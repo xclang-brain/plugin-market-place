@@ -181,6 +181,112 @@ uv（このプラグインが使う Python の道具）は、無ければ準備�
    gh auth login
    ```
 
+## 部品を単体で使う
+
+作業の画面を使わずに、部品を1つずつ使うこともできます。
+
+下の `<プラグインのフォルダ>` は、coverity-warning-triage が入っているフォルダです。手元のフォルダのマーケットプレイスから入れたときは、そのフォルダの中の coverity-warning-triage のフォルダです。GitHub から入れたときは、Copilot CLI のプラグインの置き場所（公式のドキュメントでは `~/.copilot/installed-plugins/<マーケットプレイスの名前>/coverity-warning-triage`）です。
+
+### MCP サーバー coverity-triage
+
+Coverity Connect との通信だけを受け持つ部品です。チャットで、接続の確かめ、警告の検索、警告経路の取得、Coverity への書き戻しを頼めます。coverity-warning-triage を入れると自動で登録されます。入れずに使うときは、MCP のクライアントに登録します。
+
+要るもの：
+
+- uv
+- 調べたいリポジトリの `.coverity-triage/config.yaml` に、Coverity の URL（`coverity:` の `url`）
+- 環境変数 COV_USER と COV_AUTH_KEY に、Coverity のユーザ名と認証キー（設定ファイルには書きません）。Windows では、ユーザーの環境変数に保存しておけば、MCP サーバーが直接読みます。ほかの OS では、MCP のクライアントがこの2つをサーバーに渡す必要があります（Copilot CLI は、PATH のほかの環境変数を MCP サーバーに渡しません）。
+
+登録の例です。`<server>` は、このリポジトリの `server` フォルダの絶対パスに置き換えます。初めて起動するときは、MCP サーバーの環境を作るので時間がかかります。先に `uv sync --native-tls --frozen --directory <server>` を1回動かしておくと、すぐに起動します。
+
+Windows 以外では、認証情報の環境変数（COV_USER と COV_AUTH_KEY）を、MCP の設定の `env` で渡す必要があります。下の例には `env` がないので、[server/README.md](server/README.md) の「MCP のクライアントに登録する」の例（`env` つき）を使ってください。
+
+- Copilot CLI：
+
+  ```shell
+  copilot mcp add coverity-triage -- uv run --native-tls --frozen --quiet --directory <server> coverity-triage-mcp
+  ```
+
+- VS Code（`.vscode/mcp.json`）：
+
+  ```json
+  {
+    "servers": {
+      "coverity-triage": {
+        "type": "stdio",
+        "command": "uv",
+        "args": ["run", "--native-tls", "--frozen", "--quiet", "--directory", "<server>", "coverity-triage-mcp"]
+      }
+    }
+  }
+  ```
+
+- Claude Code：
+
+  ```shell
+  claude mcp add --transport stdio coverity-triage -- uv run --native-tls --frozen --quiet --directory <server> coverity-triage-mcp
+  ```
+
+頼み方の例です。
+
+- 「C:\work\app の Coverity の接続を確かめて」
+- 「ストリーム app-main の、Impact が High の警告を一覧にして」
+- 「CID 12345 の警告経路を見せて」
+- 「CID 12345 を False Positive にして、逸脱コメントを書き戻して」：書き戻す件数と内容と、確認の文字列が示されます。同意すると書き込まれます。
+
+ツールの引数と結果の形、確認の文字列の作り方は、[server/README.md](server/README.md) にあります。
+
+### 手順書のスキル
+
+警告を調べる、直すなどの仕事を、チャットで直接頼めます。結果はチャットに返り、結果のファイルは作られず、Coverity にも書き込まれません。
+
+| スキル | すること | 頼み方の例 |
+| --- | --- | --- |
+| triage-investigation | 警告が本物のバグかを調べ、判定・確信度・推奨を返す | 「CID 12345（NULL_RETURNS、src/foo.c の 120 行）の警告が本物か調べて」 |
+| code-fix | 警告を直す | 「この警告を直して」 |
+| deviation-comment | 逸脱コメントと、Classification・Action・Severity の案を返す | 「この警告の逸脱コメントを書いて」 |
+| triage-report | 調べた結果を、決まった項目で書く | 「調べた結果を決まった形で書いて」 |
+| triage-review | 別に調べた結果を確かめ、合格・要確認・差し戻しを返す | 「この結果を確かめて」 |
+| triage-integration | 同じ原因の警告をまとめるかを決める | 「この3件、同じ原因ならまとめて」 |
+| checker-knowledge | チェッカーごとの見方を答える | 「MISRA 10.4 の警告はどう見ればいい？」 |
+
+- 直すときは、差分がチャットに示されます。差分を見て同意すると、作業中のファイルが直ります。
+- 調べたいリポジトリで頼みます。`.coverity-triage/knowledge.md` があれば、その知識も使われます。
+- 警告の情報（CID、チェッカー、ファイルと行など）が足りないときは、聞かれます。MCP サーバー coverity-triage が使えるときは、警告経路が Coverity から取られます。
+
+### スクリプト ct.py
+
+判断の要らない決まった処理（実行フォルダ、警告のグループ化、修正用のコピー、差分、レポートと一覧、反映）をするコマンドです。ターミナルで動かします。
+
+```shell
+uv run --native-tls <プラグインのフォルダ>/skills/coverity-triage-scripts/scripts/ct.py <コマンド> <引数>
+```
+
+下の表の `ct.py` は、上の `uv run --native-tls <プラグインのフォルダ>/skills/coverity-triage-scripts/scripts/ct.py` の略です。
+
+| コマンドの例 | すること |
+| --- | --- |
+| `ct.py --help` | コマンドの一覧を出す |
+| `ct.py runs --repo <リポジトリ>` | 実行の一覧を出す |
+| `ct.py status --run <実行フォルダ>` | 実行の進み具合を出す |
+
+- どのコマンドも、結果を JSON で1つ出します。できなかったときは `"ok": false` と理由（`error`）を出し、終了コード 1 で終わります。
+- 要るものは uv と、git か svn です。Python と要るライブラリは uv が用意します。`--native-tls` は省きません（社内の証明書を使うため）。
+- Coverity との通信は MCP サーバーが受け持ちます。ct.py だけでは、警告の取得も、Coverity への書き戻しもできません。
+- プラグインのフォルダの中に置いたまま使います。コマンドと引数の一覧は、`skills/coverity-triage-scripts/SKILL.md` にあります。
+
+### ct.py の画面
+
+設定・結果・監視を見るブラウザーの画面です。MCP サーバーも Copilot CLI も要りません。
+
+```shell
+uv run --native-tls <プラグインのフォルダ>/skills/coverity-triage-scripts/scripts/ct.py gui --repo <リポジトリ>
+```
+
+- `--run <実行フォルダ>` で実行を、`--view monitor|summary|settings` で最初に見せる区分を選べます。`--no-browser` を付けると、ブラウザーを開かずに URL だけを返します。
+- 画面は、このマシンのブラウザーからだけ開けます。止めるときは、画面の「サーバを止める」を押します。
+- 設定を保存するには、git か svn のリポジトリが要ります。認証情報を画面で保存できるのは Windows だけです。
+
 ## 試験
 
 構造の検査と部品の試験は、リポジトリの1つのコマンドで動かせます。モデルを使わないので、AI クレジットを使いません。plugin-creator を入れていなくても動きます。

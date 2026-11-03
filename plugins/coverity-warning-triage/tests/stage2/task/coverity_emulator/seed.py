@@ -12,9 +12,8 @@
    a build agent, to try path_strip_prefixes), and committed with cov-commit-defects to the streams
    envmon-main, envmon-release (another triage store) and envmon-svn (version = svn revision 1).
 4. A large warning with the shape of a real one (specification 4.3; USE_AFTER_FREE, 20 events nested 6
-   deep; from csutils/csdiff tests/csgrep/0132-cov-parser-nested-evt-stdin.txt, reduced to v7 in the
-   specification) with two variants (no main event; the last top-level event has children) in the
-   stream large-sample.
+   deep; made up on the paths of envmon by large_sample.py, so that no third-party data is copied) with
+   two variants (no main event; the last top-level event has children) in the stream large-sample.
 
 Prints a JSON summary (and writes it to <workdir>/seed-summary.json): users and keys, repositories
 and revisions, snapshots, CIDs per checker, and which of the 35 problems of envmon-truth.yaml came out.

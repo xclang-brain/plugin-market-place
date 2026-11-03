@@ -67,6 +67,15 @@ def _run_shell(command: str, cwd: Path, log: Path, drop: tuple[str, ...] = ()) -
     return proc.returncode == 0
 
 
+def _analyzed(json_path: Path, log: Path) -> bool:
+    """Whether the analysis output has no error; an error is written to the log (a failed analysis)."""
+    error = analysis_error(json_path)
+    if error:
+        with open(log, "ab") as f:
+            f.write(f"cov-format-errors の結果に error があります: {error}\n".encode("utf-8"))
+    return not error
+
+
 def _tail(log: Path) -> str:
     """The end of the log (the build tools of a Japanese Windows write cp932)."""
     return display_text(log.read_bytes()[-LOG_TAIL:]) if log.is_file() else ""
@@ -78,6 +87,22 @@ def intermediate_dir(cov_analyze_args: str) -> str:
     if match:
         return match.group(1) if match.group(1) is not None else match.group(2)
     raise CtError("verify.cov_analyze_args に --dir（中間ディレクトリ）を指定してください")
+
+
+def no_ticker(args: str) -> str:
+    """``--ticker-mode none`` for cov-analyze and cov-commit-defects (unless the settings choose a mode):
+    the progress bars they print by default would fill the end of the log that is shown on a failure."""
+    return args if re.search(r"(?:^|\s)--ticker-mode\b", args) else f"--ticker-mode none {args}".rstrip()
+
+
+def analysis_error(json_path: Path) -> str | None:
+    """The ``error`` of the outer object of ``cov-format-errors --json-output-v7`` output (null when it
+    worked). With an error the issue list is empty, which must not count as every warning being gone."""
+    data = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+    error = data.get("error") if isinstance(data, dict) else None
+    if not error:
+        return None
+    return error if isinstance(error, str) else json.dumps(error, ensure_ascii=False)
 
 
 def load_analysis(json_path: Path) -> list[dict[str, Any]]:
@@ -130,8 +155,8 @@ def build_command_line(config: VerifyConfig, root: Path, mode: str, json_out: Pa
     elif mode == "build+analyze":
         idir = intermediate_dir(config.cov_analyze_args)
         steps += [f"cov-build {config.cov_build_args} {config.build_command}",
-                  f"cov-analyze {config.cov_analyze_args}",
-                  f'cov-format-errors --dir {idir} --json-output-v7 "{json_out}"']
+                  f"cov-analyze {no_ticker(config.cov_analyze_args)}",
+                  f'cov-format-errors --dir "{idir}" --json-output-v7 "{json_out}"']
     else:
         raise CtError("検証方法は build か build+analyze です")
     return " && ".join(steps)
@@ -195,6 +220,8 @@ class Verifier:
         after_json = self.dir / "after.json"
         result.build_ok = _run_shell(build_command_line(self._own_dirs("after"), after, mode, after_json), after, log,
                                      self.drop)
+        if result.build_ok and mode == "build+analyze":
+            result.build_ok = _analyzed(after_json, log)
         result.seconds = time.time() - started
 
         if not result.build_ok:
@@ -215,7 +242,7 @@ class Verifier:
         before_log.unlink(missing_ok=True)
         before_json = self.dir / "before.json"
         if _run_shell(build_command_line(self._own_dirs("before"), before, result.mode, before_json), before, before_log,
-                      self.drop):
+                      self.drop) and _analyzed(before_json, before_log):
             return load_analysis(before_json)
         # Not a problem of any fix: the unmodified code itself could not be built or analyzed.
         result.error = "修正前のコードのビルド・解析に失敗しました（設定のコマンドを確認してください）"

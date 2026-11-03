@@ -698,7 +698,7 @@ table.items td.acts { white-space: nowrap; }
     <!-- ================= filters ================= -->
     <section class="panel" id="tab-filters" role="tabpanel" hidden>
       <h2>条件</h2>
-      <p class="lead">調べる警告の絞り込み条件（<code>filters/*.yaml</code>）です。<code>/coverity-run</code> で使う条件を選べます。同じ項目の中の値は「どれか」、項目どうしは「すべて」を満たす警告を選びます。空の項目は条件にしません。</p>
+      <p class="lead">調べる警告の絞り込み条件（<code>filters/*.yaml</code>）です。<code>/coverity-run</code> で使う条件を選べます。1つの項目に値をいくつか書くと、そのどれかに当たる警告を、いくつかの項目を書くと、そのすべてに当たる警告を選びます。空の項目は条件にしません。</p>
       <div class="split">
         <div>
           <div class="flist" id="flist"></div>

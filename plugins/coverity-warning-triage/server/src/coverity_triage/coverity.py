@@ -23,12 +23,14 @@ class CoverityError(Exception):
     """Coverity cannot be reached or returned an error.
 
     ``fatal`` is False when only this request failed (for example one CID is not in the stream)
-    and the next request may still succeed.
+    and the next request may still succeed. ``status`` is the HTTP status of a REST answer that
+    failed, if any.
     """
 
-    def __init__(self, message: str, fatal: bool = True):
+    def __init__(self, message: str, fatal: bool = True, status: int | None = None):
         super().__init__(message)
         self.fatal = fatal
+        self.status = status
 
 
 def filter_mismatches(issue: Issue, spec: FilterSpec, project: str | None = None,
@@ -59,14 +61,19 @@ class SearchPage:
 
     ``excluded`` lists the rows the server returned that the filter checked after the search left
     out: ``{"cid", "mismatched": {filter key: the issue's value}}``.
+    ``ends[i]`` is the offset just after the row of ``issues[i]`` and ``excluded_ends[i]`` the one after
+    the row of ``excluded[i]``: a caller that keeps only the first issues continues from there.
     """
 
     def __init__(self, issues: list[Issue], total: int | None, next_offset: int | None,
-                 excluded: list[dict[str, Any]] | None = None):
+                 excluded: list[dict[str, Any]] | None = None, ends: list[int] | None = None,
+                 excluded_ends: list[int] | None = None):
         self.issues = issues
         self.total = total
         self.next_offset = next_offset  # None when the search is complete
         self.excluded = excluded or []
+        self.ends = ends if ends is not None else []
+        self.excluded_ends = excluded_ends if excluded_ends is not None else []
 
 
 class CoverityClient(ABC):
@@ -125,7 +132,9 @@ class FakeCoverityClient(CoverityClient):
         found = [self._issue(r) for r in self._records()
                  if filter_matches(self._issue(r), spec, r.get("project"))]
         end = offset + limit
-        return SearchPage(found[offset:end], len(found), end if end < len(found) else None)
+        page = found[offset:end]
+        return SearchPage(page, len(found), end if end < len(found) else None,
+                          ends=[offset + i + 1 for i in range(len(page))])
 
     def issue_detail(self, cid: int, stream: str) -> IssueDetail:
         for record in self._records():

@@ -9,6 +9,7 @@ Layout (``<output_dir>/<run id>/``)::
     integration/  candidates.json  plan.json  (option agents.integration)
     work/         fix-<n>/  annotation-<n>/  analyzed/   (work copies; removed by ``summary``)
     cid/<ID>.html  patches/  fixed/<ID>/  summary.html  approvals.json  apply-plan.json  operations.log
+    apply-code.result.json   (the result of ``apply-code``, returned again for the same confirmation string)
     cid/<ID>.md  summary.md   (only with the option ``markdown``, and in runs made before approvals.json)
 """
 

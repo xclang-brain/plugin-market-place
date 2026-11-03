@@ -15,11 +15,25 @@ import argparse
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, NoReturn
 
 from ctlib import apply, flow, gui, initial, knowledge, metrics, prepare, selftest, triage
 from ctlib.common import CtError, resolve_path
 from ctlib.config import load_config, output_dir
+
+
+class UsageError(Exception):
+    """A wrong command line. It is printed as one JSON object, like every other failure."""
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse that raises UsageError instead of printing the usage to stderr and exiting with 2.
+    The subcommands are made with the same class. ``--help`` still prints the help and exits with 0."""
+
+    def error(self, message: str) -> NoReturn:
+        usage = " ".join(self.format_usage().split())
+        usage = usage.split(":", 1)[1].strip() if usage.lower().startswith("usage:") else usage
+        raise UsageError(f"引数が正しくありません（{message}）。使い方: {usage}（くわしくは {self.prog} --help）")
 
 
 def _overrides(args: argparse.Namespace) -> dict[str, Any]:
@@ -39,7 +53,7 @@ def _stats(repo_root: str) -> dict[str, Any]:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="ct.py", description="Coverity トリアージのスクリプト")
+    p = Parser(prog="ct.py", description="Coverity トリアージのスクリプト")
     sub = p.add_subparsers(dest="command", required=True)
 
     def command(name: str, help_text: str, *options: tuple[str, dict[str, Any]]) -> argparse.ArgumentParser:
@@ -199,7 +213,11 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
-    args = parser().parse_args(argv)
+    try:
+        args = parser().parse_args(argv)
+    except UsageError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=1))
+        return 1
 
     def log_failure(failed: dict[str, Any]) -> None:
         """Record a failed step of a run in its operations.log, for the monitor of ``ct.py gui``.
@@ -233,9 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         result, code = {"ok": False, "error": str(exc), **exc.details}, 1
     except OSError as exc:
         result, code = {"ok": False, "error": f"ファイルやコマンドの操作に失敗しました: {exc}"}, 1
-    except Exception as exc:
-        log_failure({"error": f"{type(exc).__name__}: {exc}"})
-        raise
+    except Exception as exc:  # noqa: BLE001 - one JSON object, never a traceback on the output
+        result, code = {"ok": False, "error": f"予期しないエラーで止まりました: {type(exc).__name__}: {exc}"}, 1
     if code:
         log_failure(result)
     print(json.dumps(result, ensure_ascii=False, indent=1))

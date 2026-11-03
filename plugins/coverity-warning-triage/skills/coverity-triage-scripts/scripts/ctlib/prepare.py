@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from .common import PLUGIN_ROOT, CtError, out_text, resolve_path, run_cmd
+from .common import CtError, out_text, plugin_path, resolve_path, run_cmd
 from .config import (CONFIG_DIR, CONFIG_FILE, DEFAULT_FILTER, DEFAULT_OUTPUT_DIR, DEFAULT_PARALLEL, FILTERS_DIR,
                      KNOWLEDGE_TEMPLATE, FilterSpec, ProjectConfig, VerifyConfig, knowledge_path, load_config, output_dir)
 from .envvars import get_env
@@ -19,8 +19,6 @@ from .vcs import detect as detect_vcs
 from .vcs import make_vcs
 from .verify import trial_build as run_trial_build
 
-SERVER_DIR = PLUGIN_ROOT / "server"
-AGENTS_DIR = PLUGIN_ROOT / "com.github.copilot" / "agents"
 AGENT_SUFFIX = ".agent.md"
 AGENT_PREFIX = "coverity-triage-"  # every agent of the plugin; others in the person's folder are not touched
 AGENT_ROLES = {"coverity-triage-collector": "取得", "coverity-triage-worker": "作業",
@@ -38,6 +36,16 @@ def _uv() -> str:
     return uv
 
 
+def server_dir() -> Path:
+    """The MCP server of the plugin (its uv project)."""
+    return plugin_path("server")
+
+
+def agents_dir() -> Path:
+    """The agent definitions of the plugin."""
+    return plugin_path("com.github.copilot", "agents")
+
+
 def user_agents_dir() -> Path:
     """Folder of the person's own custom agents, read by the Copilot CLI.
 
@@ -51,7 +59,7 @@ def plugin_agents() -> dict[str, Path]:
     order of /coverity-run (collector, worker, integrator, reviewer)."""
     # Only this plugin's own agents: the folder also holds the orchestrator, worker and verifier of the work screen,
     # which the person's folder must not get.
-    found = {p.name[:-len(AGENT_SUFFIX)]: p for p in AGENTS_DIR.glob(f"{AGENT_PREFIX}*{AGENT_SUFFIX}")}
+    found = {p.name[:-len(AGENT_SUFFIX)]: p for p in agents_dir().glob(f"{AGENT_PREFIX}*{AGENT_SUFFIX}")}
     order = list(AGENT_ROLES)
     return dict(sorted(found.items(), key=lambda kv: (order.index(kv[0]) if kv[0] in order else len(order), kv[0])))
 
@@ -62,10 +70,11 @@ def plugin_agents() -> dict[str, Path]:
 def prewarm() -> dict[str, Any]:
     """Create the MCP server's Python environment now, so its first start is quick."""
     started = time.monotonic()
+    server = server_dir()
     uv = _uv()
     version = out_text(run_cmd([uv, "--version"]))
-    run_cmd([uv, "sync", "--native-tls", "--frozen", "--quiet", "--directory", str(SERVER_DIR)])
-    return {"ok": True, "uv": version, "environment": str(SERVER_DIR / ".venv"),
+    run_cmd([uv, "sync", "--native-tls", "--frozen", "--quiet", "--directory", str(server)])
+    return {"ok": True, "uv": version, "environment": str(server / ".venv"),
             "seconds": round(time.monotonic() - started, 1)}
 
 
@@ -214,10 +223,19 @@ def doctor(repo_root: str) -> dict[str, Any]:
         found = shutil.which(vcs)
         checks.append(_check(f"{vcs} コマンド", "ok" if found else "ng", found or "見つかりません",
                              "" if found else f"{vcs} を入れて PATH を通してください"))
-    venv = (SERVER_DIR / ".venv").is_dir()
-    checks.append(_check("MCP サーバの Python 環境", "ok" if venv else "ng", str(SERVER_DIR / ".venv"),
-                         "" if venv else "ct.py prewarm を実行します"))
-    for name, agent in agent_state().items():
+    try:  # the plugin's files: a clear "ng" when ct.py is used outside the plugin
+        venv_dir = server_dir() / ".venv"
+        venv = venv_dir.is_dir()
+        checks.append(_check("MCP サーバの Python 環境", "ok" if venv else "ng", str(venv_dir),
+                             "" if venv else "ct.py prewarm を実行します"))
+    except CtError as exc:
+        checks.append(_check("MCP サーバの Python 環境", "ng", str(exc)))
+    try:
+        agents = agent_state()
+    except CtError as exc:
+        agents = {}
+        checks.append(_check("サブエージェント", "ng", str(exc)))
+    for name, agent in agents.items():
         if agent["status"] == "stale":
             checks.append(_check(f"古いサブエージェント {name}", "warning",
                                  f"プラグインに無くなった定義が残っています（{agent['path']}）",

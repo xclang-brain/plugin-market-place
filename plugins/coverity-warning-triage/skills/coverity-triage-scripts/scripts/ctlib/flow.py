@@ -26,7 +26,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from . import initial, triage
-from .common import SKILLS_DIR, CtError, file_lock, read_json, write_json, write_text
+from .common import CtError, file_lock, read_json, skills_dir, write_json, write_text
 from .config import knowledge_path, load_no_grouping
 from .grouping import MAX_GROUP
 from .models import IntegrationPlan, ReviewResult, TriageResult
@@ -655,7 +655,7 @@ def _integrator(run: Run, say: list[str]) -> dict[str, Any] | None:
              f"| 計画（書く） | `{plan_file}` |",
              f"| 進み具合（書く。節目ごとに上書き） | `{run.dir / 'agents' / 'integrator' / 'progress.json'}` |",
              f"| 調べるコード（読むだけ） | `{run.copy_dir('analyzed') if run.state.analyzed_revision else run.repo}` |",
-             f"| 手順書のフォルダ（読む） | `{SKILLS_DIR}` |"]
+             f"| 手順書のフォルダ（読む） | `{skills_dir()}` |"]
     if knowledge_path(run.repo).is_file():
         lines.append(f"| プロジェクトの知識（読む） | `{knowledge_path(run.repo)}` |")
     lines += ["", "- パスは、どれもリポジトリの一番上からの相対パスです。", "",
@@ -893,7 +893,7 @@ def _reviewer(run: Run, item: ItemState) -> dict[str, Any]:
              "## フォルダとファイル", "", "| 用途 | 場所 |", "|---|---|",
              f"| 調べるコード（読むだけ） | `{investigate}` |",
              f"| 検証の結果（書く） | `{out}` |", f"| 進み具合（書く。節目ごとに上書き） | `{progress}` |",
-             f"| 手順書のフォルダ（読む） | `{SKILLS_DIR}` |"]
+             f"| 手順書のフォルダ（読む） | `{skills_dir()}` |"]
     if patch:
         lines.append(f"| 修正の差分（読むだけ） | `{patch}` |")
         lines.append(f"| 修正後のファイル（読むだけ） | `{run.dir / 'fixed' / item.id / 'fix'}` |")

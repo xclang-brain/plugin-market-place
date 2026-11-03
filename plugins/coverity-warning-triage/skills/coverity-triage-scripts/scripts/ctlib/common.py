@@ -38,8 +38,32 @@ def resolve_path(path: str | Path) -> Path:
             raise CtError(f"パスを絶対パスにできません: {path}: {inner}", resolve_error=str(exc)) from inner
 
 
-PLUGIN_ROOT = resolve_path(__file__).parents[4]
-SKILLS_DIR = PLUGIN_ROOT / "skills"   # the procedure documents (手順書) the agents read with read
+def _plugin_root() -> Path | None:
+    """The plugin's folder: four folders above this file (``<plugin>/skills/coverity-triage-scripts/scripts/ctlib``).
+    None when the scripts sit in a shallower folder, so that importing never fails; ``plugin_path`` says
+    what is missing where a command needs the plugin."""
+    parents = resolve_path(__file__).parents
+    return parents[4] if len(parents) > 4 else None
+
+
+PLUGIN_ROOT = _plugin_root()
+SKILLS_DIR = PLUGIN_ROOT / "skills" if PLUGIN_ROOT else None   # the procedure documents (手順書) the agents read
+
+
+def plugin_path(*parts: str) -> Path:
+    """A file or folder of the plugin around the scripts, for the commands that need it (MCP server,
+    agent definitions, procedure documents, plugin.json). A CtError says what is missing otherwise."""
+    path = PLUGIN_ROOT.joinpath(*parts) if PLUGIN_ROOT else None
+    if path is None or not path.exists():
+        raise CtError("プラグインのファイルが見つかりません: " + ("/".join(parts) if path is None else str(path))
+                      + "（このコマンドは、ct.py を <プラグインのフォルダ>/skills/coverity-triage-scripts/scripts/"
+                        " に置いたまま使います）")
+    return path
+
+
+def skills_dir() -> Path:
+    """The folder of the procedure documents (手順書) the agents read, written into their instruction files."""
+    return plugin_path("skills")
 
 
 def now() -> str:

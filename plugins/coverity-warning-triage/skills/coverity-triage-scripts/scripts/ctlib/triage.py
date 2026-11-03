@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from . import approvals, assess, oplog
-from .common import SKILLS_DIR, CtError, file_lock, read_json, resolve_path, write_json, write_text
+from .common import CtError, file_lock, read_json, resolve_path, skills_dir, write_json, write_text
 from .config import (CONFIG_DIR, CONFIG_FILE, FilterSpec, knowledge_path, load_config, load_filter,
                      load_no_grouping, output_dir)
 from .grouping import build_work_items
@@ -53,6 +53,9 @@ def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], 
             verify: str | None, initial: bool | None = None) -> dict[str, Any]:
     repo = _repo(repo_root)
     config = load_config(repo)
+    if limit is not None and not 1 <= limit <= config.max_items:
+        raise CtError(f"件数の上限（--limit）は 1 から {config.max_items}（設定 max_items）までの数にしてください",
+                      limit=limit, max_items=config.max_items)
     if filter_name is None:
         names = sorted(p.name for p in (repo / CONFIG_DIR / "filters").glob("*.yaml"))
         if not names:
@@ -317,7 +320,7 @@ def brief(run_dir: str, item_id: str) -> dict[str, Any]:
              "| 用途 | 場所 |", "|---|---|",
              f"| 調べるコード（読むだけ。変更しない） | `{investigate}` |",
              f"| 修正するコード（ここだけを変更する） | `{fix_dir}` |",
-             f"| 手順書のフォルダ（読む） | `{SKILLS_DIR}` |"]
+             f"| 手順書のフォルダ（読む） | `{skills_dir()}` |"]
     if config.options.annotation:
         lines.append(f"| アノテーションを入れるコード（逸脱案の注釈だけを入れる） | `{run.copy_dir('annotation', item.slot)}` |")
     lines.append(f"| 結果ファイル（書く） | `{result}` |")

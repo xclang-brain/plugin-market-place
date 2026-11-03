@@ -1,7 +1,7 @@
 [project]
 name = "coverity-triage"
 version = "0.2.0"
-description = "MCP server for the Coverity triage agent plugin"
+description = "MCP server that searches Coverity Connect issues, reads their warning paths and writes triage back"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [

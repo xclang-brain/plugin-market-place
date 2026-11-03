@@ -50,7 +50,7 @@ class TriageAttributes(BaseModel):
 
 
 class TriageEntry(BaseModel):
-    """One write-back in the ``triage`` list of ``apply-plan.json`` (written by ``ct.py preview``)."""
+    """One write-back: an item of the ``triage`` list of a plan file, or of the ``entries`` argument."""
 
     id: str
     cids: list[int] = Field(min_length=1)

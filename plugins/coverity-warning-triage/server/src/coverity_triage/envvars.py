@@ -9,7 +9,7 @@ import sys
 def get_env(name: str) -> str | None:
     """Environment variable, also reading the user's saved variables on Windows.
 
-    Values saved during /coverity-setup are visible without restarting VS Code.
+    Values saved as user environment variables are visible without restarting VS Code.
     """
     value = os.environ.get(name)
     if value:

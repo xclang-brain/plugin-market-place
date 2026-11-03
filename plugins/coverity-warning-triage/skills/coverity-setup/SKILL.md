@@ -91,8 +91,8 @@ allowed-tools: ["coverity-triage", "shell(uv run:*)"]
    |---|---|
    | Coverity の URL・プロジェクト・ストリーム | 聞いた値 |
    | git / svn、取り込み先のブランチ | `detect` の値 |
-   | 結果を置く場所 | リポジトリの隣のフォルダ（`../coverity-triage-out`） |
-   | 最初に調べる警告 | 分類がまだの警告を 20 件まで（条件ファイル `untriaged.yaml`） |
+   | 結果を置く場所 | リポジトリと同じ階層の `coverity-triage-out` フォルダ（リポジトリの隣） |
+   | 最初に調べる警告 | 分類がまだの警告を 20 件まで（条件ファイル `untriaged.yaml`。K-19） |
 
 4. 同意を得たら `ct.py init-config --repo <フォルダ> --url <URL> --project <名前> --stream <名前>` を実行する（変えたい値があれば引数で渡す）。
 5. 「`.coverity-triage/` フォルダをコミットして、チームで共有してください（認証情報は入っていません）」と伝える。知識のファイル `knowledge.md` もできたこと、AI が調べる前に読むので、チームの判断の方針などを書いておけることを 1 行で伝える。
