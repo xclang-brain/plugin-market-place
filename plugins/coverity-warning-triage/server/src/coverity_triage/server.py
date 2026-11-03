@@ -531,11 +531,8 @@ def preview_triage(plan_file: str | None = None, entries: list[TriageEntry] | No
     """書き戻しの内容を確かめ、update_triage に渡す確認用の文字列を返す。読むだけで、Coverity とは通信しない。
     plan_file（{"triage": [...]} の JSON のファイル）か entries（[{id, cids, classification, action,
     severity?, comment?}]）の、どちらか一方を渡す。
-    confirmation_token の作り方：plan_file なら、ファイルのバイト列の SHA-256 の 16 進の先頭 12 文字。
-    entries なら、各項目を {id, cids, classification, action, severity, comment}（severity と comment が
-    なければ空の文字列）にそろえた {"triage": entries} を json.dumps(ensure_ascii=False, sort_keys=True,
-    separators=(",", ":")) で文字列にし、UTF-8 のバイト列にした SHA-256 の 16 進の先頭 12 文字。
-    counts（書き戻す項目の数と CID の数）と items（書き戻す内容）を人に見せ、同意を得てから update_triage を呼ぶ。"""
+    counts（書き戻す項目の数と CID の数）と items（書き戻す内容）を人に見せ、同意を得てから、返った
+    confirmation_token を update_triage に渡す。confirmation_token は自分で作らない。"""
     _one_of("plan_file", plan_file, "entries", entries)
     if plan_file is not None:
         path, raw = _plan_bytes(plan_file)
