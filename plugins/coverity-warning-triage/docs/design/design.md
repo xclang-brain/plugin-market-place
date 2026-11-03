@@ -104,6 +104,7 @@ Copilot CLI に依る部分を薄くし、それ以外を Copilot CLI なしで�
 - 起動ごとに乱数の合言葉を作り、URL に入れる（例：`http://127.0.0.1:8731/?k=<合言葉>`）。サーバーは、合言葉がない問い合わせと、Host が合わない問い合わせを断る。ほかの Web ページから開始・停止・起票を送られないようにするためである。
 - 1つのセッションでは、同時に1つの実行だけを扱う。実行中に画面を開くツールがまた呼ばれたら、新しく始めず、今の URL を返す。頼みの文は受け付けないので、黙って捨てずに、「いまの実行が終わるまで、新しい作業は始められません。…変えた作業を頼むときは、画面で止めてから、もう一度チャットで頼んでください」と知らせる（`core/constants.mjs` の `BUSY_NOTICE`）。終わった後は、新しい実行の準備に戻す。準備中の画面からも、同じセッションの前の結果（なければ、同じ作業フォルダの前の結果）と、承認していない Issue の案を開ける。
 - 窓口：`GET /`（画面）、`GET /api/state`（状態の全体）、`GET /api/agents/<番号>/reply`（返事の全文）、`GET /api/files/<番号>`（記録のツールで知らされた、作業フォルダの中のファイル）、`POST /api/start`、`POST /api/stop`、`POST /api/issues/<番号>/file`（承認して起票）。
+- エージェントの「最後の返事の全文を開く」欄は、返事のあるエージェントにだけ出す（状態の全体の、枠の `hasReply` と、試行の `replied` で決める）。
 - ファイルの窓口は、シンボリックリンクをたどった後の場所が作業フォルダの中かを確かめる。画像は png・jpeg・gif・webp だけ返し、SVG と HTML はダウンロードさせる形で返す。どれにもスクリプトを動かさない指定（`Content-Security-Policy: sandbox`、`X-Content-Type-Options: nosniff`）を付ける。
 - エージェントや記録から来た文字は、すべて文字として出し、HTML として扱わない。
 - 画面は、1秒ごとに状態の全体を取り直す。全体を取り直せば、取り逃しもつなぎ直しの処理も要らない。サーバーにつながらなくなったら、画面にそう示す。
@@ -297,6 +298,9 @@ stateDiagram-v2
 - 定義の形は `core/task.schema.json` で決まり、1段目の試験が確かめる。項目は、名前、繰り返しの上限の既定、合否の基準（番号、文、もとになったナレッジの番号）、作業エージェント（名前と画面での呼び名）、開始前の設定の部品、表示の部品である。
 
 - 部品の種類は少なくする。設定は、文字・数・選択・チェック・ファイルやフォルダの場所の入力。表示は、値の一覧・表・進み具合・文章・画像・ファイルへのリンク。グラフなどは、作業エージェントが画像のファイルとして作って見せる。
+- 数の設定には、範囲（`min`・`max`）と刻み（`step`。`min`、なければ 0 から数える。1 なら整数）を書ける。範囲の外や刻みに合わない値では開始せず、範囲を示して入れ直してもらう。刻みと数え始めが整数なら、ずれを許さずに確かめる。小数の刻みは計算のずれだけを許し、刻みの上の値に丸めて渡す。
+- 必須でない設定の欄を空にして開始すると、初めの値ではなく「（未入力）」として統括に渡す（値そのものを渡さない開始の呼び出しでは、初めの値を使う）。画面の下書きでも、空にした欄は、描き直しても空のままにする（初めの値は、まだ触っていない欄にだけ使う）。
+- 表示の部品：文章の中の http・https の URL は、押すと新しいタブで開くリンクにする。URL に入れるのは ASCII の表示できる文字だけで、空白・< > " ' ` と ASCII でない文字の手前で切る。表は、ほかの表示と横に並べず、1行の幅を使う。行のない表と項目のない値の一覧は「ありません」と出す（値がまだ送られていないときは「まだありません」）。進み具合は max が 0 でも受け付け、0% と出す。
 - 作業ごとの表示の値は、統括や作業エージェントが記録のツール（`coverity-warning-triage_show`）で送り、中心の処理が定義と照らして確かめる。
 - 合否の基準は、作業の定義を元とする。統括への指示（3.1）と計画の確かめ（3.3）は、ここから読む。EVAL の課題のファイル（`tests/eval/` の中）には、基準の番号と文を写し、採点のしかたを足す。1段目の試験で、写しが作業の定義と同じかを確かめる。
 - 合否の基準に付けるナレッジの番号は、「合否の決め方」のナレッジのものだけにする。ほかのナレッジの番号は、作業の定義とテストのフォルダを除くファイル（エージェントの指示など）に書く。1段目の試験は、ナレッジの一覧（`tests/knowledge.json`）の種類ごとに、この置き場所で番号を突き合わせる。
@@ -329,7 +333,7 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 ### 8.1 作業の定義（task.json）
 
 - 作業の題は「Coverity 警告のトリアージ」、繰り返しの上限の既定は 3 回、作業役は `worker`（トリアージ役）1体である。
-- 開始前の設定は4つ：`condition_file`（条件ファイル、文字）、`impact`（Impact で絞る、選択肢は「絞らない」「High」「Medium」「Low」「Unspecified」）、`max_items`（調べる件数の上限、数、既定 20）、`initial_analysis`（最初に解析するか、選択肢は「設定どおり」「する」「しない」）。
+- 開始前の設定は4つ：`condition_file`（条件ファイル、文字）、`impact`（Impact で絞る、選択肢は「絞らない」「High」「Medium」「Low」「Unspecified」）、`max_items`（調べる件数の上限、数、1 から 100 までの整数、既定 20。空にすると、作業役は `--limit` を付けず、条件ファイルの件数が使われる）、`initial_analysis`（最初に解析するか、選択肢は「設定どおり」「する」「しない」）。
 - 表示は実行中に `worker_status`、`errors`、`recent_activity`、`initial_analysis_progress`、`overall_progress` の5つ、終わった後に `counts`、`results`、`unprocessed`、`detail_reports`、`patches`、`approval_links` の6つを出す。値の形は作業役の指示のとおり。
 - 合否の基準は、組み立てのスクリプトが合否の決め方のナレッジから入れる。
 
@@ -360,10 +364,10 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 | --- | --- |
 | 設定 | ct.py と MCP サーバーは、同じ設定ファイル `<repo_root>/.coverity-triage/config.yaml` を読む。MCP サーバーが読むのは `coverity` の節だけで、`url` は必須である。認証情報は環境変数（既定は `COV_USER` / `COV_AUTH_KEY`）に置く |
 | 警告の検索 | `ct.py new-run` が、実行フォルダに条件のファイル `filter.json`（`streams`（1つだけ）、`project`、`checkers`、`impacts`、`triage{status, classification, action}`、`limit`）を作る。`search_issues` に `filter_file` と `output_file`（`issues.json`）を渡すと、MCP サーバーが `issues.json` に書く |
-| 警告経路 | `get_issues` に `stream`、`cids`、`output_dir`（`items/<ID>/`）を渡すと、MCP サーバーが CID ごとに `issue-<CID>.json` を書く。ct.py がそれを読む |
+| 警告経路 | `get_issues` に `stream`、`cids`、`output_dir`（`items/<ID>/`）を渡すと、MCP サーバーが CID ごとに `issue-<CID>.json` を書く。ct.py がそれを読む。取れなかった CID は、MCP サーバーが `error` を書いた `issue-<CID>.json` で分かる。`ct.py tick` は、2 回目の取得のあと、取れなかった CID の数を 1 回だけ利用者に知らせ、経路なしで作業に進む |
 | 呼び直し | ファイルに書くツールは、1回を20秒で区切る。`done: false` が返ったら、同じ引数で呼び直す（続きから進む） |
-| 書き戻し | `ct.py preview` が、反映の内容 `apply-plan.json`（`{"triage": [{id, cids, classification, action, severity?, comment?}]}`）と確認の文字列を作る。`preview_triage` に `plan_file` を渡すと、件数と内容と、同じ確認の文字列が返る。人が件数と内容を見て同意した後に、`update_triage` に `plan_file` と確認の文字列を渡す。結果は `apply-plan.result.json` に残り、`result_file` で返る。`ct.py apply-code` がそれを読む |
-| 確認の文字列 | `plan_file` のときは、ファイルのバイト列の SHA-256 の先頭12文字。`entries` のときは、正規化した `{"triage": entries}` を `json.dumps(ensure_ascii=False, sort_keys=True, separators=(",", ":"))` にした UTF-8 の SHA-256 の先頭12文字。`update_triage` は、同じ規則で作り直して照らし、合わなければ何も書かない |
+| 書き戻し | `ct.py preview` が、反映の内容 `apply-plan.json`（`{"triage": [{id, cids, stream, classification, action, severity?, comment?}]}`）と確認の文字列を作る。`stream` は警告のあるストリームの名前で、MCP サーバーは、そのストリームが使うトリアージストアに書く。`preview_triage` に `plan_file` を渡すと、件数と内容と、同じ確認の文字列が返る。人が件数と内容を見て同意した後に、`update_triage` に `plan_file` と確認の文字列を渡す。結果は `apply-plan.result.json` に残り、`result_file` で返る。`ct.py apply-code` がそれを読む |
+| 確認の文字列 | `plan_file` のときは、ファイルのバイト列の SHA-256 の先頭12文字。`entries` のときは、正規化した `{"triage": entries}`（`stream` がない項目には `stream` を入れない）を `json.dumps(ensure_ascii=False, sort_keys=True, separators=(",", ":"))` にした UTF-8 の SHA-256 の先頭12文字。`update_triage` は、同じ規則で作り直して照らし、合わなければ何も書かない |
 | ツールの名前 | サーバーの名前は `coverity-triage`。ツールは `check_connection`、`search_issues`、`get_issues`、`preview_triage`、`update_triage`。エージェントの `tools` には `coverity-triage/<ツール>` と書く |
 | ct.py とサブエージェント | `ct.py tick` が、起動するエージェントの名前・task・頼みの文を返す。`ct.py brief` などが指示ファイル（`brief.md`、統合・検証の指示）を作る。サブエージェントは結果ファイル（`result.json` など）を書き、終わったら `tick --finished` で知らせる |
 | 統括と作業・検証 | 頼みに、プラグインのフォルダの絶対パスを書く。評価基準は、C の番号と文で渡す |
@@ -439,10 +443,10 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 | ツール | 引数 | 返すもの |
 | --- | --- | --- |
 | `check_connection` | `repo_root` | 認証できるか。3xx の応答は、リダイレクト先を示して失敗にする |
-| `search_issues` | `repo_root`、`filter_file` か `filter` のどちらか一方、`output_file`、`offset`（既定 0） | `filter` は `filter.json` と同じ形の object である。`output_file` があれば `issues.json` に書く。なければ `issues`（`cid`、`checker`、`file`、`line`、`function`、`impact`、`category`、`cwe`、`classification`、`action`、`severity`、`status` のうち値のあるもの）を返す。このときの `limit` の既定は 20、上限は 100 |
+| `search_issues` | `repo_root`、`filter_file` か `filter` のどちらか一方、`output_file`、`offset`（既定 0） | `filter` は `filter.json` と同じ形の object である。`output_file` があれば `issues.json` に書く。なければ `issues`（`cid`、`checker`、`file`、`line`、`function`、`impact`、`category`、`cwe`、`classification`、`action`、`severity`、`status` のうち値のあるもの）を返す。このときの `limit` の既定は 20、上限は 100。探すのは最新のスナップショット（`last()`）の警告である。`triage.status` に `Fixed` か `Absent Dismissed` があるときだけ、すべてのスナップショット（`first()..last()`）を探す（この2つは、最新のスナップショットにない警告に付く）。Status は検索の後で絞る。`issues.json` の `excluded_cids` には外した CID のすべてを残し、呼び直しで同じ警告を2回数えない |
 | `get_issues` | `repo_root`、`stream`、`cids`、`output_dir` | `output_dir` があれば `issue-<CID>.json` に書く。なければ、CID ごとに `{cid, checker, file, line, function, events: [{file, line, tag, description, main}], checker_description}`（値のない項目は省く）を返す。このときの `cids` は10件まで |
-| `preview_triage` | `plan_file` か `entries`（`[{id, cids, classification, action, severity?, comment?}]`）のどちらか一方 | `counts`（書き戻す項目の数、CID の数）、`items`（書き戻す内容）、`confirmation_token`、`next`（件数と内容を人に見せ、同意を得てから `update_triage` に `confirmation_token` を渡すこと）。読むだけで、Coverity と通信しない |
-| `update_triage` | `repo_root`、`confirmation_token`、`plan_file` か `entries` のどちらか一方 | 書き込んだ項目、失敗した項目、`result_file`。確認の文字列が合わなければ、何も書かない。結果は、再開と二重の書き込みを防ぐために残す。`plan_file` のときは `apply-plan.result.json` に残す。`entries` のときは、一時のフォルダの中の、ユーザーごとのフォルダ（`coverity-triage-mcp-<ユーザー名>/`）の、Coverity の URL とトリアージストアごとのファイルに残す。書き込み済みの項目は中身（ID・CID・値・コメント）で引くので、並べ方や確認の文字列が変わっても書き直さない |
+| `preview_triage` | `plan_file` か `entries`（`[{id, cids, stream?, classification, action, severity?, comment?}]`）のどちらか一方 | `counts`（書き戻す項目の数、CID の数）、`items`（書き戻す内容）、`confirmation_token`、`next`（件数と内容を人に見せ、同意を得てから `update_triage` に `confirmation_token` を渡すこと）。読むだけで、Coverity と通信しない |
+| `update_triage` | `repo_root`、`confirmation_token`、`plan_file` か `entries` のどちらか一方 | 書き込んだ項目、失敗した項目、`result_file`。確認の文字列が合わなければ、何も書かない。項目に `stream` があれば、`GET /api/v2/streams/{name}` の `streams[0].triageStoreName` で、そのストリームが使うトリアージストアを調べて書く。ストリームが Coverity にないときは、その項目だけを失敗にする。`stream` がなければ、`coverity.triage_store` に書く。結果は、再開と二重の書き込みを防ぐために残す。`plan_file` のときは `apply-plan.result.json` に残す。`entries` のときは、一時のフォルダの中の、ユーザーごとのフォルダ（`coverity-triage-mcp-<ユーザー名>/`）の、Coverity の URL とトリアージストアごとのファイルに残す。書き込み済みの項目は中身（ID・CID・ストリーム・値・コメント）で引くので、並べ方や確認の文字列が変わっても書き直さない |
 
 - 書き戻しの同意は、AI の手順（`preview_triage` が返す件数と内容を人に見せ、同意を得てから `update_triage` を呼ぶ）と、MCP のクライアントのツールの許可で守る。サーバーが確かめるのは、書き戻す内容と確認の文字列が合うことだけである。確認の文字列の作り方はツールの説明にあるので、サーバーは、人が同意したかどうかを確かめられない。
 - K-82：Coverity との接続のエラー：401/403 は認証の失敗、5xx は実行全体を止める、その他の 4xx と SOAP のエラーはその1件だけ失敗にする。サーバが知らない条件の値は外して検索を続ける。URL が http なら警告する。加えて、SOAP の 401/403 と認証・権限の Fault も全体を止める。書き戻しも、5xx では呼び出し全体を止め、止まった項目は記録しない（同じ引数で呼び直すと書き込む）。401・403 以外の 4xx で断られた項目だけを、その項目の失敗にする。
@@ -472,6 +476,15 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 - 動かし方：`ct.py gui --repo <リポジトリ> [--run <実行フォルダ>] [--view monitor|summary|settings] [--no-browser] [--foreground]`。MCP サーバーも Copilot CLI も要らない。
 - 127.0.0.1 だけで待ち受け、URL に合言葉を入れる。`--no-browser` は URL だけを返し、`--foreground` は、画面のサーバが止まるまで戻らない。止めるのは、画面の「サーバを止める」である。
 - 前提：設定を保存するには、git か svn のリポジトリが要る。結果と監視は、`config.yaml` の `output_dir` の下の実行フォルダを見る。認証情報を画面で保存できるのは Windows だけである（ユーザーの環境変数に保存する）。
+- 承認を保存したあとで詳細レポートと一覧を書き直せなかったときも、承認は保存したままにし、詳細レポートと一覧には前の承認が出ていることと、その理由を画面に示す（K-64）。
+- 統合・検証を使う実行では、一覧ができるまで、結果の画面の承認の欄を選べないようにし、その理由を示す（K-80）。
+- 画面のサーバを止めると、動いている試しのビルドも、それが起動したプロセスごと止める。
+- 設定・条件・知識のファイルが読めないとき（UTF-8 でない、YAML の書式の誤り、権限がない）や型の違う値があるときも、画面は止まらず、直すところを日本語で示す。
+- 読めない config.yaml・条件ファイル・no-grouping.yaml は既定の値で表示する。画面で値を変えて保存するときはファイル全体を置き換え、保存の前の表に書く値をすべて出して、置き換えることと今のファイルの値が残らないことを示す（K-71）。読めない knowledge.md は、画面では表示も保存もしない。
+- 直すところのある config.yaml・条件ファイルは、設定が受け付ける値を設定の読み方で表示し、画面に出せない値だけを既定の値で表示する。画面に出せない値と使えない項目は、保存の前の表に今の値と並べて出す（K-71）。そのファイルは、画面で値を変えたときだけ書き直す。
+- バージョン管理の種類は、開いているフォルダから判定したものを使う。config.yaml の値と違うときはそのことを示し、保存の前の表に出してから、判定したものに直して保存する。
+- 認証キーの環境変数（画面と保存した設定の `key_env`、`COV_AUTH_KEY`、`COVERITY_PASSPHRASE`）の値は、ユーザ名の環境変数の名前に入れても画面に出さない。ユーザ名と認証キーに同じ環境変数の名前は使えず、ユーザ名を認証キーの環境変数に保存しない（K-69）。
+- `run.json` を読めない実行は、実行の一覧に出さず、そのことと理由を一覧の上に示す。
 
 ## 9. 要件のたどり方
 
@@ -488,6 +501,7 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 | REQ-003 | 9 | `docs/specs/requirements.md`、`docs/design/design.md` | 自動のテスト | `tests/stage1/` |
 | REQ-004 | 1、2.3 | `plugin.json`、`.github/plugin/marketplace.json` | 自動のテスト | `tests/stage1/` |
 | REQ-004 | 2.3、3.5 | `README.md`、`skills/` | 人が確かめる | — |
+| REQ-004 | 8.6、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
 | REQ-005 | 2.2、2.4、3.1、3.6 | `com.github.copilot/extensions/coverity-warning-triage/core/`、`com.github.copilot/extensions/coverity-warning-triage/ui/`、`com.github.copilot/extensions/coverity-warning-triage/adapter.mjs` | 自動のテスト | `tests/stage2/core/*.test.mjs`、`tests/stage2/ui/screen.test.mjs`、`tests/stage2/adapter/*.test.mjs` |
 | REQ-005 | 2.3、3.5、3.6 | `README.md`、`skills/`、`com.github.copilot/extensions/coverity-warning-triage/extension.mjs`、`com.github.copilot/extensions/coverity-warning-triage/adapter.mjs` | 人が確かめる | — |
 | REQ-029 | 2.2、2.4 | `com.github.copilot/extensions/coverity-warning-triage/ui/server.mjs`、`com.github.copilot/extensions/coverity-warning-triage/adapter.mjs` | 自動のテスト | `tests/stage2/ui/server.test.mjs`、`tests/stage2/adapter/*.test.mjs` |
@@ -520,11 +534,13 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 | REQ-102 | 8.1 | `com.github.copilot/extensions/coverity-warning-triage/task.json`、`com.github.copilot/agents/worker.agent.md` | EVAL | `tests/eval/` |
 | REQ-102 | 8.1、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
 | REQ-103 | 8.1 | `com.github.copilot/extensions/coverity-warning-triage/task.json`、`com.github.copilot/agents/worker.agent.md` | 人が確かめる | — |
+| REQ-103 | 8.1、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
 | REQ-104 | 8.3、8.6 | `com.github.copilot/agents/verifier.agent.md`、`skills/coverity-run/SKILL.md` | EVAL | `tests/eval/` |
 | REQ-104 | 8.2、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
 | REQ-105 | 8.3 | `com.github.copilot/agents/verifier.agent.md`、`com.github.copilot/agents/orchestrator.agent.md` | EVAL | `tests/eval/` |
 | REQ-106 | 8.5 | `com.github.copilot/agents/worker.agent.md`、`mcp.json` | EVAL | `tests/eval/` |
 | REQ-106 | 8.4、8.5 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
+| REQ-106 | 8.2、8.8 | `server/` | 自動のテスト | `tests/stage2/task/test_e2e_flow.py` |
 | REQ-107 | 8.7 | `README.md` | 人が確かめる | — |
 | REQ-108 | 8.2、8.8 | `server/`、`mcp.json` | 自動のテスト | `tests/stage2/task/` |
 | REQ-108 | 8.8 | `README.md`、`server/` | 人が確かめる | — |

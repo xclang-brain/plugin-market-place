@@ -11,7 +11,7 @@
 | `coverity.url` | Coverity Connect の URL | ブラウザで開く Coverity のアドレス |
 | `coverity.api` | `auto`：Coverity Connect につなぐ／`fake`：偽データ（動作確認用） | 既定 `auto` |
 | `coverity.user_env` / `coverity.key_env` | ユーザ名・認証キーを入れる環境変数の名前。ユーザ名はいつも必要。認証キーの代わりにパスワードも使える（パスワードを変えたら入れ直しが要る） | 既定 `COV_USER` / `COV_AUTH_KEY` |
-| `coverity.triage_store` | 逸脱を書き戻すトリアージストアの名前 | 既定 `Default Triage Store` |
+| `coverity.triage_store` | 書き戻しの項目にストリームがないときに書き込むトリアージストアの名前（ふだんは、警告のあるストリームが使うトリアージストアに書く） | 既定 `Default Triage Store` |
 | `coverity.revision_field` | スナップショットで解析リビジョンを記録している項目 | 既定 `sourceVersion`。記録が無ければ、手元のコードで調べてずれを確かめる |
 | `coverity.path_strip_prefixes` | Coverity のファイルパスから取り除く先頭部分 | 警告のパスが `C:/build/product/src/a.c` なら `["C:/build/product/"]`。空でも、リポジトリにある末尾の部分で自動で対応づける（K-81） |
 | `coverity.ca_file` | Coverity の CA 証明書のファイル | 空（OS の証明書を使う）。証明書のエラーが出るときだけ指定 |

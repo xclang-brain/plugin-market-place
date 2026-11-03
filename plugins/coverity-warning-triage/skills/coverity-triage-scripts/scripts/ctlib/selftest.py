@@ -27,7 +27,7 @@ from .common import CtError, out_text, plugin_path, read_json, resolve_path, run
 from .config import CONFIG_DIR, CONFIG_FILE, load_config
 from .envvars import get_env
 from .models import IssueDetail
-from .prepare import agent_state, doctor, server_dir
+from .prepare import agent_state, doctor, server_env
 from .run import Run
 
 STATE_FILE = "selftest.json"
@@ -202,7 +202,7 @@ def start(sections: str, repo: str | None, client: str, base: str | None) -> dic
 def static(folder: str) -> dict[str, Any]:
     result = Result(folder)
     agents = agent_state()  # every agent of the plugin, and old ones it no longer has ("stale")
-    venv = (server_dir() / ".venv").is_dir()
+    venv = server_env().is_dir()  # the place doctor and prewarm use (UV_PROJECT_ENVIRONMENT)
     behind = {name: a["status"] for name, a in agents.items() if a["status"] != "current"}
     ok = not behind and venv
     count = sum(a["status"] != "stale" for a in agents.values())

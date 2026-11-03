@@ -268,7 +268,7 @@ uv run --native-tls <プラグインのフォルダ>/skills/coverity-triage-scri
 | --- | --- |
 | `ct.py --help` | コマンドの一覧を出す |
 | `ct.py runs --repo <リポジトリ>` | 実行の一覧を出す |
-| `ct.py status --run <実行フォルダ>` | 実行の進み具合を出す |
+| `ct.py status --run <実行フォルダ>` | 実行の進み具合と、最近の動き（新しい順、10 行まで）を出す |
 
 - どのコマンドも、結果を JSON で1つ出します。できなかったときは `"ok": false` と理由（`error`）を出し、終了コード 1 で終わります。
 - 要るものは uv と、git か svn です。Python と要るライブラリは uv が用意します。`--native-tls` は省きません（社内の証明書を使うため）。

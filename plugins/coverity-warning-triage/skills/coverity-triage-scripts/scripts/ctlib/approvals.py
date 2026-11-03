@@ -160,7 +160,9 @@ def update(run: Run, item_id: str, decision: str | None, deviation: dict[str, An
     ``deviation`` None keeps the deviation edited earlier; the same values as the AI's proposal
     remove the edit (the report shows the AI's proposal again). An item can be approved while the
     run goes on; the summary is first written by ``ct.py summary``, which also puts the AI's
-    recommendation in for the other items (until then, ``preview`` refuses the run)."""
+    recommendation in for the other items (until then, ``preview`` refuses the run).
+
+    The entry saved is returned; with ``report_error`` when the pages could not be written again."""
     item = run.state.item(item_id)
     if item.status != "done":
         raise CtError(f"{item_id} はまだ終わっていません（状態: {item.status}）。承認できるのは終わった作業だけです")
@@ -173,8 +175,6 @@ def update(run: Run, item_id: str, decision: str | None, deviation: dict[str, An
         raise CtError(f"{item_id} の結果ファイルを読めません: {run.result_file(item_id)}")
     edit = None if deviation is None else _checked_deviation(deviation)
 
-    from . import triage  # triage imports this module
-
     with file_lock(_path(run)):
         items = load(run)
         if edit is None:
@@ -185,10 +185,28 @@ def update(run: Run, item_id: str, decision: str | None, deviation: dict[str, An
         items[item_id] = entry
         _save(run, items)
         # inside the lock, so a later change is never overwritten by an earlier one's pages
+        report_error = _write_pages(run, item_id)
+    return {**entry, "report_error": report_error} if report_error else entry
+
+
+def _write_pages(run: Run, item_id: str) -> str | None:
+    """Write the item's report and the summary (once made) again; what went wrong, if anything.
+
+    The approval is saved before and stays saved: the reports only show it (K-64), and preview reads
+    approvals.json. So a report that cannot be written is told to the person, never an unsaved approval."""
+    from . import triage  # triage imports this module
+
+    try:
         triage.write_item_files(run, item_id)
         if summary_made(run):
             triage.write_summary_files(run)
-    return entry
+    except CtError as exc:
+        return str(exc)
+    except OSError as exc:
+        return f"ファイルの操作に失敗しました: {exc}"
+    except Exception:  # noqa: BLE001 - a file of the run in a form the reports cannot read
+        return "実行フォルダのファイルに、形の違うものがあります"
+    return None
 
 
 def decisions(run: Run) -> dict[str, str]:

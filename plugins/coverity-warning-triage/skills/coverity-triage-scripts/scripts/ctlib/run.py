@@ -80,6 +80,7 @@ class RunState(BaseModel):
     max_rework: int = 1
     # progress of the steps around the work items
     fetch_rounds: int = 0  # times the collector was started to fetch the warning paths
+    paths_checked: bool = False  # after the last fetch: the person was told of the paths that could not be fetched
     integrated: bool = False
     verified: bool = False
     roles: dict[str, dict[str, Any]] = Field(default_factory=dict)  # the collector/integrator/reviewer at work

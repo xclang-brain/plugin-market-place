@@ -41,7 +41,7 @@ coverity:
 | `url` | （必須） | Coverity Connect の URL |
 | `user_env` | `COV_USER` | ユーザ名を入れた環境変数の名前 |
 | `key_env` | `COV_AUTH_KEY` | 認証キーを入れた環境変数の名前 |
-| `triage_store` | `Default Triage Store` | 書き込むトリアージストアの名前 |
+| `triage_store` | `Default Triage Store` | 書き戻しの項目に `stream` がないときに書き込むトリアージストアの名前（`stream` があれば、そのストリームが使うトリアージストアに書きます） |
 | `revision_field` | `sourceVersion` | 解析したリビジョンが入るスナップショットの項目。空にすると取らない |
 | `ca_file` | なし | 社内の CA 証明書のファイル。なければ OS の証明書ストアを使う |
 | `api` | `auto` | `fake` にすると、Coverity の代わりに `fake_data` の YAML のファイルを読む（試験用。書き戻しは `<fake_data>.writes.jsonl` に足す） |
@@ -173,6 +173,7 @@ Copilot CLI は、PATH のほかの環境変数を、そのままでは MCP サ�
 - `checkers` には `*`・`?`・`[` のワイルドカードが使えます。
 - `project` は、Coverity Connect の検索の絞り込みには使いません。どの警告を探すかは `streams` で決まります（`project` で絞るのは `api: fake` のときだけです）。
 - Status と、ワイルドカードを含むチェッカーは、Coverity の検索のあとでサーバーが絞ります。
+- 探すのは、最新のスナップショットにある警告です。`triage.status` に `Fixed`（直った警告）か `Absent Dismissed`（誤検知などにした後で、最新のスナップショットから消えた警告）があるときだけ、前のスナップショットにある警告も探します。この2つは、最新のスナップショットにない警告に付くためです。
 - `limit` は、ファイルに保存するときは保存する件数の上限（既定 100）、ツールの結果で返すときは1回に返す件数（既定 20、上限 100）です。
 - `name`（条件の名前）も書けます。検索には使いません。
 - `filter` に、ここに挙げた項目（`streams`・`checkers`・`impacts`・`triage` の `status`・`classification`・`action`・`limit`・`project`・`name`）のほかの項目があると、エラーにします。書き間違えた項目を黙って捨てて、絞らずに検索しないためです。`filter_file` は、ほかの項目があっても読み飛ばします。
@@ -188,7 +189,7 @@ Copilot CLI は、PATH のほかの環境変数を、そのままでは MCP サ�
 | `excluded` | 検索のあとの条件（Status など）で外した件数 |
 | `next` | 続きがあるときの、呼び直し方 |
 
-ファイルに保存するとき（`output_file` あり）：結果は `done`、`found`、`limit`、`limited`（上限で止めたか）、`coverity_total`、`excluded`、`excluded_note`、`analyzed_revision`（最新のスナップショットの `revision_field` の値）、`revision_error`、`output_file`、`next` です。`output_file` には、警告（`issues`）、外した警告と合わなかった値（`excluded`、50 件まで）、送った要求（`requests`）が入ります。
+ファイルに保存するとき（`output_file` あり）：結果は `done`、`found`、`limit`、`limited`（上限で止めたか）、`coverity_total`、`excluded`、`excluded_note`、`analyzed_revision`（最新のスナップショットの `revision_field` の値）、`revision_error`、`output_file`、`next` です。`output_file` には、警告（`issues`）、外した警告と合わなかった値（`excluded`、50 件まで）、外した警告の CID のすべて（`excluded_cids`。呼び直したときに同じ警告を2回数えないため）、送った要求（`requests`）が入ります。
 
 ### get_issues
 
@@ -223,7 +224,7 @@ Copilot CLI は、PATH のほかの環境変数を、そのままでは MCP サ�
 
 ```json
 [
-  {"id": "10001", "cids": [10001], "classification": "False Positive", "action": "Ignore",
+  {"id": "10001", "cids": [10001], "stream": "app-main", "classification": "False Positive", "action": "Ignore",
    "comment": "ループの前で NULL を確かめている"},
   {"id": "G1", "cids": [10002, 10003], "classification": "Bug", "action": "Fix Required", "severity": "Major"}
 ]
@@ -231,6 +232,7 @@ Copilot CLI は、PATH のほかの環境変数を、そのままでは MCP サ�
 
 - `id` は、項目を見分けるための文字列です（結果の `written` や `failed` に出ます）。
 - `severity` と `comment` は省けます。空の値は Coverity に送りません。
+- `stream` は、警告のあるストリームの名前です（省けます）。書くと、そのストリームが使うトリアージストア（Coverity に問い合わせて調べます）に書きます。書かなければ、設定の `triage_store` に書きます。ストリームが Coverity にないときは、その項目を `failed` にします。
 
 結果：`counts`（`entries` 書き戻す項目の数、`cids` CID の数）、`items`（書き戻す内容）、`confirmation_token`（確認の文字列）、`next`。
 
@@ -251,7 +253,7 @@ Copilot CLI は、PATH のほかの環境変数を、そのままでは MCP サ�
     - フォルダはユーザーごとです。Linux と macOS では、自分だけが読み書きできるように作ります。
     - ファイルは、Coverity の URL（`coverity.url`）とトリアージストア（`coverity.triage_store`）の組ごとに1つです。`<文字列>` はこの組から作り、ファイルの中にも `url` と `triage_store` を書きます。
     - 一時のフォルダは、Python の `tempfile.gettempdir()` が返すフォルダです（環境変数 `TMPDIR`・`TEMP`・`TMP` の順に見ます）。
-- 書き込み済みの項目は、書き直しません。項目は中身（`id`・`cids`・値・コメント）で見分けるので、項目の並べ方や確認の文字列が変わっても、同じ項目は二重に書きません。
+- 書き込み済みの項目は、書き直しません。項目は中身（`id`・`cids`・`stream`・値・コメント）で見分けるので、項目の並べ方や確認の文字列が変わっても、同じ項目は二重に書きません。
 - Coverity が1つの項目を断ったときは、その項目を `failed` にして、ほかの項目を書き込みます。
   - 5xx や認証の失敗で止まったときは、止まった項目を記録しません。サーバーが戻ってから同じ引数で呼ぶと、書き込みます。
   - 値の誤りなどで HTTP 4xx（401・403 を除く）で断られた項目は、同じ確認の文字列では書き直しません。値を直して、`preview_triage` からやり直します。
@@ -266,7 +268,7 @@ Copilot CLI は、PATH のほかの環境変数を、そのままでは MCP サ�
 確認の文字列は、SHA-256 の16進の先頭12文字です。`preview_triage` が返すので、ふつうは作る必要はありません。
 
 - `plan_file` のとき：ファイルのバイト列の SHA-256。
-- `entries` のとき：各項目を `id`、`cids`、`classification`、`action`、`severity`、`comment` の6つにそろえ（`severity` と `comment` がなければ空の文字列）、`{"triage": entries}` を次の形の JSON の文字列にして、UTF-8 のバイト列にした SHA-256。
+- `entries` のとき：各項目を `id`、`cids`、`classification`、`action`、`severity`、`comment` の6つにそろえ（`severity` と `comment` がなければ空の文字列）、`stream` があれば足し、`{"triage": entries}` を次の形の JSON の文字列にして、UTF-8 のバイト列にした SHA-256。
 
 ```python
 import hashlib, json
@@ -274,7 +276,8 @@ import hashlib, json
 def token(entries):
     normal = [{"id": e["id"], "cids": [int(c) for c in e["cids"]],
                "classification": e["classification"], "action": e["action"],
-               "severity": e.get("severity", ""), "comment": e.get("comment", "")} for e in entries]
+               "severity": e.get("severity", ""), "comment": e.get("comment", ""),
+               **({"stream": e["stream"]} if e.get("stream") else {})} for e in entries]
     text = json.dumps({"triage": normal}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 ```

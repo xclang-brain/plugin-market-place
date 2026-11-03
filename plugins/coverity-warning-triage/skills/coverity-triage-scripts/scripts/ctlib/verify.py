@@ -15,8 +15,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,11 +61,66 @@ class BatchResult:
     error: str = ""
 
 
+# The builds this process runs, while ``track_builds`` is on (the screen's trial build): each runs in a
+# process group of its own, so that ``stop_builds`` ends the shell and everything it started.
+_tracked: set[subprocess.Popen[bytes]] | None = None
+_stopped = False
+_track_lock = threading.Lock()
+
+
+def track_builds() -> None:
+    """Keep the builds of this process, for ``stop_builds`` (``ct.py gui`` calls it once at start)."""
+    global _tracked, _stopped
+    with _track_lock:
+        _tracked, _stopped = set(), False
+
+
+def stop_builds() -> None:
+    """End the builds running now, with their children; no build starts after this."""
+    global _stopped
+    with _track_lock:
+        _stopped = True
+        running = list(_tracked or ())
+    for proc in running:
+        if proc.poll() is None:
+            _stop_tree(proc)
+
+
+def _stop_tree(proc: subprocess.Popen[bytes]) -> None:
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+
+
 def _run_shell(command: str, cwd: Path, log: Path, drop: tuple[str, ...] = ()) -> bool:
     with open(log, "ab") as f:
         f.write(f"$ {command}\n".encode("utf-8"))
         f.flush()
-        proc = subprocess.run(command, cwd=cwd, shell=True, stdout=f, stderr=subprocess.STDOUT, env=build_env(drop=drop))
+        kwargs: dict[str, Any] = {"cwd": cwd, "shell": True, "stdout": f, "stderr": subprocess.STDOUT,
+                                  "env": build_env(drop=drop)}
+        with _track_lock:
+            tracked = _tracked
+            if tracked is None:
+                proc = None
+            elif _stopped:
+                return False
+            else:
+                group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32"
+                         else {"start_new_session": True})
+                proc = subprocess.Popen(command, **kwargs, **group)
+                tracked.add(proc)
+        if proc is None:  # ct.py itself: the build stays in the group of the command (Ctrl+C stops it)
+            return subprocess.run(command, **kwargs).returncode == 0
+        try:
+            proc.wait()
+        finally:
+            with _track_lock:
+                tracked.discard(proc)
     return proc.returncode == 0
 
 

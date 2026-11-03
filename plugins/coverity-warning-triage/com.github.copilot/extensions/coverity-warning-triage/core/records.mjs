@@ -196,9 +196,11 @@ function normalizeDisplay(ctx, run, def, value) {
         if (!(value >= 0 && value <= 100)) bad('数で渡すときは 0 から 100 にしてください。');
         return value;
       }
-      if (!isPlainObject(value) || typeof value.value !== 'number' || typeof value.max !== 'number' || !(value.max > 0)) {
+      if (!isPlainObject(value) || typeof value.value !== 'number' || typeof value.max !== 'number') {
         bad('0 から 100 の数か、{ value, max, label? } の形で渡してください。');
       }
+      // max が 0（数える物がまだない、または0件）も受け付ける。そのとき value は 0 だけ
+      if (!Number.isFinite(value.max) || value.max < 0) bad('max は 0 以上の数にしてください。');
       if (!(value.value >= 0 && value.value <= value.max)) bad('value は 0 以上 max 以下にしてください。');
       const out = { value: value.value, max: value.max };
       if (typeof value.label === 'string') out.label = value.label;

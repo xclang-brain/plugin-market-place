@@ -62,7 +62,9 @@ def preview(run_dir: str) -> dict[str, Any]:
                 except CtError as exc:
                     problems.append(f"{item.id}: {exc}")
                     continue
-                triage.append({"id": item.id, "cids": item.cids, **attrs.model_dump(), "comment": comment})
+                # stream: the triage is written in the triage store that the stream of the warnings uses (MCP update_triage)
+                triage.append({"id": item.id, "cids": item.cids, "stream": run.state.stream, **attrs.model_dump(),
+                               "comment": comment})
             if "annotation" in todo:
                 code.append({"id": item.id, "cids": item.cids, "kind": "annotation", **saved["annotation"]})
         else:
@@ -90,10 +92,10 @@ def preview(run_dir: str) -> dict[str, Any]:
 
 
 def _pr_text(run: Run, entry: dict[str, Any]) -> tuple[str, str]:
-    from .triage import review_of  # late import: triage is the larger module
+    from .triage import review_of, verify_results  # late import: triage is the larger module
 
     result = TriageResult.model_validate(read_json(run.result_file(entry["id"])))
-    verify = read_json(run.dir / "verify.json", {}).get(entry["id"]) if (run.dir / "verify.json").is_file() else None
+    verify = verify_results(run).get(entry["id"])
     result = assess.effective(result, review_of(run, run.state.item(entry["id"])), verify)  # as the reports show it
     cids = entry["cids"]
     title = f"Coverity CID {', '.join(map(str, cids[:5]))}{' ほか' if len(cids) > 5 else ''}: {result.fix.summary}"

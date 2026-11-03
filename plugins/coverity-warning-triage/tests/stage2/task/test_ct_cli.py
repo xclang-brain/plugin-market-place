@@ -696,6 +696,26 @@ class GitFlowTest(CtCase):
         self.assertEqual(listed[0]["run_dir"], str(run_dir))
         self.assertTrue(listed[0]["summary"])
 
+    def test_req103_status_gives_recent_steps_newest_first(self) -> None:
+        """status の recent は、画面の「監視」と同じく新しい順の「HH:MM:SS 文」で、10 行まで。"""
+        run_dir = self.new_run(self.repo)
+        self.assertRegex(self.ok("status", "--run", str(run_dir))["recent"][0], r"^\d{2}:\d{2}:\d{2} 実行を始めた")
+        records = [{"time": f"2026-11-03T10:00:{i:02d}", "event": "fail", "level": "critical", "source": "ct",
+                    "item": str(200 + i), "reason": f"理由 {i}"} for i in range(11)]
+        lines = [json.dumps(r, ensure_ascii=False) for r in records]
+        lines.append("{書きかけの行")  # 読めない行は飛ばす
+        lines.append(json.dumps({"time": "時刻なし", "event": "brief", "level": "info", "source": "ct", "item": "G9"},
+                                ensure_ascii=False))
+        (run_dir / "operations.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        recent = self.ok("status", "--run", str(run_dir))["recent"]
+        self.assertEqual(len(recent), 10)
+        self.assertEqual(recent[0], "--:--:-- G9 の指示を作った（サブエージェントが調べる）")  # 時刻が読めない
+        self.assertEqual(recent[1], "10:00:10 210 を処理できなかった: 理由 10")  # 新しいものが先
+        self.assertEqual(recent[-1], "10:00:02 202 を処理できなかった: 理由 2")
+        self.assertTrue(all(isinstance(line, str) for line in recent))
+        (run_dir / "operations.log").unlink()
+        self.assertEqual(self.ok("status", "--run", str(run_dir))["recent"], [])  # 記録がなくても止まらない
+
     def test_req106_preview_and_apply_code_push_once(self) -> None:
         run_dir = self.finished_run()
         self.ok("summary", "--run", str(run_dir))
@@ -1012,6 +1032,20 @@ class SelftestTest(CtCase):
         state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         self.assertIn("見本のフォルダが記録されていません",
                       self.ng("selftest", "check-run", "--dir", folder, "--run", str(run_dir))["error"])
+
+    def test_req004_selftest_static_looks_where_doctor_looks(self) -> None:
+        """UV_PROJECT_ENVIRONMENT があるとき、1-7 の「MCP サーバの Python 環境」は doctor と同じ場所を見る。"""
+        folder = self.ok("selftest", "start", "--sections", "1", "--base", str(self.tmp / "st"))["dir"]
+        repo = self.git_repo()
+        made = self.tmp / "uv-env"
+        made.mkdir()
+        for env, shown, status in ((made, "あり", "ok"), (self.tmp / "no-env", "なし", "ng")):
+            with self.subTest(environment=str(env)):
+                given = {"UV_PROJECT_ENVIRONMENT": str(env)}
+                check = self.ok("selftest", "static", "--dir", folder, env=given)["1-7"]
+                self.assertIn(f"MCP サーバの Python 環境: {shown}", check["actual"])
+                doctor = {c["check"]: c for c in self.ok("doctor", "--repo", str(repo), env=given)["checks"]}
+                self.assertEqual(doctor["MCP サーバの Python 環境"]["status"], status)
 
 
 if __name__ == "__main__":

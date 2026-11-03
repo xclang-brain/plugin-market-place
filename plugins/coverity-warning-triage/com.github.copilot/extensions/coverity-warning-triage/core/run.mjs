@@ -18,6 +18,7 @@ function makeSlot(slot, role, label, selectedModel) {
     actualModel: '',
     lastActiveAt: null,
     replySummary: '',
+    hasReply: false, // 最後の返事があるか（画面が、全文を開く欄を出すか決める）
     agentId: null,
   };
 }
@@ -111,6 +112,7 @@ export function syncSlot(run, rec) {
   slot.actualModel = rec.model ?? '';
   slot.lastActiveAt = rec.lastEventAt ?? slot.lastActiveAt;
   slot.replySummary = rec.reply ? summarizeText(rec.reply, LIMITS.REPLY_SUMMARY_CHARS) : '';
+  slot.hasReply = rec.reply != null;
 }
 
 // 今のフェーズは動いているエージェントで決める（4.5）。検証が動いていれば評価、作業なら実行、統括なら計画。
@@ -176,6 +178,7 @@ export function viewRun(ctx, run) {
       plan: it.plan,
       verdicts: (it.verdicts ?? []).map((v) => ({ ...v })),
       agentIds: [...it.agentIds],
+      replied: it.agentIds.filter((id) => run.tree.get(id)?.reply != null), // 最後の返事があるエージェント（画面が全文を開けるもの）
     })),
     displays: clone(run.displays),
     summary: run.summary,

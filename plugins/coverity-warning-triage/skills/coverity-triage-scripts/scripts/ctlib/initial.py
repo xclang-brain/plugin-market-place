@@ -13,7 +13,6 @@ triage (the warnings would be the old ones). Only the commands written in the se
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -24,7 +23,7 @@ from . import oplog
 from .common import CtError, build_env, display_text, pid_alive, read_json, resolve_path, spawn_detached, write_json
 from .envvars import get_env
 from .run import Run
-from .verify import LOG_TAIL, intermediate_dir, no_ticker, safe_relpath
+from .verify import LOG_TAIL, _stop_tree, intermediate_dir, no_ticker, safe_relpath
 
 STATUS_FILE = "status.json"
 LOG_FILE = "initial.log"
@@ -129,17 +128,6 @@ def command_lines(run: Run, root: Path) -> tuple[str, str, dict[str, str], dict[
     line += " " + no_ticker(config.cov_commit_args)
     commit = " && ".join([*prefix, f"echo {MARK}commit", line])
     return build, commit, build_env_, build_env(extra={"COVERITY_PASSPHRASE": key}, drop=keys)
-
-
-def _stop_tree(proc: subprocess.Popen[bytes]) -> None:
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
 
 
 class _Steps:

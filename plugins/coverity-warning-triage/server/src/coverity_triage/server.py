@@ -81,7 +81,8 @@ mcp = MCPServer(
         "渡して呼び直し、get_issues は remaining の CID で呼び直します。\n"
         "- 書き戻し：先に preview_triage を呼び、件数と内容を人に見せて同意を得てから、同じ plan_file か entries と、"
         "返った confirmation_token を update_triage に渡します。done: false なら同じ引数でもう一度呼びます"
-        "（plan_file でも entries でも）。"
+        "（plan_file でも entries でも）。項目に stream（警告のあるストリームの名前）を書くと、そのストリームが使う"
+        "トリアージストアに書きます。書かなければ coverity.triage_store（既定 Default Triage Store）に書きます。"
     ),
 )
 
@@ -284,7 +285,9 @@ def search_issues(repo_root: str, filter_file: str | None = None, output_file: s
     """Coverity の警告を検索する。条件は filter_file（条件の JSON のファイル）か filter（同じ形の object：
     streams（1 つだけ）、project、checkers、impacts、triage{status, classification, action}、limit）の、
     どちらか一方で渡す。filter にほかの項目があるとエラーにする。project は Coverity Connect の検索の
-    絞り込みには使わない（どの警告を探すかはストリームで決まる）。
+    絞り込みには使わない（どの警告を探すかはストリームで決まる）。探すのは最新のスナップショットの
+    警告。triage.status に Fixed か Absent Dismissed があるときは、前のスナップショットの警告も探す
+    （この2つは、最新のスナップショットにない警告に付くため）。
     output_file を渡すと、結果をそのファイルに保存して件数を返す。条件の limit 件（既定 100）で止め、
     最新スナップショットの解析リビジョンも記録する。done が false なら、同じ引数でもう一度呼ぶ
     （保存済みの続きから検索する）。外した警告と合わなかった項目の値は output_file の excluded に残る。
@@ -320,20 +323,32 @@ def search_issues(repo_root: str, filter_file: str | None = None, output_file: s
                  "limited": False, "revision_field": config.revision_field or None,
                  "revision_checked": not config.revision_field, "analyzed_revision": None,
                  "revision_error": None, "issues": [], "excluded_count": 0, "excluded": [],
-                 "requests": []}
+                 "excluded_cids": [], "requests": []}
     limit = state["limit"]
     client = make_client(config)
     try:
         if state["next_offset"] is not None and deadline.allows(client):
             page = client.search(spec, limit - len(state["issues"]), state["next_offset"], deadline.left())
+            # A new snapshot between calls, or pages that overlap, can return a row again; never keep a
+            # CID twice, neither from an earlier call nor within this one.
             known = {i["cid"] for i in state["issues"]}
-            # A new snapshot between calls can shift the pages; never keep a CID twice.
-            found = [i.model_dump(exclude_none=True) for i in page.issues if i.cid not in known]
-            state["issues"] += found
-            seen = {e["cid"] for e in state.setdefault("excluded", [])}
-            new = [e for e in page.excluded if e["cid"] not in seen]
+            for issue in page.issues:
+                if issue.cid not in known:
+                    known.add(issue.cid)
+                    state["issues"].append(issue.model_dump(exclude_none=True))
+            # Every CID left out is kept apart from the samples (at most MAX_EXCLUDED_SAMPLES), so that
+            # one left out again is not counted twice.
+            samples = state.setdefault("excluded", [])
+            left_out = state.setdefault("excluded_cids", [e["cid"] for e in samples])
+            seen = set(left_out)
+            new = []
+            for e in page.excluded:
+                if e["cid"] not in seen:
+                    seen.add(e["cid"])
+                    new.append(e)
+            left_out += [e["cid"] for e in new]
             state["excluded_count"] = state.get("excluded_count", 0) + len(new)
-            state["excluded"] += new[:max(0, MAX_EXCLUDED_SAMPLES - len(state["excluded"]))]
+            samples += new[:max(0, MAX_EXCLUDED_SAMPLES - len(samples))]
             state["coverity_total"] = page.total
             if len(state["issues"]) >= limit:
                 state["limited"] = len(state["issues"]) > limit or page.next_offset is not None
@@ -498,9 +513,19 @@ def _triage_outcome(out: dict[str, Any]) -> tuple[str, dict[str, Any]]:
              "entries": out["entries"], "failed": failed, "remaining": len(out["remaining"])})
 
 
+def _entry(entry: TriageEntry) -> dict[str, Any]:
+    """An entry as it is shown and confirmed: without a stream when none is given."""
+    return entry.model_dump(exclude_none=True)
+
+
+def _entry_key(entry: TriageEntry) -> str:
+    """Key of an entry in the result file, by content (the same as before ``stream`` was added)."""
+    return _sha(entry.model_dump_json(exclude_none=True).encode("utf-8"))[:16]
+
+
 def entries_token(entries: list[TriageEntry]) -> str:
     """Confirmation token of entries: SHA-256 of the normalized {"triage": entries} as compact JSON."""
-    text = json.dumps({"triage": [e.model_dump() for e in entries]}, ensure_ascii=False, sort_keys=True,
+    text = json.dumps({"triage": [_entry(e) for e in entries]}, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"))
     return _sha(text.encode("utf-8"))[:12]
 
@@ -529,8 +554,9 @@ def _plan_entries(path: Path, raw: bytes) -> list[TriageEntry]:
 @tool("Coverity へのトリアージの書き戻しの確認", read_only_hint=True)
 def preview_triage(plan_file: str | None = None, entries: list[TriageEntry] | None = None) -> dict[str, Any]:
     """書き戻しの内容を確かめ、update_triage に渡す確認用の文字列を返す。読むだけで、Coverity とは通信しない。
-    plan_file（{"triage": [...]} の JSON のファイル）か entries（[{id, cids, classification, action,
-    severity?, comment?}]）の、どちらか一方を渡す。
+    plan_file（{"triage": [...]} の JSON のファイル）か entries（[{id, cids, stream?, classification, action,
+    severity?, comment?}]）の、どちらか一方を渡す。stream は警告のあるストリームの名前で、書くと、そのストリームが
+    使うトリアージストアに書き戻す（書かなければ、設定の coverity.triage_store）。
     counts（書き戻す項目の数と CID の数）と items（書き戻す内容）を人に見せ、同意を得てから、返った
     confirmation_token を update_triage に渡す。confirmation_token は自分で作らない。"""
     _one_of("plan_file", plan_file, "entries", entries)
@@ -541,7 +567,7 @@ def preview_triage(plan_file: str | None = None, entries: list[TriageEntry] | No
         items = _entries(entries)
         token = entries_token(items)
     return {"counts": {"entries": len(items), "cids": len({c for e in items for c in e.cids})},
-            "items": [e.model_dump() for e in items], "confirmation_token": token,
+            "items": [_entry(e) for e in items], "confirmation_token": token,
             "next": ("件数と内容を人に見せ、同意を得てから update_triage に confirmation_token と、"
                      "同じ plan_file か entries を渡してください")}
 
@@ -578,9 +604,11 @@ def update_triage(repo_root: str, confirmation_token: str, plan_file: str | None
     """トリアージ（分類・対応・重大度・コメント）を Coverity に書き込む。plan_file か entries の、どちらか
     一方を渡す（preview_triage に渡したものと同じ）。confirmation_token は preview_triage が返した確認用の
     文字列で、人が件数と内容を見て同意した後にだけ渡す。中身と合わなければ何も書かない。
+    項目に stream があれば、そのストリームが使うトリアージストアに書く（Coverity に問い合わせて決める。ストリームが
+    なければ、その項目だけ失敗にする）。stream がなければ、設定の coverity.triage_store に書く。
     結果は、plan_file なら同じフォルダの <名前>.result.json に、entries なら一時のフォルダの
     coverity-triage-mcp-<ユーザー名>/ の、Coverity の URL とトリアージストアごとのファイルに残す（result_file）。
-    書き込み済みの項目（id・cids・値・コメントが同じもの）は、並べ方や確認用の文字列が変わっても書き直さない。
+    書き込み済みの項目（id・cids・stream・値・コメントが同じもの）は、並べ方や確認用の文字列が変わっても書き直さない。
     Coverity が1つの項目を値の誤り（401・403 以外の 4xx）で断っても（failed）、ほかの項目は書き込む。その項目は、
     同じ確認用の文字列では書き直さない（値を直して preview_triage からやり直す）。認証の失敗（401・403）と
     5xx では、呼び出し全体を止める。止まった項目は記録しないので、サーバーが戻ってから同じ引数で呼ぶと書き込む。
@@ -617,17 +645,18 @@ def update_triage(repo_root: str, confirmation_token: str, plan_file: str | None
     try:
         for entry in items:
             # Keyed by content: an entry the person changed after writing is written again.
-            key = _sha(entry.model_dump_json().encode("utf-8"))[:16]
+            key = _entry_key(entry)
             failure = result["failed"].get(key, {})
             if key in result["written"] or failure.get("token") == token:
                 continue
-            if not deadline.allows(client):
+            # An entry with a stream may also ask which triage store the stream uses: two requests.
+            if not deadline.allows(client, 2 if entry.stream else 1):
                 remaining.append(entry.id)
                 continue
             attributes = TriageAttributes(classification=entry.classification, action=entry.action,
                                           severity=entry.severity)
             try:
-                client.write_triage(entry.cids, attributes, entry.comment)
+                store = client.write_triage(entry.cids, attributes, entry.comment, entry.stream)
             except CoverityError as exc:
                 if exc.fatal:
                     raise
@@ -636,7 +665,8 @@ def update_triage(repo_root: str, confirmation_token: str, plan_file: str | None
                 result["failed"][key] = {"id": entry.id, "cids": entry.cids, "error": str(exc),
                                          "token": token, "at": _now()}
                 continue
-            result["written"][key] = {"id": entry.id, "cids": entry.cids, "at": _now()}
+            result["written"][key] = _compact({"id": entry.id, "cids": entry.cids, "stream": entry.stream,
+                                               "triage_store": store, "at": _now()})
             result["failed"].pop(key, None)
             written_now.append(entry.id)
             _write_json(result_path, result)
@@ -644,7 +674,7 @@ def update_triage(repo_root: str, confirmation_token: str, plan_file: str | None
         result["requests"] += client.requests
         client.close()
         _write_json(result_path, result)
-    keys = {_sha(e.model_dump_json().encode("utf-8"))[:16] for e in items}
+    keys = {_entry_key(e) for e in items}
     failed = [{"id": v["id"], "cids": v["cids"], "error": v["error"]}
               for k, v in result["failed"].items() if k in keys]
     done = not remaining

@@ -13,7 +13,8 @@ from pydantic import ValidationError
 
 from .common import CtError, out_text, plugin_path, resolve_path, run_cmd
 from .config import (CONFIG_DIR, CONFIG_FILE, DEFAULT_FILTER, DEFAULT_OUTPUT_DIR, DEFAULT_PARALLEL, FILTERS_DIR,
-                     KNOWLEDGE_TEMPLATE, FilterSpec, ProjectConfig, VerifyConfig, knowledge_path, load_config, output_dir)
+                     KNOWLEDGE_TEMPLATE, FilterSpec, ProjectConfig, VerifyConfig, knowledge_path, load_config, output_dir,
+                     read_text)
 from .envvars import get_env
 from .vcs import detect as detect_vcs
 from .vcs import make_vcs
@@ -39,6 +40,14 @@ def _uv() -> str:
 def server_dir() -> Path:
     """The MCP server of the plugin (its uv project)."""
     return plugin_path("server")
+
+
+def server_env() -> Path:
+    """The Python environment uv makes for the MCP server: the folder in ``UV_PROJECT_ENVIRONMENT`` when it
+    is set (uv takes a relative path from the server's folder and does not expand ``~``), ``server/.venv``
+    otherwise."""
+    server = server_dir()
+    return server / (os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
 
 
 def agents_dir() -> Path:
@@ -74,7 +83,7 @@ def prewarm() -> dict[str, Any]:
     uv = _uv()
     version = out_text(run_cmd([uv, "--version"]))
     run_cmd([uv, "sync", "--native-tls", "--frozen", "--quiet", "--directory", str(server)])
-    return {"ok": True, "uv": version, "environment": str(server / ".venv"),
+    return {"ok": True, "uv": version, "environment": str(server_env()),
             "seconds": round(time.monotonic() - started, 1)}
 
 
@@ -224,7 +233,7 @@ def doctor(repo_root: str) -> dict[str, Any]:
         checks.append(_check(f"{vcs} コマンド", "ok" if found else "ng", found or "見つかりません",
                              "" if found else f"{vcs} を入れて PATH を通してください"))
     try:  # the plugin's files: a clear "ng" when ct.py is used outside the plugin
-        venv_dir = server_dir() / ".venv"
+        venv_dir = server_env()
         venv = venv_dir.is_dir()
         checks.append(_check("MCP サーバの Python 環境", "ok" if venv else "ng", str(venv_dir),
                              "" if venv else "ct.py prewarm を実行します"))
@@ -262,7 +271,7 @@ def doctor(repo_root: str) -> dict[str, Any]:
         filters = []
         for path in sorted((repo / CONFIG_DIR / FILTERS_DIR).glob("*.yaml")):
             try:
-                spec = FilterSpec.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+                spec = FilterSpec.model_validate(yaml.safe_load(read_text(path)) or {})
                 filters.append(path.name if len(spec.streams) == 1 else f"{path.name}（ストリームが 1 つでない）")
             except Exception as exc:  # noqa: BLE001 - report every broken file
                 filters.append(f"{path.name}（読めません: {str(exc)[:100]}）")
@@ -367,7 +376,7 @@ def set_verify(repo_root: str, default: str, setup_command: str, build_command: 
     The values given as None keep what the settings have."""
     repo = resolve_path(repo_root)
     path = repo / CONFIG_DIR / CONFIG_FILE
-    text = path.read_text(encoding="utf-8")
+    text = read_text(path)
     header = "".join(line + "\n" for line in text.splitlines() if line.startswith("#"))
     data = yaml.safe_load(text) or {}
     verify = {**(data.get("verify") or {}), "default": default, "setup_command": setup_command,

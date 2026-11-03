@@ -426,7 +426,7 @@ p { margin: 6px 0; }
 .badge.edited { background: var(--amber-bg); color: var(--amber); }
 .card, section.block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   padding: 16px 18px; margin: 0 0 16px; box-shadow: var(--shadow); }
-.lead { font-size: 1.08rem; font-weight: 600; margin: 0 0 10px; }
+.lead { font-size: 1.08rem; font-weight: 600; margin: 0 0 10px; overflow-wrap: anywhere; }
 .conclusion { border-left: 5px solid var(--blue); }
 .conclusion.deviation { border-left-color: var(--violet); }
 dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 6px 0; }

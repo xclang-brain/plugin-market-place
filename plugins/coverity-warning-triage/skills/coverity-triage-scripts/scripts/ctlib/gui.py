@@ -19,6 +19,7 @@ file another one has taken stops, so none is left running where nothing can find
 from __future__ import annotations
 
 import contextlib
+import copy
 import functools
 import hashlib
 import html
@@ -42,10 +43,11 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from . import activity, approvals, assess, envvars, prepare
+from . import activity, approvals, assess, envvars, prepare, verify
 from .common import CtError, display_text, file_lock, read_json, resolve_path, spawn_detached, write_text
-from .config import (CONFIG_DIR, CONFIG_FILE, FILTERS_DIR, KNOWLEDGE_TEMPLATE, NO_GROUPING_FILE, FilterSpec,
-                     ProjectConfig, knowledge_path, load_config, output_dir)
+from .config import (CONFIG_DIR, CONFIG_FILE, FILTERS_DIR, KNOWLEDGE_FILE, KNOWLEDGE_TEMPLATE, NO_GROUPING_FILE, NOT_UTF8,
+                     FilterSpec, ProjectConfig, knowledge_path, load_config, output_dir)
+from .config import problems as _problems  # what to change, in Japanese
 from .models import Issue, TriageResult
 from .report import CONFIDENCE_ORDER, REPORT_CSS, diff_html, item_title
 from .run import RUN_FILE, ItemState, Run, list_runs, unfinished
@@ -72,17 +74,9 @@ NO_GROUPING_HEADER = "# 却下されたグループの CID。次の実行から�
 FILTER_NAME = re.compile(r"^[^\\/:*?\"<>|.][^\\/:*?\"<>|]{0,80}\.yaml$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
-ERROR_TEXT = {
-    "missing": "入力してください",
-    "greater_than_equal": "{ge} 以上にしてください",
-    "less_than_equal": "{le} 以下にしてください",
-    "int_parsing": "整数にしてください",
-    "int_type": "整数にしてください",
-    "string_type": "文字列にしてください",
-    "bool_type": "オン / オフで指定してください",
-    "literal_error": "次のどれかにしてください: {expected}",
-    "extra_forbidden": "この項目は使えません",
-}
+MAX_BODY = 4 * 1024 * 1024  # a request body larger than this is refused (the settings are a few kilobytes)
+# Names of the environment variables that hold a key: their values are never sent to the screen.
+KEY_ENVS = ("COV_AUTH_KEY", "COVERITY_PASSPHRASE")
 
 
 # ---- reading -------------------------------------------------------------------------------
@@ -90,31 +84,127 @@ ERROR_TEXT = {
 
 def _read_yaml(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None, NOT_UTF8
+    except OSError as exc:
         return None, f"読めません: {exc}"
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        return None, f"YAML の書式が正しくないため読めません: {exc}"
     if not isinstance(data, dict):
         return None, "一番外側が「キー: 値」の形ではありません"
     return data, None
 
 
+def _same_kind(default: Any, raw: Any) -> bool:
+    """Whether a saved value can stand where the screen expects ``default`` (a wrong one shows the default)."""
+    if isinstance(default, bool) or isinstance(raw, bool):
+        return isinstance(default, bool) and isinstance(raw, bool)
+    if isinstance(default, list):
+        return isinstance(raw, list) and all(isinstance(x, str) for x in raw)
+    if isinstance(default, int):
+        return isinstance(raw, int)
+    if isinstance(default, str):
+        return raw is None or isinstance(raw, str)  # revision_field may be empty (null)
+    return raw is None or isinstance(raw, (int, str))  # a value that may be empty: a text or a number
+
+
 def _merge(defaults: Any, raw: Any) -> Any:
-    """Saved values over the defaults, keeping only the keys the settings know."""
+    """Saved values over the defaults, keeping only the keys the settings know and values of the right
+    kind: the screen shows a value of the wrong kind (``streams: a`` for a list) as the default, and the
+    error says what to change."""
     if isinstance(defaults, dict):
         if not isinstance(raw, dict):
             return defaults
         return {k: _merge(v, raw[k]) if k in raw else v for k, v in defaults.items()}
-    return raw
+    return raw if _same_kind(defaults, raw) else defaults
 
 
-def _problems(exc: ValidationError, where: str) -> list[str]:
-    out = []
-    for err in exc.errors():
-        field = ".".join(str(p) for p in err["loc"]) or "（全体）"
-        template = ERROR_TEXT.get(err["type"])
-        text = template.format(**(err.get("ctx") or {})) if template else err["msg"]
-        out.append(f"{where} の {field}: {text}")
-    return out
+_MISSING = object()
+
+
+def _get(data: Any, path: tuple[Any, ...]) -> Any:
+    for key in path:
+        if not isinstance(data, dict) or key not in data:
+            return _MISSING
+        data = data[key]
+    return data
+
+
+def _put(data: dict[str, Any], path: tuple[Any, ...], value: Any) -> None:
+    """Set the value at ``path`` (``_MISSING`` removes it)."""
+    for key in path[:-1]:
+        if not isinstance(data.get(key), dict):
+            data[key] = {}
+        data = data[key]
+    if value is _MISSING:
+        data.pop(path[-1], None)
+    else:
+        data[path[-1]] = copy.deepcopy(value)
+
+
+def _field(loc: tuple[Any, ...], defaults: dict[str, Any]) -> tuple[Any, ...]:
+    """The value of the settings that an error is about (``streams`` for ``streams.0``)."""
+    path: list[Any] = []
+    known: Any = defaults
+    for key in loc:
+        if not isinstance(known, dict):
+            break
+        path.append(key)
+        known = known.get(key, _MISSING) if isinstance(key, str) else _MISSING
+    return tuple(path)
+
+
+def _leaves(value: Any, name: str) -> list[str]:
+    """The names of the values under ``name``, as the screen names them (``verify.default``)."""
+    if isinstance(value, dict) and value:
+        return [leaf for k, v in value.items() for leaf in _leaves(v, f"{name}.{k}")]
+    return [name]
+
+
+def _saved_text(value: Any) -> str:
+    if value is None or value == "":
+        return "（空）"
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= 80 else text[:79] + "…"
+
+
+def _on_screen(model: type[BaseModel], defaults: dict[str, Any], raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """What the screen shows for a settings file with errors, and the saved values it shows as the default.
+
+    The values the settings accept are shown as the settings read them (``max_items: "3"`` is 3). A value
+    with an error is shown as saved when the screen can show it (``parallel: 20``: the checks before
+    saving name it), else as the default. Those, and the keys the settings do not know, are returned by
+    name with the saved value as text: the table before saving lists them, as saving writes over them (K-71)."""
+    data = copy.deepcopy(raw)
+    wrong: set[tuple[Any, ...]] = set()
+    for _ in range(5):  # each pass puts the values with an error back to the default
+        try:
+            shown = model.model_validate(data).model_dump()
+            break
+        except ValidationError as exc:
+            paths = {_field(tuple(err["loc"]), defaults) for err in exc.errors()} - {()}
+            if not paths or paths <= wrong:  # not an error of one value: as before, value by value
+                return _merge(defaults, raw), {}
+            for path in paths:
+                wrong.add(path)
+                _put(data, path, _get(defaults, path))
+    else:
+        return _merge(defaults, raw), {}
+    saved: dict[str, str] = {}
+    for path in sorted(wrong, key=str):
+        value, default = _get(raw, path), _get(defaults, path)
+        if value is _MISSING:  # nothing was written there ("url" missing): nothing is written over
+            continue
+        if default is not _MISSING and not isinstance(default, dict) and _same_kind(default, value):
+            _put(shown, path, value)
+            continue
+        name = ".".join(str(key) for key in path)
+        for leaf in (_leaves(default, name) if default is not _MISSING else [name]):
+            saved[leaf] = _saved_text(value)
+    return shown, saved
 
 
 def _config_defaults(found: dict[str, Any]) -> dict[str, Any]:
@@ -126,13 +216,62 @@ def _filter_defaults() -> dict[str, Any]:
     return FilterSpec().model_dump()
 
 
-def credentials(user_env: str, key_env: str) -> dict[str, Any]:
-    """The user name may be shown; of the key, only whether it is set."""
-    names_ok = bool(ENV_NAME.match(user_env or "")) and bool(ENV_NAME.match(key_env or ""))
+def _env_name(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def credentials(user_env: Any, key_env: Any, saved_key_env: Any = None) -> dict[str, Any]:
+    """The user name may be shown; of the key, only whether it is set.
+
+    The variable named for the user name is not shown when it is one that holds a key (the key's variable
+    of the screen or of the saved settings, COV_AUTH_KEY, COVERITY_PASSPHRASE): only whether it is set."""
+    user_env, key_env = _env_name(user_env), _env_name(key_env)
+    names_ok = bool(ENV_NAME.match(user_env)) and bool(ENV_NAME.match(key_env))
+    keys = {name.upper() for name in (key_env, _env_name(saved_key_env), *KEY_ENVS) if name}
+    hidden = names_ok and user_env.upper() in keys
+    user = (envvars.get_env(user_env) or "") if names_ok else ""
     return {"user_env": user_env, "key_env": key_env,
-            "user": (envvars.get_env(user_env) or "") if names_ok else "",
+            "user": "" if hidden else user, "user_set": bool(user), "user_hidden": hidden,
             "key_set": bool(envvars.get_env(key_env)) if names_ok else False,
             "can_save": envvars.can_set_user_env()}
+
+
+def _saved_coverity(repo: Path) -> dict[str, str] | None:
+    """The names of the variables in the saved settings (None: there are none that can be read)."""
+    try:
+        coverity = load_config(repo).coverity
+    except CtError:
+        return None
+    return {"user_env": coverity.user_env, "key_env": coverity.key_env}
+
+
+def _saved_key_env(repo: Path) -> str | None:
+    saved = _saved_coverity(repo)
+    return saved["key_env"] if saved else None
+
+
+def _credential_names(repo: Path, config: Any) -> tuple[str, set[str]]:
+    """The variable of the user name, and those that hold a key, for the settings being saved."""
+    saved = _saved_coverity(repo) or {}
+    coverity = config.get("coverity") if isinstance(config, dict) else None
+    coverity = coverity if isinstance(coverity, dict) else {}
+    user_env = _env_name(coverity.get("user_env")) or saved.get("user_env", "")
+    keys = {_env_name(coverity.get("key_env")), saved.get("key_env", ""), *KEY_ENVS}
+    return user_env.upper(), {name.upper() for name in keys if name}
+
+
+def _knowledge(repo: Path) -> dict[str, Any]:
+    path = knowledge_path(repo)
+    if not path.is_file():
+        return {"exists": False, "text": KNOWLEDGE_TEMPLATE, "error": None}
+    try:
+        return {"exists": True, "text": path.read_text(encoding="utf-8"), "error": None}
+    except UnicodeDecodeError:
+        error = f"{KNOWLEDGE_FILE} の{NOT_UTF8}"
+    except OSError as exc:
+        error = f"{KNOWLEDGE_FILE} を読めません: {exc}"
+    # Not shown, and not saved from the screen: saving must not replace what could not be read.
+    return {"exists": True, "text": "", "error": error}
 
 
 def load_state(repo: Path) -> dict[str, Any]:
@@ -141,27 +280,34 @@ def load_state(repo: Path) -> dict[str, Any]:
     folder = repo / CONFIG_DIR
     defaults = _config_defaults(found)
     config, config_error, config_exists = defaults, None, (folder / CONFIG_FILE).is_file()
+    # A file that cannot be read is shown as the defaults, and saving it from the screen writes it whole
+    # (the table before saving lists every value). ``reset``: the saved values shown as the default.
+    config_unreadable, config_reset = False, {}
     if config_exists:
         raw, config_error = _read_yaml(folder / CONFIG_FILE)
-        if raw is not None:
-            config = _merge(defaults, raw)
+        if raw is None:
+            config_unreadable = True
+            if config_error == NOT_UTF8:
+                config_error = f"{CONFIG_FILE} の{NOT_UTF8}"
+        else:
             try:
                 config = ProjectConfig.model_validate(raw).model_dump()
             except ValidationError as exc:
                 config_error = "\n".join(_problems(exc, CONFIG_FILE))
+                config, config_reset = _on_screen(ProjectConfig, defaults, raw)
 
     filters = []
     for path in sorted((folder / FILTERS_DIR).glob("*.yaml")):
         raw, error = _read_yaml(path)
-        data = _merge(_filter_defaults(), raw or {})
+        data, reset = _filter_defaults(), {}
         if raw is not None:
             try:
                 data = FilterSpec.model_validate(raw).model_dump()
             except ValidationError as exc:
                 error = "\n".join(_problems(exc, path.name))
-        filters.append({"file": path.name, "data": data, "error": error})
+                data, reset = _on_screen(FilterSpec, _filter_defaults(), raw)
+        filters.append({"file": path.name, "data": data, "error": error, "unreadable": raw is None, "reset": reset})
 
-    knowledge = knowledge_path(repo)
     no_grouping_file = folder / NO_GROUPING_FILE
     no_grouping, no_grouping_error = [], None
     if no_grouping_file.is_file():
@@ -173,11 +319,10 @@ def load_state(repo: Path) -> dict[str, Any]:
     return {
         "repo_root": str(repo), "vcs": found["vcs"], "vcs_note": found["vcs_note"],
         "config_exists": config_exists, "config": config, "config_error": config_error,
-        "filters": filters,
-        "knowledge": {"exists": knowledge.is_file(),
-                      "text": knowledge.read_text(encoding="utf-8") if knowledge.is_file() else KNOWLEDGE_TEMPLATE},
+        "config_unreadable": config_unreadable, "config_reset": config_reset,
+        "filters": filters, "knowledge": _knowledge(repo),
         "no_grouping": no_grouping, "no_grouping_error": no_grouping_error,
-        "credentials": credentials(config["coverity"]["user_env"], config["coverity"]["key_env"]),
+        "credentials": credentials(config["coverity"]["user_env"], config["coverity"]["key_env"], _saved_key_env(repo)),
     }
 
 
@@ -198,9 +343,10 @@ def _config_problems(repo: Path, found: dict[str, Any], data: Any, problems: lis
     if not isinstance(data, dict):
         problems.append("config.yaml の内容がありません")
         return None
-    url = str((data.get("coverity") or {}).get("url") or "").strip().rstrip("/")
-    if isinstance(data.get("coverity"), dict):
-        data["coverity"]["url"] = url
+    coverity = data.get("coverity") if isinstance(data.get("coverity"), dict) else None
+    url = str((coverity or {}).get("url") or "").strip().rstrip("/")
+    if coverity is not None:
+        coverity["url"] = url
     if not re.match(r"^https?://[^/\s]+", url):
         problems.append("Coverity の URL: http:// か https:// で始まるアドレスを入れてください")
     verify = data.get("verify") if isinstance(data.get("verify"), dict) else {}
@@ -214,6 +360,9 @@ def _config_problems(repo: Path, found: dict[str, Any], data: Any, problems: lis
         return None
     if found["vcs"] and config.vcs.type != found["vcs"]:
         problems.append(f"バージョン管理: このリポジトリは {found['vcs']} です（設定は {config.vcs.type}）")
+    if config.coverity.user_env.upper() == config.coverity.key_env.upper():  # the key would be shown or overwritten
+        problems.append(f"認証情報の環境変数の名前: ユーザ名と認証キーに、別の名前を入れてください"
+                        f"（今はどちらも {config.coverity.user_env}）")
     out = output_dir(repo, config)
     if out == repo or repo in out.parents:
         problems.append(f"結果を置く場所: リポジトリの外にしてください（{out}）")
@@ -252,6 +401,17 @@ def auth_key_value(value: str) -> tuple[str, str | None]:
     return key.strip(), None
 
 
+def _config_header(path: Path) -> str:
+    """The comment lines of the config.yaml saved before, else the header /coverity-setup writes.
+
+    A file that cannot be read as UTF-8 is replaced whole (the screen showed the defaults for it)."""
+    try:
+        kept = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("#")]
+    except (OSError, UnicodeDecodeError):
+        kept = []
+    return "".join(line + "\n" for line in kept) if kept else prepare.CONFIG_HEADER
+
+
 def _dump(data: Any) -> str:
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
@@ -269,11 +429,7 @@ def save(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
         config = _config_problems(repo, found, payload["config"], problems)
         if config is not None:
             path = folder / CONFIG_FILE
-            header = prepare.CONFIG_HEADER
-            if path.is_file():
-                kept = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("#")]
-                header = "".join(line + "\n" for line in kept) if kept else header
-            writes[path] = header + _dump(_config_yaml(config))
+            writes[path] = _config_header(path) + _dump(_config_yaml(config))
     elif not (folder / CONFIG_FILE).is_file():
         problems.append("設定ファイルがまだありません。基本設定を入れてください")
 
@@ -314,17 +470,25 @@ def save(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             problems.append("グループ化しない CID: 数字だけにしてください")
 
+    user_env, key_envs = _credential_names(repo, payload.get("config"))
     for entry in payload.get("credentials") or []:
         name, value = str(entry.get("env") or ""), str(entry.get("value") or "")
+        # The user name never goes into a variable that holds a key (it would be written over the key).
+        is_user = entry.get("kind") == "user" or ("kind" not in entry and name.upper() == user_env)
         value, key_problem = auth_key_value(value)
         if key_problem:
             problems.append(f"環境変数 {name}: {key_problem}")
         elif not ENV_NAME.match(name):
             problems.append(f"環境変数の名前「{name}」は使えません（英字・数字・_ だけ）")
+        elif is_user and name.upper() in key_envs:
+            problems.append(f"環境変数 {name}: 認証キーを入れる環境変数なので、ユーザ名は保存できません。"
+                            "ユーザ名の環境変数の名前を、別の名前にしてください")
         elif not value.strip() or "\n" in value or "\r" in value:
             problems.append(f"環境変数 {name}: 1 行の値を入れてください")
         elif not envvars.can_set_user_env():
             problems.append(f"環境変数 {name}: この PC では保存できません（Windows だけ）。自分で設定してください")
+        elif any(name.upper() == done.upper() for done, _ in env_writes):  # the user name over the key
+            problems.append(f"環境変数 {name}: ユーザ名と認証キーを同じ環境変数には保存できません")
         else:
             env_writes.append((name, value.strip()))
 
@@ -405,13 +569,17 @@ def find_run(repo: Path, run_id: str) -> Run:
     output = output_dir(repo, load_config(repo))
     if not (output / run_id / RUN_FILE).is_file():
         raise NotFound(f"実行が見つかりません: {run_id}")
-    try:
-        run = Run(output / run_id)
-    except ValidationError as exc:
-        raise CtError(f"run.json を読めません: {output / run_id}: {exc}") from exc
+    run = _open_run(output / run_id)
     if run.dir.parent != output:  # a link to a folder somewhere else
         raise NotFound(f"実行が見つかりません: {run_id}")
     return run
+
+
+def _open_run(folder: Path) -> Run:
+    try:
+        return Run(folder)
+    except (CtError, ValidationError):
+        raise CtError(f"{RUN_FILE} を読めません（壊れているか、形が違います）: {folder / RUN_FILE}") from None
 
 
 def _find_item(run: Run, item_id: str) -> ItemState:
@@ -469,38 +637,60 @@ def _run_row(run: Run) -> dict[str, Any]:
 
 
 def runs_list(repo: Path) -> dict[str, Any]:
-    """The runs in the output folder of the settings, newest first."""
+    """The runs in the output folder of the settings, newest first; runs whose run.json cannot be read are
+    listed apart (``unreadable``), so that they do not disappear without a word."""
     try:
         output = output_dir(repo, load_config(repo))
     except CtError as exc:
         return {"ok": True, "runs": [], "output_dir": None, "note": f"実行を探せません: {exc}"}
-    found = []
+    found, unreadable = [], []
     for folder in list_runs(output):
         if len(found) >= RUNS_LISTED:
             break
         if not RUN_ID.match(folder.name):
             continue
         try:
-            run = Run(folder)
-        except (CtError, ValidationError):
+            run = _open_run(folder)
+        except CtError as exc:
+            if len(unreadable) < RUNS_LISTED:
+                unreadable.append({"run_id": folder.name, "error": str(exc)})
             continue
         if run.dir.parent == output:  # not a link to a folder somewhere else (find_run would refuse it)
             found.append(_run_row(run))
-    out: dict[str, Any] = {"ok": True, "runs": found, "output_dir": str(output)}
+    out: dict[str, Any] = {"ok": True, "runs": found, "output_dir": str(output), "unreadable": unreadable}
     if not found:
         out["note"] = f"まだ実行がありません（/coverity-run で始めます。結果を置く場所: {output}）"
     return out
 
 
+VERIFY_FILE = "verify.json"
+
+
+def _verify_results(run: Run) -> tuple[dict[str, Any], str | None]:
+    """The build verification of the items (verify.json), and what is wrong with the file, if anything."""
+    path = run.dir / VERIFY_FILE
+    if not path.is_file():
+        return {}, None
+    try:
+        data = read_json(path)
+    except CtError:
+        data = None
+    if not isinstance(data, dict):
+        return {}, (f"{VERIFY_FILE} を読めないため（壊れているか、形が違います）、ビルドでの確かめの結果を"
+                    f"確信度に入れていません: {path}")
+    return data, None
+
+
 def _item_row(run: Run, item: ItemState, issues: dict[int, Issue],
-              decided: dict[str, dict[str, Any]], summary_made: bool) -> dict[str, Any]:
+              decided: dict[str, dict[str, Any]], summary_made: bool,
+              verified: dict[str, Any] | None = None) -> dict[str, Any]:
     from .triage import review_of  # late import: triage is the larger module
 
     result = _result(run, item.id)
     review = review_of(run, item) if item.status == "done" else {}
     if result is not None:  # the confidence the reports show: the lowest of the worker, the review and the build
-        verify = read_json(run.dir / "verify.json", {}).get(item.id) if (run.dir / "verify.json").is_file() else None
-        result = assess.effective(result, review, verify)
+        verify = (verified if verified is not None else _verify_results(run)[0]).get(item.id)
+        result = assess.effective(result, review, verify if isinstance(verify, dict) else None)
     main = issues.get(item.cids[0]) if item.cids else None
     entry = decided.get(item.id)
     recommendation = result.recommendation if result else None
@@ -532,17 +722,19 @@ def run_summary(repo: Path, run_id: str) -> dict[str, Any]:
     decided = approvals.load(run)
     issues = _issues(run)
     made = approvals.summary_made(run)
+    verified, verify_note = _verify_results(run)
     items, errors, unprocessed = [], [], []
     for item in run.state.items:
         if item.status == "done":
-            items.append(_item_row(run, item, issues, decided, made))
+            items.append(_item_row(run, item, issues, decided, made, verified))
         elif item.status == "error":
             errors.append({"id": item.id, "cids": list(item.cids), "reason": item.error})
         elif item.status != "merged":  # merged items are shown inside the item that took them
             unprocessed.append(item.id)
     items.sort(key=lambda r: (CONFIDENCE_ORDER.get(r["confidence"], -1), r["id"]))  # as in summary.html
     return {"ok": True, "run": _run_info(run), "items": items, "errors": errors, "unprocessed": unprocessed,
-            "summary_html": run.summary_file().is_file()}
+            "summary_html": run.summary_file().is_file(), "approval_wait": _approval_wait(run),
+            "notes": [verify_note] if verify_note else []}
 
 
 def _file_urls(run_id: str, rel: str) -> dict[str, str]:
@@ -550,12 +742,33 @@ def _file_urls(run_id: str, rel: str) -> dict[str, str]:
     return {"url": f"/view/{run_id}/{path}", "raw_url": f"/files/{run_id}/{path}"}
 
 
+def _not_done_text(item: ItemState) -> str:
+    """Why an item has no detail to approve, in the words of the screen."""
+    if item.status == "error":
+        reason = item.error.strip() or "理由の記録がありません"
+        return f"{item.id} は処理できませんでした（結果がないため、承認できません）。理由: {reason}"
+    if item.status == "merged":
+        into = f"{item.merged_into} " if item.merged_into else "ほかの作業"
+        return f"{item.id} は、統合で {into}にまとめました。承認は、まとめた作業で入れます"
+    if item.status == "in_progress":
+        return f"{item.id} は、まだ調べている途中です。調べ終わると、ここで承認できます"
+    return f"{item.id} は、まだ調べていません。調べ終わると、ここで承認できます"
+
+
+def _approval_wait(run: Run) -> str | None:
+    """Why approvals cannot be chosen yet (K-80): the integration and the review may still change the items."""
+    if (run.state.integration or run.state.review) and not approvals.summary_made(run):
+        return ("統合・検証で結果が変わることがあるため、統合・検証が終わって一覧ができてから承認できます"
+                "（/coverity-run が終わるまでお待ちください）")
+    return None
+
+
 def item_detail(repo: Path, run_id: str, item_id: str) -> dict[str, Any]:
     """One finished item for the approval panel: the deviation to register, and links to its files."""
     run = find_run(repo, run_id)
     item = _find_item(run, item_id)
     if item.status != "done":
-        raise CtError(f"{item_id} はまだ終わっていません（状態: {item.status}）")
+        raise CtError(_not_done_text(item))
     result = _result(run, item_id)
     if result is None:
         raise CtError(f"{item_id} の結果ファイルを読めません: {run.result_file(item_id)}")
@@ -581,6 +794,7 @@ def item_detail(repo: Path, run_id: str, item_id: str) -> dict[str, Any]:
                 fixed.append({"kind": kind, "path": rel, **_file_urls(run_id, f"fixed/{item_id}/{kind}/{rel}")})
     report = run.report_file(item_id)
     out = {"ok": True, "item": _item_row(run, item, _issues(run), decided, approvals.summary_made(run)),
+           "approval_wait": _approval_wait(run),  # why approvals cannot be chosen yet (None: they can)
            "deviation": deviation,
            "ai_deviation": result.deviation.model_dump(),
            "deviation_edited": bool((decided.get(item_id) or {}).get("deviation")),
@@ -598,16 +812,23 @@ def set_approval(repo: Path, run_id: str, body: dict[str, Any]) -> dict[str, Any
     if not isinstance(item_id, str) or not item_id:
         raise CtError("承認する作業（item）を指定してください")
     item = _find_item(run, item_id)
-    if (run.state.integration or run.state.review) and not approvals.summary_made(run):
-        # the integration and the review may still change the item: approvals wait for the summary
-        raise CtError("統合・検証が終わって一覧ができてから承認できます（/coverity-run が終わるまでお待ちください）")
+    wait = _approval_wait(run)
+    if wait:
+        raise CtError(wait)
     before = approvals.load(run).get(item_id) or {}
-    entry = approvals.update(run, item_id, body.get("decision"), body.get("deviation"))
+    entry = dict(approvals.update(run, item_id, body.get("decision"), body.get("deviation")))
+    report_error = entry.pop("report_error", None)
     out = {"ok": True, "item": item_id, **entry}
+    warnings = []
     applied = [APPLIED_JA[part] for part in APPLIED_JA if part in item.applied]
     if applied and (before.get("decision"), before.get("deviation")) != (entry["decision"], entry.get("deviation")):
-        out["warning"] = (f"{item_id} はもう反映しています（{'、'.join(applied)}）。承認を変えても、反映したものは"
-                          "元に戻りません。まだ反映していない部分は、次の /coverity-apply で反映します")
+        warnings.append(f"{item_id} はもう反映しています（{'、'.join(applied)}）。承認を変えても、反映したものは"
+                        "元に戻りません。まだ反映していない部分は、次の /coverity-apply で反映します")
+    if report_error:
+        warnings.append("承認は保存しました（/coverity-apply は、この承認で反映します）。ただし、詳細レポートと一覧を"
+                        f"書き直せなかったため、そこには前の承認が出ています。理由: {report_error}")
+    if warnings:
+        out["warning"] = "\n".join(warnings)
     return out
 
 
@@ -793,6 +1014,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", FILE_CSP if framed else SCREEN_CSP)
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
@@ -812,12 +1035,36 @@ class Handler(BaseHTTPRequestHandler):
                     return True
         return False
 
+    def _length(self) -> int | None:
+        """The length of the request's body; None when it is not a number of bytes this server reads
+        (not a number, negative, too large, or a body sent in chunks)."""
+        text = (self.headers.get("Content-Length") or "0").strip()
+        if self.headers.get("Transfer-Encoding") or not re.fullmatch(r"[0-9]{1,12}", text):
+            return None
+        length = int(text)
+        return length if length <= MAX_BODY else None
+
     def _body(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
-        data = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
+        length = self._length()
+        if length is None:
+            self.close_connection = True  # where the body ends is not known: the connection cannot go on
+            raise ValueError("長さ（Content-Length）が正しくないか、大きすぎます")
+        raw = self.rfile.read(length) if length else b""
+        try:
+            data = json.loads(raw.decode("utf-8") or "{}")
+        except ValueError:  # UnicodeDecodeError too
+            raise ValueError("JSON として読めません") from None
         if not isinstance(data, dict):
-            raise ValueError("JSON object expected")
+            raise ValueError("JSON のオブジェクト（{ } で囲んだもの）ではありません")
         return data
+
+    def _skip_body(self) -> None:
+        """Read the body of a refused request, so that the next request on the connection starts where it should."""
+        length = self._length()
+        if length is None:
+            self.close_connection = True
+        elif length:
+            self.rfile.read(length)
 
     def _answer(self, handle: Any, *args: Any) -> None:
         """The JSON answer of an API, with what went wrong instead of a dropped connection."""
@@ -856,7 +1103,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": True, **load_state(repo)}
         if path == "/api/credentials":
             names = [(query.get(key) or [""])[0] for key in ("user_env", "key_env")]
-            return {"ok": True, **credentials(*names)}
+            return {"ok": True, **credentials(*names, _saved_key_env(repo))}
         if path == "/api/trial-build":
             return {"ok": True, **self.server.build.state}
         if path == "/api/ping":
@@ -894,11 +1141,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - name from the base class
         path = urlsplit(self.path).path
         if not self._allowed(self.headers.get("X-CT-Token")) or self.headers.get("Content-Type") != "application/json":
+            self._skip_body()
             self._json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
             return
         try:
             body = self._body()
-        except (ValueError, UnicodeDecodeError) as exc:
+        except ValueError as exc:
             self._json({"ok": False, "error": f"送られた内容を読めません: {exc}"}, HTTPStatus.BAD_REQUEST)
             return
         self._answer(self._post, path, body)
@@ -1041,6 +1289,7 @@ def serve(repo_root: str, token: str | None = None, ready_file: str | None = Non
     remembered = _remember(path, server)  # a server running for the repository stops when it sees this one
     stopped = threading.Event()
     opened = False
+    verify.track_builds()  # the trial build ends with the server (the stop button says so)
     try:
         if ready_file:  # written whole at once: ct.py gui reads it as soon as it appears
             write_text(Path(ready_file), json.dumps({"url": server.url, "pid": os.getpid()}))
@@ -1050,6 +1299,7 @@ def serve(repo_root: str, token: str | None = None, ready_file: str | None = Non
         server.serve_forever(poll_interval=0.2)
     finally:
         stopped.set()
+        verify.stop_builds()
         server.server_close()
         _forget(path, server.token)
     return {"ok": True, "url": server.url, "browser_opened": opened, "closed_by": server.closed_by,

@@ -196,10 +196,10 @@ def tick(run_dir: str, finished: str | None = None, failed: str | None = None, r
 
     # 3. warning paths of every item
     missing = _missing_paths(run)
-    if missing:
+    if missing or (run.state.fetch_rounds >= FETCH_ROUNDS and not run.state.paths_checked):
         if _role_busy(run, "collector"):
             return _answer(run, "paths", actions, say, wait=True)
-        if run.state.fetch_rounds < FETCH_ROUNDS:
+        if missing and run.state.fetch_rounds < FETCH_ROUNDS:
             if _fallback(run):
                 with run.update() as state:
                     state.fetch_rounds += 1
@@ -208,8 +208,19 @@ def tick(run_dir: str, finished: str | None = None, failed: str | None = None, r
                                          "done になるまで呼び、そのあと ct.py tick")
             actions.append(_collector_paths(run, missing))
             return _answer(run, "paths", actions, say)
-        _mark_unfetched(run, missing)  # the brief says the path could not be fetched; the work goes on
-        say.append(f"警告経路を取れなかった警告が {sum(len(c) for c in missing.values())} 件あります（経路なしで調べます）")
+        # Fetched as often as allowed: the brief says the path could not be fetched, and the work goes on.
+        # The first time, the person is told of every path missing, also of those the MCP server could not
+        # fetch (it saves a file with the error, so they are not missing files).
+        first = not run.state.paths_checked
+        _mark_unfetched(run, missing, log=False)
+        unfetched = _unfetched(run) if first else missing
+        if first:
+            with run.update() as state:
+                state.paths_checked = True
+        if unfetched:
+            _log(run, "paths-missing", level="warning", items=sorted(unfetched))
+            say.append(f"警告経路を取れなかった警告が {sum(len(c) for c in unfetched.values())} 件あります"
+                       "（経路なしで調べます）")
 
     # 4. the worker agents
     actions += _fill_slots(run, say, keep=bool(actions))
@@ -481,13 +492,35 @@ def _collector_paths(run: Run, missing: dict[str, list[int]]) -> dict[str, Any]:
                    _prompt(brief, "Coverity の警告経路を取ります"))
 
 
-def _mark_unfetched(run: Run, missing: dict[str, list[int]]) -> None:
+def _mark_unfetched(run: Run, missing: dict[str, list[int]], log: bool = True) -> None:
     for item_id, cids in missing.items():
         for cid in cids:
             path = run.item_dir(item_id) / f"issue-{cid}.json"
             if not path.is_file():
                 write_json(path, {"cid": cid, "error": "警告経路を Coverity から取れませんでした（取得を 2 回試しました）"})
-    _log(run, "paths-missing", level="warning", items=sorted(missing))
+    if log and missing:
+        _log(run, "paths-missing", level="warning", items=sorted(missing))
+
+
+def _no_path(path: Path) -> bool:
+    """The file of the CID only says that its warning path could not be fetched."""
+    try:
+        data = read_json(path, {})
+    except CtError:  # a damaged file is another problem: the brief of the item says so
+        return False
+    return isinstance(data, dict) and bool(data.get("error") and not data.get("events"))
+
+
+def _unfetched(run: Run) -> dict[str, list[int]]:
+    """CIDs whose warning path could not be fetched, by item (items still to be worked on)."""
+    found = {}
+    for item in run.state.items:
+        if item.status != "pending":
+            continue
+        cids = [cid for cid in item.cids if _no_path(run.item_dir(item.id) / f"issue-{cid}.json")]
+        if cids:
+            found[item.id] = cids
+    return found
 
 
 # ---- workers ------------------------------------------------------------------------------------

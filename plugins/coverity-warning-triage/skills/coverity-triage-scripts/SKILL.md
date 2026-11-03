@@ -34,7 +34,7 @@ uv run --native-tls <このスキルのフォルダ>/scripts/ct.py <コマンド
 
 | コマンド | すること | 主な結果 |
 |---|---|---|
-| `prewarm` | MCP サーバの Python 環境を作る（初回の起動が時間切れにならないように） | `environment`、`seconds` |
+| `prewarm` | MCP サーバの Python 環境を作る（初回の起動が時間切れにならないように） | `environment`（作った場所。環境変数 `UV_PROJECT_ENVIRONMENT` があればその場所）、`seconds` |
 | `doctor --repo R` | 準備の状況を調べる。Coverity への接続は調べない（MCP の `check_connection` で調べる） | `ready`、`checks`（`status` が ng のものを直す） |
 | `detect --repo R` | git / svn、取り込み先のブランチ、出力先の候補を調べる | `vcs`、`base_branch`、`has_config`、`output_dir` |
 | `init-config --repo R --url U --project P --stream S [--base-branch B] [--output-dir D] [--strip-prefix X]...` | 設定 `config.yaml`、最初の条件 `filters/untriaged.yaml`、知識 `knowledge.md` を作る。人に値を見せて同意を得てから実行する | `written` |
@@ -47,7 +47,7 @@ uv run --native-tls <このスキルのフォルダ>/scripts/ct.py <コマンド
 | コマンド | すること | 主な結果 |
 |---|---|---|
 | `runs --repo R` | 実行の一覧（新しい順） | `runs`（`unfinished` が true なら途中） |
-| `resume --run D` | 止まった実行を続けられるようにする（処理中・エラーの作業を未処理に戻す。失敗した初回解析はやり直す） | `counts`、`next` |
+| `resume --run D` | 止まった実行を続けられるようにする（処理中・エラーの作業を未処理に戻す。失敗した初回解析と、できずに止まった警告の検索はやり直す） | `counts`、`next` |
 | `new-run --repo R [--filter F] [--impact X]... [--checker X]... [--status X]... [--classification X]... [--action X]... [--limit N] [--verify none\|build\|build+analyze] [--initial \| --no-initial]` | 実行フォルダを作り、条件を決める。チャットで言われた条件は引数で足す（同じ項目は置き換え）。`--initial` で最初に解析してサーバに登録する（省略時は設定 `verify.initial`） | `run_dir`、`repo_root`、`work_dir`、`limit`、`initial`、`integration`、`review` |
 | `tick --run D [--finished T] [--failed T --reason "理由"]` | **次にすることを返す。** /coverity-run のオーケストレーション役は、これに従って動く。サブエージェントが終わったら、その `task`（`collector:search`、`collector:paths`、`worker:<ID>`、`integrator`、`reviewer:<ID>`）を `--finished` で知らせる。途中で止まった・起動できなかったときは `--failed`。初回解析の間は、少し（最長 `--wait` 秒）待ってから返る | `stage`、`actions`（`launch` / `command` / `mcp`）、`wait`、`done`、`stop`、`say`、`running_items`、`running_roles` |
 | `initial-status --run D` | 初回解析の状況（none / running / done / failed、いまの段、経過秒数、失敗したときはログの最後） | `status`、`step_label`、`elapsed_seconds`、`log_tail` |
@@ -56,7 +56,7 @@ uv run --native-tls <このスキルのフォルダ>/scripts/ct.py <コマンド
 | `brief --run D --item I` | 作業エージェントへの指示ファイル `brief.md` を作る（`tick` が呼ぶ） | `prompt`、`result_file` |
 | `finish --run D --item I` | 結果ファイルを確かめ、差分・ブランチ・詳細レポート `cid/<ID>.html` を作る（`tick` が呼ぶ。一覧をもう作った実行では、その作業の承認に AI の推奨も入れる） | `recommendation`、`confidence`、`warnings`、`split_into` |
 | `fail --run D --item I --reason "理由"` | 作業を処理できなかったと記録する（`tick` が呼ぶ。再開でやり直せる） | `counts` |
-| `status --run D` | 進み具合 | `counts`、`errors` |
+| `status --run D` | 進み具合と最近の動き | `counts`、`in_progress`、`errors`、`summary`、`recent`（最近の動き。画面の「監視」と同じ記録から作った「HH:MM:SS 文」の文字列の配列。画面と同じく新しい順。最大 10 行） |
 | `verify --run D` | （オプション）全部の修正案をまとめてビルドで確かめる。時間がかかる。問題が出た修正の推奨は、一覧とレポートで確信度を「低」として見せる（結果ファイルは変えない。K-13） | `build_ok`、`downgraded_to_low` |
 | `summary --run D` | 一覧 `summary.html`（設定 `options.markdown` が true なら `summary.md` も）を作り、まだ承認の無い作業に AI の推奨を入れて `approvals.json` に保存し、修正用のコピーを片付ける | `summary`（`summary.html` の場所）、`recommended`、`errors` |
 
@@ -106,7 +106,7 @@ ct.py を使わずに、チャットで MCP のツールだけを使うとき（
 |---|---|---|
 | `search_issues` | `repo_root`、`filter`（`filter.json` と同じ形。`streams` は 1 つだけ）、`offset`（続きを取るとき） | `issues`（CID、チェッカー、ファイル、行、関数、Impact など）。`next_offset` が null でなければ、`offset` に渡して呼び直すと続きが返る。1 回の件数は既定 20、`limit` で 100 まで |
 | `get_issues` | `repo_root`、`stream`、`cids`（10 件まで） | CID ごとの警告経路（`events`。`main` が true のものが ★）とチェッカーの説明（`checker_description`）。`remaining` が空でなければ、その CID で呼び直す |
-| `preview_triage` | `entries`（`[{id, cids, classification, action, severity, comment}]`。`severity` と `comment` は省ける） | 書き戻す件数と内容と、確認用の文字列（`confirmation_token`） |
+| `preview_triage` | `entries`（`[{id, cids, stream, classification, action, severity, comment}]`。`stream`（警告のあるストリーム。書くと、そのストリームが使うトリアージストアに書く）、`severity`、`comment` は省ける） | 書き戻す件数と内容と、確認用の文字列（`confirmation_token`） |
 | `update_triage` | `repo_root`、`preview_triage` に渡したものと同じ `entries`、`confirmation_token` | 書き込んだ項目と、書き込めなかった項目（`failed`） |
 
 書き戻すときは、`preview_triage` の件数と内容を人に見せ、同意を得てから `update_triage` を呼びます。

@@ -29,6 +29,13 @@ PREVIOUS_RESULT = "result.previous.json"  # the result before the review sent th
 REWORK_FRESH = "rework-fresh"  # the earlier fix could not be applied to the work copy again
 
 
+def verify_results(run: Run) -> dict[str, Any]:
+    """The build verification of the items (verify.json); a file of another shape counts as none (the screen
+    says so: gui.py _verify_results)."""
+    data = read_json(run.dir / "verify.json", {})
+    return data if isinstance(data, dict) else {}
+
+
 def _repo(path: str) -> Path:
     repo = resolve_path(path)
     if not repo.is_dir():
@@ -598,7 +605,7 @@ def write_item_files(run: Run, item_id: str, verify: dict[str, Any] | None = Non
     result = TriageResult.model_validate(read_json(run.result_file(item_id)))
     saved = read_json(run.item_dir(item_id) / "saved.json", {})
     if verify is None:
-        verify = read_json(run.dir / "verify.json", {}).get(item_id)
+        verify = verify_results(run).get(item_id)
     report = _report(run, item_id, result, saved, run.state.item(item_id).seconds, verify)
     _write_item(run, report, _approvals(run).get(item_id))
 
@@ -632,6 +639,11 @@ def resume(run_dir: str) -> dict[str, Any]:
                 item.status, item.slot = "pending", None
         for lease in state.roles.values():  # the agents of the stopped session are gone
             lease["active"] = False
+        collector = state.roles.get("collector")
+        if collector is not None and not state.planned:
+            # The search stopped (Coverity was not reached twice): it is tried again from the start, by the
+            # collector agent first and by the orchestrating agent in its place, as in a new run.
+            collector.update(fallback=False, fallback_searches=0, rounds=0)
     from . import initial
 
     if run.state.initial and initial.status(run)["status"] == "failed":  # tried again from the start
@@ -645,12 +657,15 @@ def resume(run_dir: str) -> dict[str, Any]:
 
 
 def status(run_dir: str) -> dict[str, Any]:
+    from . import activity  # late import: only status reads the log as the monitor does
+
     run = Run(run_dir)
     state = run.state
     return {"ok": True, "run_dir": str(run.dir), "counts": state.counts(),
             "in_progress": [i.id for i in state.items if i.status == "in_progress"],
             "errors": [{"item": i.id, "reason": i.error} for i in state.items if i.status == "error"],
-            "summary": next((str(p) for p in (run.summary_file(), run.summary_file("md")) if p.is_file()), None)}
+            "summary": next((str(p) for p in (run.summary_file(), run.summary_file("md")) if p.is_file()), None),
+            "recent": activity.recent_lines(run)}
 
 
 def runs(repo_root: str, limit: int) -> dict[str, Any]:
@@ -676,7 +691,7 @@ def runs(repo_root: str, limit: int) -> dict[str, Any]:
 def _collect(run: Run) -> tuple[list[ItemReport], list[tuple[str, str]], list[str]]:
     """Reports of the finished items, the items that failed (with the reason) and the rest."""
     reports, errors, unprocessed = [], [], []
-    verify = read_json(run.dir / "verify.json", {})
+    verify = verify_results(run)
     for item in run.state.items:
         if item.status == "done":
             result = TriageResult.model_validate(read_json(run.result_file(item.id)))
@@ -794,7 +809,7 @@ def verify(run_dir: str, mode: str | None) -> dict[str, Any]:
 
     # result.json keeps what the worker wrote; the reports show the lower confidence (assess.effective)
     downgraded = []
-    results = read_json(run.dir / "verify.json", {})
+    results = verify_results(run)
     for item_id, checked in outcome.items.items():
         result = TriageResult.model_validate(read_json(run.result_file(item_id)))
         shown = assess.effective(result, review_of(run, run.state.item(item_id)), checked)

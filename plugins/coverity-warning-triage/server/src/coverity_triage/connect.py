@@ -1,9 +1,11 @@
 """Coverity Connect client.
 
 REST API v2: issue search (``POST /api/v2/issues/search``, the request shape used by the public
-``mlx.coverity`` package) and triage write-back (``PUT /api/v2/issues/triage``, Coverity Connect
-2022.6.0 or later). SOAP API v9: warning path (``getStreamDefects``) and snapshot information
-(``getSnapshotsForStream`` / ``getSnapshotInformation``).
+``mlx.coverity`` package; the latest snapshot, or every snapshot when the status Fixed or Absent
+Dismissed is wanted) and triage write-back (``PUT /api/v2/issues/triage``, Coverity Connect
+2022.6.0 or later) to the triage store of the stream (``GET /api/v2/streams/{name}``, as public
+clients do before they write). SOAP API v9: warning path (``getStreamDefects``) and snapshot
+information (``getSnapshotsForStream`` / ``getSnapshotInformation``).
 
 How answers that are not the expected data are handled (from responses recorded on a real server,
 Coverity Connect 2024.12, and the published XSD):
@@ -31,6 +33,7 @@ import time
 import xml.etree.ElementTree as ET
 from html import escape
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -62,6 +65,11 @@ REQUIRED_FIELDS = ("cid", "checker", "file")
 # which can differ from the key the server matched (for example a localized label).
 FILTER_COLUMNS = {"checkers": "Checker", "impacts": "Impact",
                   "classification": "Classification", "action": "Action"}
+# Fixed and Absent Dismissed are the status of an issue that an earlier snapshot has and the latest
+# one does not, so the scope last() never holds them. Only when one of them is wanted, the search
+# covers every snapshot of the stream (first()..last()); the status is still checked after the search.
+LATEST_SCOPE, ALL_SCOPE = "last()", "first()..last()"
+ABSENT_STATUSES = frozenset({"Fixed", "Absent Dismissed"})
 
 # A value the server does not have (for example the Test Advisor classifications on a server
 # without Test Advisor) is rejected with HTTP 500 and this message.
@@ -209,6 +217,7 @@ class ConnectClient(CoverityClient):
         self.config = config
         self.user, self.key = user, key
         self.http = httpx.Client(**_http_kwargs(config, TIMEOUT, transport))
+        self._stores: dict[str, str] = {}  # stream -> the triage store it uses
 
     def close(self) -> None:
         self.http.close()
@@ -336,13 +345,15 @@ class ConnectClient(CoverityClient):
         keys = [k for k in COLUMN_KEYS.values() if k in available]
         stream = spec.streams[0]
         filters, on_server = self._filters(spec, stream)
+        scope = ALL_SCOPE if ABSENT_STATUSES & set(spec.triage.status) else LATEST_SCOPE
         body = {"filters": filters, "columns": keys,
-                "snapshotScope": {"show": {"scope": "last()", "includeOutdatedSnapshots": False}}}
+                "snapshotScope": {"show": {"scope": scope, "includeOutdatedSnapshots": False}}}
         page_size = min(MAX_PAGE, max(limit, MIN_PAGE))
         issues: list[Issue] = []
         ends: list[int] = []  # offset just after the row of each issue
         excluded: list[dict[str, Any]] = []
         excluded_ends: list[int] = []
+        seen: set[int] = set()  # pages can overlap (the issues change between requests): each CID once
         total: int | None = None
         while True:
             page_started = time.monotonic()
@@ -362,8 +373,9 @@ class ConnectClient(CoverityClient):
             total = _int(data.get("totalRows")) if total is None else total
             for index, row in enumerate(rows):
                 issue = self._issue({c.get("key"): c.get("value") for c in row}, stream)
-                if issue is None:
+                if issue is None or issue.cid in seen:
                     continue
+                seen.add(issue.cid)
                 mismatched = filter_mismatches(issue, spec, skip=on_server)
                 if mismatched:
                     excluded.append({"cid": issue.cid,
@@ -468,10 +480,36 @@ class ConnectClient(CoverityClient):
 
     # ---- write-back -------------------------------------------------------------------------
 
-    def write_triage(self, cids: list[int], attributes: TriageAttributes, comment: str) -> None:
+    def triage_store_of(self, stream: str) -> str:
+        """The triage store the stream uses: ``streams[0].triageStoreName`` of GET /api/v2/streams/{name}
+        (the answer is a list even for one name). Kept for the life of this client."""
+        if stream not in self._stores:
+            path = f"/api/v2/streams/{quote(stream, safe='')}"
+            try:
+                data = self._rest("GET", path, {"locale": "en_us"})
+            except CoverityError as exc:
+                if exc.status == 404:
+                    raise CoverityError(f"ストリーム {stream} が Coverity にありません。書き戻しの項目の stream に、"
+                                        "警告のあるストリームの名前を書いてください", fatal=False, status=404) from exc
+                raise
+            streams = data.get("streams") if isinstance(data, dict) else None
+            first = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+            name = str(first.get("triageStoreName") or "").strip()
+            if not name:
+                raise CoverityError(f"ストリーム {stream} が使うトリアージストアが、Coverity の応答（REST GET {path}）に"
+                                    "ありません。Coverity の管理者に、ストリームのトリアージストアを確認してください",
+                                    fatal=False)
+            self._stores[stream] = name
+        return self._stores[stream]
+
+    def write_triage(self, cids: list[int], attributes: TriageAttributes, comment: str,
+                     stream: str | None = None) -> str:
+        # The store the stream uses: another store would change the triage of the streams that use it.
+        store = self.triage_store_of(stream) if stream else self.config.triage_store
         values = [("Classification", attributes.classification), ("Action", attributes.action),
                   ("Severity", attributes.severity), ("Comment", comment)]
         body = {"cids": list(cids),
                 "attributeValuesList": [{"attributeName": n, "attributeValue": v} for n, v in values if v]}
         # 5xx, 401/403 and connection errors stop the call (K-82); another 4xx fails only this write.
-        self._rest("PUT", "/api/v2/issues/triage", {"triageStoreName": self.config.triage_store}, body)
+        self._rest("PUT", "/api/v2/issues/triage", {"triageStoreName": store}, body)
+        return store

@@ -106,8 +106,10 @@ class CoverityClient(ABC):
         """git commit / svn revision recorded in the latest snapshot, if any."""
 
     @abstractmethod
-    def write_triage(self, cids: list[int], attributes: TriageAttributes, comment: str) -> None:
-        """Register classification, action, severity and comment."""
+    def write_triage(self, cids: list[int], attributes: TriageAttributes, comment: str,
+                     stream: str | None = None) -> str | None:
+        """Register classification, action, severity and comment, in the triage store ``stream`` uses
+        (without a stream, the one of the settings). Returns the store written, if known."""
 
 
 class FakeCoverityClient(CoverityClient):
@@ -148,10 +150,14 @@ class FakeCoverityClient(CoverityClient):
         value = (self.data.get("snapshot") or {}).get(field)
         return str(value) if value else None
 
-    def write_triage(self, cids: list[int], attributes: TriageAttributes, comment: str) -> None:
+    def write_triage(self, cids: list[int], attributes: TriageAttributes, comment: str,
+                     stream: str | None = None) -> str | None:
         record = {"cids": cids, **attributes.model_dump(), "comment": comment}
+        if stream:
+            record["stream"] = stream
         with self._lock, open(str(self.path) + ".writes.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return None
 
 
 def make_client(config: CoverityConfig) -> CoverityClient:

@@ -610,6 +610,11 @@ h3 {
   border-radius: var(--radius);
 }
 
+/* 表は、ほかの表示と横に並べず、1行の幅を使う（列の多い表が、狭い枠に押し込まれないように） */
+.display[data-type="table"] {
+  grid-column: 1 / -1;
+}
+
 .table-wrap {
   max-width: 100%;
   overflow-x: auto;

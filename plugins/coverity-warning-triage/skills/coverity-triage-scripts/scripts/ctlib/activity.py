@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,8 @@ from .run import ItemState, Run
 STALL_SECONDS = 600  # an item (or an agent) with no sign of work for this long may have stopped
 INITIAL_STALL_SECONDS = 1800  # the build may print nothing for 10 minutes: the log of the initial analysis gets 30
 RECENT = 40
+STATUS_RECENT = 10  # lines of the recent steps that ct.py status gives
+CLOCK = re.compile(r"\d{2}:\d{2}:\d{2}")
 MAX_ALERTS = 100
 TEXT_CHARS = 160  # one line of the screen
 DETAIL_CHARS = 4000
@@ -992,6 +995,17 @@ def board(run: Run, now: float | None = None) -> dict[str, Any]:
             # an item the integration took into another one is not counted (it is shown inside that one)
             "counts": counts, "total": len(state.items) - counts.get("merged", 0), "parallel": parallel,
             "workers": workers, "initial": first, "roles": roles, "recent": recent, "alerts": alerts}
+
+
+def recent_lines(run: Run, limit: int = STATUS_RECENT) -> list[str]:
+    """The last steps of the run as lines "HH:MM:SS text", newest first (``ct.py status``), as the monitor's
+    recent steps (``board()["recent"]``): the same log, the same text, the same order."""
+    lines = []
+    records = oplog.read(run.dir)[-limit:] if limit > 0 else []
+    for record in reversed(records):
+        clock = str(record.get("time") or "")[11:19]
+        lines.append(f"{clock if CLOCK.fullmatch(clock) else '--:--:--'} {_text(record)}")
+    return lines
 
 
 def alerts(run: Run, now: float | None = None) -> list[dict[str, Any]]:

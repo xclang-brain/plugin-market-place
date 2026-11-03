@@ -95,7 +95,7 @@ tools:
 
 - `worker_status`（作業ごとの様子、表）：`columns` は「作業」「段」「経過時間」「状態」。作業の ID、段（progress.json の phase）、経過時間、状態を1行ずつ書く。10分（初回解析は30分）のあいだ動きがない作業は、状態に「⚠ 停止?」と書く。修正用のコピーを用意している作業には、時間がかかっても書かない（K-79）。
 - `errors`（重大なエラーと注意、表）：`columns` は「作業」「種類」「内容」。K-82 の接続のエラー、初回解析の失敗、処理できなかった作業などを書く。
-- `recent_activity`（最近の動き、文章）：`ct.py status` の最近の動きを、新しいものから5行まで。
+- `recent_activity`（最近の動き、文章）：`ct.py status` が返す `recent`（最近の動きの行の一覧。新しい順）の先頭の5行までを、そのままの順で、改行でつないで送る。
 - `initial_analysis_progress`（初回解析の進み具合）：`{value, max, label}`。初回解析をするときは、`ct.py initial-status` の進みを `value` と `max` に入れ、`label` に段の名前を書く。しないときは `value` を 0、`max` を 100、`label` を「初回解析はしない」にする。
 - `overall_progress`（全体の進み具合）：`{value, max, label}`。処理が終わった警告（グループは1として数える）の数を `value`、警告の総数を `max` に入れ、`label` に「処理した件数 / 全体」を書く。
 
