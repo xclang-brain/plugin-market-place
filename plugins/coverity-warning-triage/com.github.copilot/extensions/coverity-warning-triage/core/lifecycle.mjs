@@ -89,10 +89,12 @@ function formatSettingValue(def, value) {
 }
 
 // 統括への指示文（4.3）。決まった形で組み立てる。始めに、定義の手順で進めて作業・検証に任せる旨の 1 文を置く。
+// プラグインのフォルダの絶対パスを入れる（4.7）。エージェントが、ルールのスキルの SKILL.md とスクリプトを絶対パスで読めるようにするためである。
 export function buildInstruction(ctx, run) {
   const lines = [];
   lines.push(INSTRUCTION_HEAD, '');
   lines.push(`実行の番号：${run.id}`, '');
+  if (ctx.pluginRoot) lines.push('## プラグインのフォルダ', ctx.pluginRoot, '');
   lines.push('## 頼まれた作業', run.requestText || '（作業の文は渡されませんでした）', '');
   lines.push('## 繰り返しの上限', `${run.settings.maxIterations} 回`, '');
   lines.push('## 作業ごとの設定の値');
