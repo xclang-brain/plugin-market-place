@@ -50,6 +50,7 @@ WRITE_WAIT = 5.0
 RC_WAIT = 5.0          # 終了コードを調べるコマンドの返事を待つ秒数
 PROMPT_HEAD_MAX = 3    # 複数の行のプロンプトとして扱う、上の行の数の上限
 OUTPUT_LINES = 60
+LOG_PARTIAL_MAX = 65536  # ログで、改行が届くまで持っておく文字の数の上限
 LAST_LINE_MAX = 200    # 結果の文に引く「最後の行」の長さの上限
 MASK = "＊＊＊"
 
@@ -57,10 +58,13 @@ MASK = "＊＊＊"
 # 返事は「__EDL_RC=数」の1行になる。エコーされた行は「__EDL_RC=$?」のままなので、
 # 数が付いているかで、返事とエコーを見分けられる。
 # 先頭の空白は、bash の履歴に残さないため（HISTCONTROL が ignorespace のとき）。
+# この印は、ログのファイルにも書かない。代わりに EXIT_LINE の行を書く。
 RC_TAG = "__EDL_RC="
 RC_COMMAND = " echo " + RC_TAG + "$?"
 RC_OUT_RE = re.compile(re.escape(RC_TAG) + r"([0-9]+)")
 RC_ECHO_DONE_RE = re.compile(re.escape(RC_TAG) + r"\$\?[^\n]*\n")
+EXIT_LINE = "（終了コード：%s）\n"   # ログで、各コマンドの出力の後に書く行
+EXIT_UNKNOWN = "読めませんでした"
 GITIGNORE_TEXT = "*\n"  # 設定（パスワード）やログが、誤って git に入らないようにする
 
 LOGIN_RE = re.compile(r"login:\s*$")
@@ -747,6 +751,26 @@ def drop_marker_lines(lines):
     return [line for line in lines if RC_TAG not in line]
 
 
+def strip_marker(line):
+    """ログに書く1行から、終了コードを調べるコマンドの印を除く。(残す文字, 返事があったか) を返す。
+
+    送ったコマンドの行（エコー。前のプロンプトを含む）は、行ごと除く。
+    返事の行は、返事の所だけを除き、ほかの文字（機器のメッセージなど）が残れば残す。
+    """
+    if RC_TAG not in line:
+        return line, False
+    answer = RC_OUT_RE.search(line) is not None
+    rest = RC_OUT_RE.sub("", line)
+    if RC_TAG in rest or not clean(rest).strip():
+        return "", answer
+    return rest, answer
+
+
+def exit_line(code):
+    """ログに書く、終了コードの行。"""
+    return EXIT_LINE % (EXIT_UNKNOWN if code is None else code)
+
+
 def find_exit_code(text):
     """終了コードを調べるコマンドの返事から、数を読む。読めなければ None。
 
@@ -957,8 +981,7 @@ class Console(object):
         if not text:
             return
         if self.log is not None:
-            self.log.write(text)
-            self.log.flush()
+            self.log.device(text)
         self.seg.append(text)
         self.seg_chars += len(text)
         pos = text.rfind("\n")
@@ -1294,8 +1317,11 @@ def read_exit_code(con, s):
     """終了コードを調べるコマンドを送り、直前のコマンドの終了コードを返す。
 
     読めなければ None。プロンプトの形に頼らず、返事の行「__EDL_RC=数」を探す。
+    この間に届いた行は、ログにはまだ書かない（終わった後に write_exit_line で書く）。
     """
     con.mark()
+    if con.log is not None:
+        con.log.hold()
     con.send(RC_COMMAND + "\r")
     patterns = [("prompt", s.prompt_re)]
     waits = dict(need_newline=True, nudge=(0.5, 1.0, 3),
@@ -1423,15 +1449,116 @@ def _open_log(folder, label):
     f = open(path, "w", encoding="utf-8", errors="replace", newline="")
     f.write("# log-capture の記録（%s）\n" % label)
     f.write("# 開始：%s\n" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    return path, f
+    return path, LogFile(f)
+
+
+class LogFile(object):
+    """ログのファイル。機器から届いた文字は、そのまま書く。
+
+    ただし、終了コードを調べるコマンドの行（送った行のエコーと、返事の行）は書かない。
+    代わりに、各コマンドの出力の後に「（終了コード：0）」の1行を書く。
+    行ごとに印を見分けるため、改行が届くまで、その行は書かずに持っておく。
+    """
+
+    def __init__(self, f):
+        self.f = f
+        self.partial = ""  # まだ改行が届いていない、最後の行
+        self.held = None   # 終了コードを調べている間に届いた行（終わってから書く）
+        self.line_start = True  # 書いた文字が、改行で終わっているか
+
+    def _write(self, text):
+        if not text:
+            return
+        self.line_start = text.endswith("\n")
+        try:
+            self.f.write(text)
+            self.f.flush()
+        except Exception:
+            pass
+
+    def device(self, text):
+        """機器から届いた文字。"""
+        self.partial += text
+        pos = self.partial.rfind("\n")
+        if pos < 0:
+            if len(self.partial) > LOG_PARTIAL_MAX and self.held is None and RC_TAG not in self.partial:
+                # 改行のない長い出力は、持ちすぎないように先に書く（プロンプトではない）
+                self._write(self.partial)
+                self.partial = ""
+            return
+        done = self.partial[:pos].split("\n")
+        self.partial = self.partial[pos + 1:]
+        out = []
+        for line in done:
+            line += "\n"
+            if self.held is not None:
+                self.held.append(line)
+            else:
+                out.append(strip_marker(line)[0])
+        self._write("".join(out))
+
+    def hold(self):
+        """ここから、終了コードの行を書くまで、届いた行を持っておく。"""
+        if self.held is None:
+            self.held = []
+
+    def _release(self):
+        """持っていた行を、印を除いて返す。返事の行のすぐ後の位置も返す（なければ None）。"""
+        held, self.held = self.held or [], None
+        out = []
+        at = None
+        for line in held:
+            text, answer = strip_marker(line)
+            if text:
+                out.append(text)
+            if answer and at is None:
+                at = len(out)
+        return out, at
+
+    def write_exit_line(self, code, prompt_is_back=True):
+        """コマンドの出力の後に、終了コードの行を書く。
+
+        終了コードを調べていたときは、持っていた行を書き、返事の行の所にこの行を置く。
+        prompt_is_back が True なら、書きかけの最後の行はプロンプトなので、その前に置く。
+        False なら、書きかけの行を先に書いてから置く。
+        """
+        out, at = self._release()
+        if not prompt_is_back and self.partial:
+            text = strip_marker(self.partial)[0]
+            self.partial = ""
+            if text:
+                out.append(text + "\n")
+        out.insert(len(out) if at is None else at, exit_line(code))
+        self._write("".join(out))
+
+    def flush(self):
+        """持っている行と、書きかけの行を、印を除いて書く。"""
+        out, _ = self._release()
+        if self.partial:
+            out.append(strip_marker(self.partial)[0])
+            self.partial = ""
+        self._write("".join(out))
+
+    def note(self, text):
+        """スクリプトからの書き込み（「#」の行など）。
+
+        書いた文字が改行で終わっていれば、text の頭の改行は省く（空の行を作らない）。
+        """
+        self.flush()
+        if self.line_start and text.startswith("\n"):
+            text = text[1:]
+        self._write(text)
+
+    def close(self):
+        self.flush()
+        self.f.close()
 
 
 def log_note(f, text):
     if f is None:
         return
     try:
-        f.write(text)
-        f.flush()
+        f.note(text)
     except Exception:
         pass
 
@@ -1606,7 +1733,7 @@ def cmd_run(args):
     for c in commands:
         log_note(log, "# 実行するコマンド：%s\n" % c)
     if commands:
-        log_note(log, "# 各コマンドの後に「%s」を送り、終了コードを調べる\n" % RC_COMMAND.strip())
+        log_note(log, "# 各コマンドの出力の後に、機器での終了コードを「（終了コード：数）」の行で書く\n")
     if listen_only:
         log_note(log, "# コマンドは実行せず、%s 秒記録する\n" % _num(listen_seconds))
     log_note(log, "# ---- ここから下は、機器から届いた文字そのまま ----\n")
@@ -1648,11 +1775,13 @@ def cmd_run(args):
                 if not back:
                     stuck = True
                     result["not_run"] = commands[i + 1:]
+                    log.write_exit_line(None, prompt_is_back=False)
                     break
                 if not r["timed_out"]:
                     # Ctrl-C で止めたときは、終了コードを調べない（null のまま）
                     progress = {"phase": "exit_code", "command": c, "rest": commands[i + 1:]}
                     r["exit_code"] = read_exit_code(con, s)
+                log.write_exit_line(r["exit_code"])
                 trimmed = trim_prompt_head(lines, con.prompt_head)
                 if trimmed is not lines:
                     set_output(r, trimmed)
@@ -1720,6 +1849,7 @@ def cmd_run(args):
             "USB ケーブルが抜けていないかを確かめてください。" % s.port
         )
         if con is not None and progress.get("phase") in ("command", "exit_code"):
+            log.write_exit_line(None, prompt_is_back=False)
             if progress["phase"] == "command":
                 result["commands"].append(partial_command(con, progress["command"]))
             if progress["rest"]:

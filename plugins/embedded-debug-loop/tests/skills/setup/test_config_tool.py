@@ -233,10 +233,10 @@ class ShowTest(ToolTestCase):
         self.assertEqual(data["missing"], ["camera_ip"])
 
     def test_show_table_for_the_final_report(self):
-        """終わりの報告にそのまま貼る表。空は（空）、パスワードは ＊＊＊、長い値は切る。"""
+        """終わりの報告にそのまま貼る表。空は（空）、パスワードは ＊＊＊、長い値は真ん中を省く。"""
         path = self.copy(CAMERA)
         self.ok("set", path, "admin_user", "a|b")
-        self.ok("set", path, "camera_ip", "x" * 50)
+        self.ok("set", path, "camera_ip", "x" * 40 + "y" * 40)
         data = self.ok("show", path)
         lines = data["table"].split("\n")
         self.assertEqual(lines[:2], ["| 項目 | 値 |", "| --- | --- |"])
@@ -252,9 +252,27 @@ class ShowTest(ToolTestCase):
         self.assertEqual(rows["rtsp_port"], "`554`")
         self.assertEqual(rows["night_mode"], "`true`")
         self.assertEqual(rows["admin_user"], "`a\\|b`")
-        self.assertEqual(rows["camera_ip"], "`" + "x" * 40 + "…`")
+        self.assertEqual(rows["camera_ip"], "`" + "x" * 29 + "…" + "y" * 30 + "`")
         self.assertEqual(rows["recording_dirs"], '`["/mnt/rec1", "/mnt/録画 2"]`')
         self.assertNotIn("tk-0123456789abcdef", data["table"])
+
+    def test_show_table_keeps_long_paths_readable(self):
+        """60 文字までは切らない。長いパスは真ん中を省き、頭と終わり（ファイルの名前）を残す（S2-r3）。"""
+        path = self.copy(CAMERA)
+        sixty = "/opt/" + "a" * 55
+        self.ok("set", path, "camera_ip", "--stdin", stdin=sixty + "\n")
+        self.assertIn("| camera_ip | `" + sixty + "` |", self.ok("show", path)["table"])
+        long_path = "/opt/poky/4.0/sysroots/x86_64-pokysdk-linux/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"
+        self.ok("set", path, "camera_ip", "--stdin", stdin=long_path + "\n")
+        table = self.ok("show", path)["table"]
+        row = [line for line in table.split("\n") if line.startswith("| camera_ip |")][0]
+        cell = row[len("| camera_ip | `"):-len("` |")]
+        self.assertEqual(len(cell), 60)
+        self.assertEqual(cell.count("…"), 1)
+        head, tail = cell.split("…")
+        self.assertTrue(long_path.startswith(head), cell)
+        self.assertTrue(long_path.endswith(tail), cell)
+        self.assertTrue(cell.endswith("poky-linux-gnueabi"), cell)
 
     def test_show_table_empty_secret(self):
         path = self.copy(COFFEE)
@@ -278,6 +296,66 @@ class ShowTest(ToolTestCase):
         self.assertFalse(it["color"]["fill_recommended"])  # 例の行は説明ではない
         coffee = self.items(self.copy(COFFEE))
         self.assertFalse(any(v["fill_recommended"] for v in coffee.values()))
+
+    def test_can_be_empty(self):
+        """空にしてよいか。必須の項目と、空を選べない「選べる値」の項目は空にできない（S1-r3）。"""
+        coffee = self.items(self.copy(COFFEE))
+        self.assertFalse(coffee["machine_name"]["can_be_empty"])    # 必須
+        self.assertFalse(coffee["bean_type"]["can_be_empty"])       # 選べる値に空がない
+        self.assertFalse(coffee["cleaning_days"]["can_be_empty"])   # 必須で、選べる値がある
+        self.assertTrue(coffee["greeting"]["can_be_empty"])
+        self.assertTrue(coffee["favorite_menu"]["can_be_empty"])
+        self.assertTrue(coffee["last_service"]["can_be_empty"])
+        path = self.write("c.yaml", "# 見本\n\n# 色。空なら色なし。\n# 選べる値：\"\" / red / blue\ncolor: \"red\"\n")
+        it = self.items(path)
+        self.assertEqual(it["color"]["choices"], ["", "red", "blue"])
+        self.assertTrue(it["color"]["can_be_empty"])
+
+    def test_ask_alone(self):
+        """パスワードを環境変数で渡すための項目は、単独では聞かない（S2-r3）。"""
+        coffee = self.items(self.copy(COFFEE))
+        self.assertFalse(coffee["maintenance_password_env"]["ask_alone"])
+        self.assertTrue(coffee["maintenance_password"]["ask_alone"])
+        self.assertTrue(coffee["machine_name"]["ask_alone"])
+        camera = self.items(self.copy(CAMERA))
+        self.assertFalse(camera["api_token_env"]["ask_alone"])
+        # もとの項目がパスワードでなければ、ふつうの項目として聞く
+        path = self.write("e.yaml", "# 見本\n\n# 言葉\nlang: \"ja\"\n\n# 言葉を入れた環境変数の名前\nlang_env: \"\"\n")
+        it = self.items(path)
+        self.assertEqual(it["lang_env"]["env_for"], "lang")
+        self.assertTrue(it["lang_env"]["ask_alone"])
+
+    def test_value_digest(self):
+        """パスワードなどは、値を見せずに、書き換わったかが分かる指紋を返す（S2-r3）。"""
+        path = self.copy(CAMERA)
+        first = self.items(path)
+        digest = first["api_token"]["value_digest"]
+        self.assertRegex(digest, r"^[0-9a-f]{8}$")
+        self.assertNotIn("value_digest", first["admin_user"])          # パスワードでない項目にはない
+        self.assertNotIn("value_digest", first["api_token_env"])
+        # 同じ値なら同じ指紋、違う値なら違う指紋
+        self.assertEqual(self.items(path)["api_token"]["value_digest"], digest)
+        self.assertEqual(self.ok("get", path, "api_token")["value_digest"], digest)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text.replace("tk-0123456789abcdef", "tk-0123456789abcdeg"))
+        changed = self.items(path)["api_token"]["value_digest"]
+        self.assertRegex(changed, r"^[0-9a-f]{8}$")
+        self.assertNotEqual(changed, digest)
+        # 手で同じ値に戻せば、指紋も戻る
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        self.assertEqual(self.items(path)["api_token"]["value_digest"], digest)
+        # 値そのものや、ただの sha256 は出さない
+        import hashlib
+        code, data, out = self.tool("show", path)
+        self.assertNotIn("tk-0123456789abcdef", out)
+        for raw in ("tk-0123456789abcdef", '"tk-0123456789abcdef"'):
+            self.assertNotIn(hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8], out)
+        # 空の値は、空の指紋
+        coffee = self.items(self.copy(COFFEE))
+        self.assertEqual(coffee["maintenance_password"]["value_digest"], "")
 
     def test_secret_never_printed(self):
         path = self.copy(CAMERA)
@@ -648,6 +726,31 @@ class RefuseTest(ToolTestCase):
         self.fail_("set", coffee, "cleaning_days", '["mon", "holiday"]', "--json")
         self.ok("set", coffee, "cleaning_days", '["sat"]', "--json")
         self.ok("set", coffee, "bean_type", "arabica")  # 「（…）」の注は値に含めない
+
+    def test_choices_refuse_empty(self):
+        """選べる値に空がない項目は、空にできない。選べる値を示して断る（S1-r3）。"""
+        path = self.copy(CAMERA)
+        before = self.read(path)
+        data, _ = self.fail_("set", path, "resolution", "")
+        self.assertIn("「resolution」は空にできません", data["error"])
+        self.assertIn("720p / 1080p / 4k", data["error"])
+        self.assertEqual(data["choices"], ["720p", "1080p", "4k"])
+        code, data, _ = self.tool("set", path, "resolution", "--stdin", stdin="")
+        self.assertEqual(code, 2)
+        self.assertIn("空にできません", data["error"])
+        self.assert_unchanged(path, before)
+        coffee = self.copy(COFFEE)
+        before = self.read(coffee)
+        data, _ = self.fail_("set", coffee, "cleaning_days", "[]", "--json")
+        self.assertIn("空にできません", data["error"])
+        self.fail_("set", coffee, "cleaning_days", '[""]', "--json")
+        self.assert_unchanged(coffee, before)
+        # 選べる値に "" があれば、空にできる
+        path = self.write("c.yaml", "# 見本\n\n# 色。空なら色なし。\n# 選べる値：\"\" / red / blue\ncolor: \"red\"\n")
+        data, _ = self.fail_("set", path, "color", "green")
+        self.assertIn('"" / red / blue', data["error"])
+        self.assertTrue(self.ok("set", path, "color", "")["changed"])
+        self.assertEqual(self.value(path, "color"), "")
 
     def test_secret_masked_in_set_and_errors(self):
         path = self.copy(CAMERA)

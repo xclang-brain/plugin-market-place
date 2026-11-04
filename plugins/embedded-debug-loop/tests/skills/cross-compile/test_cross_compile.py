@@ -1191,6 +1191,17 @@ class SkillDocTest(unittest.TestCase):
         self.assertIn("利用者に見せません", section)
         self.assertIn("設定ファイルの項目名", section)
 
+    def test_check_summary_is_a_table_of_config_names(self):
+        """表の見出しに、項目名と日本語の言い換えが混ざった（S1-r3）。項目名と値の表で見せる。"""
+        section = self.text.split("### 設定を確かめて、問題が無かったとき", 1)[1].split("### ビルドに成功したとき", 1)[0]
+        for word in ("設定ファイルの項目名と値の表で見せます。",
+                     "列は「項目」と「値」です。",
+                     "日本語に言い換えません。",
+                     "「説明」の列を別に足します。",
+                     "表の外に文で伝えます。"):
+            self.assertIn(word, section, word)
+        self.assertNotIn("ビルドするフォルダ、コマンド、できるファイルを短く伝えます", self.text)
+
     def test_mentions_notes_compiler_and_gitignore(self):
         for word in ("`notes`", "`empty_recommended`", "`compiler`", "`.gitignore`",
                      "`stale_outputs`", "`added`"):

@@ -1,11 +1,20 @@
 // イベントの記録：作業・検証の返事の取り込み、くわしい記録の行、待っていること、図で光らせるエージェント。
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 import { VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
 
 const lines = (app) => app.store.snapshot().run.activity.map((a) => `${a.who}|${a.text}`);
+/** その実行の events.jsonl の中身 */
+const eventsOf = (dataDir, id) => {
+  const file = path.join(dataDir, 'runs', id, 'events.jsonl');
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+};
+const replies = (dataDir, id) => eventsOf(dataDir, id).filter((e) => e.type === 'worker.reply' || e.type === 'verifier.reply')
+  .map(({ type, iteration, report, ignored, reason }) => ({ type, iteration, report, ...(ignored ? { ignored, reason } : {}) }));
 
 test('作業エージェントの返事は、計画があって作業の報告がまだの試行に入る', async (t) => {
   const { fake, app } = await startRun(t);
@@ -260,4 +269,83 @@ test('検証エージェントを呼ばずに評価したときは、その印�
   fake.subagentStop({ agentType: VERIFIER, agentId: 'v2', response: '後から届いた返事' });
   assert.equal(study(3).verifierCalled, true, '評価の後に呼んだときは、印を外す');
   assert.equal(study(3).verifierReport, '後から届いた返事');
+});
+
+// ---------- 試行の記録に入れない返事も、events.jsonl に残す ----------
+
+test('試行の記録に入れない作業・検証の返事も、events.jsonl に ignored: true と理由を付けて残す', async (t) => {
+  const { fake, app, dataDir } = await startRun(t, { prepare: false });
+  const id = app.store.snapshot().run.id;
+  fake.subagentStop({ agentType: WORKER, agentId: 'w0', response: '準備：できている' });
+  fake.subagentStop({ agentType: VERIFIER, agentId: 'v0', response: '計画の前の評価' });
+  await fake.call('plan', { iteration: 1, plan: 'p1' });
+  fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告 1' });
+  fake.subagentStop({ agentType: 'helper-a', agentId: 'w2', response: '同じ試行での 2 回目の報告' });
+  fake.subagentStop({ agentType: VERIFIER, agentId: 'v1', response: 'C1：合格' });
+  fake.subagentStop({ agentType: 'general-purpose', agentId: 'g1', response: 'ほかのエージェントの返事' });
+  fake.subagentStop({ agentType: WORKER, agentId: 'w3', response: '' });
+
+  assert.equal(app.store.snapshot().run.iterations[0].do.report, '報告 1', '試行の記録は、最初の報告のまま');
+  assert.deepEqual(replies(dataDir, id), [
+    { type: 'worker.reply', iteration: 0, report: '準備：できている', ignored: true, reason: '試行の計画が記録される前に届いたため。' },
+    { type: 'verifier.reply', iteration: 0, report: '計画の前の評価', ignored: true, reason: '試行の計画が記録される前に届いたため。' },
+    { type: 'worker.reply', iteration: 1, report: '報告 1' },
+    { type: 'worker.reply', iteration: 1, report: '同じ試行での 2 回目の報告', ignored: true, reason: '試行 1 の作業の報告は、もう記録してあるため。' },
+    { type: 'verifier.reply', iteration: 1, report: 'C1：合格' },
+  ]);
+});
+
+test('止めた後の返事と、終わった後の返事も、理由を付けて残す。新しい下書きの準備の確認は、前の実行に書かない', async (t) => {
+  const a = await startRun(t);
+  await a.fake.call('plan', { iteration: 1, plan: 'p1' });
+  a.fake.emit('subagent.started', { agentType: WORKER, toolCallId: 't1' }, 'w1');
+  await a.app.control.stop();
+  a.fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '途中までの報告' });
+  const stoppedId = a.app.store.snapshot().run.id;
+  const stopped = eventsOf(a.dataDir, stoppedId).find((e) => e.type === 'worker.reply');
+  assert.equal(stopped.ignored, true);
+  assert.equal(stopped.afterStop, true);
+  assert.equal(stopped.reason, '利用者が止めた後に届いたため。');
+
+  const b = await startRun(t);
+  const id = b.app.store.snapshot().run.id;
+  await b.fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+  b.fake.subagentStop({ agentType: VERIFIER, agentId: 'v9', response: '終わった後の返事' });
+  await b.fake.call('open', { request: '次の作業' });
+  b.fake.subagentStop({ agentType: WORKER, agentId: 'w9', response: '準備：できている（次の作業）' });
+  assert.deepEqual(replies(b.dataDir, id), [
+    { type: 'verifier.reply', iteration: 0, report: '終わった後の返事', ignored: true, reason: '実行が終わった後に届いたため。' },
+  ]);
+});
+
+// ---------- コマンドの説明 ----------
+
+test('コマンドに説明（description）があれば、行は説明にし、コマンドの全文も残す。なければコマンドの行にする', async (t) => {
+  const { fake, app, dataDir } = await startRun(t);
+  fake.emit('subagent.started', { agentType: WORKER, toolCallId: 't0' }, 'w1');
+  const long = `python3 /tmp/${'d/'.repeat(200)}scripts/run.py run --workdir /w/project`;
+  fake.emit('tool.execution_start', { toolCallId: 'c1', toolName: 'bash', arguments: { command: long, description: '  Run the tool\n on the target ' } }, 'w1');
+  fake.emit('tool.execution_complete', { toolCallId: 'c1', success: false }, 'w1');
+  fake.emit('tool.execution_start', { toolCallId: 'c2', toolName: 'powershell', arguments: { command: 'dir', description: '一覧を見る' } }, 'w1');
+  fake.emit('tool.execution_start', { toolCallId: 'c3', toolName: 'bash', arguments: { command: 'ls -la', description: '   ' } }, 'w1');
+  fake.emit('tool.execution_start', { toolCallId: 'c4', toolName: 'bash', arguments: { command: 'make' } }, 'w1');
+
+  const activity = app.store.snapshot().run.activity.slice(0, 4).reverse().map(({ who, text, command }) => ({ who, text, command }));
+  assert.deepEqual(activity, [
+    { who: '作業', text: 'コマンドを実行：Run the tool on the target（失敗）', command: long },
+    { who: '作業', text: 'コマンドを実行：一覧を見る', command: 'dir' },
+    { who: '作業', text: 'コマンドを実行：ls -la', command: undefined },
+    { who: '作業', text: 'コマンドを実行：make', command: undefined },
+  ]);
+  app.store.flush();
+  const id = app.store.snapshot().run.id;
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'runs', id, 'run.json'), 'utf8'));
+  assert.equal(saved.activity.find((a) => a.text.startsWith('コマンドを実行：一覧')).command, 'dir', '実行の記録にも残す');
+  const logged = eventsOf(dataDir, id).filter((e) => e.type === 'activity' && e.text.startsWith('コマンドを実行：'));
+  assert.deepEqual(logged.map((e) => [e.text, e.command]), [
+    ['コマンドを実行：Run the tool on the target', long],
+    ['コマンドを実行：一覧を見る', 'dir'],
+    ['コマンドを実行：ls -la', undefined],
+    ['コマンドを実行：make', undefined],
+  ]);
 });

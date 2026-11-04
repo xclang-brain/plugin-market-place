@@ -63,3 +63,62 @@ test('壊れた入力でも例外を投げない', async (t) => {
     assert.doesNotThrow(() => hook(input, { sessionId: 's' }));
   }
 });
+
+// ---------- 作業の報告がある試行での、作業エージェントへの頼み直し ----------
+
+const REPORTED_1 = 'この試行の作業は、もう報告されています。続けるときは、先に embedded-debug-loop_plan で試行 2 の計画を記録してから頼んでください。';
+const task = (agentType, extra = {}) => ({ toolName: 'task', toolArgs: { agent_type: agentType, description: '作業', prompt: '…' }, ...extra });
+
+test('実行中：今の試行に作業の報告があり、新しい計画がないときは、統括エージェントの作業エージェントへの task を拒む', async (t) => {
+  const { fake } = await startRun(t);
+  await fake.call('plan', { iteration: 1, plan: 'p1' });
+  assert.equal(fake.pre(task(WORKER)), undefined, '報告の前は拒まない');
+  fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告：できなかった' });
+  for (const input of [
+    task(WORKER),
+    task('helper-a'), // プラグインの名前がなくても同じエージェント
+    { toolName: 'task', toolArgs: JSON.stringify({ agent_type: WORKER, prompt: '…' }) }, // 引数が JSON の文でも読む
+    task(WORKER, { sessionId: 's1' }),
+  ]) {
+    const r = fake.pre(input);
+    assert.equal(r?.permissionDecision, 'deny', JSON.stringify(input));
+    assert.equal(r.permissionDecisionReason, REPORTED_1);
+  }
+  // 検証エージェントやほかのエージェントへの頼み、子のエージェントの呼び出しは拒まない
+  assert.equal(fake.pre(task(VERIFIER)), undefined);
+  assert.equal(fake.pre(task('general-purpose')), undefined);
+  assert.equal(fake.pre(task(WORKER, { agentId: 'x1', agentType: 'general-purpose' })), undefined);
+  assert.equal(fake.pre(task(WORKER, { sessionId: 'child-1' })), undefined);
+  assert.equal(fake.pre({ toolName: 'read_agent', toolArgs: { agent_id: 'w1' } }), undefined);
+
+  // 評価の後でも、新しい計画がなければ拒む
+  await fake.call('study', { iteration: 1, verdicts: [{ criterion: 'C1', result: 'fail', reason: 'r' }], next: 'n' });
+  assert.equal(fake.pre(task(WORKER))?.permissionDecisionReason, REPORTED_1);
+
+  // 試行 2 の計画を記録したら、頼める。報告が届いたら、また拒む（番号は今の試行に合わせる）
+  await fake.call('plan', { iteration: 2, plan: 'p2' });
+  assert.equal(fake.pre(task(WORKER)), undefined);
+  fake.subagentStop({ agentType: WORKER, agentId: 'w2', response: '報告 2' });
+  assert.equal(fake.pre(task(WORKER))?.permissionDecisionReason,
+    'この試行の作業は、もう報告されています。続けるときは、先に embedded-debug-loop_plan で試行 3 の計画を記録してから頼んでください。');
+});
+
+test('準備の確認の頼みは拒まない：実行の前、下書きのとき、開始の後で試行 1 の計画の前', async (t) => {
+  const a = await startWith(t);
+  assert.equal(a.fake.pre(task(WORKER)), undefined, '実行のないとき');
+  await a.fake.call('open', { request: '作業' });
+  assert.equal(a.fake.pre(task(WORKER)), undefined, '下書きのとき');
+
+  const b = await startRun(t, { prepare: false });
+  assert.equal(b.fake.pre(task(WORKER)), undefined, '開始の後、計画の前');
+  b.fake.subagentStop({ agentType: WORKER, agentId: 'w0', response: '準備：できている' });
+  assert.equal(b.fake.pre(task(WORKER)), undefined, '準備の確認の返事の後も、計画の前は拒まない');
+
+  // 終わった後の新しい頼み（下書き）でも拒まない
+  await b.fake.call('plan', { iteration: 1, plan: 'p1' });
+  b.fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告' });
+  await b.fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+  assert.equal(b.fake.pre(task(WORKER)), undefined, '終わった後');
+  await b.fake.call('open', { request: '次の作業' });
+  assert.equal(b.fake.pre(task(WORKER)), undefined, '終わった後の下書き');
+});

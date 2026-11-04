@@ -1,10 +1,10 @@
 // Copilot CLI のイベントを、実行の記録にする。
 // - だれが動いているか（統括・作業・検証・その他）と、待っていること（質問・許可。実行の前や後でも示す）
 // - くわしい記録の行（ツールの呼び出しを、ふつうの言葉にしたもの）
-// - 作業エージェントと検証エージェントの返事（フック onSubagentStop で届く）
+// - 作業エージェントと検証エージェントの返事（フック onSubagentStop で届く）。試行の記録に入れない返事も、理由を付けて events.jsonl に残す
 // エージェントの役は、名前が設定の作業エージェント・検証エージェントと同じかどうかだけで決める。
 
-import { TOOL_PREFIX } from './messages.mjs';
+import { IGNORED, TOOL_PREFIX } from './messages.mjs';
 import { sameAgent, text } from './store.mjs';
 
 export const WHO = Object.freeze({ orchestrator: '統括', worker: '作業', verifier: '検証', other: 'その他', user: '利用者' });
@@ -67,8 +67,8 @@ export function createEventSink({ store, onStopped = () => {} }) {
   const calls = new Map(); // ツールの呼び出しの番号 → くわしい記録の行（失敗の印を付けるため）
   const edits = new Map(); // ファイルを直すツールの呼び出しの番号 → 変えるファイルのパス
 
-  function roleOf(agentType) {
-    const s = store.activeRun() ?? store.settings;
+  // s は、作業・検証エージェントの名前を持つもの（実行か設定）
+  function roleOf(agentType, s = store.activeRun() ?? store.settings) {
     if (sameAgent(agentType, s.worker)) return 'worker';
     if (sameAgent(agentType, s.verifier)) return 'verifier';
     return 'other';
@@ -79,13 +79,26 @@ export function createEventSink({ store, onStopped = () => {} }) {
     return ROLE_NAME[role] ?? `エージェント「${oneLine(agentType) || '名前なし'}」`;
   };
 
-  /** ツールの呼び出しを、ふつうの言葉の1行にする。出さないものは null */
+  /**
+   * ツールの呼び出しを、ふつうの言葉の1行にする。出さないものは null。
+   * コマンドに説明（description）があれば、行には説明を出し、コマンドの全文は extra.command に残す（画面では title に出す）
+   */
   function describeTool(name, rawArgs) {
+    if (name === 'bash' || name === 'powershell') {
+      const a = argsOf(rawArgs);
+      const command = commandLine(a.command);
+      const description = oneLine(a.description);
+      if (!description) return { text: `コマンドを実行：${command}` };
+      return { text: `コマンドを実行：${description}`, extra: command ? { command } : undefined };
+    }
+    const line = toolLine(name, rawArgs);
+    return line === null ? null : { text: line };
+  }
+
+  /** コマンドのほかのツールの行 */
+  function toolLine(name, rawArgs) {
     const a = argsOf(rawArgs);
     switch (name) {
-      case 'bash':
-      case 'powershell':
-        return `コマンドを実行：${commandLine(a.command)}`;
       case 'write_bash':
       case 'write_powershell':
         return 'コマンドに入力';
@@ -181,7 +194,7 @@ export function createEventSink({ store, onStopped = () => {} }) {
           }
           const line = run ? describeTool(text(data.toolName), data.arguments) : null;
           if (line) {
-            const entry = store.activity(WHO[roleOfEvent(event)], line);
+            const entry = store.activity(WHO[roleOfEvent(event)], line.text, line.extra);
             if (entry && data.toolCallId) {
               calls.set(data.toolCallId, entry);
               if (calls.size > MAX_CALLS) calls.delete(calls.keys().next().value);
@@ -239,24 +252,48 @@ export function createEventSink({ store, onStopped = () => {} }) {
     }
   }
 
-  /** 子のエージェントが手番を終えたときの返事。作業の報告と、検証の返事を記録する */
+  /**
+   * 子のエージェントが手番を終えたときの返事。作業の報告と、検証の返事を記録する。
+   * 試行の記録に入れない返事も、捨てずに events.jsonl に ignored: true と理由を付けて残す
+   * （下書きのときの準備の確認は、統括エージェントが prepare で記録するので除く）
+   */
   function onSubagentStop(input) {
     try {
-      const run = store.activeRun();
       const response = typeof input?.response === 'string' ? input.response : '';
-      if (!run || !response) return undefined;
-      const role = roleOf(text(input.agentType) || input.agentName);
-      const it = store.current();
-      // 止めた後に届いた返事は、途中で切れたもの。試行の記録には入れず、振り返りの記録にだけ残す
-      if (run.status === 'stopping' && (role === 'worker' || role === 'verifier')) {
-        store.log(`${role}.reply`, { iteration: it?.n ?? 0, report: response, afterStop: true });
+      if (!response) return undefined;
+      const agentType = text(input.agentType) || input.agentName;
+      const run = store.activeRun();
+      if (!run) {
+        // 終わった実行の後に届いた返事。新しい下書き（open の後）があれば、その準備の確認なので残さない
+        const last = store.run?.status === 'finished' && !store.draft ? store.run : null;
+        const role = last ? roleOf(agentType, last) : 'other';
+        if (role === 'worker' || role === 'verifier') {
+          store.log(`${role}.reply`, { iteration: last.iteration, report: response, ignored: true, reason: IGNORED.finished }, { finished: true });
+        }
         return undefined;
       }
-      if (role === 'worker' && it && !it.do) {
+      const role = roleOf(agentType);
+      if (role !== 'worker' && role !== 'verifier') return undefined;
+      const it = store.current();
+      const ignore = (reason, extra = {}) => store.log(`${role}.reply`, { iteration: it?.n ?? 0, report: response, ...extra, ignored: true, reason });
+      // 止めた後に届いた返事は、途中で切れたもの。試行の記録には入れず、振り返りの記録にだけ残す
+      if (run.status === 'stopping') {
+        ignore(IGNORED.afterStop, { afterStop: true });
+        return undefined;
+      }
+      if (!it) {
+        ignore(IGNORED.noPlan);
+        return undefined;
+      }
+      if (role === 'worker') {
+        if (it.do) {
+          ignore(IGNORED.reported(it.n));
+          return undefined;
+        }
         it.do = { report: response, at: store.iso() };
         store.log('worker.reply', { iteration: it.n, report: response });
         store.changed();
-      } else if (role === 'verifier' && it) {
+      } else {
         markVerifierCalled();
         if (it.study) it.study.verifierReport = response;
         else it._verifierReport = response;

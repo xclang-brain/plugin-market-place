@@ -204,19 +204,22 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       if (run) run.waiting = store.waiting ? { ...store.waiting } : null;
       store.changed();
     },
-    /** あとで振り返るための記録。動いている実行がなければ書かない */
-    log(type, data = {}) {
-      const run = store.activeRun();
+    /**
+     * あとで振り返るための記録。動いている実行がなければ書かない。
+     * finished が true なら、終わった実行（いちばん新しいもの）にも書く
+     */
+    log(type, data = {}, { finished = false } = {}) {
+      const run = store.activeRun() ?? (finished && store.run?.status === 'finished' ? store.run : null);
       if (run) persist.appendEvent(run.id, { at: iso(), type, ...data });
     },
-    /** くわしい記録の1行。新しいものを先頭に置く */
-    activity(who, line) {
+    /** くわしい記録の1行。新しいものを先頭に置く。extra は行に足す項目（コマンドの全文 command など） */
+    activity(who, line, extra = {}) {
       const run = store.activeRun();
       if (!run) return null;
-      const entry = { at: iso(), who, text: line };
+      const entry = { at: iso(), who, text: line, ...extra };
       run.activity.unshift(entry);
       if (run.activity.length > MAX_ACTIVITY) run.activity.length = MAX_ACTIVITY;
-      store.log('activity', { who, text: line });
+      store.log('activity', { who, text: line, ...extra });
       store.changed();
       return entry;
     },

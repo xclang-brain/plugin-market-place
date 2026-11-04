@@ -110,7 +110,20 @@ class SkillMdTest(unittest.TestCase):
         return self.body[self.body.index(start):self.body.index(end)]
 
     def test_empty_optional_item_can_stay_empty(self):
-        self.assertIn("「空のまま」（必須でなく、今の値が空のとき）", self.body)
+        self.assertIn("「空のまま」（`can_be_empty` が true で、今の値が空のとき）", self.body)
+
+    def test_empty_options_only_when_empty_is_allowed(self):
+        """選べる値の決まった項目（空は選べない）に「空にする」を出した（S1-r3）。"""
+        section = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
+        for word in ("「空にする」（`can_be_empty` が true で",
+                     "「あとで決める」（`can_be_empty` が false で、今の値が空のとき）",
+                     "`can_be_empty` が false の項目には、「空のまま」「空にする」を出しません。",
+                     "`choices` がある項目は、空の値が `choices` にあるときだけ出します。"):
+            self.assertIn(word, section, word)
+        self.assertNotIn("（必須でなく、今の値が空でない", self.body)
+        self.assertIn("`can_be_empty`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
+        tool = self.section("## 道具", "### 値の渡し方")
+        self.assertIn("空の値も、`choices` に空の値がなければ書きません。", tool)
 
     def test_choice_order_puts_values_before_staying_empty(self):
         """「空のまま」が先頭（既定）だと、Enter だけで大事な項目が空のままになる。
@@ -118,7 +131,7 @@ class SkillMdTest(unittest.TestCase):
         section = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
         current = section.index("「今の値のまま：<value>」")
         values = section.index("「<値> と書く」")
-        empty = section.index("「空のまま」（必須でなく")
+        empty = section.index("「空のまま」（`can_be_empty`")
         self.assertLess(current, values)
         self.assertLess(values, empty)
         self.assertIn("「空のまま」は、書ける値より前に置きません。", section)
@@ -132,11 +145,45 @@ class SkillMdTest(unittest.TestCase):
         write = self.section("### 5. 答えを書き込む", "### 6. パスワードなど")
         self.assertIn("「<値> と書く」を選んだら", write)
 
-    def test_fill_recommended_puts_first_example_first(self):
-        section = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
-        self.assertIn("`fill_recommended` が true の項目は、`examples` の1つ目を1番目に置きます。", section)
-        self.assertIn("「（おすすめ）」", section)
+    def test_fill_recommended_asks_for_the_users_own_value(self):
+        """ある環境だけの例の値を（おすすめ）にすると、その値を書けばよいと読める（S2-r3）。"""
+        section = self.section("今の値が空で、`fill_recommended` が true の項目は", "### 5. 答えを書き込む")
+        for word in ("質問の文には、コメントの「必ず書く」の文を、省かずに入れます。",
+                     "1番目の選択肢は「自分の値を書く（おすすめ）」にします。",
+                     "「<値> と書く（例）」",
+                     "例の値に「（おすすめ）」は付けません。",
+                     "「<key> に書く値を書いてください。」",
+                     "「自由に書かれた答え」のとおりに書き込みます"):
+            self.assertIn(word, section, word)
+        self.assertNotIn("`examples` の1つ目を1番目に置きます", self.body)
+        self.assertNotIn("と書く（おすすめ）」", self.body)
         self.assertIn("`fill_recommended`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
+
+    def test_option_values_are_the_shown_text(self):
+        """選択肢の値が英語の短い名前だと、それが会話の記録に出る（S2-r3）。"""
+        section = self.section("## 質問のしかた", "### 質問が取り消されたとき")
+        for word in ("選択肢の値は、見える文と同じ日本語の文にします。",
+                     "値と見える文を分けて書けるときも、同じ文にします。",
+                     "選ばれた値を、そのまま会話の記録に出す",
+                     "英語の短い名前や記号を、値に使いません。"):
+            self.assertIn(word, section, word)
+
+    def test_default_option_rule(self):
+        """「空のまま」が既定だと、Enter だけで空のままになる（S2-r3）。"""
+        section = self.section("## 質問のしかた", "### 質問が取り消されたとき")
+        for word in ("既定の選択肢（Enter だけで選ばれるもの）は、ふつうは付けません。",
+                     "付けるときは、1番目の選択肢だけを既定にします。",
+                     "「空のまま」「空にする」は、既定にしません。"):
+            self.assertIn(word, section, word)
+
+    def test_env_partner_items_are_not_asked_alone(self):
+        """環境変数の名前の項目を、表に出したり単独で聞いたりした（S2-r3）。"""
+        order = self.section("### 3. 聞く順番", "### 4. 1つの項目の聞き方")
+        for word in ("`ask_alone` が false の項目は、1〜5 のどれでも扱いません。",
+                     "表にも、「直す項目を選ぶ」の選択肢にも入れません。N にも数えません。",
+                     "もとの項目で「環境変数で渡す」を選んだときだけ聞きます。"):
+            self.assertIn(word, order, word)
+        self.assertIn("`ask_alone`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
 
     def test_file_only_phrases_are_rephrased(self):
         """コメントの「下の」「このスキル」は、チャットでは何を指すか分からない。"""
@@ -170,7 +217,11 @@ class SkillMdTest(unittest.TestCase):
     def test_wording_of_the_rest_question(self):
         self.assertNotIn("説明の1行目", self.body)
         self.assertNotIn("残りの N 個", self.body)
-        self.assertIn("「ほかの N 個の項目は、今の値のままでよいですか。」", self.body)
+        order = self.section("### 3. 聞く順番", "### 4. 1つの項目の聞き方")
+        # まだ何も聞いていないときに「ほかの」と言うと、何のほかかが分からない（S1-r3）。
+        self.assertIn("聞いた項目があるとき：「ほかの N 個の項目は、今の値のままでよいですか。」", order)
+        self.assertIn("まだ1つも聞いていないとき：「この N 個の項目は、今の値のままでよいですか。」", order)
+        self.assertIn("表の前の文でも「ほかの」を使いません。", order)
         self.assertIn("列は「項目」「今の値」「説明」です。", self.body)
 
     def test_rewriting_by_hand_waits_for_the_user(self):
@@ -180,6 +231,17 @@ class SkillMdTest(unittest.TestCase):
                      "「書き換えたら教えてください。」", "「書き換えた」「あとでやる」の2つ",
                      "`show` でファイルを読み直します", "「あとで書き換える項目」"):
             self.assertIn(word, section, word)
+        # 前から値があったパスワードは、空かどうかでは書き換わったか分からない（S2-r3）。
+        for word in ("`empty` と `value_digest` を、書き換える前と比べます。",
+                     "「<key> は、まだ前の値のままです。」",
+                     "「<key> は、まだ空のままです。」",
+                     "2 をもう一度聞きます。",
+                     "「前の値のままにする」",
+                     "書き換わったと確かめられないときに、書き換わったとは言いません。"):
+            self.assertIn(word, section, word)
+        self.assertNotIn("空でなくなっていれば、書き換わった", self.body)
+        self.assertIn("`value_digest`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
+        self.assertIn("利用者には見せません。", self.section("`value_digest` は、", "## 利用者に見せる言葉"))
         report = self.section("### 7. 終わりの報告", "## 守ること")
         self.assertIn("「あとで書き換える項目：<key>」", report)
 
@@ -198,12 +260,26 @@ class SkillMdTest(unittest.TestCase):
         """呼び出し元が続けて別の作業をすると、報告が抜けた（2回続けて）。"""
         section = self.body[self.body.index("### 7. 終わりの報告"):self.body.index("## 守ること")]
         for word in ("呼び出し元がこの後に別の作業を続けるときも、省きません。",
-                     "手番を返す前の最後のこと",
+                     "この報告が、このスキルでする最後のことです。",
                      "チャットの文として、利用者に必ず見せます。",
                      "`show` と、ほかのコマンドやツールを、一緒に呼びません。",
                      "報告を書く前に、ほかのコマンドやツールを呼びません。",
                      "`table` を、そのまま貼ります"):
             self.assertIn(word, section, word)
+
+    def test_caller_may_continue_after_the_report(self):
+        """報告を「手番を返す前の最後」と書くと、呼び出し元まで手番を終えた（S2-r3）。"""
+        section = self.section("### 7. 終わりの報告", "## 守ること")
+        self.assertNotIn("手番を返す前", self.body)
+        for word in ("報告の後は、呼び出し元の作業に戻ります。",
+                     "呼び出し元は、報告の後に、自分の作業を続けてかまいません。",
+                     "このスキルの報告で、呼び出し元の手番を終えることはしません。"):
+            self.assertIn(word, section, word)
+
+    def test_table_cut_is_described(self):
+        section = self.section("### 7. 終わりの報告", "## 守ること")
+        self.assertIn("真ん中を「…」で省いて、60 文字ほどにしてあります。", section)
+        self.assertNotIn("40 文字で切り", self.body)
 
     def test_values_are_always_passed_through_stdin(self):
         """値を引数に書くと、値の中のパスに Copilot CLI が許可を求め、値もコマンドの行に出る。"""
@@ -282,7 +358,8 @@ class IndependenceTest(unittest.TestCase):
 
     def test_only_stdlib_imports(self):
         tree = ast.parse(read(TOOL))
-        allowed = {"json", "math", "os", "re", "sys", "tempfile", "traceback", "unicodedata", "errno"}
+        allowed = {"json", "math", "os", "re", "sys", "tempfile", "traceback", "unicodedata", "errno",
+                   "hashlib"}
         names = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

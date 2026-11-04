@@ -22,10 +22,15 @@
 - 項目のすぐ上のコメントを、その項目の説明として読む。
   - 「例：…」の行は例、「選べる値：a / b」の行は書ける値の一覧。
   - 説明に「必須」があれば、必須の項目とみなす。
+  - 「選べる値：」がある項目は、その中の値しか書けない。空の値も、
+    選べる値に "" があるときだけ書ける。
+- パスワードなどの値は、結果に出さない。かわりに、値には戻せない短い指紋
+  （value_digest）を返す。書き換わったかを見分けるためのもの。
 - Python 3.8 以上の標準ライブラリだけで動く。
 """
 
 import errno
+import hashlib
 import json
 import math
 import os
@@ -451,9 +456,11 @@ def parse_choices(text):
     out = []
     for part in parts:
         value = re.split(r"\s*[（(]", part.strip(), maxsplit=1)[0].strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"
+        if quoted:
             value = value[1:-1]
-        if value and value not in out:
+        # 空の値は、"" と囲んで書いたときだけ、選べる値に入れる。
+        if (value or quoted) and value not in out:
             out.append(value)
     return out
 
@@ -682,6 +689,44 @@ def masked(item, value):
     return value
 
 
+DIGEST_ROUNDS = 20000
+_DIGEST_KEY = []
+
+
+def _digest_key():
+    """指紋を作るための、この PC だけの鍵。チャットには出ないので、指紋から値を当てにくい。"""
+    if not _DIGEST_KEY:
+        key = b""
+        for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+            try:
+                with open(path, "rb") as f:
+                    key = f.read().strip()
+            except OSError:
+                continue
+            if key:
+                break
+        _DIGEST_KEY.append(key)
+    return _DIGEST_KEY[0]
+
+
+def value_digest(item, value):
+    """secret の値の指紋（16 進 8 文字）。値には戻せない。空の値は空の文字。"""
+    if is_empty(value):
+        return ""
+    salt = b"config-value-digest\0" + _digest_key() + b"\0" + item.key.encode("utf-8")
+    data = render_value(value).encode("utf-8", "surrogatepass")
+    return hashlib.pbkdf2_hmac("sha256", data, salt, DIGEST_ROUNDS)[:4].hex()
+
+
+def can_be_empty(item):
+    """空の値を書いてよい項目か。必須の項目と、選べる値に "" がない項目は、空にできない。"""
+    if item.required:
+        return False
+    if item.choices and "" not in item.choices:
+        return False
+    return True
+
+
 def shown_value(item, value):
     """文の中に書く値。空なら（空）、secret なら ＊＊＊。"""
     if is_empty(value):
@@ -701,10 +746,14 @@ def item_info(doc, item):
         "empty": is_empty(item.value),
         "secret": item.secret,
         "fill_recommended": item.fill_recommended,
+        "can_be_empty": can_be_empty(item),
+        "ask_alone": True,
         "examples": [masked(item, v) for v in item.examples()],
         "choices": list(item.choices),
         "line": item.start + 1,
     }
+    if item.secret:
+        info["value_digest"] = value_digest(item, item.value)
     env_key = item.key + "_env"
     if env_key in doc.by_key:
         info["env_alternative"] = env_key
@@ -712,12 +761,15 @@ def item_info(doc, item):
         base = item.key[:-4]
         if base in doc.by_key:
             info["env_for"] = base
+            # パスワードなどを環境変数で渡すための項目は、もとの項目と一緒にだけ聞く。
+            if doc.by_key[base].secret:
+                info["ask_alone"] = False
         if isinstance(item.value, str) and item.value.strip():
             info["env_defined"] = bool(os.environ.get(item.value.strip()))
     return info
 
 
-TABLE_VALUE_MAX = 40
+TABLE_VALUE_MAX = 60
 
 
 def _code_span(text):
@@ -728,8 +780,17 @@ def _code_span(text):
     return "`" + text + "`"
 
 
+def shorten_middle(text, limit=TABLE_VALUE_MAX):
+    """長い値は、真ん中を「…」で省く。パスの頭と終わり（ファイルの名前）が読めるように。"""
+    if len(text) <= limit:
+        return text
+    head = (limit - 1) // 2
+    tail = limit - 1 - head
+    return text[:head] + "…" + text[len(text) - tail:]
+
+
 def table_cell(item):
-    """終わりの報告の表に書く値。空なら（空）、secret なら ＊＊＊。長い値は切る。"""
+    """終わりの報告の表に書く値。空なら（空）、secret なら ＊＊＊。長い値は真ん中を省く。"""
     value = item.value
     if is_empty(value):
         return EMPTY_WORD
@@ -737,9 +798,7 @@ def table_cell(item):
         return MASK
     text = render_value(value) if isinstance(value, list) else display_scalar(value)
     text = re.sub(r"[\r\n\t]+", " ", text)
-    if len(text) > TABLE_VALUE_MAX:
-        text = text[:TABLE_VALUE_MAX] + "…"
-    return _code_span(text)
+    return _code_span(shorten_middle(text))
 
 
 def value_table(doc):
@@ -848,12 +907,18 @@ def convert_input(item, raw, use_json):
     if want != "null" and new_type != want:
         raise _type_error(item, new_type)
 
-    if item.choices and not is_empty(value):
+    if item.choices:
+        listed = " / ".join('""' if c == "" else c for c in item.choices)
+        if is_empty(value):
+            if "" not in item.choices:
+                raise ToolError("「{}」は空にできません。書ける値は、{} のどれかです。".format(key, listed),
+                                key=key, choices=list(item.choices))
+            return value
         given = value if isinstance(value, list) else [value]
         bad = [display_scalar(v) for v in given if display_scalar(v) not in item.choices]
         if bad:
             raise ToolError("「{}」に書ける値は、{} のどれかです（書こうとした値：{}）。".format(
-                key, " / ".join(item.choices), MASK if item.secret else "、".join(bad)),
+                key, listed, MASK if item.secret else "、".join(bad)),
                 key=key, choices=list(item.choices))
     return value
 
@@ -922,7 +987,7 @@ def cmd_get(opts, pos):
     path = resolve_path(pos[0], opts["workdir"])
     doc = load(path)
     item = doc.get(pos[1])
-    return {
+    result = {
         "ok": True,
         "file": path,
         "key": item.key,
@@ -931,6 +996,9 @@ def cmd_get(opts, pos):
         "empty": is_empty(item.value),
         "secret": item.secret,
     }
+    if item.secret:
+        result["value_digest"] = value_digest(item, item.value)
+    return result
 
 
 STDIN_HINT = ("値は、コマンドの後ろに <<'VALUE_END' を付け、次の行に値、"

@@ -118,6 +118,21 @@ class CaptureTestCase(unittest.TestCase):
         with open(data["log"], encoding="utf-8") as f:
             return f.read()
 
+    def transcript(self, data):
+        """ログの、機器から届いた文字の部分（\r を除き、行に分けたもの）。"""
+        with open(data["log"], encoding="utf-8", newline="") as f:
+            text = f.read()
+        self.assertNotIn(MARKER_TAG, text)
+        body = text.split("そのまま ----\n", 1)[1].split("# ---- ここまで ----", 1)[0]
+        return body.replace("\r", "").split("\n")
+
+    def assert_log_has_no_marker(self, data):
+        """終了コードを調べるコマンドの印は、ログのファイルのどこにもない。"""
+        with open(data["log"], "rb") as f:
+            raw = f.read()
+        self.assertNotIn(MARKER_TAG.encode("ascii"), raw)
+        return raw.decode("utf-8")
+
 
 # ---------------------------------------------------------------------------
 # run：ログイン、コマンド、出力
@@ -366,6 +381,12 @@ class RunExitCodes(CaptureTestCase):
         for c in data["commands"]:
             self.assertNotIn(MARKER_TAG, c["output"], c)
         self.assertNotIn(MARKER_TAG, data["message"])
+        log = self.assert_log_has_no_marker(data)
+        # 各コマンドの出力の後に、終了コードの行が1つずつある
+        want = ["（終了コード：%s）" % ("読めませんでした" if c["exit_code"] is None else c["exit_code"])
+                for c in data["commands"]]
+        got = re.findall(r"（終了コード：[^）]*）", log.split("そのまま ----", 1)[1])
+        self.assertEqual(got, want)
 
     def test_success_is_zero(self):
         port = self.start_device(login=True)
@@ -445,10 +466,54 @@ class RunExitCodes(CaptureTestCase):
         self.assertEqual(data["commands"][4]["output"].split("\n")[-1], "100")
         self.assert_no_marker(data)
         self.assertNotIn(MARKER_TAG, json.dumps(data["commands"], ensure_ascii=False))
-        # ログには、届いた文字がそのまま残る
+        # ログには、印の行の代わりに、終了コードの行がある。ほかの文字は残る
         log = self.read_log(data)
-        self.assertIn(MARKER, log)
-        self.assertIn("__EDL_RC=1", log)
+        self.assertNotIn(MARKER_TAG, log)
+        self.assertIn("line three\n（終了コード：0）\n", log.replace("\r", ""))
+        self.assertIn("# false\n（終了コード：1）\n", log.replace("\r", ""))
+        self.assertIn("\n1\n", log.replace("\r", ""))
+        self.assertIn("\n100\n（終了コード：0）\n", log.replace("\r", ""))
+
+    def test_log_is_the_transcript_without_marker(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="root",
+                          commands=["run-app /opt/sensor/sensor_app", "false", "nosuchcmd"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assert_no_marker(data)
+        lines = self.transcript(data)
+        self.assertIn("sensor-board login: root", lines)
+        self.assertIn("Last login: Tue Nov  4 12:00:00 on ttyS0", lines)
+        first = lines.index("root@sensor-board:~# run-app /opt/sensor/sensor_app")
+        self.assertEqual(lines[first:], [
+            "root@sensor-board:~# run-app /opt/sensor/sensor_app",
+            "[DBG] start", "[DBG] AVG=3", "sensor_app: done",
+            "（終了コード：0）",
+            "root@sensor-board:~# false",
+            "（終了コード：1）",
+            "root@sensor-board:~# nosuchcmd",
+            "-sh: nosuchcmd: not found",
+            "（終了コード：127）",
+            "root@sensor-board:~# exit", "logout", "", "sensor-board login: ",
+            "",
+        ])
+        # 印のコマンドは、機器には送っている（終了コードを読むため）
+        self.assertEqual(self.device.executed.count(MARKER), 3)
+
+    def test_log_keeps_escapes_but_not_marker(self):
+        port = self.start_device(login=False, ansi=True, status_prompt=True)
+        self.write_config(port=port, commands=["color", "false"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assert_no_marker(data)
+        with open(data["log"], encoding="utf-8", newline="") as f:
+            log = f.read()
+        self.assertIn("\x1b[1;31m[DBG]\x1b[0m AVG=\x1b[33m3\x1b[0m\r\n\x1b[32mOK\x1b[0m\r\n（終了コード：0）\n", log)
+        # 印を送った行（その前のプロンプトを含む）は、行ごと除く
+        self.assertIn("# false\r\n（終了コード：1）\n", log)
+        # ほかのプロンプト（color の前、false の前、最後）は残る
+        self.assertEqual(log.count("\x1b[?2004h"), 3)
+        self.assertEqual(log.count("\x1b[01;32mroot@sensor-board\x1b[00m:\x1b[01;34m~\x1b[00m# false\r\n"), 1)
 
     def test_ansi_prompt_that_shows_the_status(self):
         # 直前の終了コードをプロンプトに出すシェル（色つき）。コマンドが失敗すると、プロンプトの形が変わる
@@ -495,6 +560,13 @@ class RunExitCodes(CaptureTestCase):
         for c in data["commands"]:
             self.assertNotIn("fish", c["output"])
         self.assertLess(self.elapsed, 8)
+        self.assert_no_marker(data)
+        lines = self.transcript(data)
+        self.assertEqual(lines.count("（終了コード：読めませんでした）"), 2)
+        # 機器の返事（印を含まない行）は、ログに残る
+        self.assertEqual(lines[lines.index("hi") + 1:lines.index("hi") + 3], [
+            "fish: $? is not the exit status. In fish, please use $status.",
+            "（終了コード：読めませんでした）"])
 
     def test_listen_only_sends_nothing(self):
         port = self.start_device(login=False, ticker=0.2)
@@ -532,6 +604,13 @@ class RunFailures(CaptureTestCase):
         self.assertIn("run-app /opt/hang", data["message"])
         self.assertIn("Ctrl-C", data["message"])
         self.assertEqual(self.device.exits, 1)  # ログアウトもした
+        # ログ：止めたコマンドの後は「読めませんでした」。印は残らない
+        lines = self.transcript(data)
+        first = lines.index("root@sensor-board:~# run-app /opt/hang")
+        self.assertEqual(lines[first:first + 7], [
+            "root@sensor-board:~# run-app /opt/hang", "[DBG] start", "^C",
+            "（終了コード：読めませんでした）",
+            "root@sensor-board:~# echo hi", "hi", "（終了コード：0）"])
 
     def test_prompt_never_comes_back(self):
         port = self.start_device(login=True)
@@ -546,6 +625,8 @@ class RunFailures(CaptureTestCase):
         self.assertIn("プロンプトが戻りませんでした", data["message"])
         self.assertNotIn("echo hi", self.device.executed)
         self.assertEqual(self.device.exits, 0)
+        lines = self.transcript(data)
+        self.assertEqual(lines[-4:], ["[DBG] start", "^C", "（終了コード：読めませんでした）", ""])
 
     def test_no_response_at_all(self):
         port = self.start_device(plugged=False)  # ケーブルが抜けている
@@ -618,6 +699,8 @@ class RunFailures(CaptureTestCase):
         self.assertIn("bye", data["commands"][0]["output"])
         self.assertEqual(data["not_run"], ["echo hi"])
         self.assertIn("残りの 1 個", data["message"])
+        lines = self.transcript(data)
+        self.assertEqual(lines[-3:], ["bye", "（終了コード：読めませんでした）", ""])
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1009,9 @@ class Check(CaptureTestCase):
         self.assertEqual(self.device.login_attempts, [("root", True)])
         self.assertEqual(self.device.executed, ["exit"])  # コマンドは実行しない
         self.assertEqual(self.device.state, "login")
+        log = self.assert_log_has_no_marker(data)
+        self.assertIn("sensor-board login: root", log)
+        self.assertNotIn("（終了コード", log)
 
     def test_check_shell_without_login(self):
         port = self.start_device(login=False)
@@ -1005,6 +1091,83 @@ class Parts(unittest.TestCase):
     def test_drop_marker_lines(self):
         lines = ["__EDL_RC=0", "root@b:~#  echo __EDL_RC=$?", "[DBG] AVG=3", "done"]
         self.assertEqual(self.m.drop_marker_lines(lines), ["[DBG] AVG=3", "done"])
+
+    def test_strip_marker(self):
+        f = self.m.strip_marker
+        self.assertEqual(f("root@b:~#  echo __EDL_RC=$?\r\n"), ("", False))  # 送った行は行ごと
+        self.assertEqual(f("__EDL_RC=0\r\n"), ("", True))
+        self.assertEqual(f("\x1b[?2004l\r__EDL_RC=127\r\n"), ("", True))
+        # 機器のメッセージと同じ行に来たら、メッセージは残す
+        self.assertEqual(f("[  1.0] usb 1-1: x__EDL_RC=1\r\n"), ("[  1.0] usb 1-1: x\r\n", True))
+        self.assertEqual(f("echo __EDL_RC=$?\n"), ("", False))
+        self.assertEqual(f("[DBG] AVG=3\r\n"), ("[DBG] AVG=3\r\n", False))
+        self.assertEqual(f("fish: $? is not the exit status.\n"), ("fish: $? is not the exit status.\n", False))
+
+    def log_file(self):
+        import io
+        buf = io.StringIO()
+        return self.m.LogFile(buf), buf
+
+    def test_log_file_replaces_marker_with_exit_line(self):
+        log, buf = self.log_file()
+        # 文字は、行の途中で切れて届く
+        for chunk in ["root@b:~# true\r", "\n", "root@b:~# ", " echo __ED", "L_RC=$?\r\n__EDL", "_RC=0\r\nroot@b:~# "]:
+            if chunk == " echo __ED":
+                log.hold()
+            log.device(chunk)
+        log.write_exit_line(0)
+        log.device("exit\r\nlogout\r\n")
+        log.flush()
+        self.assertEqual(buf.getvalue(), "root@b:~# true\r\n（終了コード：0）\nroot@b:~# exit\r\nlogout\r\n")
+
+    def test_log_file_exit_line_goes_where_the_answer_was(self):
+        log, buf = self.log_file()
+        log.device("hi\r\n[1] \r\n# ")
+        log.hold()
+        log.device(" echo __EDL_RC=$?\r\n__EDL_RC=1\r\n[0] \r\n# ")
+        log.write_exit_line(1)
+        log.note("\n# end\n")
+        self.assertEqual(buf.getvalue(), "hi\r\n[1] \r\n（終了コード：1）\n[0] \r\n# \n# end\n")
+
+    def test_log_file_when_exit_code_is_unknown(self):
+        log, buf = self.log_file()
+        log.device("hi\r\n$ ")
+        log.hold()
+        log.device(" echo __EDL_RC=$?\r\nfish: $? is not the exit status.\r\necho __EDL_RC=$?\r\n> ")
+        log.write_exit_line(None)
+        log.flush()
+        self.assertEqual(buf.getvalue(),
+                         "hi\r\nfish: $? is not the exit status.\r\n（終了コード：読めませんでした）\n> ")
+
+    def test_log_file_when_prompt_did_not_come_back(self):
+        log, buf = self.log_file()
+        log.device("[DBG] start\r\n^C")
+        log.write_exit_line(None, prompt_is_back=False)
+        log.note("\n# end\n")
+        self.assertEqual(buf.getvalue(), "[DBG] start\r\n^C\n（終了コード：読めませんでした）\n# end\n")
+
+    def test_log_file_drops_late_marker_lines(self):
+        # 返事が遅れて、次のコマンドの出力に紛れ込んだとき。終了コードの行は増やさない
+        log, buf = self.log_file()
+        log.device("root@b:~# echo hi\r\n__EDL_RC=0\r\nhi\r\nroot@b:~#  echo __EDL_RC=$?")
+        log.flush()
+        self.assertEqual(buf.getvalue(), "root@b:~# echo hi\r\nhi\r\n")
+
+    def test_log_file_flushes_held_lines_on_error(self):
+        log, buf = self.log_file()
+        log.device("out\r\n# ")
+        log.hold()
+        log.device(" echo __EDL_RC=$?\r\n[  5.0] usb 1-1: x\r\n")
+        log.note("\n# 思わぬエラー\n")
+        self.assertEqual(buf.getvalue(), "out\r\n[  5.0] usb 1-1: x\r\n# 思わぬエラー\n")
+        self.assertNotIn("EDL", buf.getvalue())
+
+    def test_log_file_writes_long_lines_without_newline(self):
+        log, buf = self.log_file()
+        log.device("x" * 70000)
+        self.assertEqual(len(buf.getvalue()), 70000)  # 改行を待たずに書いた
+        log.device("y\r\n")
+        self.assertEqual(buf.getvalue(), "x" * 70000 + "y\r\n")
 
     def test_exit_code_notes(self):
         f = self.m.exit_code_notes
@@ -1248,6 +1411,24 @@ class Independence(unittest.TestCase):
         self.assertIn("`exit_code` が 0 以外の数なら", section)
         self.assertIn("「終了コード N」", section)
         self.assertIn("`exit_code` という項目名は見せません", section)
+
+    def test_skill_md_marks_guesses_as_guesses(self):
+        """結果にない原因を、前のやり取りから推測して事実のように書いた（S1-r3）。"""
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("結果にない原因を、事実として書きません。", section)
+        self.assertIn("推測だと分かるように書きます。", section)
+
+    def test_skill_md_does_not_show_the_marker(self):
+        """終了コードを調べるための印は、SKILL.md にも書かない（利用者への答えに写されないように）。"""
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn(MARKER_TAG, text)
+        self.assertNotIn("$?", text)
+        self.assertIn("ログにも残しません", text)
+        self.assertIn("「（終了コード：0）」", text)
+        self.assertIn("「（終了コード：読めませんでした）」", text)
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""

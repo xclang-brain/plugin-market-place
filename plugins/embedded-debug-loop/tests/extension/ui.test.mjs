@@ -332,3 +332,43 @@ test('くわしい記録：長いコマンドの行は、頭と終わりを残�
   assert.equal(textOf(third), `ファイルを読む：${'/x'.repeat(100)}`);
   assert.equal(third.getAttribute('title'), null);
 });
+
+test('くわしい記録：説明のあるコマンドの行は、説明をそのまま出し（省かない）、コマンドの全文を title に出す', async () => {
+  const command = `python3 /tmp/work/${'a'.repeat(200)}/scripts/run.py run --workdir /w/project`;
+  const description = `Run the tool ${'x'.repeat(150)}`;
+  const run = finishedRun([], 'success');
+  const t = (s) => new Date(Date.now() - s * 1000).toISOString();
+  run.activity = [
+    { at: t(1), who: '作業', text: `コマンドを実行：${description}（失敗）`, command },
+    { at: t(2), who: '作業', text: 'コマンドを実行：一覧を見る', command: 'ls -la' },
+  ];
+  const { $, poll } = await screen(snap({ run }));
+  const details = $('run-log').querySelector('details');
+  details.open = true;
+  details.dispatch('toggle');
+  await poll();
+  const [first, second] = $('run-log').querySelectorAll('span.act-text');
+  assert.equal(textOf(first), `コマンドを実行：${description}（失敗）`);
+  assert.equal(first.getAttribute('title'), command);
+  assert.equal(textOf(second), 'コマンドを実行：一覧を見る');
+  assert.equal(second.getAttribute('title'), 'ls -la');
+});
+
+// ---------- 結果の振り返り ----------
+
+test('結果：振り返りがないとき、止めて終わった実行・途中で終えた実行では「まだ」と言わない', async () => {
+  const retroOf = async (run) => {
+    const { $ } = await screen(snap({ run, runs: [{ id: run.id, startedAt: at, outcome: run.finish?.outcome ?? null }] }));
+    return textOf($('h-retro').parent.querySelector('p'));
+  };
+  const noRetro = (outcome) => {
+    const run = finishedRun([{ n: 1, plan, do: null, study: null }], outcome);
+    run.finish.retro = '';
+    return run;
+  };
+  assert.equal(await retroOf(noRetro('stopped')), '止めたため、振り返りはありません。');
+  assert.equal(await retroOf(noRetro('needs-human')), '途中で終えたため、振り返りはありません。');
+  assert.equal(await retroOf(finishedRun([], 'stopped')), 'なし', '振り返りがあれば、そのまま出す');
+  const running = { ...noRetro('stopped'), status: 'running', finishedAt: null, finish: null };
+  assert.equal(await retroOf(running), '振り返りはまだありません。', '実行中は「まだ」');
+});

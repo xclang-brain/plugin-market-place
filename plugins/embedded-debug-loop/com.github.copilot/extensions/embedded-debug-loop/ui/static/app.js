@@ -1118,12 +1118,14 @@
     return h('ol', { class: 'activity' }, list.map((line) => {
       const who = str(line.who) || 'その他';
       const full = str(line.text);
-      const shown = activityText(full);
+      // コマンドの説明の行は、説明をそのまま出し、コマンドの全文を title に出す
+      const command = str(line.command);
+      const shown = command ? full : activityText(full);
       return h('li', null,
         h('time', { class: 'act-time' }, hms(line.at)),
         h('span', { class: `who who-${WHO_CLASS[who] || 'x'}` }, who),
         // 省いたときは、全文を title に残す
-        h('span', { class: 'act-text', title: shown !== full ? full : null }, shown));
+        h('span', { class: 'act-text', title: command || (shown !== full ? full : null) }, shown));
     }));
   }
 
@@ -1199,6 +1201,14 @@
       })));
   }
 
+  // 振り返りがないときの文。止めて終わった実行では「まだ」と言わない
+  function noRetroText(run) {
+    const outcome = run.status === 'finished' && run.finish ? run.finish.outcome : null;
+    if (outcome === 'stopped') return '止めたため、振り返りはありません。';
+    if (outcome === 'needs-human') return '途中で終えたため、振り返りはありません。';
+    return '振り返りはまだありません。';
+  }
+
   function resultView(run, isPast) {
     const fin = run.finish;
     const done = run.status === 'finished';
@@ -1254,7 +1264,7 @@
         ui.open[allKey] ? arr(run.iterations).slice().reverse().map((it) => iterationCard(run, it, false, 'res')) : null) : null),
       h('section', { class: 'card', 'aria-labelledby': 'h-retro' },
         h('h2', { id: 'h-retro' }, '振り返り'),
-        fin && fin.retro ? h('p', { class: 'pre' }, normalize(fin.retro)) : h('p', { class: 'muted' }, '振り返りはまだありません。')),
+        fin && fin.retro ? h('p', { class: 'pre' }, normalize(fin.retro)) : h('p', { class: 'muted' }, noRetroText(run))),
     ];
   }
 
