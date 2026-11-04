@@ -135,7 +135,7 @@ export function createControl({ store, port, persist }) {
     if (warning) store.activity('その他', warning);
     store.changed();
     try {
-      await port.send(startNotice(run, Boolean(prepared)));
+      await port.send(startNotice(run, prepared));
     } catch (error) {
       store.run = previous;
       store.draft = draft;

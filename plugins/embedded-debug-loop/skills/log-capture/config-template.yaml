@@ -31,8 +31,8 @@ login_password_env: ""
 prompt: "[#$] $"
 
 # 機器のシェルで、上から順に実行するコマンド。
-# 空なら何も実行せず、listen_seconds の秒数だけ出力を記録する。
-# 例：["run-app /opt/sensor/sensor_app"]
+# 空なら何も実行せず、listen_seconds の秒数だけ出力を記録する（そのときは listen_seconds を 1 以上にする）。
+# 例：["/opt/sensor/sensor_app"]
 # 例：["dmesg | tail -n 20", "cat /var/log/messages"]
 commands: []
 

@@ -32,10 +32,11 @@ python3 <このスキルのフォルダ>/scripts/capture.py run
 
 - 設定の commands を、機器のシェルで上から順に実行します。
 - 今回だけ別のコマンドを実行するときは、`--command` を付けます。
-  何回でも書けます。例：`run --command "run-app /opt/sensor/sensor_app"`
+  何回でも書けます。例：`run --command "/opt/sensor/sensor_app"`
 - コマンドを実行せず、出力を記録するだけのときは、`--listen-only 秒数` を付けます。
   例：`run --listen-only 30`
 - 作業フォルダが今のフォルダと違うときは、`--workdir フォルダ` を付けます。
+- 設定ファイルを別の場所に置くときは、`--config ファイル` を付けます。
 - 時間がかかることがあります。途中で止めずに、終わるまで待ってください。
   最長の目安は「コマンドの数 ×（command_timeout_seconds ＋ 10 秒）＋ listen_seconds ＋ 1 分」です。
 
@@ -76,6 +77,7 @@ python3 <このスキルのフォルダ>/scripts/capture.py check
 - run のとき
   - コマンドごとに、`command` と `output` を見せます。
   - `timed_out` が true なら、時間内に終わらず Ctrl-C で止めたと伝えます。
+    それまでの出力は記録されていて、判断に使えます。終わらないプログラムを見るときは、command_timeout_seconds を見たい長さの秒数にします。
   - `truncated` が true なら、`output` は最後の 60 行だけです。全部はログにあります。
   - `listen` があれば、記録した出力（`listen` の `output`）を見せます。
   - `not_run` があれば、実行しなかったコマンドを伝えます。
@@ -92,5 +94,5 @@ python3 <このスキルのフォルダ>/scripts/capture.py check
 
 - 頼まれない限り、設定ファイルを書き換えません。
 - つながらなかったときに、むやみにやり直しません。
-  原因を伝えて、利用者の返事を待ちます。
+  やり直さずに、原因を伝えて終えます。どうするかは、頼んだ側か利用者が決めます。
 - パスワードを、画面やチャットに出しません。

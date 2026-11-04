@@ -102,6 +102,15 @@ test('開始：準備していない・作業エージェントを変えたと�
   assert.ok(b.fake.sent[0].includes('作業エージェントの準備の確認がまだです。'));
 });
 
+test('開始：前の準備の確認が「できていない」なら、頼み直す行を付ける', async (t) => {
+  const { fake, app } = await startWith(t);
+  await fake.call('open', { request: '作業', criteria: ['条件'] });
+  await fake.call('prepare', { worker: WORKER, ready: false, report: '準備：できていない' });
+  await app.control.start({});
+  assert.ok(fake.sent[0].includes('前の準備の確認では「できていない」でした。最初に準備の確認を頼み直してから、試行を始めてください。'));
+  assert.ok(!fake.sent[0].includes('準備の確認がまだ'));
+});
+
 test('開始：プラグインの名前の付け方が違っても、同じ作業エージェントなら準備ずみとみなす', async (t) => {
   const { fake, app } = await startWith(t);
   await fake.call('open', { request: '作業', criteria: ['条件'] });

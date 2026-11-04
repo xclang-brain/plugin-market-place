@@ -36,7 +36,7 @@ export function settingsLines(s) {
   ];
 }
 
-/** 「開始」が押されたときに、チャットへ送る知らせ */
+/** 「開始」が押されたときに、チャットへ送る知らせ。prepared は、同じ作業エージェントで記録した準備の確認（なければ null） */
 export function startNotice(run, prepared) {
   const lines = [
     '［Web管理画面からの開始の知らせ］',
@@ -49,6 +49,7 @@ export function startNotice(run, prepared) {
     `検証エージェント：${run.verifier}`,
   ];
   if (!prepared) lines.push('作業エージェントの準備の確認がまだです。最初に準備の確認を頼んでから、試行を始めてください。');
+  else if (prepared.ready === false) lines.push('前の準備の確認では「できていない」でした。最初に準備の確認を頼み直してから、試行を始めてください。');
   lines.push('統括エージェントの手順に沿って、試行 1 の計画から始めてください。');
   return lines.join('\n');
 }
