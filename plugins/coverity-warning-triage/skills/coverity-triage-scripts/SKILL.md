@@ -40,7 +40,7 @@ uv run --native-tls <このスキルのフォルダ>/scripts/ct.py <コマンド
 | `init-config --repo R --url U --project P --stream S [--base-branch B] [--output-dir D] [--strip-prefix X]...` | 設定 `config.yaml`、最初の条件 `filters/untriaged.yaml`、知識 `knowledge.md` を作る。人に値を見せて同意を得てから実行する | `written` |
 | `install-agent` | サブエージェント（取得・作業・統合・検証）の定義を `~/.copilot/agents`（環境変数 `COPILOT_HOME` があればその `agents`）に置く | `agents`（エージェントごとの `status`）、`restart_needed` |
 | `trial-build --repo R --build-command C [--setup-command S] [--build-dir D]` | （オプション）修正前の最新のコードを試しにビルドする。時間がかかる | `build_ok`、`log`、`log_tail` |
-| `set-verify --repo R --build-command C [--setup-command S] [--build-dir D] [--default build] [--initial \| --no-initial] [--cov-commit-args A] [--timeout-minutes N]` | （オプション）ビルドでの検証と初回解析の設定を書く | `written` |
+| `set-verify --repo R --build-command C [--setup-command S] [--build-dir D] [--default build] [--initial \| --no-initial] [--cov-commit-args A] [--timeout-minutes N] [--check]` | （オプション）ビルドでの検証と初回解析の設定を書く。変えた値の行だけを書き換え、注釈は元の場所に残す。`--check` は何も書かずに、注釈を残せるかだけを返す | `written`、`comments`（`kept`：注釈は元の場所に残る、`lost`：残せない書き方のファイルで、全体を書き直す。`--check` で `lost` のときは、人に伝える `notice`） |
 
 ### 実行（/coverity-run）
 

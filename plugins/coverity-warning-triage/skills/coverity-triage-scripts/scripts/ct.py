@@ -88,7 +88,9 @@ def parser() -> argparse.ArgumentParser:
             ("--initial", {"action": argparse.BooleanOptionalAction, "default": None,
                            "help": "/coverity-run の最初に解析してサーバに登録する（--no-initial でしない。省略時は今の設定のまま）"}),
             ("--cov-commit-args", {"help": "初回解析の cov-commit-defects に足す引数（省略時は今の設定のまま）"}),
-            ("--timeout-minutes", {"type": int, "help": "初回解析を止めるまでの分（省略時は今の設定のまま）"}))
+            ("--timeout-minutes", {"type": int, "help": "初回解析を止めるまでの分（省略時は今の設定のまま）"}),
+            ("--check", {"action": "store_true",
+                         "help": "書かずに、config.yaml の注釈を元の場所に残せるか（comments: kept / lost）だけを返す"}))
     command("gui", "設定・結果・監視の画面をブラウザで開く（裏で動かし、すぐ戻る。動いていれば再利用する）", repo,
             ("--run", {"help": "開く実行フォルダ（new-run が返す run_dir）"}),
             ("--view", {"choices": list(gui.VIEWS), "help": "最初に出す画面（既定: --run があれば monitor）"}),
@@ -158,7 +160,7 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if c == "set-verify":
         return prepare.set_verify(args.repo, args.default, args.setup_command, args.build_command, args.build_dir,
                                   args.cov_build_args, args.cov_analyze_args, args.initial, args.cov_commit_args,
-                                  args.timeout_minutes)
+                                  args.timeout_minutes, args.check)
     if c == "gui":
         if args.serve:  # the token is not passed on to the commands the screen runs (trial build)
             return gui.serve(args.repo, os.environ.pop(gui.TOKEN_ENV, None), args.ready_file)

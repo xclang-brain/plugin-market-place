@@ -15,6 +15,7 @@ from .common import CtError, out_text, plugin_path, resolve_path, run_cmd
 from .config import (CONFIG_DIR, CONFIG_FILE, DEFAULT_FILTER, DEFAULT_OUTPUT_DIR, DEFAULT_PARALLEL, FILTERS_DIR,
                      KNOWLEDGE_TEMPLATE, FilterSpec, ProjectConfig, VerifyConfig, knowledge_path, load_config, output_dir,
                      read_text)
+from . import yamledit
 from .envvars import get_env
 from .vcs import detect as detect_vcs
 from .vcs import make_vcs
@@ -27,6 +28,10 @@ AGENT_ROLES = {"coverity-triage-collector": "取得", "coverity-triage-worker": 
 INITIAL_COMMANDS = ("cov-build", "cov-analyze", "cov-commit-defects")
 CONFIG_HEADER = ("# Coverity トリアージの設定（/coverity-setup で作成）。チームで共有するためコミットします。\n"
                  "# 認証情報はここに書きません（環境変数に置きます）。\n")
+COMMENTS_LOST = ("このファイルでは、注釈は動いたり消えたりします。注釈を元の場所に残せない書き方（「|」「>」で何行かに"
+                 "わたる値、「&」「*」で値を使い回す書き方など）があるため、ファイル全体を書き直します。行の頭の「#」の行は"
+                 "ファイルの先頭にまとめ、字下げした「#」の行と行の終わりの注釈は消えます（値は正しく保存されます）。"
+                 "注釈を残すときは、保存しないで、メモ帳などでファイルを直してください。")
 
 
 def _uv() -> str:
@@ -370,10 +375,14 @@ def trial_build(repo_root: str, setup_command: str, build_command: str, build_di
 
 def set_verify(repo_root: str, default: str, setup_command: str, build_command: str, build_dir: str,
                cov_build_args: str | None, cov_analyze_args: str | None, initial: bool | None = None,
-               cov_commit_args: str | None = None, timeout_minutes: int | None = None) -> dict[str, Any]:
+               cov_commit_args: str | None = None, timeout_minutes: int | None = None,
+               check: bool = False) -> dict[str, Any]:
     """Save the build verification and initial analysis settings the person agreed to.
 
-    The values given as None keep what the settings have."""
+    The values given as None keep what the settings have. Only the values that change are rewritten, and
+    the comments in the file stay where they are (yamledit); a file written in a way that cannot be kept
+    is written whole, as before ("comments": "lost"). ``check``: write nothing, only tell what would
+    become of the comments (asked before the person agrees)."""
     repo = resolve_path(repo_root)
     path = repo / CONFIG_DIR / CONFIG_FILE
     text = read_text(path)
@@ -392,5 +401,13 @@ def set_verify(repo_root: str, default: str, setup_command: str, build_command: 
     except ValidationError as exc:
         raise CtError("設定の値が正しくありません",
                       problems=[f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()]) from exc
-    path.write_text(header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    return {"ok": True, "written": str(path), "verify": verify}
+    out = yamledit.edit(text, data)
+    comments = "kept"
+    if out is None:
+        out = header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        comments = "lost" if yamledit.has_comments(text) else "kept"
+    if check:
+        return {"ok": True, "check": True, "comments": comments, "verify": verify,
+                **({"notice": COMMENTS_LOST} if comments == "lost" else {})}
+    path.write_text(out, encoding="utf-8")
+    return {"ok": True, "written": str(path), "verify": verify, "comments": comments}

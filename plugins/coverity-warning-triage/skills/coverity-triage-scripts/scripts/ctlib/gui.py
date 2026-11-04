@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from . import activity, approvals, assess, envvars, prepare, verify
+from . import activity, approvals, assess, envvars, prepare, verify, yamledit
 from .common import CtError, display_text, file_lock, read_json, resolve_path, spawn_detached, write_text
 from .config import (CONFIG_DIR, CONFIG_FILE, FILTERS_DIR, KNOWLEDGE_FILE, KNOWLEDGE_TEMPLATE, NO_GROUPING_FILE, NOT_UTF8,
                      FilterSpec, ProjectConfig, knowledge_path, load_config, output_dir)
@@ -416,6 +416,62 @@ def _dump(data: Any) -> str:
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
 
+def _only_changed(full: dict[str, Any], raw: dict[str, Any], default: dict[str, Any]) -> dict[str, Any]:
+    """The settings to write: those already in the file, and the others only when they differ from the default."""
+    out: dict[str, Any] = {}
+    for key, value in full.items():
+        below = default.get(key) if isinstance(default.get(key), dict) else {}
+        if key in raw:
+            out[key] = _only_changed(value, raw[key], below) if isinstance(value, dict) and isinstance(raw[key], dict) else value
+        elif isinstance(value, dict):
+            part = _only_changed(value, {}, below)
+            if part:
+                out[key] = part
+        elif key not in default or value != default[key]:
+            out[key] = value
+    return out
+
+
+def config_text(path: Path, config: ProjectConfig) -> tuple[str, str]:
+    """The new config.yaml, and what becomes of its comments (REQ-102).
+
+    "kept": only the values that change are rewritten (yamledit), or there is no comment to lose.
+    "lost": the file is written in a way yamledit does not handle; it is written whole, as before (the
+    comment lines are gathered at the top, the others are lost). A file that does not exist or cannot be
+    read is written whole too (the screen said so for the latter)."""
+    full = _config_yaml(config)
+    whole = _config_header(path) + _dump(full)
+    try:
+        text = path.read_text(encoding="utf-8")
+        raw = yaml.safe_load(text)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return whole, "kept"
+    if not isinstance(raw, dict):
+        return whole, "kept"
+    target = _only_changed(full, raw, _config_yaml(ProjectConfig.model_validate(
+        {"coverity": {"url": config.coverity.url}, "vcs": {"type": config.vcs.type}})))
+    try:
+        same = _config_yaml(ProjectConfig.model_validate(target)) == full
+    except ValidationError:
+        same = False
+    out = yamledit.edit(text, target if same else full)
+    if out is not None:
+        return out, "kept"
+    return whole, "lost" if yamledit.has_comments(text) else "kept"
+
+
+def save_check(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Before the save is confirmed: what becomes of the comments of config.yaml (the screen tells when they are lost)."""
+    if payload.get("config") is None:
+        return {"ok": True, "comments": "kept"}
+    problems: list[str] = []
+    config = _config_problems(repo, prepare.detect(str(repo)), payload["config"], problems)
+    if config is None:
+        return {"ok": False, "error": "設定の値に直すところがあります", "problems": problems}
+    comments = config_text(repo / CONFIG_DIR / CONFIG_FILE, config)[1]
+    return {"ok": True, "comments": comments, **({"notice": prepare.COMMENTS_LOST} if comments == "lost" else {})}
+
+
 def save(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
     """Check everything first; write only when nothing is wrong."""
     found = prepare.detect(str(repo))
@@ -424,12 +480,13 @@ def save(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
     writes: dict[Path, str] = {}
     deletes: list[Path] = []
     env_writes: list[tuple[str, str]] = []
+    comments = None
 
     if payload.get("config") is not None:
         config = _config_problems(repo, found, payload["config"], problems)
         if config is not None:
             path = folder / CONFIG_FILE
-            writes[path] = _config_header(path) + _dump(_config_yaml(config))
+            writes[path], comments = config_text(path, config)
     elif not (folder / CONFIG_FILE).is_file():
         problems.append("設定ファイルがまだありません。基本設定を入れてください")
 
@@ -507,8 +564,11 @@ def save(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": f"環境変数 {name} を保存できませんでした: {exc}",
                     "written": [str(p) for p in writes], "deleted": [str(p) for p in deletes]}
         saved_env.append(name)
-    return {"ok": True, "written": [str(p) for p in writes], "deleted": [str(p) for p in deletes],
-            "environment_variables": saved_env}
+    out = {"ok": True, "written": [str(p) for p in writes], "deleted": [str(p) for p in deletes],
+           "environment_variables": saved_env}
+    if comments is not None:
+        out["comments"] = comments  # "lost": config.yaml was written whole (its comments moved or went)
+    return out
 
 
 class TrialBuild:
@@ -1156,6 +1216,8 @@ class Handler(BaseHTTPRequestHandler):
             result = save(self.server.repo, body)
             self.server.saved.extend(result.get("written", []) + result.get("deleted", []))
             return result
+        if path == "/api/save-check":
+            return save_check(self.server.repo, body)
         if path == "/api/trial-build":
             return self.server.build.start(body)
         if path == "/api/close":

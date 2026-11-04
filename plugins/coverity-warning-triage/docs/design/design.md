@@ -335,6 +335,7 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 - 作業の題は「Coverity 警告のトリアージ」、繰り返しの上限の既定は 3 回、作業役は `worker`（トリアージ役）1体である。
 - 開始前の設定は4つ：`condition_file`（条件ファイル、文字）、`impact`（Impact で絞る、選択肢は「絞らない」「High」「Medium」「Low」「Unspecified」）、`max_items`（調べる件数の上限、数、1 から 100 までの整数、既定 20。空にすると、作業役は `--limit` を付けず、条件ファイルの件数が使われる）、`initial_analysis`（最初に解析するか、選択肢は「設定どおり」「する」「しない」）。
 - 表示は実行中に `worker_status`、`errors`、`recent_activity`、`initial_analysis_progress`、`overall_progress` の5つ、終わった後に `counts`、`results`、`unprocessed`、`detail_reports`、`patches`、`approval_links` の6つを出す。値の形は作業役の指示のとおり。
+- `detail_reports`（詳細レポート）と `patches`（差分と修正後のファイル）は文章の欄で、ct.py の画面で確信度がいちばん低い1件の詳細を開く URL（`ct.py gui --view summary` が返した URL に `&item=<ID>` を足したもの）を入れる。結果の実行フォルダは `output_dir` でリポジトリの外にあり（REQ-106）、Web管理画面のファイルの窓口は作業フォルダの外のファイルを出さない（2.4）ためである。URL は、写しの画面が文章の中の URL をリンクにする仕組み（`ui/static/render.js` の `linkedText`）で押せる。クリエイターの土台の元にはこの仕組みがないので、土台を元に戻すと、URL は文字で出る。
 - 合否の基準は、組み立てのスクリプトが合否の決め方のナレッジから入れる。
 
 ### 8.2 部品の分け方
@@ -402,6 +403,12 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 - K-69：認証情報は環境変数 COV_USER / COV_AUTH_KEY に置き、設定ファイルには書かない。認証キーをチャットで聞かず、ターミナルの伏せ字の欄で入れてもらう。チャットに貼られたら使わず、作り直しを頼む。ログと記録では認証情報を **** に伏せる。
 - K-70：初回解析の登録では認証キーを環境変数 COVERITY_PASSPHRASE で渡し、コマンドラインとログに出さない。ビルドと解析には認証キーを渡さない。
 - K-71：設定ファイルを書く・変える前に、書く値を表で見せて同意を得る。確かめられることは推測せず doctor と check_connection で確かめる。git / svn / VS Code / Coverity の設定は変えない。
+- config.yaml を書き換えるとき（ct.py の画面の保存 `gui.save` と、`ct.py set-verify`）は、`ctlib/yamledit.py` が、今のファイルの中の値の場所（pyyaml の `compose` の位置）を見て、変えた値の範囲だけを書き換える。新しいライブラリは足さない（ct.py の依存は pyyaml と pydantic のまま）。
+  - 書き換え方：値は、その値の範囲だけを置き換える（行の終わりの注釈は残る）。「- 値」のリストは、値ごとに比べて（`difflib`）、変えた値はその範囲だけ、足す値は前の値の行の後（先頭に足すときは、最初の値のすぐ上の注釈の行の上）、消す値はその行とすぐ上の注釈の行を消す。空にしたリストは `キー: []` にして、キーの行の終わりの注釈は残す。1行に書いたリストは1行のまま書き換え、`[]` に値を入れるときは次の行から「- 値」で書く。消す設定の項目は、その行から値の終わりまでと、すぐ上の注釈の行を消す。足す設定の項目は、その節の最後の値の行の後に入れる。
+  - ct.py の画面は、ファイルにない設定の項目を、既定の値から変えたときだけ足す。`set-verify` は、今と同じく、同意を得た `verify` の値を書く。
+  - 扱わない書き方（「|」「>」の値、「&」「*」、タグ、1行に書いたマップ、3段以上の入れ子、文書が2つ以上など）があるときと、書き換えた中身の確かめに合わないときは、今と同じ書き直し（行の頭の「#」の行を先頭に集めて、`yaml.safe_dump` で全体を書く）に戻す。
+  - 書き換えた中身の確かめ：読み直した値が書く値と同じであること、元の注釈（消した設定の項目やリストの値に付いていたものを除く）が、元の行のまま残るか、値を変えた行の終わりに残ること、注釈の行とその次の行の間に、新しい行が入らないこと。確かめは、書き換えの手順とは別に、元のファイルと書いた中身の行の比べ（`difflib`）で行う。
+  - 保存の前に知らせる：ct.py の画面は、保存の確認を開くときに `POST /api/save-check` で同じ書き換えを試し、注釈を残せないなら確認に「このファイルでは、注釈は動いたり消えたりします」と出す。`/coverity-setup` は、同意を求める前に `ct.py set-verify … --check` を動かし、`comments` が `lost` なら同じことを伝える。どちらも、続けると今と同じ書き直しで保存する。
 - K-74：動作確認（/coverity-selftest）では社内の Coverity に書き込まず（preview / apply-code / update_triage を使わず、初回解析もしない）、報告はホスト名・ユーザ名・認証情報を伏せ、社内のソースコードは記録しない。
 - K-75：文字コードの特別な処理はしない。差分などを作るときに文字コードを壊さない。
 - K-65 の守ること：人が承認して反映するまで、作業中のファイルも Coverity のトリアージ（分類・コメント）も変えない（初回解析の登録を除く）。修正案はリポジトリの外にスクリプトが用意する修正用のコピー（git worktree / svn checkout）の上で作り、調べるコードは読むだけにする。
@@ -533,7 +540,9 @@ coverity-warning-triage の作業だけに関わる設計である。部品の�
 | REQ-101 | 8.2、8.3 | `com.github.copilot/agents/worker.agent.md`、`com.github.copilot/agents/verifier.agent.md`、`skills/coverity-run/SKILL.md` | EVAL | `tests/eval/` |
 | REQ-102 | 8.1 | `com.github.copilot/extensions/coverity-warning-triage/task.json`、`com.github.copilot/agents/worker.agent.md` | EVAL | `tests/eval/` |
 | REQ-102 | 8.1、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
+| REQ-102 | 8.5 | `skills/coverity-triage-scripts/scripts/ctlib/yamledit.py`、`skills/coverity-triage-scripts/scripts/ctlib/gui.py`、`skills/coverity-triage-scripts/scripts/ctlib/prepare.py`、`skills/coverity-setup/SKILL.md` | 自動のテスト | `tests/stage2/task/test_yamledit.py`、`tests/stage2/task/test_ct_cli.py`、`tests/stage2/task/ct-gui.test.mjs` |
 | REQ-103 | 8.1 | `com.github.copilot/extensions/coverity-warning-triage/task.json`、`com.github.copilot/agents/worker.agent.md` | 人が確かめる | — |
+| REQ-103 | 8.1 | `com.github.copilot/extensions/coverity-warning-triage/task.json`、`com.github.copilot/agents/worker.agent.md` | 自動のテスト | `tests/stage2/task/web-ui.test.mjs` |
 | REQ-103 | 8.1、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |
 | REQ-104 | 8.3、8.6 | `com.github.copilot/agents/verifier.agent.md`、`skills/coverity-run/SKILL.md` | EVAL | `tests/eval/` |
 | REQ-104 | 8.2、8.8 | `skills/coverity-triage-scripts/scripts/` | 自動のテスト | `tests/stage2/task/test_ct_cli.py` |

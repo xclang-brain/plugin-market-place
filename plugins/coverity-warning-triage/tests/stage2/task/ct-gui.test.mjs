@@ -1674,12 +1674,65 @@ if (SKIP) {
         await v.page.locator('#more > summary').click();
         await v.page.locator('#f-par').fill('2');
         await openSave(v.page);
+        assert.equal(await v.page.locator('#dlg-comments').count(), 0, '注釈を残せるのに、残せないと知らせた');
         await v.page.locator('#dlgOk').click();
         await waitText(v.page, '#toast', '保存しました');
         const saved = fs.readFileSync(cfgFile(), 'utf8');
         assert.match(saved, /parallel: 2/);
         assert.match(saved, /max_items: 100 {2}# 夜間に 100 件まで（チームで決めた）/, '行末の注釈が消えた');
         assert.match(saved, /# --- ここからバージョン管理（変えるときはチームに相談） ---\nvcs:/, '注釈の行が元の場所（vcs の前）にない');
+        assert.equal(saved, withNotes.replace(/^parallel: \d+$/m, 'parallel: 2'), '変えた値の行のほかが変わった');
+      } finally {
+        await v.close();
+        restore();
+      }
+    });
+
+    test('REQ-102 設定：注釈を元の場所に残せない書き方（「|」の値）の config.yaml では、保存の前の確認に知らせが出て、続けると値が保存される', async () => {
+      const restore = keepSettings();
+      const block = W.configText
+        .replace("  setup_command: ''\n", '  setup_command: |-\n    call env.bat\n')
+        .replace('max_items: 100', 'max_items: 100  # 夜間に 100 件まで');
+      assert.notEqual(block, W.configText);
+      fs.writeFileSync(cfgFile(), block, 'utf8');
+      const v = await open('#view=settings');
+      try {
+        await settingsReady(v.page);
+        await tab(v.page, 'options');
+        await v.page.locator('#more > summary').click();
+        await v.page.locator('#f-par').fill('2');
+        const dlg = await openSave(v.page);
+        assert.match(dlg.body, /このファイルでは、注釈は動いたり消えたりします/);
+        assert.match(await text(v.page, '#dlg-comments'), /保存しないで、メモ帳などでファイルを直してください/);
+        await shot(v.page, 'settings-save-comments-lost-1280');
+        await v.page.locator('#dlgOk').click();
+        await waitText(v.page, '#toast', '保存しました');
+        const saved = fs.readFileSync(cfgFile(), 'utf8');
+        assert.match(saved, /^parallel: 2$/m);
+        assert.match(saved, /^ {2}setup_command: call env\.bat$/m, '「|」の値が正しく保存されていない');
+        assert.doesNotMatch(saved, /夜間に 100 件まで/, '知らせのとおり、行の終わりの注釈は消える');
+      } finally {
+        await v.close();
+        restore();
+      }
+    });
+
+    test('REQ-102 設定：ファイルにない設定の項目は、既定の値から変えたときだけ足される', async () => {
+      const restore = keepSettings();
+      const line = (key) => W.configText.match(new RegExp(`^ *${key}: .*$`, 'm'))[0];
+      const small = `# チームの設定\ncoverity:\n${line('url')}   # エミュレーター\nvcs:\n  type: git\n${line('output_dir')}\n`;
+      fs.writeFileSync(cfgFile(), small, 'utf8');
+      const v = await open('#view=settings');
+      try {
+        await settingsReady(v.page);
+        await tab(v.page, 'options');
+        await v.page.locator('#more > summary').click();
+        await v.page.locator('#f-par').fill('2');
+        await openSave(v.page);
+        assert.equal(await v.page.locator('#dlg-comments').count(), 0);
+        await v.page.locator('#dlgOk').click();
+        await waitText(v.page, '#toast', '保存しました');
+        assert.equal(fs.readFileSync(cfgFile(), 'utf8'), small + 'parallel: 2\n', '変えた値のほかの項目まで足された');
       } finally {
         await v.close();
         restore();

@@ -250,13 +250,13 @@
     {
       "key": "detail_reports",
       "label": "詳細レポート",
-      "type": "file",
+      "type": "text",
       "when": "finished"
     },
     {
       "key": "patches",
       "label": "差分と修正後のファイル",
-      "type": "file",
+      "type": "text",
       "when": "finished"
     },
     {

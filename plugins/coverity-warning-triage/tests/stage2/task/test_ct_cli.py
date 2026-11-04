@@ -563,6 +563,59 @@ class SetupTest(CtCase):
         self.assertFalse((fresh / ".coverity-triage" / "config.yaml").exists())
 
 
+    def test_req102_set_verify_keeps_the_comments_of_config_yaml(self) -> None:
+        """set-verify は変えた値の行だけを書き換え、人が書いた注釈は元の場所に残る。--check は何も書かない"""
+        repo = self.git_repo("notes", with_config=False)
+        self.ok("init-config", "--repo", str(repo), "--url", "https://cov.example.co.jp:8443", "--project", "Proj",
+                "--stream", STREAM, "--output-dir", str(self.tmp / "notes-results"), "--strip-prefix", "/build/ws/")
+        path = repo / ".coverity-triage" / "config.yaml"
+        text = path.read_text(encoding="utf-8")
+        text = (text.replace("  url: https://cov.example.co.jp:8443\n", "  url: https://cov.example.co.jp:8443   # 社内の Coverity\n")
+                .replace("vcs:\n", "# --- ここからバージョン管理（チームで決めた） ---\nvcs:\n")
+                .replace("  build_dir: ''\n", "  # makefile のあるフォルダ\n  build_dir: ''\n")
+                + "agents:\n  integration: true   # 統合を使う（/coverity-setup のエージェントが書く形）\n")
+        self.assertEqual(text.count("#"), 6)
+        path.write_text(text, encoding="utf-8")
+        args = ("set-verify", "--repo", str(repo), "--build-command", "make all", "--build-dir", "src")
+        checked = self.ok(*args, "--check")
+        self.assertEqual((checked["check"], checked["comments"]), (True, "kept"))
+        self.assertNotIn("notice", checked)
+        self.assertEqual(path.read_text(encoding="utf-8"), text, "--check が書いた")
+        written = self.ok(*args)
+        self.assertEqual(written["comments"], "kept")
+        saved = path.read_text(encoding="utf-8")
+        self.assertEqual(saved, text.replace("  default: none\n", "  default: build\n")
+                         .replace("  build_dir: ''\n", "  build_dir: src\n")
+                         .replace("  build_command: ''\n", "  build_command: make all\n"),
+                         "変えた値の行のほかが変わった（注釈が動いたか消えた）")
+        self.ok("doctor", "--repo", str(repo))
+        # もう一度：ある verify の値だけが変わる
+        self.ok("set-verify", "--repo", str(repo), "--build-command", "make -j4 all", "--build-dir", "src")
+        self.assertEqual(path.read_text(encoding="utf-8"), saved.replace("build_command: make all", "build_command: make -j4 all"))
+
+    def test_req102_set_verify_tells_when_the_comments_cannot_be_kept(self) -> None:
+        """注釈を残せない書き方（「|」の値）なら、--check が lost と知らせの文を返し、書くときは全体を書き直す（値は正しい）"""
+        repo = self.git_repo("block", with_config=False)
+        self.ok("init-config", "--repo", str(repo), "--url", "https://cov.example.co.jp:8443", "--project", "Proj",
+                "--stream", STREAM, "--output-dir", str(self.tmp / "block-results"))
+        path = repo / ".coverity-triage" / "config.yaml"
+        text = (path.read_text(encoding="utf-8").replace("vcs:\n", "# バージョン管理\nvcs:\n")
+                .replace("  setup_command: ''\n", "  setup_command: |-\n    call env.bat\n")
+                .replace("  build_command: ''\n", "  build_command: make   # 夜間\n"))
+        path.write_text(text, encoding="utf-8")
+        args = ("set-verify", "--repo", str(repo), "--build-command", "make all", "--setup-command", "call env.bat")
+        checked = self.ok(*args, "--check")
+        self.assertEqual(checked["comments"], "lost")
+        self.assertIn("このファイルでは、注釈は動いたり消えたりします", checked["notice"])
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+        self.assertEqual(self.ok(*args)["comments"], "lost")
+        saved = path.read_text(encoding="utf-8")
+        self.assertNotIn("# 夜間", saved)
+        self.assertIn("build_command: make all", saved)
+        self.assertIn("setup_command: call env.bat", saved)
+        self.ok("doctor", "--repo", str(repo))
+
+
 # ==== plan・next・brief・finish・summary・preview・apply-code（REQ-104、REQ-106） ===============
 
 

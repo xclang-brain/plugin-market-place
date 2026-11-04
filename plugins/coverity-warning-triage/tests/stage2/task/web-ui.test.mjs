@@ -353,7 +353,8 @@ function runningValues(snap, { initial }) {
   };
 }
 
-/** ct.py summary の結果と実行フォルダのファイルから、終わった後の6つの表示の値を作る（detail_reports と patches はファイルの場所） */
+/** ct.py summary の結果と実行フォルダのファイルから、終わった後の6つの表示の値を作る（detail_reports と patches は、
+ * ct.py の画面で確信度の低い順の1件目の詳細を開く URL。作業役の指示のとおり） */
 function finishedValues(fin) {
   const items = (fin.items ?? []).filter((i) => i.status !== 'merged');
   const checkers = new Map((fin.issues ?? []).map((i) => [i.cid, i.checker]));
@@ -392,9 +393,10 @@ function finishedValues(fin) {
   };
   const first = order[0];
   if (first) {
-    values.detail_reports = path.join(fin.run_dir, 'cid', `${first.id}.html`);
+    const link = `${fin.gui?.url ?? ''}&item=${first.id}`;
+    values.detail_reports = `${first.id} の詳細レポート（確信度がいちばん低い1件。ほかの作業は、ct.py の画面の「結果」の一覧から開く）：\n${link}`;
     const patch = path.join(fin.run_dir, 'patches', `${first.id}-fix.patch`);
-    if ((fin.files ?? []).includes(patch)) values.patches = patch;
+    if ((fin.files ?? []).includes(patch)) values.patches = `${first.id} の差分と修正後のファイルは、この画面の詳細で見る：\n${link}`;
   }
   return values;
 }
@@ -430,6 +432,9 @@ const SAMPLE_FINISHED = {
   },
   unprocessed: { columns: UNPROCESSED_COLUMNS, rows: [['10049', '警告経路を取れませんでした（SOAP の Fault）']] },
   approval_links: '結果の画面：http://127.0.0.1:43813/?t=hBlp3g36SN30UQkHFYm73Q3rBzaTkc0u#run=20261103-173908&view=summary\n承認の選択と逸脱コメントの手直しは、この画面の「結果」で行い、/coverity-apply で反映する。',
+  // 結果はリポジトリの外にあるので、ファイルではなく、ct.py の画面でその1件の詳細を開く URL（作業役の指示のとおり）
+  detail_reports: '10014 の詳細レポート（確信度がいちばん低い1件。ほかの作業は、ct.py の画面の「結果」の一覧から開く）：\nhttp://127.0.0.1:43813/?t=hBlp3g36SN30UQkHFYm73Q3rBzaTkc0u#run=20261103-173908&view=summary&item=10014',
+  patches: '10014 の差分と修正後のファイルは、この画面の詳細で見る：\nhttp://127.0.0.1:43813/?t=hBlp3g36SN30UQkHFYm73Q3rBzaTkc0u#run=20261103-173908&view=summary&item=10014',
 };
 
 /** 値をまとめて送る。断られたものを [{ key, error }] で返す */
@@ -440,16 +445,6 @@ async function showAll(p, values, agentId = p.workerId) {
     if (!r.ok) refused.push({ key, error: r.error });
   }
   return refused;
-}
-
-// ct.py の出力先（../coverity-triage-out/<日時>/）と同じ形の、作業フォルダの外の実行フォルダを作る
-function makeRunFolderOutside(work) {
-  const runDir = path.join(path.dirname(work), `coverity-triage-out-${path.basename(work)}`, '20261103-173405');
-  fs.mkdirSync(path.join(runDir, 'cid'), { recursive: true });
-  fs.mkdirSync(path.join(runDir, 'patches'), { recursive: true });
-  fs.writeFileSync(path.join(runDir, 'cid', '10014.html'), '<!doctype html><title>10014</title><p>詳細レポート</p>');
-  fs.writeFileSync(path.join(runDir, 'patches', '10014-fix.patch'), 'diff --git a/src/app/config_ini.c b/src/app/config_ini.c\n');
-  return runDir;
 }
 
 // =================================================================================================
@@ -690,8 +685,7 @@ describe('実行中の表示（作業役の指示どおりの値。REQ-103、REQ
         ['overall_progress', 120, /数で渡すときは 0 から 100 にしてください。/],
         ['initial_analysis_progress', { value: '2', max: 4, label: 'ビルド' }, /\{ value, max, label\? \} の形で渡してください。/],
         ['counts', { 警告: { n: 5 } }, /\{ 見出し: 値 \} の形で渡してください。/],
-        ['detail_reports', '', /作業フォルダの中の場所を、文字列で渡してください。/],
-        ['detail_reports', 'cid/99999.html', /ファイルが見つかりません：cid\/99999\.html/],
+        ['detail_reports', ['cid/10014.html'], /文字列で渡してください。/],
         ['progress', { value: 1, max: 2 }, new RegExp(`作業ごとの指示にない表示です：progress。使える表示の名前（key）：${keys}`)],
       ];
       const problems = [];
@@ -915,17 +909,26 @@ def do_run(cmd):
     Recording(world, run_dir, s.Actors(world), "webui").go()
     summary = world.ct("summary", "--run", run_dir)
     gui = world.ct("gui", "--repo", str(world.repo), "--run", run_dir, "--view", "summary", "--no-browser")
-    if gui.get("url"):
-        try:
-            s.gui_call(gui["url"], "POST", "/api/close", {})
-        except Exception:  # noqa: BLE001 - 止まっていればよい
-            pass
     rd = Path(run_dir)
     run = read_json(rd / "run.json", {}) or {}
+    # 詳細レポートと差分の欄のリンク（url に &item=<ID>）が開く先：ct.py の画面が、その作業の詳細を返すか
+    item_api = {}
+    if gui.get("url"):
+        try:
+            for item in run.get("items", []):
+                code, body = s.gui_call(gui["url"], "GET", f"/api/runs/{rd.name}/items/{item['id']}")
+                body = body if isinstance(body, dict) else {}
+                item_api[item["id"]] = {"status": code, "ok": bool(body.get("ok")), "report": bool(body.get("report_url")),
+                                        "patches": len(body.get("patches") or [])}
+        finally:
+            try:
+                s.gui_call(gui["url"], "POST", "/api/close", {})
+            except Exception:  # noqa: BLE001 - 止まっていればよい
+                pass
     results = {i["id"]: read_json(rd / "items" / i["id"] / "result.json") for i in run.get("items", [])}
     issues = (read_json(rd / "issues.json", {}) or {}).get("issues") or []
     emit({"event": "finished", "id": rid, "ok": True, "run_dir": run_dir, "summary": dict(summary),
-          "summary_code": summary.code, "gui": dict(gui), "approvals": read_json(rd / "approvals.json"),
+          "summary_code": summary.code, "gui": dict(gui), "item_api": item_api, "approvals": read_json(rd / "approvals.json"),
           "items": run.get("items", []), "results": {k: v for k, v in results.items() if v is not None},
           "issues": [{k: i.get(k) for k in ("cid", "checker", "impact", "file", "line")} for i in issues],
           "files": sorted(str(p) for sub in ("cid", "patches") for p in (rd / sub).glob("*") if p.is_file()),
@@ -1165,10 +1168,6 @@ describe('実際の流れ：画面の設定 → 本物の ct.py・MCP サーバ�
         patches: { text: await displayText(page, 'patches'), href: (await linksOf(page, 'patches'))[0] ?? null },
         approval: { text: await displayText(page, 'approval_links'), links: await linksOf(page, 'approval_links') },
       };
-      if (rec.finishedPage.detail.href) {
-        const response = await page.request.get(new URL(rec.finishedPage.detail.href, p.url).toString());
-        rec.finishedPage.detail.status = response.status();
-      }
       await shot(page, 'real-finished');
 
       // ---- 2回目：警告が0件になる条件ファイル（none.yaml）・最初に解析しない ----
@@ -1312,21 +1311,33 @@ describe('実際の流れ：画面の設定 → 本物の ct.py・MCP サーバ�
     for (const row of rec.finishedPage.results.rows) assert.match(row[1], /^(\d+|G\d+（\d+ 件）)（[A-Za-z_.*0-9 -]+）$/, 'ID 欄にチェッカー名');
   });
 
-  test('REQ-103 終わった後、詳細レポート（確信度の低い順の1件目の cid/<ID>.html）が画面に出て、開ける', (t) => {
+  /** 詳細レポートと差分の欄のリンクの先（ct.py の画面の、確信度の低い順の1件目の詳細）の ID */
+  const firstItem = () => /&item=([A-Za-z0-9_-]+)/.exec(rec.finishedValues.detail_reports ?? '')?.[1];
+
+  test('REQ-103 終わった後、詳細レポートの欄に、ct.py の画面で確信度の低い順の1件目の詳細を開くリンクが出て、その先に詳細レポートがある', (t) => {
     if (!need(t, 'run', 'finishedPage')) return;
     const shown = rec.finishedShows.detail_reports;
     assert.ok(shown, '詳細レポートを送っていない');
     assert.equal(shown.ok, true, `作業役が送った ${rec.finishedValues.detail_reports} が断られた：${shown.error}`);
-    assert.ok(rec.finishedPage.detail.href, `画面の「${LABEL.detail_reports}」が「${rec.finishedPage.detail.text.replace(/\n/g, ' ')}」`);
-    assert.equal(rec.finishedPage.detail.status, 200);
+    const id = firstItem();
+    assert.ok(id, `送った値に &item=<ID> がない：${rec.finishedValues.detail_reports}`);
+    assert.equal(rec.finishedPage.detail.href, `${rec.run.gui.url}&item=${id}`,
+      `画面の「${LABEL.detail_reports}」が「${rec.finishedPage.detail.text.replace(/\n/g, ' ')}」（URL が押せるリンクになっていない）`);
+    assert.match(rec.finishedPage.detail.href, /#run=\d{8}-\d{6}&view=summary&item=/, 'ct.py の画面がその1件を開く形（gui.html の parseHash）');
+    const api = rec.run.item_api?.[id];
+    assert.ok(api?.ok, `ct.py の画面が ${id} の詳細を返さない：${JSON.stringify(api)}`);
+    assert.equal(api.report, true, `${id} の詳細レポート cid/${id}.html がない`);
   });
 
-  test('REQ-103 終わった後、差分（patches/<ID>-fix.patch）が画面に出て、開ける', (t) => {
+  test('REQ-103 終わった後、差分と修正後のファイルの欄に、同じ1件の詳細を開くリンクが出て、その先に差分がある', (t) => {
     if (!need(t, 'run', 'finishedPage')) return;
     const shown = rec.finishedShows.patches;
     assert.ok(shown, '差分を送っていない（修正の作業がない）');
     assert.equal(shown.ok, true, `作業役が送った ${rec.finishedValues.patches} が断られた：${shown.error}`);
-    assert.ok(rec.finishedPage.patches.href, `画面の「${LABEL.patches}」が「${rec.finishedPage.patches.text.replace(/\n/g, ' ')}」`);
+    const id = firstItem();
+    assert.equal(rec.finishedPage.patches.href, `${rec.run.gui.url}&item=${id}`,
+      `画面の「${LABEL.patches}」が「${rec.finishedPage.patches.text.replace(/\n/g, ' ')}」`);
+    assert.ok(rec.run.item_api?.[id]?.patches > 0, `ct.py の画面の ${id} の詳細に差分がない：${JSON.stringify(rec.run.item_api?.[id])}`);
   });
 
   test('REQ-103 終わった後、承認の画面（ct.py gui の「結果」）の URL が出て、押して開けるリンクになっている', (t) => {
@@ -1368,8 +1379,6 @@ async function withState(state, options, fn) {
     if (['do', 'study', 'finished'].includes(state)) {
       await toWorker(p);
       await showAll(p, { ...SAMPLE_RUNNING, ...SAMPLE_FINISHED });
-      const runDir = makeRunFolderOutside(p.work);
-      await showAll(p, { detail_reports: path.join(runDir, 'cid', '10014.html'), patches: path.join(runDir, 'patches', '10014-fix.patch') });
       await waitDisplay(page, 'overall_progress', '1 / 5');
     }
     if (['study', 'finished'].includes(state)) {

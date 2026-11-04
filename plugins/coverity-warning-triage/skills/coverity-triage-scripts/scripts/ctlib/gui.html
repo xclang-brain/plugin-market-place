@@ -1330,7 +1330,17 @@ function goTo(err) {
   const target = $(err.selector);
   if (target) { target.setAttribute("aria-invalid", "true"); target.focus(); }
 }
-function openSave() {
+// config.yaml の注釈（REQ-102）：変えた値の行だけを書き換えて、注釈は元の場所に残す。残せない書き方のファイルだけ、
+// 保存の前に知らせる（知らせの文はサーバが返す。/coverity-setup の set-verify --check と同じ文）
+async function commentsNotice(c) {
+  try {
+    const res = await api("/api/save-check", { config: payload(c).config });
+    return res && res.ok && res.comments === "lost" ? res.notice : null;
+  } catch (e) {
+    return null;  // the save itself tells what is wrong
+  }
+}
+async function openSave() {
   triedSave = true; markDirty();
   $$("[aria-invalid]").forEach((n) => n.removeAttribute("aria-invalid"));
   const errs = validate();
@@ -1352,6 +1362,10 @@ function openSave() {
     if (c.config.length) {
       body.append(el("div", { class: "dlg-section" }, !state.config_exists ? "設定 config.yaml を作る" : state.config_unreadable ? "設定 config.yaml を置き換える" : "設定 config.yaml を変える"));
       if (state.config_unreadable) body.append(el("p", { class: "help" }, "今の config.yaml は読めないため、ファイル全体を次の値で書き直します。今のファイルにあった値は残りません（残すときは、保存しないで、メモ帳などでファイルを直してください）。"));
+      else if (state.config_exists) {
+        const notice = await commentsNotice(c);
+        if (notice) body.append(el("p", { class: "help", id: "dlg-comments" }, notice));
+      }
       body.append(table(c.config));
     }
     for (const f of c.filters) {
