@@ -1,172 +1,240 @@
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
-import { join } from 'node:path';
-import { parseJsonLines } from './util.mjs';
+// 状態の置き場。設定・下書き・実行・過去の実行の一覧を持ち、Web管理画面に渡す形（スナップショット）を作る。
+// 作業エージェントと検証エージェントの名前は、ただの文字として扱う（中身は知らない）。
 
-// 記録のファイル（6.5）。実行ごとのフォルダに、次を置く。
-//   log.jsonl   イベント、記録、状態の変わり目を、届いた順に 1 行ずつ
-//   result.json 終わったときの状態の全体（一時ファイルに書いて名前を変えて置く）。ない実行が、終わっていない実行
-//   alive       生きている印（今の時刻）
-//   issues/     案ごとの起票の印（4.11）
-// 順番が確かで、試験で時計を進めるだけで済むように、同期の fs で書く。
+import { MSG } from './messages.mjs';
 
-export function createStore({ dataRoot, clock }) {
-  const dirOf = (runId) => join(dataRoot, runId);
-  const logPath = (runId) => join(dirOf(runId), 'log.jsonl');
-  const resultPath = (runId) => join(dirOf(runId), 'result.json');
-  const alivePath = (runId) => join(dirOf(runId), 'alive');
-  const issuesDir = (runId) => join(dirOf(runId), 'issues');
-  const markerPath = (runId, issueId) => join(issuesDir(runId), `${issueId}.json`);
+export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
+export const OUTCOMES = Object.freeze(['success', 'failure', 'stopped', 'needs-human']);
+export const MAX_ITERATIONS_LIMIT = 20;
+const MAX_ACTIVITY = 300;
+const SAVE_DELAY_MS = 300;
+const SETTING_TEXT_KEYS = ['worker', 'verifier', 'workerModel', 'workerEffort', 'verifierModel', 'verifierEffort'];
 
-  function writeAtomic(path, text) {
-    const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-    writeFileSync(tmp, text);
-    renameSync(tmp, path);
+/** 利用者の入力の誤り。status は HTTP の番号、message は画面に出す文 */
+export class UserError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+export const text = (value) => (typeof value === 'string' ? value.trim() : '');
+
+/** '<プラグイン>:<名前>' と '<名前>' を同じものとみなして比べる */
+export function sameAgent(a, b) {
+  const x = text(a);
+  const y = text(b);
+  if (!x || !y) return false;
+  const bare = (s) => s.slice(s.lastIndexOf(':') + 1);
+  return x === y || bare(x) === bare(y);
+}
+
+/** 合格の条件：配列でも、1行に1つの文でも受ける */
+export function readCriteria(value) {
+  const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n/) : [];
+  return list.map(text).filter(Boolean);
+}
+
+const effortOf = (value) => {
+  const v = text(value);
+  return v === '既定' || v === 'default' ? '' : v;
+};
+
+/**
+ * 設定の入力を確かめて、新しい設定を返す。誤りがあれば UserError(400)。
+ * 入力は、項目が平らに並んだものでも、settings の中に入ったものでも受ける。
+ */
+export function readSettingsInput(body, base) {
+  const src = body && typeof body === 'object' ? { ...body, ...(body.settings && typeof body.settings === 'object' ? body.settings : {}) } : {};
+  const out = { ...base };
+  for (const key of SETTING_TEXT_KEYS) if (key in src) out[key] = key.endsWith('Effort') ? effortOf(src[key]) : text(src[key]);
+  if ('maxIterations' in src) out.maxIterations = Number(src.maxIterations);
+  const problems = [];
+  if (!out.worker) problems.push('作業エージェントを選んでください。');
+  if (!out.verifier) problems.push('検証エージェントを選んでください。');
+  if (!Number.isInteger(out.maxIterations) || out.maxIterations < 1 || out.maxIterations > MAX_ITERATIONS_LIMIT) {
+    problems.push(`繰り返しの上限は、1 から ${MAX_ITERATIONS_LIMIT} までの整数にしてください。`);
+  }
+  for (const key of ['workerEffort', 'verifierEffort']) {
+    if (out[key] && !EFFORTS.includes(out[key])) problems.push(`考える深さは、既定・${EFFORTS.join('・')} から選んでください。`);
+  }
+  if (problems.length > 0) throw new UserError(400, [...new Set(problems)].join(''));
+  return out;
+}
+
+function pad(n) {
+  return String(n).padStart(2, '0');
+}
+
+/** 実行の番号 R-YYYYmmdd-HHMMSS（手元の時刻） */
+export function runIdOf(date) {
+  const d = date;
+  return `R-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+export function createStore({ defaults, persist, now = () => new Date() }) {
+  const base = {
+    worker: text(defaults.worker),
+    verifier: text(defaults.verifier),
+    maxIterations: Number.isInteger(defaults.maxIterations) ? defaults.maxIterations : 5,
+    workerModel: '',
+    workerEffort: '',
+    verifierModel: '',
+    verifierEffort: '',
+  };
+  let settings = base;
+  try {
+    const saved = persist.readSettings();
+    if (saved) settings = readSettingsInput(saved, base);
+  } catch {
+    settings = base; // 保存された設定が壊れていたら、既定に戻す
   }
 
-  return {
-    dataRoot,
-    dirOf,
-    markerPath,
-    issuesDir,
-
-    ensureRoot() {
-      mkdirSync(dataRoot, { recursive: true });
-    },
-
-    createRun(runId, header) {
-      mkdirSync(issuesDir(runId), { recursive: true });
-      appendFileSync(logPath(runId), `${JSON.stringify(header)}\n`);
-      writeFileSync(alivePath(runId), String(clock.now()));
-    },
-
-    append(runId, entry) {
-      appendFileSync(logPath(runId), `${JSON.stringify(entry)}\n`);
-    },
-
-    writeAlive(runId) {
-      writeFileSync(alivePath(runId), String(clock.now()));
-    },
-
-    readAlive(runId) {
-      try {
-        const n = Number(readFileSync(alivePath(runId), 'utf8').trim());
-        return Number.isFinite(n) ? n : null;
-      } catch {
-        return null;
-      }
-    },
-
-    writeResult(runId, result) {
-      writeAtomic(resultPath(runId), JSON.stringify(result));
-    },
-
-    readResult(runId) {
-      try {
-        return JSON.parse(readFileSync(resultPath(runId), 'utf8'));
-      } catch {
-        return null;
-      }
-    },
-
-    hasResult(runId) {
-      return existsSync(resultPath(runId));
-    },
-
-    readLog(runId) {
-      try {
-        return parseJsonLines(readFileSync(logPath(runId), 'utf8'));
-      } catch {
-        return [];
-      }
-    },
-
-    // 実行の番号を古い順に返す
-    listRuns() {
-      try {
-        return readdirSync(dataRoot)
-          .filter((name) => {
-            try {
-              return statSync(logPath(name)).isFile();
-            } catch {
-              return false;
-            }
-          })
-          .sort();
-      } catch {
-        return [];
-      }
-    },
-
-    // 件数が上限を超えたら、終わった実行を古いものから消す。終わっていない実行は消さない。
-    purge(keep) {
-      const ids = this.listRuns();
-      let count = ids.length;
-      for (const id of ids) {
-        if (count <= keep) break;
-        if (!this.hasResult(id)) continue;
-        try {
-          rmSync(dirOf(id), { recursive: true, force: true });
-          count -= 1;
-        } catch {
-          // 消せなければそのままにする
-        }
-      }
-    },
-
-    // ---- 起票の印（4.11） ----
-
-    readMarker(runId, issueId) {
-      try {
-        return JSON.parse(readFileSync(markerPath(runId, issueId), 'utf8'));
-      } catch {
-        return null;
-      }
-    },
-
-    // 印を「なければ作る」形で（排他的に）作る。作れたら true、すでにあれば false。
-    createMarkerExclusive(runId, issueId, marker) {
-      mkdirSync(issuesDir(runId), { recursive: true });
-      let fd;
-      try {
-        fd = openSync(markerPath(runId, issueId), 'wx');
-      } catch (e) {
-        if (e.code === 'EEXIST') return false;
-        throw e;
-      }
-      try {
-        writeSync(fd, JSON.stringify(marker));
-      } finally {
-        closeSync(fd);
-      }
-      return true;
-    },
-
-    // 前の印の名前を変えて退ける。成功は 1 つのセッションだけ。成功したら true。
-    retireMarker(runId, issueId, suffix) {
-      try {
-        renameSync(markerPath(runId, issueId), `${markerPath(runId, issueId)}.old-${suffix}`);
-        return true;
-      } catch (e) {
-        if (e.code === 'ENOENT') return false;
-        throw e;
-      }
-    },
-
-    replaceMarker(runId, issueId, marker) {
-      writeAtomic(markerPath(runId, issueId), JSON.stringify(marker));
-    },
+  let saveTimer = null;
+  const store = {
+    version: 1,
+    url: null,
+    settings,
+    draft: null,
+    run: null,
+    runs: persist.listRuns(),
+    options: { agents: [], models: [] },
+    // エージェントが動いているかの見張り（events.mjs が更新する）
+    live: { agents: new Map(), mainSince: null },
   };
+
+  const iso = () => now().toISOString();
+
+  function saveRunNow() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    if (store.run) persist.writeRun(publicRun(store.run, true));
+  }
+
+  Object.assign(store, {
+    iso,
+    /** 変わったことを記録し、実行の記録を少し後でまとめて書く */
+    changed() {
+      store.version += 1;
+      if (store.run && !saveTimer) {
+        saveTimer = setTimeout(saveRunNow, SAVE_DELAY_MS);
+        saveTimer.unref?.();
+      }
+    },
+    flush: saveRunNow,
+    /** 動いている（running か stopping の）実行 */
+    activeRun: () => (store.run && (store.run.status === 'running' || store.run.status === 'stopping') ? store.run : null),
+    isBusy: () => store.live.mainSince !== null || store.live.agents.size > 0,
+    current() {
+      const run = store.activeRun();
+      return run && run.iteration > 0 ? run.iterations[run.iteration - 1] : null;
+    },
+    /** 設定を変えてファイルに書く。書けなければ false */
+    setSettings(next) {
+      store.settings = next;
+      store.changed();
+      return persist.writeSettings(next);
+    },
+    /** あとで振り返るための記録。動いている実行がなければ書かない */
+    log(type, data = {}) {
+      const run = store.activeRun();
+      if (run) persist.appendEvent(run.id, { at: iso(), type, ...data });
+    },
+    /** くわしい記録の1行。新しいものを先頭に置く */
+    activity(who, line) {
+      const run = store.activeRun();
+      if (!run) return null;
+      const entry = { at: iso(), who, text: line };
+      run.activity.unshift(entry);
+      if (run.activity.length > MAX_ACTIVITY) run.activity.length = MAX_ACTIVITY;
+      store.log('activity', { who, text: line });
+      store.changed();
+      return entry;
+    },
+    newRun({ request, criteria, prepared }) {
+      const started = now();
+      let id = runIdOf(started);
+      for (let n = 2; persist.runExists(id) || store.runs.some((r) => r.id === id); n += 1) id = `${runIdOf(started)}-${n}`;
+      const s = store.settings;
+      return {
+        id,
+        status: 'running',
+        startedAt: started.toISOString(),
+        finishedAt: null,
+        request,
+        criteria,
+        worker: s.worker,
+        verifier: s.verifier,
+        maxIterations: s.maxIterations,
+        models: { workerModel: s.workerModel, workerEffort: s.workerEffort, verifierModel: s.verifierModel, verifierEffort: s.verifierEffort },
+        prepared: prepared ?? null,
+        iteration: 0,
+        active: null,
+        waiting: null,
+        iterations: [],
+        finish: null,
+        activity: [],
+      };
+    },
+    /** 実行を終える。auto は、統括エージェントが記録せずに終わったとき（止めたとき）の印 */
+    finish({ outcome, conclusion, retro = '', auto = false }) {
+      const run = store.run;
+      run.status = 'finished';
+      run.finishedAt = iso();
+      run.finish = { outcome, conclusion, retro, at: run.finishedAt, auto };
+      run.active = null;
+      run.waiting = null;
+      const listed = store.runs.find((r) => r.id === run.id);
+      if (listed) listed.outcome = outcome;
+      persist.appendEvent(run.id, { at: run.finishedAt, type: 'finish', outcome, conclusion, retro, auto });
+      store.changed();
+      saveRunNow();
+    },
+    finishStopped() {
+      if (store.run?.status === 'stopping') store.finish({ outcome: 'stopped', conclusion: MSG.stoppedConclusion, auto: true });
+    },
+    snapshot() {
+      return {
+        version: store.version,
+        settings: { ...store.settings },
+        options: { agents: store.options.agents, models: store.options.models, efforts: [...EFFORTS] },
+        draft: store.draft
+          ? { request: store.draft.request, criteria: [...store.draft.criteria], prepared: store.draft.prepared ? { ...store.draft.prepared } : null }
+          : null,
+        run: store.run ? publicRun(store.run, false) : null,
+        runs: store.runs.map((r) => ({ ...r })),
+      };
+    },
+  });
+  return store;
+}
+
+/** 画面とファイルに出す形。内部の印（_ で始まるもの、auto）は出さない */
+export function publicRun(run, forFile) {
+  const out = {
+    id: run.id,
+    status: run.status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    request: run.request,
+    criteria: [...run.criteria],
+    worker: run.worker,
+    verifier: run.verifier,
+    maxIterations: run.maxIterations,
+    models: { ...run.models },
+    prepared: run.prepared ? { ...run.prepared } : null,
+    iteration: run.iteration,
+    active: run.active ? { ...run.active } : null,
+    waiting: run.waiting ? { kind: run.waiting.kind, text: run.waiting.text } : null,
+    iterations: run.iterations.map((it) => ({
+      n: it.n,
+      plan: { ...it.plan },
+      do: it.do ? { ...it.do } : null,
+      study: it.study ? { ...it.study, verdicts: it.study.verdicts.map((v) => ({ ...v })) } : null,
+    })),
+    finish: run.finish ? { outcome: run.finish.outcome, conclusion: run.finish.conclusion, retro: run.finish.retro, at: run.finish.at } : null,
+    activity: run.activity.map((a) => ({ ...a })),
+  };
+  if (forFile) out.savedAt = new Date().toISOString();
+  return out;
 }

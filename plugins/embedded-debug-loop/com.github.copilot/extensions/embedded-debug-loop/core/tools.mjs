@@ -1,164 +1,269 @@
-// 記録のツールの定義（6.2）。つなぎ口は、これを登録するだけにする。
-// name は名前の後ろの部分。登録する名前は toolFullName() で作る（例：weekly-report_plan）。
-// description は、モデルの振る舞いを決める自然言語の部品である（BLUEPRINT 6章。R1 の決まりに沿って書いた）。
-// 記録のツールは、画面の状態を書くだけで外を変えないので、許可の確認を省いて登録する（4.14）。
+// 統括エージェントが呼ぶ記録のツール。断るときは例外を投げず、理由の文を失敗の結果で返す。
+// 成功の文には、モデルが次に何をするかを書く。
 
-const integerSchema = { type: 'integer', minimum: 1 };
+import { execFile } from 'node:child_process';
 
-export const TOOL_DEFS = Object.freeze([
-  {
-    name: 'open',
-    caller: 'main',
-    skipPermission: true,
+import { MSG, TOOL, manualIssue, settingsLines } from './messages.mjs';
+import { OUTCOMES, readCriteria, text } from './store.mjs';
+
+const VERDICTS = ['pass', 'fail', 'unknown'];
+const ISSUE_TIMEOUT_MS = 30_000;
+
+const fail = (message) => ({ textResultForLlm: message, resultType: 'failure' });
+// モデルが数や真偽を文字で渡すこともあるので、受け入れる
+const int = (v) => (typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : v);
+
+/** gh を、シェルを通さずに動かす。結果は { code, stdout, stderr, missing, timedOut } */
+export function runCommand(command, args, timeoutMs) {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({
+        code: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
+        stdout: String(stdout ?? ''),
+        stderr: String(stderr ?? ''),
+        missing: error?.code === 'ENOENT',
+        timedOut: Boolean(error?.killed),
+      });
+    });
+  });
+}
+
+const S = (description) => ({ type: 'string', description });
+
+const DEFINITIONS = {
+  open: {
     description:
-      '名前の頭（`_open` の前の部分）と同じ名前のプラグインの作業を、ユーザーから頼まれたときに呼ぶ。どんな作業かは、そのプラグインのスキルの説明にある。作業の Web管理画面（ブラウザーで開く画面）を用意し、その URL と、ユーザーに伝える注意を返す。作業はまだ始まらず、ユーザーが画面で設定して開始ボタンを押すと始まる。実行中に呼ぶと、新しくは始めず、今の画面の URL を返す。実行が終わった後に呼ぶと、画面が次の実行の準備に戻る（前の結果も画面で開ける）。',
+      '統括エージェントが最初に呼ぶ。頼む作業と合格の条件を記録し、Web管理画面を開いて、URL と今の設定を返す。',
     parameters: {
       type: 'object',
       properties: {
-        requestText: { type: 'string', description: 'ユーザーが頼んだ作業の文。ユーザーの言葉のまま渡す。' },
+        request: S('頼む作業。利用者の頼みを短くまとめた文'),
+        criteria: { type: 'array', items: { type: 'string' }, description: '合格の条件。1つずつ、結果を見て確かめられる文で' },
       },
-      required: ['requestText'],
-      additionalProperties: false,
+      required: ['request'],
     },
   },
-  {
-    name: 'plan',
-    caller: 'orchestrator',
-    skipPermission: true,
-    description:
-      '統括エージェントが、試行ごとに、作業エージェントに頼む前に呼ぶ。試行の番号、評価基準、計画を記録し、画面に出す。番号は 1 から順に、繰り返しの上限まで。評価基準には、ユーザーと確かめた合否の基準を、番号と文を受け取ったとおりに、すべて入れる（足す基準は、重ならない番号で入れてよい）。頼まれた作業の文が、ユーザーと確かめた基準と食い違うときは、基準を優先し、頼みの文の使わない部分を計画に書く。2回目からは、前の試行の指摘への対応を計画に書く。決まりに合わない記録は、理由を返して断る。返った理由に従い、直せるときは直して呼び直す。「作業を終えてください」と返ったら、呼び直さない。すべての評価基準を満たした後と、上限の回数の試行の合否が記録された後は、まとめに進むよう返して断る。',
+  prepare: {
+    description: '作業エージェントに頼んだ「準備の確認」の返事を記録する。Web管理画面に、そのまま表示される。',
     parameters: {
       type: 'object',
       properties: {
-        iteration: { ...integerSchema, description: '試行の番号。1 から始め、前の試行の次の番号にする。' },
-        criteria: {
-          type: 'array',
-          minItems: 1,
-          description: '評価基準の一覧。ユーザーと確かめた基準は番号と文を変えずに入れる。足した基準は入れてよい。',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string', description: '基準の番号（例：C-01）' },
-              text: { type: 'string', description: '基準の文' },
-            },
-            required: ['id', 'text'],
-            additionalProperties: false,
-          },
-        },
-        plan: { type: 'string', minLength: 1, description: 'この試行の計画。2回目からは、前の試行の指摘への対応を入れる。' },
+        worker: S('準備の確認を頼んだ作業エージェントの名前'),
+        ready: { type: 'boolean', description: '返事の1行目が「準備：できている」なら true' },
+        report: S('作業エージェントの返事の全文'),
       },
-      required: ['iteration', 'criteria', 'plan'],
-      additionalProperties: false,
+      required: ['worker', 'ready', 'report'],
     },
   },
-  {
-    name: 'verdict',
-    caller: 'verifier',
-    skipPermission: true,
-    description:
-      '検証エージェントが、試行の成果物を評価基準で確かめた後に呼ぶ。その試行の評価基準のすべてについて、合否と指摘を1回にまとめて記録し、画面に出す。番号は評価基準の番号をそのまま使い、その試行にない番号は入れない。不合格の指摘には、何をどう直せばよいかを書く。検証エージェント以外からの記録と、その試行の作業エージェントが終わる前の記録は断る。決まりに合わない記録は、理由を返して断る。返った理由に従い、直せるときは直して呼び直す。「作業を終えてください」と返ったら、呼び直さない。',
+  plan: {
+    description: '試行の計画を記録する。作業エージェントに頼む前に呼ぶ。',
+    parameters: {
+      type: 'object',
+      properties: { iteration: { type: 'integer', description: '試行の番号（1 から）' }, plan: S('この試行で試すこと') },
+      required: ['iteration', 'plan'],
+    },
+  },
+  study: {
+    description: '検証エージェントの評価をもとに、合格の条件ごとの合否と、次にすることを記録する。',
     parameters: {
       type: 'object',
       properties: {
-        iteration: { ...integerSchema, description: '合否を記録する試行の番号。' },
+        iteration: { type: 'integer', description: '試行の番号' },
         verdicts: {
           type: 'array',
-          minItems: 1,
+          description: '条件ごとの合否',
           items: {
             type: 'object',
             properties: {
-              criterionId: { type: 'string', description: '評価基準の番号' },
-              pass: { type: 'boolean', description: '合格なら true' },
-              note: { type: 'string', description: '指摘。不合格のときは、直す点を書く。' },
+              criterion: S('合格の条件（C1 など）'),
+              result: { type: 'string', enum: VERDICTS, description: 'pass は合格、fail は不合格、unknown は判断できない' },
+              reason: S('理由'),
             },
-            required: ['criterionId', 'pass'],
-            additionalProperties: false,
+            required: ['criterion', 'result', 'reason'],
           },
         },
+        next: S('次にどうするか（1〜2文）'),
       },
-      required: ['iteration', 'verdicts'],
-      additionalProperties: false,
+      required: ['iteration', 'verdicts', 'next'],
     },
   },
-  {
-    name: 'show',
-    caller: 'orchestrator,worker',
-    skipPermission: true,
-    description:
-      '統括エージェントか作業エージェントが、作業ごとの指示に書かれた表示（key）に、値を送る。値の形は表示の種類で決まり、引数 `value` の説明のとおりにする（image で画像として出すのは png・jpeg・gif・webp）。同じ key にまた送ると、表示が新しい値に変わる。作業ごとの指示にない key と、形の合わない値は、理由を返して断る。',
+  finish: {
+    description: '実行を終え、結論と振り返りを記録する。',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: '表示の名前（作業ごとの指示に書かれた key）' },
-        value: {
-          description:
-            '表示の種類に合う値。text は文字列、kv は { 見出し: 値 }、table は { columns: [見出し], rows: [[値, …]] }、progress は 0〜100 の数か { value, max, label }（label はなくてよい）、image と file は作業フォルダの中のファイルの場所の文字列。',
-        },
+        outcome: { type: 'string', enum: OUTCOMES, description: 'success は合格、failure は上限まで試して不合格、stopped は止めた、needs-human は人の判断が要る' },
+        conclusion: S('結論。直ったか、何が原因か、何を変えたかを、利用者に分かる言葉で'),
+        retro: S('振り返り。進め方のよくなかった点と改善の案。なければ「なし」'),
       },
-      required: ['key', 'value'],
-      additionalProperties: false,
+      required: ['outcome', 'conclusion', 'retro'],
     },
   },
-  {
-    name: 'review',
-    caller: 'orchestrator',
-    skipPermission: true,
-    description:
-      '統括エージェントが、繰り返しを終えた後（すべての評価基準を満たしたか、上限の回数まで試行した後）に、まとめの最初に呼ぶ。記録から機械的に洗い出した課題と、試行ごとの合否の要点を返す。返った課題は、何もしなくても課題の一覧に入る。繰り返しの途中では断る。',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'issue',
-    caller: 'orchestrator',
-    skipPermission: true,
-    description:
-      '統括エージェントが、繰り返しの後の振り返りで、このプラグイン自身を直せば防げる課題を見つけたときに呼ぶ。Issue の案（題と本文）を1件足す。案は終わった後の画面の課題の一覧に並び、ユーザーが承認した案だけが、このプラグインの GitHub リポジトリに起票される。題と本文は、平易な日本語で簡潔に書き、説明のない専門用語を使わない。名前が `_review` で終わる記録のツールが返した課題と、同じものは足さない。繰り返しの途中では断る。',
+  issue: {
+    description: '振り返りの改善の案を、GitHub の Issue にする。利用者がチャットで「する」と答えたときだけ呼ぶ。',
     parameters: {
       type: 'object',
-      properties: {
-        title: { type: 'string', minLength: 1, description: 'Issue の題' },
-        body: { type: 'string', minLength: 1, description: 'Issue の本文' },
-      },
+      properties: { title: S('Issue の題'), body: S('Issue の本文') },
       required: ['title', 'body'],
-      additionalProperties: false,
     },
   },
-  {
-    name: 'finish',
-    caller: 'orchestrator',
+};
+
+export function createTools({ store, ensureServer, refreshOptions = () => {}, issueRepo = '', run = runCommand }) {
+  const urlLine = () => (store.url ? `URL：${store.url}` : '');
+  const running = () => {
+    const r = store.activeRun();
+    if (!r) return { error: fail(MSG.notRunning) };
+    return { run: r };
+  };
+
+  const handlers = {
+    async open(args) {
+      const request = text(args?.request);
+      if (!request) return fail('request（頼む作業）が空です。利用者の頼みを短くまとめて入れてください。');
+      if (store.run?.status === 'running') {
+        return fail(`実行中です。終わるのを待つか、利用者に Web管理画面で止めてもらってください。${urlLine()}`);
+      }
+      let url;
+      try {
+        url = await ensureServer();
+      } catch (error) {
+        return fail(`Web管理画面を開けませんでした（${error?.message ?? error}）。利用者に伝えてください。`);
+      }
+      store.draft = { request, criteria: readCriteria(args?.criteria), prepared: null };
+      store.changed();
+      refreshOptions();
+      const w = store.settings.worker;
+      const next = w
+        ? `次に、作業エージェント「${w}」に、準備の確認だけを頼んでください（作業はさせない）。返事を ${TOOL.prepare} で記録してください。`
+        : '作業エージェントが決まっていません。利用者に URL を伝え、Web管理画面で作業エージェントを選んで「開始」を押すよう頼んで、手番を終えてください。';
+      return [`Web管理画面を開きました。URL：${url}`, '今の設定：', ...settingsLines(store.settings), next].join('\n');
+    },
+
+    async prepare(args) {
+      const worker = text(args?.worker);
+      const report = typeof args?.report === 'string' ? args.report.trim() : '';
+      if (!worker || !report) return fail('worker（作業エージェントの名前）と report（返事の全文）を入れてください。');
+      const prepared = { worker, ready: args?.ready === true || args?.ready === 'true', report, at: store.iso() };
+      const run = store.activeRun();
+      if (run) {
+        run.prepared = prepared;
+        store.log('prepare', prepared);
+        store.changed();
+        return prepared.ready
+          ? `記録しました。試行 ${run.iteration + 1} の計画を立て、${TOOL.plan} で記録してください。`
+          : '記録しました。準備ができていないことと、足りないものを利用者に伝え、どうするかを ask_user で聞いてください。';
+      }
+      if (!store.draft) return fail(`先に ${TOOL.open} を呼んでください。`);
+      store.draft.prepared = prepared;
+      store.changed();
+      const lines = [
+        `記録しました。利用者に Web管理画面の URL（${store.url}）を伝え、設定と作業エージェントの準備の内容を確かめて『開始』を押すよう頼んで、手番を終えてください。開始が押されると、このチャットに開始の知らせが届きます。`,
+      ];
+      if (!prepared.ready) lines.push('準備ができていないことと、足りないものを利用者に伝えてください。');
+      return lines.join('\n');
+    },
+
+    async plan(args) {
+      const { run, error } = running();
+      if (error) return error;
+      const n = int(args?.iteration);
+      const plan = text(args?.plan);
+      if (!Number.isInteger(n) || !plan) return fail('iteration（試行の番号。整数）と plan（計画）を入れてください。');
+      if (n > run.maxIterations) return fail(`上限（${run.maxIterations} 回）に達しています。${TOOL.finish} で終えてください。`);
+      const cur = run.iterations[run.iteration - 1];
+      const replace = n === run.iteration && cur && !cur.do && !cur.study;
+      if (n !== run.iteration + 1 && !replace) {
+        return fail(`試行の番号が合いません。次の試行は ${run.iteration + 1} です。`);
+      }
+      const entry = { n, plan: { text: plan, at: store.iso() }, do: null, study: null };
+      if (replace) run.iterations[n - 1] = entry;
+      else run.iterations.push(entry);
+      run.iteration = n;
+      store.log('plan', { iteration: n, plan });
+      store.changed();
+      return `記録しました。作業エージェント「${run.worker}」に task で頼んでください。`;
+    },
+
+    async study(args) {
+      const { run, error } = running();
+      if (error) return error;
+      const n = int(args?.iteration);
+      const it = store.current();
+      if (!it) return fail(`先に試行の計画を ${TOOL.plan} で記録してください。`);
+      if (n !== run.iteration) return fail(`評価を記録できるのは、いまの試行 ${run.iteration} だけです。`);
+      const verdicts = Array.isArray(args?.verdicts) ? args.verdicts : [];
+      const bad = verdicts.length === 0 || verdicts.some((v) => !text(v?.criterion) || !VERDICTS.includes(v?.result));
+      if (bad) return fail('verdicts に、条件ごとの criterion と result（pass・fail・unknown のどれか）と reason を入れてください。');
+      const next = text(args?.next);
+      it.study = {
+        verdicts: verdicts.map((v) => ({ criterion: text(v.criterion), result: v.result, reason: text(v.reason) })),
+        next,
+        verifierReport: it._verifierReport ?? '',
+        at: store.iso(),
+      };
+      delete it._verifierReport;
+      store.log('study', { iteration: n, verdicts: it.study.verdicts, next });
+      store.changed();
+      if (it.study.verdicts.every((v) => v.result === 'pass')) {
+        return `すべての条件が合格です。${TOOL.finish}（outcome は success）で終えてください。`;
+      }
+      if (n >= run.maxIterations) {
+        return `上限（${run.maxIterations} 回）に達しました。${TOOL.finish}（outcome は failure）で終えてください。`;
+      }
+      return `記録しました。次は試行 ${n + 1} です。評価の指摘をもとに計画を立て、${TOOL.plan} で記録してください。`;
+    },
+
+    async finish(args) {
+      const run = store.run;
+      const autoFinished = run?.status === 'finished' && run.finish?.auto;
+      if (!run || (run.status === 'finished' && !autoFinished)) return fail(`終える実行がありません。${urlLine()}`);
+      const stopped = run.status === 'stopping' || autoFinished;
+      const outcome = stopped ? 'stopped' : args?.outcome;
+      const conclusion = text(args?.conclusion);
+      if (!OUTCOMES.includes(outcome) || !conclusion) {
+        return fail(`outcome（${OUTCOMES.join('・')} のどれか）と conclusion（結論）を入れてください。`);
+      }
+      // 止めたときの仮の結論は、統括エージェントの結論で置き換える
+      store.finish({ outcome, conclusion, retro: text(args?.retro) });
+      return `記録しました。結果の画面：${store.url}#result\n利用者に結論を短く伝えてください。`;
+    },
+
+    async issue(args) {
+      const title = text(args?.title);
+      const body = text(args?.body);
+      if (!title || !body) return fail('title（題）と body（本文）を入れてください。');
+      if (!issueRepo) return fail('Issue の送り先が決まっていません。利用者に、題と本文をそのまま示してください。');
+      const result = await run('gh', ['issue', 'create', '--repo', issueRepo, '--title', title, '--body', body], ISSUE_TIMEOUT_MS);
+      const url = /https:\/\/github\.com\/\S+\/issues\/\d+/.exec(result.stdout)?.[0];
+      if (url) {
+        store.log('issue', { title, url });
+        return `Issue を作りました：${url}\n利用者に URL を伝えてください。`;
+      }
+      const reason = result.missing
+        ? 'gh（GitHub のコマンド）が見つからないため、Issue を作れませんでした。'
+        : result.timedOut
+          ? 'gh が 30 秒たっても終わらないため、Issue を作れませんでした。'
+          : `gh で Issue を作れませんでした（${result.stderr.trim().split('\n').pop() || `終了コード ${result.code}`}）。gh auth status で認証を確かめてください。`;
+      return fail(manualIssue(reason, issueRepo, title, body));
+    },
+  };
+
+  // 止めたあとは、終わりの記録のほかは断る。どのツールも例外を投げない。
+  return Object.entries(DEFINITIONS).map(([short, def]) => ({
+    name: TOOL[short],
+    description: def.description,
+    parameters: def.parameters,
     skipPermission: true,
-    description:
-      '統括エージェントが、振り返りの最後に1回だけ呼ぶ。実行全体のまとめ（何回の試行で、どの評価基準を満たし、どれを満たせなかったか、成果物の場所。基準と食い違うので使わなかった頼みの文の部分があれば、それも）を記録し、画面に出す。記録できたら、作業を終える。繰り返しの途中と、2回目の記録は断る。',
-    parameters: {
-      type: 'object',
-      properties: { summary: { type: 'string', minLength: 1, description: '実行全体のまとめ' } },
-      required: ['summary'],
-      additionalProperties: false,
+    defer: 'never',
+    handler: async (args) => {
+      try {
+        if (store.run?.status === 'stopping' && short !== 'finish') return fail(MSG.stopped);
+        return await handlers[short](args ?? {});
+      } catch (error) {
+        console.error(`[Web管理画面] ツール ${TOOL[short]} の処理で失敗しました：`, error);
+        return fail(MSG.unexpected);
+      }
     },
-  },
-]);
-
-export const RECORD_TOOL_NAMES = Object.freeze(TOOL_DEFS.map((t) => t.name));
-
-export function toolFullName(pluginName, shortName) {
-  return `${pluginName}_${shortName}`;
-}
-
-// 登録する名前から、名前の後ろの部分を取り出す。合わなければ null。
-export function toolShortName(pluginName, fullName) {
-  const prefix = `${pluginName}_`;
-  if (typeof fullName !== 'string' || !fullName.startsWith(prefix)) return null;
-  const short = fullName.slice(prefix.length);
-  return RECORD_TOOL_NAMES.includes(short) ? short : null;
-}
-
-// つなぎ口が登録する形（名前に生成プラグインの名前を付けたもの）
-export function buildToolDefinitions(pluginName) {
-  return TOOL_DEFS.map((t) => ({
-    name: toolFullName(pluginName, t.name),
-    shortName: t.name,
-    description: t.description,
-    parameters: t.parameters,
-    skipPermission: t.skipPermission,
   }));
 }

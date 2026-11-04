@@ -1,287 +1,151 @@
-// 画面のサーバー（汎用）。生成プラグインの画面も、クリエイターの画面も、これを読み込んで使う。
-// 設計書：docs/design/generated-plugin-structure.md の 4.2、6.3、9章。
-//
-// 決まり
-// - 127.0.0.1 だけで待ち受ける。いつもの番号がふさがっていたら、OS に空いている番号を選ばせる。
-// - 起動ごとに乱数の合言葉を作り、URL に入れる（?k=<合言葉>）。
-// - 全部の問い合わせで、合言葉と Host（127.0.0.1 か localhost と番号）を確かめる。画面の部品（静的ファイル）も同じ。
-// - 全部の応答に、スクリプトを自分のサーバーのものだけにする CSP と nosniff を付ける。
-// - ファイルの窓口の確かめは serveFile() に持つ。生成プラグインの routes から使う。
-//
-// 外部の npm パッケージは使わない（Node.js の標準の部品だけ）。
+// Web管理画面のサーバー。Node.js の標準の部品だけを使う。
+// - 127.0.0.1 だけで待ち受け、番号は OS に選ばせる。
+// - 起動ごとに合言葉（24 文字）を作る。すべての問い合わせで、URL の ?k= か、最初に開いたときに渡すクッキーで確かめる。
+// - Host が 127.0.0.1 か localhost で、番号が合うものだけを受ける（ほかのサイトからの呼び出しを防ぐ）。
+// api：state()、saveSettings(body)、start(body)、stop()、runDetail(id)。誤りは status と message を持つ例外で返す。
 
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 
-const MAX_BODY_BYTES = 1024 * 1024; // 画面から送る内容は小さい
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
-
-// 自分のサーバーのスクリプトだけを動かす。エージェントが書いた文字の中のスクリプトは動かない（6.3）。
-const SECURITY_HEADERS = {
-  'Content-Security-Policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-  'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'no-referrer', // URL の合言葉をほかへ漏らさない
+const MAX_BODY_BYTES = 64 * 1024;
+const STATIC = {
+  '/': ['index.html', 'text/html; charset=utf-8'],
+  '/index.html': ['index.html', 'text/html; charset=utf-8'],
+  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/style.css': ['style.css', 'text/css; charset=utf-8'],
+};
+// 動かしてよいスクリプトは、このサーバーのファイル（app.js）だけ。画面のファイルに直接書いたスクリプトは動かない
+const HEADERS = {
   'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy':
+    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
-const STATIC_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-};
-
-// 画像として返す種類は、これだけ（SVG と HTML は含めない。6.3）
-const IMAGE_TYPES = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-};
-
-/** routes の関数から投げると、その状態の番号と文で断る。message は画面に出るので平易な日本語にする。 */
-export class HttpError extends Error {
+class HttpError extends Error {
   constructor(status, message) {
     super(message);
     this.status = status;
   }
 }
 
-/** routes の関数がこれを返すと、JSON にせず、そのまま返す（ファイルの窓口用）。 */
-export class Reply {
-  constructor({ status = 200, headers = {}, body = '' } = {}) {
-    this.status = status;
-    this.headers = headers;
-    this.body = body;
-  }
-}
-
-function send(res, status, headers, body) {
-  res.writeHead(status, { ...SECURITY_HEADERS, ...headers });
+function send(res, status, type, body, extra = {}) {
+  res.writeHead(status, { ...HEADERS, 'Content-Type': type, ...extra });
   res.end(body);
 }
-
-function sendJson(res, status, value) {
-  send(res, status, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(value));
-}
-
-function compileRoutes(routes) {
-  return Object.entries(routes).map(([key, handler]) => {
-    const [method, pattern] = key.split(' ');
-    const names = [];
-    const source = pattern
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/:(\w+)/g, (_, name) => {
-        names.push(name);
-        return '([^/]+)';
-      });
-    return { method, names, handler, re: new RegExp(`^${source}$`) };
-  });
-}
+const sendJson = (res, status, value) => send(res, status, 'application/json; charset=utf-8', JSON.stringify(value));
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
-    let tooBig = false;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) tooBig = true;
-      else chunks.push(chunk);
+      if (size <= MAX_BODY_BYTES) chunks.push(chunk);
     });
     req.on('end', () => {
-      if (tooBig) return reject(new HttpError(413, '送られた内容が大きすぎます'));
-      const text = Buffer.concat(chunks).toString('utf8');
-      if (text.trim() === '') return resolve({});
+      if (size > MAX_BODY_BYTES) return reject(new HttpError(413, '送られた内容が大きすぎます（64 KB まで）。'));
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
+      if (!raw) return resolve({});
       try {
-        resolve(JSON.parse(text));
+        const value = JSON.parse(raw);
+        if (value && typeof value === 'object' && !Array.isArray(value)) return resolve(value);
       } catch {
-        reject(new HttpError(400, '送られた内容を読み取れません'));
+        // 下で断る
       }
+      reject(new HttpError(400, '送られた内容を読み取れません（JSON の形にしてください）。'));
     });
     req.on('error', reject);
   });
 }
 
-async function readStatic(staticDirs, relativePath) {
-  if (!/^[\w.-]+(\/[\w.-]+)*$/.test(relativePath) || relativePath.split('/').some((p) => p === '.' || p === '..')) {
-    return null;
+function cookieOf(req, name) {
+  for (const part of String(req.headers.cookie ?? '').split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return rest.join('=');
   }
-  for (const dir of staticDirs) {
-    const file = path.resolve(dir, relativePath);
-    if (!file.startsWith(dir + path.sep)) continue;
-    try {
-      return { file, data: await fsp.readFile(file) };
-    } catch {
-      // 次の置き場所を探す
-    }
-  }
-  return null;
+  return undefined;
 }
 
-/**
- * 画面のサーバーを起動する。
- * @param {object} options
- * @param {number} [options.preferredPort] いつもの番号。ふさがっていたら OS に選ばせる。0 なら最初から OS に選ばせる。
- * @param {string|string[]} [options.staticDir] 画面の部品（index.html など）の置き場所。複数なら前のものを先に探す
- *   （クリエイターの画面が、自分の部品と、ひな形の描画の部品の両方を出すため）。
- * @param {Record<string, Function>} [options.routes] 'GET /api/state': (req) => 値 、'POST /api/start': (req, body) => 値。
- *   パスに :名前 を書くと req.params で受け取れる。値は JSON で返す。Reply を返すとそのまま返す。HttpError で断る。
- * @param {Function} [options.onListen] 待ち受けを始めたときに ({ url, port, token }) で呼ぶ
- * @returns {Promise<{ url: string, port: number, token: string, close: () => Promise<void> }>}
- */
-export async function startServer({ preferredPort = 0, staticDir, routes = {}, onListen } = {}) {
-  const token = crypto.randomBytes(24).toString('base64url');
+export async function startServer({ staticDir, api }) {
+  const token = crypto.randomBytes(18).toString('base64url');
   const tokenBytes = Buffer.from(token);
-  const staticDirs = [].concat(staticDir ?? []).map((dir) => path.resolve(dir));
-  const compiled = compileRoutes(routes);
-  let port = 0;
-
-  const tokenOk = (given) => {
+  const matches = (given) => {
     if (typeof given !== 'string') return false;
     const bytes = Buffer.from(given);
     return bytes.length === tokenBytes.length && crypto.timingSafeEqual(bytes, tokenBytes);
   };
-  const hostOk = (host) => {
-    const value = String(host ?? '').toLowerCase();
-    return value === `127.0.0.1:${port}` || value === `localhost:${port}`;
-  };
+  let port = 0;
+  let cookieName = '';
 
-  async function handle(req, res) {
-    const raw = req.url ?? '/';
-    if (!raw.startsWith('/') || raw.startsWith('//')) return sendJson(res, 400, { error: '問い合わせの形が正しくありません' });
-    const queryAt = raw.indexOf('?');
-    const rawPath = queryAt < 0 ? raw : raw.slice(0, queryAt);
-    const query = new URLSearchParams(queryAt < 0 ? '' : raw.slice(queryAt + 1));
-
-    if (!hostOk(req.headers.host) || !tokenOk(query.get('k'))) {
-      return sendJson(res, 403, { error: 'このアドレスでは開けません。チャットで示された URL を開いてください' });
-    }
-    query.delete('k');
-
-    // 窓口は、元の文字のまま（% の符号を戻す前に）合わせてから、:名前 の部分だけを戻す（番号に / があってもよいように）
-    for (const route of compiled) {
-      if (route.method !== req.method) continue;
-      const match = route.re.exec(rawPath);
-      if (!match) continue;
-      let params;
+  async function route(req, res, url) {
+    const method = req.method ?? 'GET';
+    const file = STATIC[url.pathname];
+    if (file) {
+      if (method !== 'GET') throw new HttpError(405, 'この操作はできません。');
+      let body;
       try {
-        params = Object.fromEntries(route.names.map((name, i) => [name, decodeURIComponent(match[i + 1])]));
+        body = await fsp.readFile(path.join(staticDir, file[0]));
       } catch {
-        return sendJson(res, 400, { error: '問い合わせの形が正しくありません' });
+        throw new HttpError(404, `画面のファイル ${file[0]} が見つかりません。`);
       }
-      const pathname = rawPath;
-      const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
-      const result = await route.handler({ method: req.method, path: pathname, params, query: Object.fromEntries(query), headers: req.headers }, body);
-      if (result instanceof Reply) return send(res, result.status, result.headers, result.body);
-      return sendJson(res, 200, result ?? {});
+      // 画面の部品（app.js など）とデータの取得も通るよう、合言葉をクッキーでも渡す（番号ごとに別の名前）
+      return send(res, 200, file[1], body, { 'Set-Cookie': `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict` });
     }
-
-    if (req.method === 'GET') {
-      let pathname;
-      try {
-        pathname = decodeURIComponent(rawPath);
-      } catch {
-        return sendJson(res, 400, { error: '問い合わせの形が正しくありません' });
-      }
-      const name = pathname === '/' ? 'index.html' : pathname.slice(1);
-      const found = await readStatic(staticDirs, name);
-      if (found) {
-        const type = STATIC_TYPES[path.extname(found.file).toLowerCase()] ?? 'application/octet-stream';
-        // 画面の部品の中の合言葉の差し込み口を、今の合言葉にする（静的ファイルの問い合わせにも合言葉を付けるため）
-        const data = name === 'index.html' ? found.data.toString('utf8').replaceAll('%%K%%', token) : found.data;
-        return send(res, 200, { 'Content-Type': type }, data);
-      }
+    const runMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
+    if (method === 'GET' && url.pathname === '/api/state') return sendJson(res, 200, await api.state());
+    if (method === 'GET' && runMatch) return sendJson(res, 200, await api.runDetail(runMatch[1]));
+    if (method === 'POST' && url.pathname === '/api/settings') return sendJson(res, 200, await api.saveSettings(await readBody(req)));
+    if (method === 'POST' && url.pathname === '/api/start') return sendJson(res, 200, await api.start(await readBody(req)));
+    if (method === 'POST' && url.pathname === '/api/stop') return sendJson(res, 200, await api.stop(await readBody(req)));
+    if (['/api/state', '/api/settings', '/api/start', '/api/stop'].includes(url.pathname) || runMatch) {
+      throw new HttpError(405, 'この操作はできません。');
     }
-    return sendJson(res, 404, { error: '見つかりません' });
+    throw new HttpError(404, 'そのページはありません。');
   }
 
-  const server = http.createServer((req, res) => {
-    handle(req, res).catch((error) => {
-      if (res.headersSent) return res.destroy();
-      if (error instanceof HttpError) return sendJson(res, error.status, { error: error.message });
-      // 中身は返さない（画面に内部の事情を出さない）
-      sendJson(res, 500, { error: '処理に失敗しました' });
-    });
+  const server = http.createServer(async (req, res) => {
+    try {
+      const host = String(req.headers.host ?? '');
+      if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) throw new HttpError(403, 'この URL では開けません。チャットに出た URL（http://127.0.0.1: で始まるもの）から開いてください。');
+      const url = new URL(req.url ?? '/', `http://${host}`);
+      if (!matches(url.searchParams.get('k')) && !matches(cookieOf(req, cookieName))) {
+        throw new HttpError(403, '合言葉が違います。チャットに出た URL から開き直してください。');
+      }
+      await route(req, res, url);
+    } catch (error) {
+      const known = Number.isInteger(error?.status);
+      const status = known ? error.status : 500;
+      if (!known) console.error('[Web管理画面] 問い合わせの処理で失敗しました：', error);
+      else if (status >= 500) console.error(`[Web管理画面] ${error.message}`);
+      const message = known ? error.message : 'Web管理画面の処理で思わぬ失敗が起きました。もう一度試してください。';
+      if (!res.headersSent) sendJson(res, status, { error: message });
+      else res.end();
+    }
   });
 
-  const listen = (wantedPort) =>
-    new Promise((resolve, reject) => {
-      const onError = (error) => {
-        server.off('listening', onListening);
-        reject(error);
-      };
-      const onListening = () => {
-        server.off('error', onError);
-        resolve();
-      };
-      server.once('error', onError);
-      server.once('listening', onListening);
-      server.listen({ port: wantedPort, host: '127.0.0.1', exclusive: true });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
     });
-
-  try {
-    await listen(preferredPort);
-  } catch (error) {
-    if (preferredPort === 0 || (error.code !== 'EADDRINUSE' && error.code !== 'EACCES')) throw error;
-    await listen(0);
-  }
+  });
   port = server.address().port;
+  cookieName = `edl_k_${port}`;
+  server.unref?.();
 
-  const url = `http://127.0.0.1:${port}/?k=${token}`;
-  let closing = null;
-  const close = () => {
-    closing ??= new Promise((resolve) => {
-      server.close(() => resolve());
-      server.closeAllConnections();
-    });
-    return closing;
+  return {
+    url: `http://127.0.0.1:${port}/?k=${token}`,
+    port,
+    token,
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections?.();
+        server.close(() => resolve());
+      }),
   };
-  onListen?.({ url, port, token });
-  return { url, port, token, close };
-}
-
-/**
- * ファイルの窓口の確かめ。作業フォルダ（root）の中のファイルだけを返す。
- * - 本当の場所（シンボリックリンクをたどった後）が root の中か確かめる。
- * - png・jpeg・gif・webp だけを画像として返す。SVG や HTML を含むほかは、ダウンロードさせる形で返す。
- * - どれにも、スクリプトを動かさない指定（Content-Security-Policy: sandbox と nosniff）を付ける。
- * @returns {Promise<Reply>} 見つからないときと、root の外のときは HttpError(404)
- */
-export async function serveFile({ path: filePath, root, name }) {
-  const notFound = new HttpError(404, 'ファイルが見つかりません');
-  let real;
-  let stat;
-  try {
-    const realRoot = await fsp.realpath(root);
-    real = await fsp.realpath(path.resolve(root, String(filePath)));
-    const relative = path.relative(realRoot, real);
-    if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw notFound;
-    stat = await fsp.stat(real);
-  } catch {
-    throw notFound;
-  }
-  if (!stat.isFile()) throw notFound;
-  if (stat.size > MAX_FILE_BYTES) throw new HttpError(413, 'ファイルが大きすぎて開けません');
-
-  const headers = {
-    'Content-Security-Policy': 'sandbox',
-    'X-Content-Type-Options': 'nosniff',
-  };
-  const imageType = IMAGE_TYPES[path.extname(real).toLowerCase()];
-  if (imageType) {
-    headers['Content-Type'] = imageType;
-  } else {
-    const shown = String(name ?? path.basename(real)).replace(/[\u0000-\u001f"\\/]/g, '_');
-    headers['Content-Type'] = 'application/octet-stream';
-    headers['Content-Disposition'] = `attachment; filename="${shown.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(shown).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
-  }
-  return new Reply({ status: 200, headers, body: await fsp.readFile(real) });
 }

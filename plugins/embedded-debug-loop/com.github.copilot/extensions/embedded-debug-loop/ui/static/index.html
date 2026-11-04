@@ -3,16 +3,160 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>作業の画面</title>
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Web管理画面</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?k=%%K%%">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
 </head>
-<body>
-<div id="app" class="page" aria-busy="true">
-  <p id="loading" class="muted">読み込んでいます…</p>
-  <noscript><p class="alert alert-error">この画面を使うには、ブラウザーで JavaScript を有効にしてください。</p></noscript>
+<body aria-busy="true">
+<noscript><p class="banner banner-error">この画面を使うには、ブラウザーで JavaScript を有効にしてください。</p></noscript>
+<header class="top">
+  <div class="wrap top-in">
+    <div class="brand">
+      <h1>Web管理画面</h1>
+      <p class="sub">統括エージェントが、作業エージェントと検証エージェントに頼みます。<br>計画 → 作業 → 評価 を、合格するまでくり返します。</p>
+    </div>
+    <p id="pill" class="pill">読み込んでいます…</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="conn" class="banner banner-error" role="alert" hidden></div>
+  <div id="waiting" class="banner banner-wait" hidden></div>
+  <p id="live" class="sr-only" role="status" aria-live="polite"></p>
+
+  <div class="tabs" role="tablist" aria-label="画面の切り替え">
+    <button type="button" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="true">設定</button>
+    <button type="button" role="tab" id="tab-run" aria-controls="panel-run" aria-selected="false" tabindex="-1">実行のようす<span class="tab-dot" id="run-dot" hidden></span></button>
+    <button type="button" role="tab" id="tab-result" aria-controls="panel-result" aria-selected="false" tabindex="-1">結果</button>
+  </div>
+
+  <main id="main">
+    <!-- 設定 -->
+    <section id="panel-settings" class="panel" role="tabpanel" aria-labelledby="tab-settings">
+      <p id="settings-note" class="note"></p>
+
+      <form id="settings-form" novalidate>
+        <section class="card" aria-labelledby="h-ask">
+          <h2 id="h-ask">頼む内容</h2>
+
+          <div class="field">
+            <label for="f-request">頼む作業</label>
+            <p class="help" id="help-request">統括エージェントに頼む作業です。チャットで頼んだ内容が入ります。</p>
+            <textarea id="f-request" rows="3" aria-describedby="help-request err-request"></textarea>
+            <p class="err" id="err-request" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="f-criteria">合格の条件</label>
+            <p class="help" id="help-criteria">1 行に 1 つ書きます。すべて満たすと合格です。</p>
+            <textarea id="f-criteria" rows="3" aria-describedby="help-criteria err-criteria"></textarea>
+            <p class="err" id="err-criteria" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="f-max">繰り返しの上限</label>
+            <p class="help" id="help-max">計画 → 作業 → 評価 を、最大で何回くり返すかです（1〜20 回）。</p>
+            <div class="unit">
+              <input id="f-max" type="number" min="1" max="20" step="1" inputmode="numeric" aria-describedby="help-max err-max">
+              <span aria-hidden="true">回</span>
+            </div>
+            <p class="err" id="err-max" hidden></p>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="h-agents">
+          <h2 id="h-agents">エージェント</h2>
+          <dl class="legend">
+            <div><dt>モデル</dt><dd>そのエージェントが使う AI の種類です。</dd></div>
+            <div><dt>考える深さ</dt><dd>深いほど、ていねいに考えます。そのぶん時間がかかります。</dd></div>
+            <div><dt>既定</dt><dd>エージェントの定義に書かれたとおりに動きます。</dd></div>
+          </dl>
+
+          <div class="roles">
+            <section class="role role-o" aria-labelledby="h-role-o">
+              <h3 id="h-role-o"><span class="role-mark" aria-hidden="true"></span>統括エージェント</h3>
+              <p class="role-job">計画を立て、作業と確認を頼み、評価を記録します。</p>
+              <p class="role-fixed">チャットで選んだモデル（/model）で動きます。ここでは変えません。</p>
+            </section>
+
+            <section class="role role-w" aria-labelledby="h-role-w">
+              <h3 id="h-role-w"><span class="role-mark" aria-hidden="true"></span>作業エージェント</h3>
+              <p class="role-job">計画どおりに作業して、結果を報告します。</p>
+              <div class="field">
+                <label for="f-worker">使うエージェント</label>
+                <select id="f-worker" aria-describedby="worker-desc err-worker"></select>
+                <p class="help" id="worker-desc"></p>
+                <p class="err" id="err-worker" hidden></p>
+              </div>
+              <div class="field">
+                <label for="f-worker-model">モデル</label>
+                <div id="slot-worker-model"></div>
+              </div>
+              <div class="field">
+                <label for="f-worker-effort">考える深さ</label>
+                <select id="f-worker-effort"></select>
+              </div>
+            </section>
+
+            <section class="role role-v" aria-labelledby="h-role-v">
+              <h3 id="h-role-v"><span class="role-mark" aria-hidden="true"></span>検証エージェント</h3>
+              <p class="role-job">合格の条件を満たしたかを、条件ごとに確かめます。</p>
+              <div class="field">
+                <label for="f-verifier">使うエージェント</label>
+                <select id="f-verifier" aria-describedby="err-verifier"></select>
+                <p class="err" id="err-verifier" hidden></p>
+              </div>
+              <div class="field">
+                <label for="f-verifier-model">モデル</label>
+                <div id="slot-verifier-model"></div>
+              </div>
+              <div class="field">
+                <label for="f-verifier-effort">考える深さ</label>
+                <select id="f-verifier-effort"></select>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="card" id="prep" aria-labelledby="h-prep">
+          <div class="card-head">
+            <h2 id="h-prep">作業エージェントの準備</h2>
+            <span id="prep-badge" class="badge badge-unk">まだ確かめていない</span>
+          </div>
+          <p class="help" id="prep-meta"></p>
+          <p class="warn-line" id="prep-other" hidden></p>
+          <pre class="report" id="prep-report"></pre>
+          <p class="help">作業エージェントを変えたときは、開始の後に統括エージェントが準備を確かめ直します。</p>
+        </section>
+
+        <div class="actions" id="form-actions">
+          <button type="button" id="btn-save" class="btn">保存</button>
+          <button type="submit" id="btn-start" class="btn btn-primary">開始</button>
+          <p id="form-msg" class="form-msg" role="status" aria-live="polite"></p>
+        </div>
+      </form>
+    </section>
+
+    <!-- 実行のようす -->
+    <section id="panel-run" class="panel" role="tabpanel" aria-labelledby="tab-run" hidden>
+      <div id="run-now"></div>
+      <div id="run-iters"></div>
+      <div id="run-log"></div>
+    </section>
+
+    <!-- 結果 -->
+    <section id="panel-result" class="panel" role="tabpanel" aria-labelledby="tab-result" hidden>
+      <div id="result-body"></div>
+      <div id="result-runs"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p id="foot-text"></p>
+  </footer>
 </div>
-<script src="render.js?k=%%K%%"></script>
-<script src="app.js?k=%%K%%"></script>
 </body>
 </html>

@@ -1,0 +1,49 @@
+# log-capture スキルの設定ファイルです。
+# 機器のシリアルコンソールにつないで、コマンドを実行し、出力を記録するときのやり方を書きます。
+# 各項目の意味は、項目のすぐ上のコメントに書いてあります。
+# 作業フォルダとは、.embedded-debug-loop フォルダがあるフォルダです。
+
+# 機器につながるシリアルポート（必須）。
+# 例：/dev/ttyUSB0
+# 例：/dev/ttyACM0
+port: ""
+
+# シリアルの速さ（ボーレート）。機器の設定と同じ値にする。
+# 例：115200
+# 例：9600
+baud: 115200
+
+# ログインするユーザー名。空ならログインしない。
+# 例：root
+login_user: "root"
+
+# ログインのパスワード。パスワードがなければ空のままにする。
+# ここに書きたくないときは、下の login_password_env を使う。
+login_password: ""
+
+# パスワードを入れた環境変数の名前。空でなければ、login_password より優先する。
+# 例：DEVICE_PASSWORD
+login_password_env: ""
+
+# シェルのプロンプトの終わりに合う正規表現。空なら "[#$] $"（# か $ と空白で終わる）。
+# 例：[#$] $
+# 例：sensor-board:~# $
+prompt: "[#$] $"
+
+# 機器のシェルで、上から順に実行するコマンド。
+# 空なら何も実行せず、listen_seconds の秒数だけ出力を記録する。
+# 例：["run-app /opt/sensor/sensor_app"]
+# 例：["dmesg | tail -n 20", "cat /var/log/messages"]
+commands: []
+
+# 1つのコマンドの出力を待つ最長の秒数。過ぎたら Ctrl-C を送って止める。
+# 例：30
+command_timeout_seconds: 30
+
+# コマンドの後に、さらに出力を記録する秒数。0 なら記録しない。
+# 例：10
+listen_seconds: 0
+
+# 終わったらログアウトする（exit を送る）か。このスキルがログインしたときだけ送る。
+# 選べる値：true / false
+logout: true
