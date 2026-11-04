@@ -6,6 +6,8 @@ allowed-tools: ["coverity-triage", "shell(uv run:*)"]
 
 # 承認の反映
 
+人への返事は日本語で書く。ユーザーが別の言語で書いたら、その言語で書く。画面と README が日本語で書かれているためである。
+
 最初にスキル `coverity-triage-scripts` を読み、`ct.py` の場所と使い方を確かめます。以下の `ct.py X` はそこに書かれた方法で実行します。
 
 承認（修正 / 逸脱 / 却下 / 反映しない）と逸脱コメントの手直しは、人が画面（`ct.py gui`）の「結果」で入れ、実行フォルダの `approvals.json` に保存されています。`ct.py preview` はそれを読みます。あなたは `approvals.json` も一覧のファイルも書き換えません。（K-63、K-64）
