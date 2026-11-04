@@ -75,8 +75,8 @@ sensor_app を機器で動かすと、平均値が AVG=3 と出ます。正し�
 
 ## 3段階目：統括エージェントと Web管理画面で進める
 
-1. チャットで `/settings experimental on` と打ちます。Copilot CLI が自動で再起動します（今の会話は消えます）。
-2. 再起動の後に「… wants elevated permissions」と聞かれたら、「Yes」を選びます。
+1. Copilot CLI を起動したときに「… wants elevated permissions」と聞かれたら、「Yes」を選びます（3段階目の Web管理画面を動かすエクステンションの確認です）。
+2. 聞かれず、統括エージェントが URL を出せないときは、[統括エージェントと Web管理画面](docs/guide/3-orchestrator.md) の「準備」を見てください。
 3. `/agent` で `embedded-debug-loop:orchestrator` を選び、直してほしいことを頼みます。
 4. 統括エージェントがチャットに出す URL を、同じ PC のブラウザーで開きます。
 5. 設定と、作業エージェントの準備の内容を確かめて、「開始」を押します。

@@ -10,8 +10,10 @@
 
 ## 準備
 
-1. チャットで `/settings experimental on` と打ちます。Copilot CLI が自動で再起動します（今の会話は消えます）。
-2. 再起動の後に、次の確認が出ます。
+3段階目は、Web管理画面を動かすために、Copilot CLI のエクステンションを使います。
+
+1. Copilot CLI 1.0.105 では、エクステンションは既定で読み込まれます。読み込まれないときは、チャットで `/extensions` と打ち、モードが「Load & Augment」か「Load Only」かを確かめます。古い版の Copilot CLI では、チャットで `/settings experimental on` と打ちます（Copilot CLI が再起動し、今の会話は消えます）。
+2. 起動（または再起動）の後に、次の確認が出ます。
    - フォルダを信頼するかを聞かれたら、信頼します。
    - 「Extension "plugin:embedded-debug-loop:embedded-debug-loop" wants elevated permissions」と聞かれたら、「1. Yes」を選びます。このフォルダで毎回聞かれたくなければ、「2. Yes, and always allow …」を選びます。同じ確認が続けて2回出ることがあります。
    - 「No」を選んだときは、Copilot CLI を起動し直して、もう一度答えます。
@@ -95,7 +97,7 @@
 
 | 起きること | すること |
 | --- | --- |
-| URL が出ない。統括エージェントが「記録のツールがない」と言う | `/settings experimental on` を打ち、再起動の後の確認で「Yes」を選ぶ |
+| URL が出ない。統括エージェントが「記録のツールがない」と言う | `/extensions` でエクステンションが動いているかを確かめる（古い版では `/settings experimental on`）。起動の後の確認で「Yes」を選ぶ |
 | 画面に「サーバーとつながりません」と出る | Copilot CLI を閉じたか、再起動しました。統括エージェントにもう一度頼み、新しい URL を開く |
 | 画面に「URL が正しくない」と出る | チャットに出た、いちばん新しい URL を開く |
 | ほかの PC のブラウザーで開けない | Web管理画面は、Copilot CLI を動かしている PC からしか開けません |
