@@ -33,11 +33,14 @@
     fail: { label: '不合格', cls: 'ng', mark: '✗' },
     unknown: { label: '判断できない', cls: 'unk', mark: '？' },
   };
-  const WHO_CLASS = { 統括: 'o', 作業: 'w', 検証: 'v' };
+  const WHO_CLASS = { 統括: 'o', 作業: 'w', 検証: 'v', 利用者: 'u' };
   const MSG = {
     offline: 'この画面のサーバーとつながりません。Copilot CLI を閉じたか、起動し直したのかもしれません。'
       + '起動し直したときは、統括エージェントに頼み直し、チャットに出る新しい URL を開いてください。',
     badKey: 'この画面の URL が正しくないか、古くなっています。チャットに出た URL を開き直してください。',
+    notReady: '作業エージェントの準備ができていません。下の「作業エージェントの準備」の「足りないもの」を直してから、「開始」を押してください。'
+      + '開始すると、統括エージェントが準備を確かめ直します。',
+    notReadyShort: '準備ができていません。直してから押してください。',
   };
 
   // ---------- 画面の状態 ----------
@@ -380,8 +383,8 @@
     const permission = w.kind === 'permission';
     const title = permission ? 'チャットで許可を求めています' : 'チャットで質問に答えてください';
     const how = permission
-      ? 'チャットの画面で、許可するかどうかを選んでください。選ぶまで、作業は止まっています。'
-      : 'チャットの画面で答えてください。答えるまで、作業は止まっています。';
+      ? 'チャットの画面で、許可するかどうかを選んでください。選ぶまで、エージェントは先に進みません。'
+      : 'チャットの画面で答えてください。答えるまで、エージェントは先に進みません。';
     fill(box, [
       h('span', { class: 'banner-icon', 'aria-hidden': 'true' }, '！'),
       h('div', { class: 'banner-body' },
@@ -553,18 +556,7 @@
     ui.optionsKey = optKey;
     lockForm(locked);
     drawWorkerDesc();
-
-    // 上の案内
-    const note = $('settings-note');
-    note.className = 'note';
-    if (locked) {
-      note.textContent = '実行中は、設定を変えられません。いま使っている設定を表示しています。';
-      note.classList.add('note-lock');
-    } else if (snap.draft) {
-      note.textContent = '内容を確かめて「開始」を押してください。開始すると、チャットに知らせが届き、統括エージェントが作業を始めます。';
-    } else {
-      note.textContent = 'チャットで統括エージェントに作業を頼むと、頼む作業と合格の条件がここに入ります。ここに直接書いてもかまいません。';
-    }
+    drawNote(locked);
 
     // 設定は作業フォルダごとに保存する
     const folder = $('settings-folder');
@@ -572,6 +564,39 @@
     folder.hidden = !snap.folder;
 
     drawPrepared(locked);
+  }
+
+  // 選んでいる作業エージェントの準備が「できていない」と記録されているか（実行中・別のエージェントを選んだときは見ない）
+  function notReady(locked) {
+    const prep = !locked && ui.snap.draft && ui.snap.draft.prepared;
+    if (!prep || prep.ready === true) return false;
+    const selected = $('f-worker').value;
+    return !(selected && str(prep.worker) && !sameAgent(selected, prep.worker));
+  }
+
+  // 上の案内と、開始のボタンの横の注意
+  function drawNote(locked) {
+    const snap = ui.snap;
+    const warn = notReady(locked);
+    const note = $('settings-note');
+    note.className = 'note';
+    if (locked) {
+      note.textContent = '実行中は、設定を変えられません。いま使っている設定を表示しています。';
+      note.classList.add('note-lock');
+    } else if (warn) {
+      note.textContent = MSG.notReady;
+      note.classList.add('note-warn');
+    } else if (snap.draft) {
+      note.textContent = '内容を確かめて「開始」を押してください。開始すると、チャットに知らせが届き、統括エージェントが作業を始めます。';
+    } else {
+      note.textContent = 'チャットで統括エージェントに作業を頼むと、頼む作業と合格の条件がここに入ります。ここに直接書いてもかまいません。';
+    }
+    // 開始のボタンは押せるままにし、横に短い注意を出す
+    const side = $('start-note');
+    side.textContent = warn ? MSG.notReadyShort : '';
+    side.hidden = !warn;
+    if (warn) $('btn-start').setAttribute('aria-describedby', 'start-note');
+    else $('btn-start').removeAttribute('aria-describedby');
   }
 
   function drawPrepared(locked) {
@@ -693,6 +718,7 @@
     $('f-criteria').addEventListener('input', () => autoGrow($('f-criteria')));
     $('f-worker').addEventListener('change', () => {
       drawWorkerDesc();
+      drawNote(false);
       drawPrepared(false);
     });
     $('btn-save').addEventListener('click', async () => {
@@ -724,7 +750,13 @@
     const last = its[its.length - 1];
     const max = Number(run.maxIterations) || 0;
     const role = run.active && run.active.role;
-    if (run.status === 'finished') return { step: 'done', n: last ? last.n : 0 };
+    if (run.status === 'finished') {
+      // 終わった後は、最後の試行に記録がある段だけを済みにする。止めたときは、記録のない最初の段が止めた所
+      const has = [!!(last && last.plan), !!(last && last.do), !!(last && last.study)];
+      const outcome = run.finish && run.finish.outcome;
+      const cut = outcome === 'stopped' || outcome === 'needs-human' ? has.indexOf(false) : -1;
+      return { step: 'done', n: last ? last.n : 0, has, cut };
+    }
     // 試行の前に作業エージェントが動いているのは、準備の確認
     if (!last) return { step: role === 'worker' ? 'prep' : 'plan', n: 1 };
     if (role === 'worker') return { step: 'do', n: last.n };
@@ -737,7 +769,10 @@
   }
 
   function nowSentence(run) {
-    if (run.status === 'finished') return { text: '終わりました。結論は「結果」の画面にあります。', time: '' };
+    if (run.status === 'finished') {
+      const stopped = run.finish && run.finish.outcome === 'stopped';
+      return { text: `${stopped ? '途中で止めました' : '終わりました'}。結論は「結果」の画面にあります。`, time: '' };
+    }
     if (run.status === 'stopping') return { text: '止めています。統括エージェントが終わりの記録をするのを待っています。', time: '' };
     const c = cycleOf(run);
     const a = run.active;
@@ -779,7 +814,8 @@
     const order = ['plan', 'do', 'study'];
     const at = order.indexOf(c.step);
     const stateOf = (i) => {
-      if (c.step === 'done' || c.step === 'wrap') return 'done';
+      if (c.step === 'done') return c.has[i] ? 'done' : i === c.cut ? 'cut' : 'todo';
+      if (c.step === 'wrap') return 'done';
       if (at < 0) return 'todo';
       return i < at ? 'done' : i === at ? 'now' : 'todo';
     };
@@ -794,9 +830,10 @@
         steps.map(([, name, who, cls], i) => {
           const st = stateOf(i);
           return h('li', { class: `step step-${cls} is-${st}`, 'aria-current': st === 'now' ? 'step' : null },
-            h('span', { class: 'step-no', 'aria-hidden': 'true' }, st === 'done' ? '✓' : String(i + 1)),
+            h('span', { class: 'step-no', 'aria-hidden': 'true' }, st === 'done' ? '✓' : st === 'cut' ? '■' : String(i + 1)),
             h('span', { class: 'step-name' }, name),
             h('span', { class: 'step-who' }, roleWords(who)),
+            st === 'cut' ? h('span', { class: 'step-cut' }, '途中で止めた') : null,
             st === 'now' ? h('span', { class: 'sr-only' }, '（いまここ）') : null);
         })),
       h('p', { class: 'cycle-loop' },
@@ -910,7 +947,10 @@
       if (c.unknown) return { label: `判断できない ${c.unknown}`, cls: 'unk' };
       return { label: 'すべて合格', cls: 'ok' };
     }
-    if (run.status === 'finished') return { label: '途中で終了', cls: 'unk' };
+    if (run.status === 'finished') {
+      const outcome = run.finish && run.finish.outcome;
+      return outcome === 'stopped' ? { label: '途中で止めた', cls: 'warn' } : { label: '途中で終了', cls: 'unk' };
+    }
     if (run.status === 'stopping') return { label: '止めています', cls: 'warn' };
     if (it.do) return { label: '評価しています', cls: 'run' };
     return { label: '作業しています', cls: 'run' };
@@ -922,16 +962,17 @@
     const open = key in ui.open ? ui.open[key] : openByDefault;
     const role = run.active && run.active.role;
     const isLast = arr(run.iterations).slice(-1)[0] === it;
+    const yet = run.status === 'finished' ? '' : 'まだ'; // 終わった後は「まだ」と言わない
 
     const planCol = h('section', { class: 'pds-col pds-o' },
       h('h4', null, h('span', { class: 'pds-no', 'aria-hidden': 'true' }, '1'), '計画',
         h('span', { class: 'pds-who' }, `統括エージェント${it.plan && it.plan.at ? `・${hm(it.plan.at)}` : ''}`)),
-      it.plan && it.plan.text ? longText(it.plan.text, `${key}:plan`) : h('p', { class: 'muted' }, 'まだ計画はありません。'));
+      it.plan && it.plan.text ? longText(it.plan.text, `${key}:plan`) : h('p', { class: 'muted' }, `${yet}計画はありません。`));
 
     let doBody;
     if (it.do) doBody = longText(it.do.report, `${key}:do`);
     else if (isLast && run.status === 'running' && role === 'worker') doBody = h('p', { class: 'muted' }, '作業エージェントが作業をしています…');
-    else doBody = h('p', { class: 'muted' }, 'まだ報告はありません。');
+    else doBody = h('p', { class: 'muted' }, `${yet}報告はありません。`);
     const doCol = h('section', { class: 'pds-col pds-w' },
       h('h4', null, h('span', { class: 'pds-no', 'aria-hidden': 'true' }, '2'), '作業の報告',
         h('span', { class: 'pds-who' }, `作業エージェント${it.do && it.do.at ? `・${hm(it.do.at)}` : ''}`)),
@@ -964,7 +1005,7 @@
     } else if (isLast && run.status === 'running' && role === 'verifier') {
       studyBody = h('p', { class: 'muted' }, '検証エージェントが確かめています…');
     } else {
-      studyBody = h('p', { class: 'muted' }, 'まだ評価はありません。');
+      studyBody = h('p', { class: 'muted' }, `${yet}評価はありません。`);
     }
     const noVerifier = !!(it.study && !it.study.verifierReport && it.study.verifierCalled === false);
     const studyCol = h('section', { class: 'pds-col pds-v' },

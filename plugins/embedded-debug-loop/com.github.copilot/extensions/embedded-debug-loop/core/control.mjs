@@ -3,9 +3,10 @@
 // port：send(prompt)、abort()、getSubagentSettings()、updateSubagentSettings(value)、listAgents()、listModels()、
 //       currentAgent()（チャットで選ばれているエージェント）、workingDirectory()（作業フォルダ）
 
+import { WHO } from './events.mjs';
 import { startNotice } from './messages.mjs';
 import { RUN_ID } from './persist.mjs';
-import { UserError, publicRun, readCriteria, readSettingsInput, sameAgent, text } from './store.mjs';
+import { UserError, publicRun, readCriteria, readSettingsInput, sameAgent, stopPlace, text } from './store.mjs';
 
 const OPTIONS_TTL_MS = 10_000;
 const OPTIONS_WAIT_MS = 1_500;
@@ -176,7 +177,7 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     store.draft = null;
     store.runs.unshift({ id: run.id, startedAt: run.startedAt, outcome: null });
     store.log('start', { request, criteria, settings, prepared: Boolean(prepared) });
-    if (warning) store.activity('その他', warning);
+    if (warning) store.activity(WHO.other, warning);
     store.changed();
     try {
       await port.send(startNotice(run, prepared));
@@ -196,13 +197,15 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     const run = store.activeRun();
     if (!run) throw new UserError(409, '止める実行がありません。');
     if (run.status === 'stopping') return { ok: true };
+    // 止めた所は、押したときの記録で決める（止めた後に届く返事で変わらないように）
+    run._stopPlace = stopPlace(run);
     run.status = 'stopping';
-    store.activity('その他', '利用者が Web管理画面で止めました');
+    store.activity(WHO.user, 'Web管理画面で「止める」を押しました');
     store.changed();
     try {
       await port.abort();
     } catch (error) {
-      store.activity('その他', `止める合図を送れませんでした：${error?.message ?? error}`);
+      store.activity(WHO.other, `止める合図を送れませんでした：${error?.message ?? error}`);
     }
     // 動いているエージェントがなければ、終わりの知らせ（session.idle）は来ないので、ここで終える
     if (!store.isBusy()) store.finishStopped();

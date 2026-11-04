@@ -439,6 +439,28 @@ h3 {
   background: var(--warn-bg);
 }
 
+/* 準備ができていないときの、上の警告 */
+.note-warn {
+  border: 2px solid var(--warn-line);
+  border-left-width: 6px;
+  background: var(--warn-bg);
+  font-weight: 700;
+}
+
+.note-warn::before {
+  content: '！';
+  display: inline-grid;
+  place-items: center;
+  width: 1.5em;
+  height: 1.5em;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--warn-line);
+  color: #1b1f24;
+  font-size: 0.875rem;
+  vertical-align: 0.1em;
+}
+
 .warn-line {
   color: var(--warn);
   background: var(--warn-bg);
@@ -636,6 +658,16 @@ select {
 
 .form-msg-info {
   color: var(--warn);
+}
+
+/* 開始のボタンの横の注意（押すことは止めない） */
+.start-note {
+  color: var(--warn);
+  background: var(--warn-bg);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 700;
 }
 
 /* ---------- ボタン ---------- */
@@ -1064,6 +1096,24 @@ select {
   color: var(--ok);
 }
 
+/* 途中で止めた段 */
+.step.is-cut {
+  border-style: dashed;
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+
+.step.is-cut .step-no {
+  background: var(--warn-line);
+  color: #1b1f24;
+}
+
+.step-cut {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--warn);
+}
+
 .step-o.is-now {
   border-color: var(--o);
   background: var(--o-bg);
@@ -1393,6 +1443,11 @@ select {
 .who-v {
   background: var(--v-bg);
   color: var(--v);
+}
+
+.who-u {
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 
 .act-text {

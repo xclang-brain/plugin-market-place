@@ -23,6 +23,43 @@ export const MSG = Object.freeze({
   unexpected: '記録の処理で思わぬ失敗が起きました。同じことが続くときは、利用者に伝えてください。',
 });
 
+// 止めたときの結論で、途中で変えたファイルの一覧の見出し
+export const CHANGED_FILES_HEAD = '途中で変えたファイル（元に戻していません）：';
+
+/** 途中で変えたファイルの一覧の行。なければ空の配列 */
+export function changedFilesLines(files) {
+  return files.length ? [CHANGED_FILES_HEAD, ...files.map((f) => `- ${f}`)] : [];
+}
+
+const STOP_PLACE = {
+  prep: (n) => `試行 ${n} の前の、準備の確認の途中で止めました。`,
+  plan: (n) => `試行 ${n} の計画の途中で止めました。`,
+  do: (n) => `試行 ${n} の作業の途中で止めました。`,
+  study: (n) => `試行 ${n} の評価の途中で止めました。`,
+  after: (n) => `試行 ${n} の評価の後、終わりの記録の前に止めました。`,
+};
+
+/** 統括エージェントが記録せずに終わったとき（利用者が止めたとき）の結論。place は { n, step }、files は途中で変えたファイル */
+export function stoppedConclusion(place, files = []) {
+  const lines = [MSG.stoppedConclusion];
+  if (place && STOP_PLACE[place.step]) lines.push(STOP_PLACE[place.step](place.n));
+  return [...lines, ...changedFilesLines(files)].join('\n');
+}
+
+/** prepare の結果の文。ready でなければ、すぐに「開始」を押すよう頼ませない */
+export function preparedNext(ready, url) {
+  if (ready) {
+    return `記録しました。利用者に Web管理画面の URL（${url}）を伝え、設定と作業エージェントの準備の内容を確かめて『開始』を押すよう頼んで、手番を終えてください。開始が押されると、このチャットに開始の知らせが届きます。`;
+  }
+  return [
+    '記録しました。作業エージェントの準備ができていません。',
+    '利用者に次のことを伝えて、手番を終えてください。いますぐ『開始』を押すようには頼まないでください。',
+    '- 作業エージェントの返事の「足りないもの」の部分。書き換えずに、そのまま引用します。',
+    '- 直し方。返事に書かれた手順を、省かずにそのまま伝えます。',
+    `- 直してから、Web管理画面（${url}）で『開始』を押すこと。開始すると、統括エージェントが準備を確かめ直すこと。`,
+  ].join('\n');
+}
+
 const or = (value) => (value ? value : DEFAULT_LABEL);
 
 /** 今の設定を、モデルが読める行にする */

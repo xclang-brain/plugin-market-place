@@ -3,7 +3,7 @@
 
 import { execFile } from 'node:child_process';
 
-import { MSG, TOOL, manualIssue, settingsLines } from './messages.mjs';
+import { CHANGED_FILES_HEAD, MSG, TOOL, changedFilesLines, manualIssue, preparedNext, settingsLines } from './messages.mjs';
 import { OUTCOMES, matchCriterion, readCriteria, text } from './store.mjs';
 
 const VERDICTS = ['pass', 'fail', 'unknown'];
@@ -153,16 +153,12 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
         store.changed();
         return prepared.ready
           ? `記録しました。試行 ${run.iteration + 1} の計画を立て、${TOOL.plan} で記録してください。`
-          : '記録しました。準備ができていないことと、足りないものを利用者に伝え、どうするかを ask_user で聞いてください。';
+          : '記録しました。準備ができていません。作業エージェントの返事の「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。';
       }
       if (!store.draft) return fail(`先に ${TOOL.open} を呼んでください。`);
       store.draft.prepared = prepared;
       store.changed();
-      const lines = [
-        `記録しました。利用者に Web管理画面の URL（${store.url}）を伝え、設定と作業エージェントの準備の内容を確かめて『開始』を押すよう頼んで、手番を終えてください。開始が押されると、このチャットに開始の知らせが届きます。`,
-      ];
-      if (!prepared.ready) lines.push('準備ができていないことと、足りないものを利用者に伝えてください。');
-      return lines.join('\n');
+      return preparedNext(prepared.ready, store.url);
     },
 
     async plan(args) {
@@ -229,8 +225,9 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       if (!OUTCOMES.includes(outcome) || !conclusion) {
         return fail(`outcome（${OUTCOMES.join('・')} のどれか）と conclusion（結論）を入れてください。`);
       }
-      // 止めたときの仮の結論は、統括エージェントの結論で置き換える
-      store.finish({ outcome, conclusion, retro: text(args?.retro) });
+      // 止めたときの仮の結論は、統括エージェントの結論で置き換える。途中で変えたファイルの一覧は残す
+      const files = stopped && !conclusion.includes(CHANGED_FILES_HEAD) ? changedFilesLines(store.changedFiles(run)) : [];
+      store.finish({ outcome, conclusion: [conclusion, ...files].join('\n'), retro: text(args?.retro) });
       return `記録しました。結果の画面：${store.url}#result\n利用者に結論を短く伝えてください。`;
     },
 

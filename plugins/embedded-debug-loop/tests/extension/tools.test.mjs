@@ -65,7 +65,22 @@ test('prepare：返事を下書きに残し、開始を押してもらうよう�
   assert.equal(p.report, '準備：できている\n設定の要約');
   assert.ok(p.at);
   const ng = await fake.call('prepare', { worker: WORKER, ready: false, report: '準備：できていない\n足りないもの' });
-  assert.match(ng.text, /準備ができていないことと、足りないものを利用者に伝えてください。/);
+  assert.equal(app.store.snapshot().draft.prepared.ready, false);
+  assert.match(ng.text, /作業エージェントの準備ができていません。/);
+  assert.match(ng.text, /「足りないもの」の部分。書き換えずに、そのまま引用します。/);
+  assert.match(ng.text, /直し方。返事に書かれた手順を、省かずに/);
+  assert.match(ng.text, /直してから、Web管理画面（http:\/\/127\.0\.0\.1:\d+\/\?k=[^）]+）で『開始』を押すこと。開始すると、統括エージェントが準備を確かめ直すこと。/);
+  assert.match(ng.text, /いますぐ『開始』を押すようには頼まないでください。/);
+  assert.ok(!ng.text.includes('『開始』を押すよう頼んで'), '準備ができていないのに、すぐ開始を押すよう頼ませない');
+});
+
+test('prepare（実行中）：準備ができていなければ、足りないものをそのまま引用して伝え、ask_user で聞くよう伝える', async (t) => {
+  const { fake } = await startRun(t, { prepare: false });
+  const ok = await fake.call('prepare', { worker: WORKER, ready: true, report: '準備：できている' });
+  assert.match(ok.text, /試行 1 の計画を立て/);
+  const ng = await fake.call('prepare', { worker: WORKER, ready: false, report: '準備：できていない' });
+  assert.match(ng.text, /「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。/);
+  assert.ok(!ng.text.includes('開始'));
 });
 
 test('開始：チャットに開始の知らせを送る（準備ずみなら、確認の頼みは付けない）', async (t) => {

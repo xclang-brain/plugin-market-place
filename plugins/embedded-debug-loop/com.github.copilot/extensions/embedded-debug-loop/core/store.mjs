@@ -3,7 +3,7 @@
 
 import path from 'node:path';
 
-import { MSG } from './messages.mjs';
+import { stoppedConclusion } from './messages.mjs';
 
 export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 export const OUTCOMES = Object.freeze(['success', 'failure', 'stopped', 'needs-human']);
@@ -59,6 +59,21 @@ export function matchCriterion(raw, criteria = []) {
   }
   const i = criteria.findIndex((c) => stripCriterionNo(c) === value);
   return { no: i >= 0 ? i + 1 : null, text: value };
+}
+
+/**
+ * 止めたときに、どこにいたか。{ n: 試行の番号, step: 'prep' | 'plan' | 'do' | 'study' | 'after' }
+ * 記録（計画・作業の報告・評価）と、いま動いているエージェントの役だけで決める。
+ */
+export function stopPlace(run) {
+  const role = run.active?.role;
+  const it = run.iteration > 0 ? run.iterations[run.iteration - 1] : null;
+  if (!it) return { n: 1, step: role === 'worker' ? 'prep' : 'plan' };
+  if (!it.study) return { n: it.n, step: it.do || role === 'verifier' ? 'study' : 'do' };
+  const verdicts = it.study.verdicts ?? [];
+  const allPass = verdicts.length > 0 && verdicts.every((v) => v.result === 'pass');
+  if (!allPass && it.n < run.maxIterations) return { n: it.n + 1, step: 'plan' };
+  return { n: it.n, step: 'after' };
 }
 
 const effortOf = (value) => {
@@ -244,8 +259,26 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       store.changed();
       saveRunNow();
     },
+    /** 止めている実行を、統括エージェントの記録なしで終える。結論に、止めた所と途中で変えたファイルを書く */
     finishStopped() {
-      if (store.run?.status === 'stopping') store.finish({ outcome: 'stopped', conclusion: MSG.stoppedConclusion, auto: true });
+      const run = store.run;
+      if (run?.status !== 'stopping') return;
+      const place = run._stopPlace ?? stopPlace(run);
+      store.finish({ outcome: 'stopped', conclusion: stoppedConclusion(place, store.changedFiles(run)), auto: true });
+    },
+    /**
+     * ファイルを直すツールの呼び出しで、変えた（変えようとした）ファイルを覚える。
+     * state：'pending'（始まった）・'ok'（できた）・'failed'（失敗した）。一度できたファイルは、変えたままとみなす。
+     */
+    noteFiles(paths, state) {
+      const run = store.activeRun();
+      if (!run || paths.length === 0) return;
+      run._files ??= new Map();
+      for (const p of paths) if (run._files.get(p) !== 'ok') run._files.set(p, state);
+    },
+    /** その実行で変えたファイル（失敗したものは除く。終わりの知らせが来ていないものは、変えたかもしれないので入れる） */
+    changedFiles(run) {
+      return [...(run?._files ?? new Map())].filter(([, state]) => state !== 'failed').map(([p]) => p);
     },
     snapshot() {
       return {

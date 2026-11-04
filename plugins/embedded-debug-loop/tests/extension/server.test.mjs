@@ -159,7 +159,8 @@ test('開始と止める：止めると Copilot CLI に止める合図を送り�
   assert.equal(fake.aborts, 1);
   let run = (await http(api('/api/state'))).data.run;
   assert.equal(run.status, 'stopping');
-  assert.match(run.activity[0].text, /利用者が Web管理画面で止めました/);
+  assert.equal(run.activity[0].who, '利用者');
+  assert.equal(run.activity[0].text, 'Web管理画面で「止める」を押しました');
   const refused = await fake.call('plan', { iteration: 1, plan: 'p' });
   assert.equal(refused.ok, false);
   assert.match(refused.text, /^利用者が Web管理画面で止めました。/);
@@ -168,7 +169,7 @@ test('開始と止める：止めると Copilot CLI に止める合図を送り�
   run = (await http(api('/api/state'))).data.run;
   assert.equal(run.status, 'finished');
   assert.equal(run.finish.outcome, 'stopped');
-  assert.equal(run.finish.conclusion, '利用者が Web管理画面で止めました。');
+  assert.equal(run.finish.conclusion, '利用者が Web管理画面で止めました。\n試行 1 の前の、準備の確認の途中で止めました。');
   assert.equal((await http(api('/api/stop'), { method: 'POST', body: {} })).status, 409);
   assert.equal(app.store.snapshot().runs[0].outcome, 'stopped');
 });

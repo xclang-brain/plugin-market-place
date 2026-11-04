@@ -8,6 +8,9 @@ PC 側の pty（スクリプトが開くシリアルポート）と、機器側�
 
 中継を止めると「ケーブルが抜けた（何も届かない）」状態になり、
 PC 側の親を閉じると「USB が抜けた（読むとエラー）」状態になる。
+
+シェルのまねは、直前のコマンドの終了コード（$?）を覚えていて、
+echo の引数の $? を、その数に置き換える。
 """
 
 import os
@@ -21,8 +24,12 @@ PLAIN_PROMPT = "root@sensor-board:~# "
 ANSI_PROMPT = "\x1b[?2004h\x1b[01;32mroot@sensor-board\x1b[00m:\x1b[01;34m~\x1b[00m# "
 KERNEL_LINE = "[  123.456789] usb 1-1: new high-speed USB device number 3 using ehci-platform"
 
+# コマンドへの返事。値は出力の文字か、(出力の文字, 終了コード)。文字だけなら終了コードは 0。
 DEFAULT_RESPONSES = {
     "run-app /opt/x": "[DBG] AVG=3",
+    "run-app /opt/nosum/sensor_app": ("run-app: /opt/nosum/sensor_app: checksum file not found", 1),
+    "run-app /opt/denied/sensor_app": ("[DBG] start\nrun-app: /opt/denied/sensor_app: Permission denied", 126),
+    "false": ("", 1),
     "run-app /opt/sensor/sensor_app": "[DBG] start\n[DBG] AVG=3\nsensor_app: done",
     "uname -a": "Linux sensor-board 5.15.71-yocto-standard #1 SMP PREEMPT armv7l GNU/Linux",
     "echo hi": "hi",
@@ -124,7 +131,8 @@ class FakeDevice(object):
 
     def __init__(self, relay, login=True, user="root", password="root", ansi=False,
                  garbage=False, ticker=None, wrap=0, wrap_repeat=False, responses=None,
-                 ignore_interrupt=(), left_at_password=False):
+                 ignore_interrupt=(), left_at_password=False, status_prompt=False, dollar_q=True,
+                 prompt_text=None):
         self.relay = relay
         self.fd = relay.dev_slave
         self.need_login = login
@@ -139,6 +147,10 @@ class FakeDevice(object):
         if responses:
             self.responses.update(responses)
         self.ignore_interrupt = set(ignore_interrupt)
+        self.status_prompt = status_prompt  # プロンプトの頭に、直前の終了コードを出す（例：[1] root@…# ）
+        self.dollar_q = dollar_q            # False なら $? が使えないシェルのまね
+        self.status = 0                     # 直前のコマンドの終了コード（$?）
+        self.prompt_text = prompt_text      # プロンプトを差し替える（複数の行のプロンプトなど）
         self.state = "login" if login else "shell"
         self.pending_user = ""
         self.left_at_password = left_at_password
@@ -174,7 +186,10 @@ class FakeDevice(object):
 
     def prompt(self):
         self.col = 0
-        self.out(ANSI_PROMPT if self.ansi else PLAIN_PROMPT)
+        text = self.prompt_text or (ANSI_PROMPT if self.ansi else PLAIN_PROMPT)
+        if self.status_prompt:
+            text = "[%d] %s" % (self.status, text)
+        self.out(text)
 
     def login_prompt(self):
         self.out("\n%s login: " % HOST)
@@ -271,12 +286,14 @@ class FakeDevice(object):
                     self.out("^C")
                     return
                 self.running = None
+                self.status = 130
                 self.out("^C\n")
                 self.prompt()
             return
         if ch == "\x03":
             self.interrupts += 1
             self.line = ""
+            self.status = 130
             self.out("^C\n")
             self.prompt()
             return
@@ -329,25 +346,49 @@ class FakeDevice(object):
             self.relay.pull_usb()
             return
         if cmd == "slow":
+            self.status = 0
             self.out("first\n")
             self.scheduled.append((time.monotonic() + 0.6, "second\n", True))
             return
         if cmd == "noisy":
             # プロンプトのすぐ後ろに、カーネルのメッセージが出る
+            self.status = 0
             self.out("[DBG] AVG=3\n")
             self.prompt()
             self.scheduled.append((time.monotonic() + 0.05, KERNEL_LINE + "\n", False))
             return
         if cmd == "tricky":
             # 出力の途中に「# 」が来て、少し間が空いてから続きが来る
+            self.status = 0
             self.out("value # ")
             self.scheduled.append((time.monotonic() + 0.05, "done\n", True))
             return
         if cmd in self.responses:
             text = self.responses[cmd]
+            status = 0
+            if isinstance(text, tuple):
+                text, status = text
             if text:
                 self.out(text + "\n")
+            self.status = status
+            self.prompt()
+            return
+        if cmd == "echo" or cmd.startswith("echo "):
+            self._echo(cmd[4:].strip())
             self.prompt()
             return
         self.out("-sh: %s: not found\n" % cmd.split()[0])
+        self.status = 127
         self.prompt()
+
+    def _echo(self, args):
+        """echo のまね。$? を直前の終了コードに置き換え、引用符を外す。"""
+        if "$?" in args and not self.dollar_q:
+            # fish のように $? が使えないシェル
+            self.out("fish: $? is not the exit status. In fish, please use $status.\n")
+            self.out("echo %s\n" % args)
+            self.status = 1
+            return
+        text = args.replace("$?", str(self.status)).replace('"', "").replace("'", "")
+        self.out(text + "\n")
+        self.status = 0

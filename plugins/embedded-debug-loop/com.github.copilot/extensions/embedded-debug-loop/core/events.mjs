@@ -7,7 +7,7 @@
 import { TOOL_PREFIX } from './messages.mjs';
 import { sameAgent, text } from './store.mjs';
 
-export const WHO = Object.freeze({ orchestrator: '統括', worker: '作業', verifier: '検証', other: 'その他' });
+export const WHO = Object.freeze({ orchestrator: '統括', worker: '作業', verifier: '検証', other: 'その他', user: '利用者' });
 const ROLE_NAME = { orchestrator: '統括エージェント', worker: '作業エージェント', verifier: '検証エージェント' };
 const RECORD_NAME = { open: 'Web管理画面を開く', prepare: '準備', plan: '計画', study: '評価', finish: '終わり', issue: 'Issue' };
 // くわしい記録に出さない、細かいツール
@@ -27,8 +27,22 @@ const question = (value) => {
 };
 const argsOf = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
+// パッチの文の中の、ファイルの行（*** Add File: など）
+const PATCH_FILE = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to):[ \t]*(.+?)[ \t]*$/gm;
+
+/** ファイルを直すツール（edit・create・apply_patch）が変えるファイルのパス。ほかのツールなら空の配列 */
+export function editedPaths(name, rawArgs) {
+  const a = argsOf(rawArgs);
+  if (name !== 'edit' && name !== 'create' && name !== 'apply_patch') return [];
+  if (text(a.path)) return [text(a.path)];
+  if (name !== 'apply_patch') return [];
+  const patch = typeof rawArgs === 'string' ? rawArgs : typeof a.input === 'string' ? a.input : typeof a.patch === 'string' ? a.patch : '';
+  return [...new Set([...patch.matchAll(PATCH_FILE)].map((m) => m[1]))];
+}
+
 export function createEventSink({ store }) {
   const calls = new Map(); // ツールの呼び出しの番号 → くわしい記録の行（失敗の印を付けるため）
+  const edits = new Map(); // ファイルを直すツールの呼び出しの番号 → 変えるファイルのパス
 
   function roleOf(agentType) {
     const s = store.activeRun() ?? store.settings;
@@ -60,8 +74,10 @@ export function createEventSink({ store }) {
       case 'edit':
       case 'create':
         return `ファイルを直す：${oneLine(a.path)}`;
-      case 'apply_patch':
-        return `ファイルを直す：${typeof a.path === 'string' ? oneLine(a.path) : '（パッチ）'}`;
+      case 'apply_patch': {
+        const paths = editedPaths(name, rawArgs);
+        return `ファイルを直す：${paths.length ? oneLine(paths.join('、')) : '（パッチ）'}`;
+      }
       case 'grep':
       case 'glob':
       case 'rg':
@@ -136,6 +152,14 @@ export function createEventSink({ store }) {
           break;
         case 'tool.execution_start': {
           if (!event.agentId) store.live.mainSince ??= at;
+          const paths = run ? editedPaths(text(data.toolName), data.arguments) : [];
+          if (paths.length) {
+            store.noteFiles(paths, 'pending');
+            if (data.toolCallId) {
+              edits.set(data.toolCallId, paths);
+              if (edits.size > MAX_CALLS) edits.delete(edits.keys().next().value);
+            }
+          }
           const line = run ? describeTool(text(data.toolName), data.arguments) : null;
           if (line) {
             const entry = store.activity(WHO[roleOfEvent(event)], line);
@@ -147,6 +171,9 @@ export function createEventSink({ store }) {
           break;
         }
         case 'tool.execution_complete': {
+          const edited = edits.get(data.toolCallId);
+          edits.delete(data.toolCallId);
+          if (edited) store.noteFiles(edited, data.success === false ? 'failed' : 'ok');
           const entry = calls.get(data.toolCallId);
           calls.delete(data.toolCallId);
           if (entry && data.success === false) {
@@ -201,6 +228,11 @@ export function createEventSink({ store }) {
       if (!run || !response) return undefined;
       const role = roleOf(text(input.agentType) || input.agentName);
       const it = store.current();
+      // 止めた後に届いた返事は、途中で切れたもの。試行の記録には入れず、振り返りの記録にだけ残す
+      if (run.status === 'stopping' && (role === 'worker' || role === 'verifier')) {
+        store.log(`${role}.reply`, { iteration: it?.n ?? 0, report: response, afterStop: true });
+        return undefined;
+      }
       if (role === 'worker' && it && !it.do) {
         it.do = { report: response, at: store.iso() };
         store.log('worker.reply', { iteration: it.n, report: response });

@@ -47,8 +47,20 @@ QUIET = 0.15           # プロンプトが出た後、続きが来ないこと�
 DRAIN_QUIET = 0.2      # コマンドの前に、残りの出力を読み捨てる静かな時間
 DRAIN_MAX = 1.0
 WRITE_WAIT = 5.0
+RC_WAIT = 5.0          # 終了コードを調べるコマンドの返事を待つ秒数
+PROMPT_HEAD_MAX = 3    # 複数の行のプロンプトとして扱う、上の行の数の上限
 OUTPUT_LINES = 60
+LAST_LINE_MAX = 200    # 結果の文に引く「最後の行」の長さの上限
 MASK = "＊＊＊"
+
+# 各コマンドの後に送る、終了コードを調べるコマンド。
+# 返事は「__EDL_RC=数」の1行になる。エコーされた行は「__EDL_RC=$?」のままなので、
+# 数が付いているかで、返事とエコーを見分けられる。
+# 先頭の空白は、bash の履歴に残さないため（HISTCONTROL が ignorespace のとき）。
+RC_TAG = "__EDL_RC="
+RC_COMMAND = " echo " + RC_TAG + "$?"
+RC_OUT_RE = re.compile(re.escape(RC_TAG) + r"([0-9]+)")
+RC_ECHO_DONE_RE = re.compile(re.escape(RC_TAG) + r"\$\?[^\n]*\n")
 GITIGNORE_TEXT = "*\n"  # 設定（パスワード）やログが、誤って git に入らないようにする
 
 LOGIN_RE = re.compile(r"login:\s*$")
@@ -641,6 +653,50 @@ def last_lines(text, n=OUTPUT_LINES):
     return "\n".join(lines[-n:]), total, total > n
 
 
+def drop_marker_lines(lines):
+    """終了コードを調べるコマンドのエコーと返事の行を除く。
+
+    ふつうは別に読むので、コマンドの出力には入らない。
+    機器が遅く、返事が次のコマンドの出力に紛れ込んだときのため。
+    """
+    return [line for line in lines if RC_TAG not in line]
+
+
+def find_exit_code(text):
+    """終了コードを調べるコマンドの返事から、数を読む。読めなければ None。
+
+    返事の行は、どこにあってもよい（プロンプトや機器のメッセージが前後に付いても読める）。
+    """
+    found = RC_OUT_RE.findall(text)
+    return int(found[-1]) if found else None
+
+
+def last_output_line(output):
+    """出力の最後の行（空の行は除く）。長すぎる行は切る。"""
+    for line in reversed(output.split("\n")):
+        line = line.strip()
+        if line:
+            if len(line) > LAST_LINE_MAX:
+                line = line[:LAST_LINE_MAX] + "…"
+            return line
+    return ""
+
+
+def exit_code_notes(commands):
+    """終了コードが 0 でないコマンドを、人に伝える文にする。"""
+    notes = []
+    for c in commands:
+        code = c.get("exit_code")
+        if code is None or code == 0:
+            continue
+        last = last_output_line(c.get("output") or "")
+        if last:
+            notes.append("コマンド「%s」は終了コード %d で終わりました（最後の行：%s）。" % (c["command"], code, last))
+        else:
+            notes.append("コマンド「%s」は終了コード %d で終わりました（出力はありませんでした）。" % (c["command"], code))
+    return "".join(notes)
+
+
 # ---------------------------------------------------------------------------
 # シリアルポート
 # ---------------------------------------------------------------------------
@@ -791,6 +847,7 @@ class Console(object):
         self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.total = 0
         self.known_prompt = None  # 機器のプロンプトの文字（色などを除いたもの）
+        self.prompt_head = []     # プロンプトが複数の行のとき、最後の行より上の行
         self.mark()
 
     def mark(self):
@@ -1105,7 +1162,7 @@ def _shell_back(con):
 
 
 def run_command(con, s, command):
-    """コマンドを1つ実行し、(結果, プロンプトが戻ったか) を返す。"""
+    """コマンドを1つ実行し、(結果, プロンプトが戻ったか, 出力の行) を返す。"""
     con.drain()
     con.mark()
     say("コマンドを実行します：%s" % command)
@@ -1128,16 +1185,94 @@ def run_command(con, s, command):
         lines = lines[:-1]  # 最後の行はプロンプト
     if back:
         _remember_prompt(con)
-    lines = remove_echo(lines, command)
-    output, total, truncated = last_lines("\n".join(lines))
+    lines = remove_echo(drop_marker_lines(lines), command)
     result = {
         "command": command,
-        "output": output,
+        "output": "",
         "timed_out": timed_out,
-        "output_lines": total,
-        "truncated": truncated,
+        "exit_code": None,  # 終わった後に read_exit_code で読む
+        "output_lines": 0,
+        "truncated": False,
     }
-    return result, back
+    set_output(result, lines)
+    return result, back, lines
+
+
+def set_output(result, lines):
+    output, total, truncated = last_lines("\n".join(lines))
+    result["output"] = output
+    result["output_lines"] = total
+    result["truncated"] = truncated
+
+
+def read_exit_code(con, s):
+    """終了コードを調べるコマンドを送り、直前のコマンドの終了コードを返す。
+
+    読めなければ None。プロンプトの形に頼らず、返事の行「__EDL_RC=数」を探す。
+    """
+    con.mark()
+    con.send(RC_COMMAND + "\r")
+    patterns = [("prompt", s.prompt_re)]
+    waits = dict(need_newline=True, nudge=(0.5, 1.0, 3),
+                 nudge_if=con.shell_is_back, evidence=lambda: _shell_back(con))
+    deadline = time.monotonic() + RC_WAIT
+    while True:
+        remaining = deadline - time.monotonic()
+        hit = con.wait_for(patterns, remaining, **waits) if remaining > 0 else None
+        text = clean(con.segment())
+        code = find_exit_code(text)
+        if hit is None:
+            # プロンプトが戻らない。数が届いていれば、それを使う
+            break
+        if code is not None:
+            _remember_prompt(con)
+            _remember_prompt_head(con, text)
+            break
+        if RC_ECHO_DONE_RE.search(text):
+            # コマンドは受け付けられたが、数が出ない（$? が使えないシェルなど）
+            break
+        # 前のプロンプトが遅れて届いただけ。返事を待ち続ける
+    if code is None:
+        say("終了コードは読み取れませんでした。")
+    else:
+        say("終了コード：%d" % code)
+    return code
+
+
+def _remember_prompt_head(con, text):
+    """終了コードの返事の後ろに出たプロンプトから、最後の行より上の行を覚える。
+
+    複数の行のプロンプトや、端末の幅で折り返した長いプロンプトのとき、
+    上の行がコマンドの出力の終わりに混ざるので、それを除くために使う。
+    Enter を足したときや、プロンプトを推し量ったときは、まちがえやすいので覚えない。
+    """
+    if con.by_evidence or con.nudged:
+        return
+    lines = text.split("\n")
+    last = None
+    for i, line in enumerate(lines):
+        if RC_OUT_RE.search(line):
+            last = i
+    if last is None:
+        return
+    head = lines[last + 1:-1]
+    if len(head) <= PROMPT_HEAD_MAX:
+        con.prompt_head = head
+
+
+def _prompt_shape(line):
+    """プロンプトの行を比べるための形。数の違い（終了コードや時刻を出すプロンプト）は見ない。"""
+    return re.sub(r"[0-9]+", "0", line.rstrip())
+
+
+def trim_prompt_head(lines, head):
+    """出力の終わりが、プロンプトの上の行と同じ形なら、それを除く。"""
+    if not head or not any(h.strip() for h in head):
+        return lines
+    n = len(head)
+    if len(lines) >= n and [_prompt_shape(x) for x in lines[-n:]] == [_prompt_shape(h) for h in head]:
+        return lines[:-n]
+    return lines
 
 
 def listen(con, seconds):
@@ -1150,9 +1285,9 @@ def listen(con, seconds):
 
 def partial_command(con, command):
     """途中で切れたコマンドの、そこまでの出力。"""
-    lines = remove_echo(clean(con.segment()).split("\n"), command)
+    lines = remove_echo(drop_marker_lines(clean(con.segment()).split("\n")), command)
     output, total, truncated = last_lines("\n".join(lines))
-    return {"command": command, "output": output, "timed_out": False,
+    return {"command": command, "output": output, "timed_out": False, "exit_code": None,
             "output_lines": total, "truncated": truncated, "interrupted": True}
 
 
@@ -1376,6 +1511,8 @@ def cmd_run(args):
     log_note(log, "# シリアルポート：%s（速さ %d）\n" % (s.port, s.baud))
     for c in commands:
         log_note(log, "# 実行するコマンド：%s\n" % c)
+    if commands:
+        log_note(log, "# 各コマンドの後に「%s」を送り、終了コードを調べる\n" % RC_COMMAND.strip())
     if listen_only:
         log_note(log, "# コマンドは実行せず、%s 秒記録する\n" % _num(listen_seconds))
     log_note(log, "# ---- ここから下は、機器から届いた文字そのまま ----\n")
@@ -1410,7 +1547,7 @@ def cmd_run(args):
                 say("シェルのプロンプトを確かめました（ログインは不要でした）。")
             for i, c in enumerate(commands):
                 progress = {"phase": "command", "command": c, "rest": commands[i + 1:]}
-                r, back = run_command(con, s, c)
+                r, back, lines = run_command(con, s, c)
                 result["commands"].append(r)
                 if r["timed_out"] and timed_out_cmd is None:
                     timed_out_cmd = c
@@ -1418,6 +1555,13 @@ def cmd_run(args):
                     stuck = True
                     result["not_run"] = commands[i + 1:]
                     break
+                if not r["timed_out"]:
+                    # Ctrl-C で止めたときは、終了コードを調べない（null のまま）
+                    progress = {"phase": "exit_code", "command": c, "rest": commands[i + 1:]}
+                    r["exit_code"] = read_exit_code(con, s)
+                trimmed = trim_prompt_head(lines, con.prompt_head)
+                if trimmed is not lines:
+                    set_output(r, trimmed)
         progress = {}
         if listen_seconds and not stuck:
             progress = {"phase": "listen"}
@@ -1463,6 +1607,8 @@ def cmd_run(args):
                 msg += "そのあと %s 秒、出力を記録しました。" % _num(listen_seconds)
             result["message"] = msg
             code = 0
+        # 機器のコマンドが 0 以外の終了コードで終わったとき（取ること自体はできているので ok は変えない）
+        result["message"] += exit_code_notes(result["commands"])
         if result.get("logged_out") is False:
             result["message"] += "exit を送りましたが、ログインの求めに戻ったかは確かめられませんでした。"
         result["ok"] = code == 0
@@ -1479,8 +1625,9 @@ def cmd_run(args):
             "シリアルポート %s とのやりとりが、途中で切れました。"
             "USB ケーブルが抜けていないかを確かめてください。" % s.port
         )
-        if con is not None and progress.get("phase") == "command":
-            result["commands"].append(partial_command(con, progress["command"]))
+        if con is not None and progress.get("phase") in ("command", "exit_code"):
+            if progress["phase"] == "command":
+                result["commands"].append(partial_command(con, progress["command"]))
             if progress["rest"]:
                 result["not_run"] = progress["rest"]
                 result["message"] += "残りの %d 個のコマンドは実行していません。" % len(progress["rest"])
@@ -1488,6 +1635,7 @@ def cmd_run(args):
             result["listen"] = partial_listen(con, listen_seconds)
         if result["commands"] or result["listen"]:
             result["message"] += "切れるまでの出力は記録しました。"
+        result["message"] += exit_code_notes(result["commands"])
         code = 1
     except Exception as e:  # 思わぬエラー：くわしくはログへ
         log_note(log, "\n# 思わぬエラー：\n" + traceback.format_exc())

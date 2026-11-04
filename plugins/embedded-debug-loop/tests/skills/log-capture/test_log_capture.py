@@ -33,6 +33,10 @@ SCRIPT = os.path.join(SKILL_DIR, "scripts", "capture.py")
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
 
+# 終了コードを調べるために、各コマンドの後に送るコマンド（機器のまねは前後の空白を除いて覚える）
+MARKER = "echo __EDL_RC=$?"
+MARKER_TAG = "__EDL_RC"
+
 TEMPLATE_KEYS = [
     "port", "baud", "login_user", "login_password", "login_password_env", "prompt",
     "commands", "command_timeout_seconds", "listen_seconds", "logout",
@@ -135,9 +139,11 @@ class RunLoginAndCommands(CaptureTestCase):
         self.assertEqual(c["command"], "run-app /opt/x")
         self.assertEqual(c["output"], "[DBG] AVG=3")
         self.assertFalse(c["timed_out"])
+        self.assertEqual(c["exit_code"], 0)
         self.assertIn("1 個のコマンドを実行し", data["message"])
+        self.assertNotIn("終了コード", data["message"])
         self.assertEqual(self.device.login_attempts, [("root", True)])
-        self.assertEqual(self.device.executed, ["run-app /opt/x", "exit"])
+        self.assertEqual(self.device.executed, ["run-app /opt/x", MARKER, "exit"])
         self.assertEqual(self.device.state, "login")  # ログアウトして、ログインの求めに戻った
         log = self.read_log(data)
         self.assertIn("sensor-board login:", log)
@@ -227,6 +233,7 @@ class RunLoginAndCommands(CaptureTestCase):
         outs = [c["output"] for c in data["commands"]]
         self.assertEqual(outs, ["[DBG] AVG=3", "hi", "[DBG] AVG=3"])
         self.assertFalse(any(c["timed_out"] for c in data["commands"]))
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [0, 0, 0])
         self.assertTrue(data["logged_out"])
         self.assertLess(self.elapsed, 15)
 
@@ -242,6 +249,7 @@ class RunLoginAndCommands(CaptureTestCase):
             self.assertFalse(c["timed_out"], c)
             got = [line for line in c["output"].split("\n") if line != KERNEL_LINE]
             self.assertEqual(got, want, c)
+            self.assertEqual(c["exit_code"], 0, c)
         self.assertEqual(self.device.state, "login")
 
     def test_long_output_keeps_last_60_lines(self):
@@ -266,7 +274,7 @@ class RunLoginAndCommands(CaptureTestCase):
         self.assertEqual([c["command"] for c in data["commands"]], ["echo hi", "uname -a"])
         self.assertEqual(data["commands"][0]["output"], "hi")
         self.assertIn("armv7l", data["commands"][1]["output"])
-        self.assertEqual(self.device.executed, ["echo hi", "uname -a", "exit"])
+        self.assertEqual(self.device.executed, ["echo hi", MARKER, "uname -a", MARKER, "exit"])
         # 設定ファイルは書き換えない
         with open(self.config_path, encoding="utf-8") as f:
             self.assertIn('commands: ["run-app /opt/x"]', f.read())
@@ -349,6 +357,156 @@ class RunLoginAndCommands(CaptureTestCase):
 
 
 # ---------------------------------------------------------------------------
+# run：機器のコマンドの終了コード
+# ---------------------------------------------------------------------------
+
+class RunExitCodes(CaptureTestCase):
+
+    def assert_no_marker(self, data):
+        for c in data["commands"]:
+            self.assertNotIn(MARKER_TAG, c["output"], c)
+        self.assertNotIn(MARKER_TAG, data["message"])
+
+    def test_success_is_zero(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="root",
+                          commands=["run-app /opt/sensor/sensor_app", "true"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [0, 0])
+        self.assertEqual(data["commands"][0]["output"], "[DBG] start\n[DBG] AVG=3\nsensor_app: done")
+        self.assertEqual(data["commands"][1]["output"], "")
+        self.assertNotIn("終了コード", data["message"])
+        self.assert_no_marker(data)
+        # 各コマンドの後に、終了コードを調べるコマンドを1つずつ送った
+        self.assertEqual(self.device.executed,
+                         ["run-app /opt/sensor/sensor_app", MARKER, "true", MARKER, "exit"])
+
+    def test_failure_is_reported_in_message(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="root", commands=["run-app /opt/nosum/sensor_app"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)  # 取ること自体はできた
+        self.assertTrue(data["ok"])
+        c = data["commands"][0]
+        self.assertEqual(c["exit_code"], 1)
+        self.assertFalse(c["timed_out"])
+        self.assertEqual(c["output"], "run-app: /opt/nosum/sensor_app: checksum file not found")
+        self.assertIn(
+            "コマンド「run-app /opt/nosum/sensor_app」は終了コード 1 で終わりました"
+            "（最後の行：run-app: /opt/nosum/sensor_app: checksum file not found）。",
+            data["message"])
+        self.assertTrue(data["message"].startswith("シリアルポート %s で 1 個のコマンドを実行し" % port))
+        self.assert_no_marker(data)
+
+    def test_each_failed_command_is_named(self):
+        port = self.start_device(login=False)
+        self.write_config(port=port, commands=[
+            "false", "echo hi", "nosuchcmd -x", "run-app /opt/denied/sensor_app"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [1, 0, 127, 126])
+        msg = data["message"]
+        self.assertIn("コマンド「false」は終了コード 1 で終わりました（出力はありませんでした）。", msg)
+        self.assertIn("コマンド「nosuchcmd -x」は終了コード 127 で終わりました（最後の行：-sh: nosuchcmd: not found）。", msg)
+        self.assertIn("コマンド「run-app /opt/denied/sensor_app」は終了コード 126 で終わりました"
+                      "（最後の行：run-app: /opt/denied/sensor_app: Permission denied）。", msg)
+        self.assertNotIn("「echo hi」", msg)
+        self.assertEqual(data["commands"][3]["output"],
+                         "[DBG] start\nrun-app: /opt/denied/sensor_app: Permission denied")
+        self.assert_no_marker(data)
+
+    def test_timeout_gives_null(self):
+        port = self.start_device(login=False)
+        self.write_config(port=port, command_timeout_seconds=1, commands=["run-app /opt/hang", "false"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        first, second = data["commands"]
+        self.assertTrue(first["timed_out"])
+        self.assertIsNone(first["exit_code"])
+        self.assertEqual(second["exit_code"], 1)  # Ctrl-C の後のコマンドは、ふつうに読む
+        self.assertIn("Ctrl-C で止めました", data["message"])
+        self.assertIn("コマンド「false」は終了コード 1 で終わりました", data["message"])
+        self.assertNotIn("「run-app /opt/hang」は終了コード", data["message"])
+        # 止めたコマンドの後には、終了コードを調べるコマンドを送らない
+        self.assertEqual(self.device.executed, ["run-app /opt/hang", "false", MARKER])
+        self.assert_no_marker(data)
+
+    def test_marker_lines_are_removed_from_output(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="root", commands=[
+            "true", "echo hi", "cat /var/log/messages", "false", "seq 100"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        outs = [c["output"] for c in data["commands"]]
+        self.assertEqual(outs[:4], ["", "hi", "line one\nline two\nline three", ""])
+        self.assertEqual(data["commands"][4]["output_lines"], 100)
+        self.assertEqual(data["commands"][4]["output"].split("\n")[-1], "100")
+        self.assert_no_marker(data)
+        self.assertNotIn(MARKER_TAG, json.dumps(data["commands"], ensure_ascii=False))
+        # ログには、届いた文字がそのまま残る
+        log = self.read_log(data)
+        self.assertIn(MARKER, log)
+        self.assertIn("__EDL_RC=1", log)
+
+    def test_ansi_prompt_that_shows_the_status(self):
+        # 直前の終了コードをプロンプトに出すシェル（色つき）。コマンドが失敗すると、プロンプトの形が変わる
+        port = self.start_device(login=True, ansi=True, status_prompt=True)
+        self.write_config(port=port, login_password="root",
+                          commands=["run-app /opt/nosum/sensor_app", "color", "nosuchcmd", "echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [1, 0, 127, 0])
+        self.assertEqual([c["output"] for c in data["commands"]], [
+            "run-app: /opt/nosum/sensor_app: checksum file not found",
+            "[DBG] AVG=3\nOK",
+            "-sh: nosuchcmd: not found",
+            "hi",
+        ])
+        self.assertTrue(data["logged_out"])
+        self.assert_no_marker(data)
+
+    def test_prompt_on_two_lines(self):
+        # 2行のプロンプト。上の行が出力に混ざらず、「最後の行」も正しく引く
+        port = self.start_device(login=True, status_prompt=True,
+                                 prompt_text="\n[root@sensor-board ~]\n# ")
+        self.write_config(port=port, login_password="root",
+                          commands=["run-app /opt/nosum/sensor_app", "echo hi", "false", "true"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [1, 0, 1, 0])
+        self.assertEqual([c["output"] for c in data["commands"]], [
+            "run-app: /opt/nosum/sensor_app: checksum file not found", "hi", "", ""])
+        self.assertIn("（最後の行：run-app: /opt/nosum/sensor_app: checksum file not found）", data["message"])
+        self.assertIn("コマンド「false」は終了コード 1 で終わりました（出力はありませんでした）。", data["message"])
+        self.assert_no_marker(data)
+
+    def test_shell_without_exit_status(self):
+        # $? が使えないシェル：終了コードは null。待ちすぎず、印の行も出力に混ざらない
+        port = self.start_device(login=False, dollar_q=False)
+        self.write_config(port=port, commands=["run-app /opt/nosum/sensor_app", "echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [None, None])
+        self.assertEqual([c["output"] for c in data["commands"]],
+                         ["run-app: /opt/nosum/sensor_app: checksum file not found", "hi"])
+        self.assertNotIn("終了コード", data["message"])
+        for c in data["commands"]:
+            self.assertNotIn("fish", c["output"])
+        self.assertLess(self.elapsed, 8)
+
+    def test_listen_only_sends_nothing(self):
+        port = self.start_device(login=False, ticker=0.2)
+        self.write_config(port=port, commands=["false"])
+        code, data = self.capture("run", "--listen-only", "1")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["commands"], [])
+        self.assertEqual(bytes(self.relay.from_pc), b"")
+        self.assertNotIn(MARKER_TAG, self.read_log(data))
+
+
+# ---------------------------------------------------------------------------
 # run：時間切れ、応答なし、ポートの問題
 # ---------------------------------------------------------------------------
 
@@ -363,10 +521,13 @@ class RunFailures(CaptureTestCase):
         self.assertFalse(data["ok"])
         first, second = data["commands"]
         self.assertTrue(first["timed_out"])
+        self.assertIsNone(first["exit_code"])  # Ctrl-C で止めたときは読まない
         self.assertIn("[DBG] start", first["output"])
         self.assertNotIn("run-app /opt/hang", first["output"])
         self.assertFalse(second["timed_out"])
         self.assertEqual(second["output"], "hi")  # Ctrl-C の後も続けられた
+        self.assertEqual(second["exit_code"], 0)
+        self.assertEqual(self.device.executed, ["run-app /opt/hang", "echo hi", MARKER, "exit"])
         self.assertEqual(self.device.interrupts, 1)
         self.assertIn("run-app /opt/hang", data["message"])
         self.assertIn("Ctrl-C", data["message"])
@@ -380,6 +541,7 @@ class RunFailures(CaptureTestCase):
         self.assertEqual(code, 1, data)
         self.assertEqual(len(data["commands"]), 1)
         self.assertTrue(data["commands"][0]["timed_out"])
+        self.assertIsNone(data["commands"][0]["exit_code"])
         self.assertEqual(data["not_run"], ["echo hi"])
         self.assertIn("プロンプトが戻りませんでした", data["message"])
         self.assertNotIn("echo hi", self.device.executed)
@@ -452,6 +614,7 @@ class RunFailures(CaptureTestCase):
         self.assertIn("途中で切れました", data["message"])
         self.assertEqual(len(data["commands"]), 1)
         self.assertTrue(data["commands"][0]["interrupted"])
+        self.assertIsNone(data["commands"][0]["exit_code"])
         self.assertIn("bye", data["commands"][0]["output"])
         self.assertEqual(data["not_run"], ["echo hi"])
         self.assertIn("残りの 1 個", data["message"])
@@ -716,6 +879,45 @@ class Parts(unittest.TestCase):
         error = ["run-app: /opt/sensor/sensor_app: Permission denied"]
         self.assertEqual(f(error, "run-app /opt/sensor/sensor_app"), error)
 
+    def test_find_exit_code(self):
+        f = self.m.find_exit_code
+        self.assertEqual(f(" echo __EDL_RC=$?\n__EDL_RC=0\nroot@b:~# "), 0)
+        self.assertEqual(f("echo __EDL_RC=$?\n__EDL_RC=127\n[127] root@b:~# "), 127)
+        # 返事の行の前後に、プロンプトや機器のメッセージが付いても読む
+        self.assertEqual(f("root@b:~# __EDL_RC=2\n"), 2)
+        self.assertEqual(f("[  1.0] usb 1-1: x__EDL_RC=1\n# "), 1)
+        # エコーだけ（数がない）なら読めない
+        self.assertIsNone(f("root@b:~# echo __EDL_RC=$?\n"))
+        self.assertIsNone(f("fish: $? is not the exit status.\necho __EDL_RC=$?\n> "))
+        self.assertIsNone(f(""))
+
+    def test_drop_marker_lines(self):
+        lines = ["__EDL_RC=0", "root@b:~#  echo __EDL_RC=$?", "[DBG] AVG=3", "done"]
+        self.assertEqual(self.m.drop_marker_lines(lines), ["[DBG] AVG=3", "done"])
+
+    def test_exit_code_notes(self):
+        f = self.m.exit_code_notes
+        self.assertEqual(f([{"command": "a", "output": "x", "exit_code": 0},
+                            {"command": "b", "output": "x", "exit_code": None}]), "")
+        self.assertEqual(
+            f([{"command": "run-app /opt/x", "output": "start\nrun-app: /opt/x: checksum file not found\n",
+                "exit_code": 1}]),
+            "コマンド「run-app /opt/x」は終了コード 1 で終わりました（最後の行：run-app: /opt/x: checksum file not found）。")
+        self.assertEqual(f([{"command": "false", "output": "", "exit_code": 1}]),
+                         "コマンド「false」は終了コード 1 で終わりました（出力はありませんでした）。")
+        long_line = "x" * 500
+        note = f([{"command": "c", "output": long_line, "exit_code": 3}])
+        self.assertIn("x" * 200 + "…）", note)
+        self.assertNotIn("x" * 201, note)
+
+    def test_trim_prompt_head(self):
+        f = self.m.trim_prompt_head
+        head = ["", "[0] root@b ~"]
+        self.assertEqual(f(["out", "", "[1] root@b ~"], head), ["out"])  # 数の違いは見ない
+        self.assertEqual(f(["out", "", "root@other ~"], head), ["out", "", "root@other ~"])
+        self.assertEqual(f(["out"], []), ["out"])
+        self.assertEqual(f(["out", ""], [""]), ["out", ""])  # 空の行だけなら何もしない
+
     def test_template_is_read_as_expected(self):
         cfg = self.m.read_yaml(TEMPLATE)
         self.assertEqual(list(cfg.keys()), TEMPLATE_KEYS)
@@ -840,14 +1042,26 @@ class Independence(unittest.TestCase):
         self.assertNotIn("../", source)
 
     def test_skill_md_does_not_show_exit_codes(self):
-        """終了コードで場合分けを書くと、モデルが利用者に見せてしまう。"""
+        """スクリプト自身の終了コードで場合分けを書くと、モデルが利用者に見せてしまう。
+
+        機器のコマンドの終了コード（exit_code）は、「終了コード N」の形で伝える。
+        """
         with open(SKILL_MD, encoding="utf-8") as f:
             text = f.read()
         for line in text.splitlines():
-            if "終了コード" in line or "終わりのコード" in line:
+            if "スクリプト" in line and ("終了コード" in line or "終わりのコード" in line):
                 self.assertIn("伝えません", line, line)
+        self.assertIn("自身の終了コードは、利用者に伝えません", text)
         self.assertNotRegex(text, r"[0-2] ?[がは](成功|問題)")
         self.assertIn("`.gitignore`", text)
+
+    def test_skill_md_tells_device_exit_codes(self):
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("`exit_code` が 0 以外の数なら", section)
+        self.assertIn("「終了コード N」", section)
+        self.assertIn("`exit_code` という項目名は見せません", section)
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""
