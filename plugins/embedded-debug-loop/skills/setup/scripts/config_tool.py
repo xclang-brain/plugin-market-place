@@ -75,6 +75,8 @@ LOOSE_FLOAT_RE = re.compile(r"^[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)(?:[eE][-+
 EXAMPLE_RE = re.compile(r"^\s*例\s*[：:]\s*(.*?)\s*$")
 CHOICES_RE = re.compile(r"^\s*選べる値\s*[：:]\s*(.*?)\s*$")
 REQUIRED_RE = re.compile(r"必須(?!で(?:は)?(?:ない|なく|ありません))")
+# 必須ではないが、ふだん使うには書く項目（「必ず書く」など）。「必ずしも」は数えない。
+SHOULD_FILL_RE = re.compile(r"必ず(?!しも)")
 SECRET_KEY_RE = re.compile(r"(password|passwd|passphrase|secret|token|api_?key|パスワード|暗証)", re.IGNORECASE)
 
 
@@ -414,6 +416,12 @@ class Item(object):
     def secret(self):
         return is_secret_key(self.key)
 
+    @property
+    def fill_recommended(self):
+        if self.required:
+            return False
+        return any(SHOULD_FILL_RE.search(line) for line in self.description)
+
     def examples(self):
         out = []
         for text in self.examples_text:
@@ -689,6 +697,7 @@ def item_info(doc, item):
         "required": item.required,
         "empty": is_empty(item.value),
         "secret": item.secret,
+        "fill_recommended": item.fill_recommended,
         "examples": [masked(item, v) for v in item.examples()],
         "choices": list(item.choices),
         "line": item.start + 1,
@@ -703,6 +712,39 @@ def item_info(doc, item):
         if isinstance(item.value, str) and item.value.strip():
             info["env_defined"] = bool(os.environ.get(item.value.strip()))
     return info
+
+
+TABLE_VALUE_MAX = 40
+
+
+def _code_span(text):
+    """表のマス目に入れる、そのままの形の文字（`…`）。| は表の区切りと見られないようにする。"""
+    text = text.replace("|", "\\|")
+    if "`" in text:
+        return "`` " + text + " ``"
+    return "`" + text + "`"
+
+
+def table_cell(item):
+    """終わりの報告の表に書く値。空なら（空）、secret なら ＊＊＊。長い値は切る。"""
+    value = item.value
+    if is_empty(value):
+        return EMPTY_WORD
+    if item.secret:
+        return MASK
+    text = render_value(value) if isinstance(value, list) else display_scalar(value)
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    if len(text) > TABLE_VALUE_MAX:
+        text = text[:TABLE_VALUE_MAX] + "…"
+    return _code_span(text)
+
+
+def value_table(doc):
+    """項目と値の表（Markdown）。そのまま利用者に見せられる形にする。"""
+    lines = ["| 項目 | 値 |", "| --- | --- |"]
+    for item in doc.items:
+        lines.append("| {} | {} |".format(item.key, table_cell(item)))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -868,6 +910,7 @@ def cmd_show(opts, pos):
         "header": "\n".join(doc.header).strip(),
         "items": items,
         "missing": [it["key"] for it in items if it["required"] and it["empty"]],
+        "table": value_table(doc),
     }
 
 

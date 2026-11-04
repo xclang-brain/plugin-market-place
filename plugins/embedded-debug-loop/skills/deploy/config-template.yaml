@@ -15,7 +15,7 @@ port: 21
 user: "root"
 
 # FTP でログインするパスワード。
-# ここに書きたくないときは、下の password_env を使う。
+# ファイルに書きたくないときは、password_env に、パスワードを入れた環境変数の名前を書く。
 password: ""
 
 # パスワードを入れた環境変数の名前。
@@ -29,15 +29,16 @@ passive: true
 
 # 機器に送るファイル（必須）。作業フォルダからの相対パスで書く。
 # 作業フォルダとは、.embedded-debug-loop フォルダがあるフォルダ。
-# 例：["sensor_app"]
-# 例：["build/sensor_app", "conf/sensor.conf"]
+# 例：["my_app"]
+# 例：["build/my_app", "conf/my_app.conf"]
 files: []
 
 # 機器の送り先のフォルダ（必須）。なければ作る。
-# 例：/opt/sensor
+# 例：/opt/myapp
 remote_dir: ""
 
-# 送った後にファイルに付ける権限。8進数の数字。空なら変えない。
+# 送った後にファイルに付ける権限。8進数の数字。空なら権限を付けない。
+# FTP で送ったファイルは、ふつうは実行できない権限になる。
 # 機器でプログラムを実行するなら 755 にする。
 # 例：755
 file_mode: ""
@@ -50,7 +51,7 @@ file_mode: ""
 checksum: "none"
 
 # サム値のファイルの名前の末尾に付ける文字。
-# .sum なら、sensor_app のサム値のファイルは sensor_app.sum。
+# .sum なら、my_app のサム値のファイルは my_app.sum。
 # サム値のファイルは、送るファイルと同じフォルダに送る。
 # 例：.sum
 checksum_suffix: ".sum"

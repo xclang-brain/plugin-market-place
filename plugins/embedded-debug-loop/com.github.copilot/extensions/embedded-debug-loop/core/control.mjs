@@ -1,10 +1,11 @@
 // Web管理画面からの操作：状態を見る、設定を保存する、開始する、止める、過去の実行を見る。
 // Copilot CLI への呼び出しは port（adapter.mjs が作る）を通す。
-// port：send(prompt)、abort()、getSubagentSettings()、updateSubagentSettings(value)、listAgents()、listModels()、
+// port：send(prompt)、abort()、log(message, options)（チャットに知らせを出す）、getSubagentSettings()、
+//       updateSubagentSettings(value)、listAgents()、listModels()、
 //       currentAgent()（チャットで選ばれているエージェント）、workingDirectory()（作業フォルダ）
 
 import { WHO } from './events.mjs';
-import { startNotice } from './messages.mjs';
+import { startNotice, stoppedChatNotice } from './messages.mjs';
 import { RUN_ID } from './persist.mjs';
 import { UserError, publicRun, readCriteria, readSettingsInput, sameAgent, stopPlace, text } from './store.mjs';
 
@@ -208,8 +209,22 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
       store.activity(WHO.other, `止める合図を送れませんでした：${error?.message ?? error}`);
     }
     // 動いているエージェントがなければ、終わりの知らせ（session.idle）は来ないので、ここで終える
-    if (!store.isBusy()) store.finishStopped();
+    if (!store.isBusy() && store.finishStopped()) await announceStopped();
     return { ok: true };
+  }
+
+  /**
+   * 止めて自動で終えた実行の結論と、結果の画面の URL を、チャットにも出す。
+   * 止めた後は統括エージェントの手番が来ないので、チャットには、止めたことしか出ないため。失敗しても投げない
+   */
+  async function announceStopped() {
+    const run = store.run;
+    if (run?.status !== 'finished' || !run.finish?.auto) return;
+    try {
+      await port.log(stoppedChatNotice(run.finish.conclusion, store.url), { level: 'warning' });
+    } catch (error) {
+      console.error('[Web管理画面] 止めたことをチャットに出せませんでした：', error?.message ?? error);
+    }
   }
 
   function runDetail(id) {
@@ -220,5 +235,5 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     return saved;
   }
 
-  return { state, saveSettings, start, stop, runDetail, refreshOptions, refreshFolder };
+  return { state, saveSettings, start, stop, runDetail, refreshOptions, refreshFolder, announceStopped };
 }

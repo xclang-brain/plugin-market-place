@@ -36,7 +36,7 @@ python3 <このスキルのフォルダ>/scripts/capture.py run
 - 各コマンドの後に `echo __EDL_RC=$?` を送り、機器での終了コードを読みます。
   この行と返事は `output` から除きます。ログには残ります。
 - 今回だけ別のコマンドを実行するときは、`--command` を付けます。
-  何回でも書けます。例：`run --command "/opt/sensor/sensor_app"`
+  何回でも書けます。例：`run --command "/opt/myapp/my_app"`
 - コマンドを実行せず、出力を記録するだけのときは、`--listen-only 秒数` を付けます。
   例：`run --listen-only 30`
 - 作業フォルダが今のフォルダと違うときは、`--workdir フォルダ` を付けます。
@@ -74,6 +74,10 @@ python3 <このスキルのフォルダ>/scripts/capture.py check
 
 - `message` を、そのまま伝えます。
 - ログのファイルの場所（`log`）を伝えます。
+- JSON の項目名（`ok`、`exit_code`、`timed_out`、`not_run` など）は、利用者に見せません。
+  ふつうの言葉で言い換えます（例：「終了コード N」「時間切れ」「実行しなかったコマンド」）。
+- 設定ファイルの項目名（commands、listen_seconds など）は、見せてかまいません。
+  利用者が自分で書き換えるものだからです。
 - run のとき
   - コマンドごとに、`command` と `output` を見せます。
   - `exit_code` は、機器でそのコマンドが終わったときの終了コードです。

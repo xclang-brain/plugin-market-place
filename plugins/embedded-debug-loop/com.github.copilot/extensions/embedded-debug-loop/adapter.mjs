@@ -60,6 +60,8 @@ export async function startAdapter({ joinSession, dataDir, defaultsFile, staticD
   const port = {
     send: (prompt) => need().send({ prompt }),
     abort: () => need().abort(),
+    // チャットに知らせを出す（手番は始まらない）
+    log: (message, options) => need().log(message, options),
     getSubagentSettings: () => need().rpc.tools.getSubagentSettings(),
     updateSubagentSettings: (value) => need().rpc.tools.updateSubagentSettings(value),
     listAgents: () => need().rpc.agent.list(),
@@ -91,7 +93,7 @@ export async function startAdapter({ joinSession, dataDir, defaultsFile, staticD
     return server.url;
   }
 
-  const sink = createEventSink({ store });
+  const sink = createEventSink({ store, onStopped: control.announceStopped });
   const tools = createTools({
     store,
     ensureServer,

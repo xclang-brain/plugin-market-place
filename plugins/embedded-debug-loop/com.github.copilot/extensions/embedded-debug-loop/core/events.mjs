@@ -40,7 +40,22 @@ export function editedPaths(name, rawArgs) {
   return [...new Set([...patch.matchAll(PATCH_FILE)].map((m) => m[1]))];
 }
 
-export function createEventSink({ store }) {
+/**
+ * 子のエージェントが終わったときの、くわしい記録の行。
+ * cancelled は、返事をせずに途中で切られた印（「止める」で止めたときなど）。返事をしたとは書かない
+ */
+function endLine(role, type, data, run) {
+  const name = ROLE_NAME[role] ?? 'エージェント';
+  if (type === 'subagent.failed') return `${name}が失敗しました：${oneLine(data.error?.message ?? data.error)}`;
+  if (data.cancelled === true) return `${name}は途中で止まりました${run.status === 'stopping' ? '（利用者が止めたため）' : ''}`;
+  return `${name}が返事をしました`;
+}
+
+/**
+ * @param {object} options
+ * @param {Function} [options.onStopped] 止めている実行を、終わりの知らせ（session.idle）で終えたときに呼ぶ
+ */
+export function createEventSink({ store, onStopped = () => {} }) {
   const calls = new Map(); // ツールの呼び出しの番号 → くわしい記録の行（失敗の印を付けるため）
   const edits = new Map(); // ファイルを直すツールの呼び出しの番号 → 変えるファイルのパス
 
@@ -133,11 +148,7 @@ export function createEventSink({ store }) {
         case 'subagent.failed': {
           const agent = store.live.agents.get(event.agentId);
           store.live.agents.delete(event.agentId);
-          if (agent && run) {
-            const name = ROLE_NAME[agent.role] ?? 'エージェント';
-            const failed = event.type === 'subagent.failed';
-            store.activity(WHO[agent.role], failed ? `${name}が失敗しました：${oneLine(data.error?.message ?? data.error)}` : `${name}が返事をしました`);
-          }
+          if (agent && run) store.activity(WHO[agent.role], endLine(agent.role, event.type, data, run));
           break;
         }
         case 'assistant.turn_start':
@@ -209,7 +220,7 @@ export function createEventSink({ store }) {
           store.live.mainSince = null;
           store.live.agents.clear();
           if (store.pending.size > 0) store.setWaiting(null, null);
-          if (run?.status === 'stopping') store.finishStopped();
+          if (run?.status === 'stopping' && store.finishStopped()) onStopped();
           break;
         default:
           return;

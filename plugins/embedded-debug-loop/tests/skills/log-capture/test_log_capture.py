@@ -680,6 +680,12 @@ class Settings(CaptureTestCase):
         self.assertTrue(data["created"])
         self.assertEqual(data["config"], self.config_path)
         self.assertTrue(any("port" in p for p in data["problems"]))
+        # 問題の文と「設定ファイルは…」の文のあいだに「。」がある
+        self.assertEqual(
+            data["message"],
+            "設定ファイルがなかったので、ひな形から作りました。"
+            "port（機器につながるシリアルポート）が空です。/dev/ttyUSB0 のように書いてください。"
+            "設定ファイルは %s です。" % self.config_path)
         with open(TEMPLATE, encoding="utf-8") as a, open(self.config_path, encoding="utf-8") as b:
             self.assertEqual(a.read(), b.read())
 
@@ -775,6 +781,14 @@ class Settings(CaptureTestCase):
         self.assertEqual(code, 2, data)
         self.assertIn("login_user", data["message"])
         self.assertEqual(self.device.login_attempts, [])
+
+    def test_bad_arguments_are_sentences(self):
+        for args in (["frobnicate"], ["run", "--listen-only", "0"], ["run", "--no-such-option"],
+                     ["run", "--workdir"]):
+            code, data = self.capture(*args)
+            self.assertEqual(code, 2, (args, data))
+            self.assertTrue(data["message"].endswith("。"), data["message"])
+            self.assertNotIn("。。", data["message"])
 
     def test_bad_arguments(self):
         for args in (["run", "--listen-only", "abc"],
@@ -984,6 +998,63 @@ class Parts(unittest.TestCase):
                 self.m.open_port("/dev/ttyUSB0", 115200)
         self.assertIn("ほかのプログラム", cm.exception.message)
 
+    def test_every_problem_ends_a_sentence(self):
+        """問題の文が「例：…」で終わると、次の文とつながって読めない。"""
+        cases = [
+            {"port": "", "baud": "", "command_timeout_seconds": ""},
+            {"port": ["a"], "baud": 12345, "login_user": ["x"], "login_password": ["y"],
+             "login_password_env": ["z"], "prompt": ["p"], "commands": {"a": 1},
+             "command_timeout_seconds": 0, "listen_seconds": -1, "logout": "maybe"},
+            {"port": "/dev/ttyUSB0", "prompt": "[", "commands": ["", "echo hi"]},
+            {"port": "/dev/ttyUSB0", "login_password": "", "login_password_env": "EDL_TEST_NOT_SET_Y"},
+        ]
+        seen = 0
+        for over in cases:
+            cfg = self.m.read_yaml(TEMPLATE)
+            cfg.update(over)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("EDL_TEST_NOT_SET_Y", None)
+                _s, problems = self.m.validate(cfg)
+            self.assertTrue(problems, over)
+            for p in problems:
+                seen += 1
+                self.assertTrue(p.endswith("。"), p)
+                self.assertNotRegex(p, r"例：[^）]*$", p)
+        self.assertGreaterEqual(seen, 14)
+
+    def test_single_problem_message_is_punctuated(self):
+        msg = self.m.problems_message(["prompt の値が読めません：x"], "/w/c.yaml", False)
+        self.assertEqual(msg, "prompt の値が読めません：x。設定ファイルは /w/c.yaml です。")
+        msg = self.m.problems_message(["port が空です。"], "/w/c.yaml", False)
+        self.assertNotIn("。。", msg)
+
+    def test_port_messages_are_sentences(self):
+        with mock.patch.object(self.m, "find_ports", return_value=["/dev/ttyUSB0", "/dev/ttyUSB1"]):
+            msg = self.m._not_found_message("ttyUSB9")
+        self.assertTrue(msg.endswith("。"), msg)
+        self.assertIn("この PC で見つかったシリアルポートは、/dev/ttyUSB0、/dev/ttyUSB1 です。", msg)
+
+    def test_template_examples_are_generic(self):
+        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        with open(TEMPLATE, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("sensor", text)
+        self.assertIn('# 例：["/opt/myapp/my_app"]', text)
+
+    def test_template_comments_do_not_point_by_position(self):
+        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        with open(TEMPLATE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        for i, line in enumerate(lines):
+            if not re.match(r"^[a-z_]+:", line):
+                continue
+            j = i
+            while j > 0 and lines[j - 1].startswith("#"):
+                j -= 1
+            for comment in lines[j:i]:
+                for word in ("下の", "上の", "上から", "このスキル", "この項目"):
+                    self.assertNotIn(word, comment, comment)
+
     def test_validate_resolves_password_without_leaking(self):
         cfg = self.m.read_yaml(TEMPLATE)
         cfg.update({"port": "/dev/ttyUSB0", "login_password": "pw1"})
@@ -1054,6 +1125,15 @@ class Independence(unittest.TestCase):
         self.assertIn("自身の終了コードは、利用者に伝えません", text)
         self.assertNotRegex(text, r"[0-2] ?[がは](成功|問題)")
         self.assertIn("`.gitignore`", text)
+
+    def test_skill_md_hides_json_names(self):
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("JSON の項目名", section)
+        self.assertIn("利用者に見せません", section)
+        self.assertIn("設定ファイルの項目名（commands、listen_seconds など）は、見せてかまいません", section)
+        self.assertNotIn("sensor", text)
 
     def test_skill_md_tells_device_exit_codes(self):
         with open(SKILL_MD, encoding="utf-8") as f:

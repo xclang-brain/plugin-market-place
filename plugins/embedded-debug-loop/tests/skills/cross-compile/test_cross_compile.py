@@ -201,6 +201,36 @@ class TemplateTest(unittest.TestCase):
         self.assertIn("PC 用", block)
         self.assertNotIn("必須", block, "必須の印を付けると、空のときにビルドできなくなる")
 
+    def test_clean_command_comment_says_the_old_build_stays(self):
+        """空のままだと「前のビルドのまま」になることを、コメントだけで分かるようにする。"""
+        with open(TEMPLATE, encoding="utf-8") as f:
+            text = f.read()
+        block = re.search(r"((?:^#.*\n)+)clean_command:", text, re.M).group(1)
+        self.assertIn("作り直されず", block)
+        self.assertIn("前のビルドでできたファイルがそのまま残る", block)
+        self.assertIn("make clean", block)
+
+    def test_template_examples_are_generic(self):
+        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        with open(TEMPLATE, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("sensor", text)
+        self.assertIn('# 例：["my_app"]', text)
+
+    def test_template_comments_do_not_point_by_position(self):
+        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        with open(TEMPLATE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        for i, line in enumerate(lines):
+            if not re.match(r"^[A-Za-z_]+:", line):
+                continue
+            j = i
+            while j > 0 and lines[j - 1].startswith("#"):
+                j -= 1
+            for comment in lines[j:i]:
+                for word in ("下の", "上の", "上から", "このスキル", "この項目"):
+                    self.assertNotIn(word, comment, comment)
+
     def test_template_values(self):
         with open(TEMPLATE, encoding="utf-8") as f:
             data = BUILD.parse_yaml(f.read())
@@ -553,6 +583,16 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertTrue(any("no-such-cross-gcc-xyz" in x for x in data["problems"]),
                         data["problems"])
+
+    def test_empty_outputs_problem_is_one_sentence_with_a_generic_example(self):
+        p = Project(self)
+        p.configure(outputs=[])
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 2)
+        problem = [x for x in data["problems"] if "outputs" in x][0]
+        self.assertTrue(problem.endswith("。"), problem)
+        self.assertIn("my_app", problem)
+        self.assertNotIn("sensor", problem)
 
     def test_bad_values(self):
         p = Project(self)
@@ -970,6 +1010,12 @@ class SkillDocTest(unittest.TestCase):
             if "終了コード" in line:
                 self.assertIn("伝えません", line, line)
         self.assertNotRegex(self.text, r"[0-2] ?[がは]成功")
+
+    def test_json_names_are_not_shown(self):
+        section = self.text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("JSON の項目名", section)
+        self.assertIn("利用者に見せません", section)
+        self.assertIn("設定ファイルの項目名", section)
 
     def test_mentions_notes_compiler_and_gitignore(self):
         for word in ("`notes`", "`empty_recommended`", "`compiler`", "`.gitignore`",

@@ -461,11 +461,23 @@
 
   const optionsKeyOf = (opts) => JSON.stringify([opts.agents, opts.models, opts.efforts]);
 
+  // エージェントの選択肢。もう一方の欄で選んでいるエージェントは出さない（own は、この欄の今の値）
+  function agentItems(opts, other, own) {
+    return arr(opts.agents)
+      .map((a) => str(a.name))
+      .filter((name) => name && (!other || !sameAgent(name, other) || (own && sameAgent(name, own))))
+      .map((name) => ({ value: name, label: name }));
+  }
+
+  // 作業エージェントの欄には、選んでいる検証エージェントを出さない。検証エージェントの欄も同じ
+  function writeAgentChoices(worker, verifier, opts) {
+    setOptions($('f-worker'), agentItems(opts, verifier, worker), worker, '（選んでください）');
+    setOptions($('f-verifier'), agentItems(opts, worker, verifier), verifier, '（選んでください）');
+  }
+
   // 選ぶ欄に、選択肢と値を書く（今の値が一覧になくても残す）
   function writeChoices(v, opts) {
-    const agents = arr(opts.agents).map((a) => ({ value: str(a.name), label: str(a.name) }));
-    setOptions($('f-worker'), agents, v.worker, '（選んでください）');
-    setOptions($('f-verifier'), agents, v.verifier, '（選んでください）');
+    writeAgentChoices(v.worker, v.verifier, opts);
     modelControl('worker', arr(opts.models), v.workerModel);
     modelControl('verifier', arr(opts.models), v.verifierModel);
     const efforts = effortItems(arr(opts.efforts));
@@ -716,11 +728,15 @@
     }
     $('f-request').addEventListener('input', () => autoGrow($('f-request')));
     $('f-criteria').addEventListener('input', () => autoGrow($('f-criteria')));
+    // 片方を選び直したら、もう一方の欄の選択肢を作り直す
+    const rewriteAgents = () => writeAgentChoices($('f-worker').value, $('f-verifier').value, (ui.snap && ui.snap.options) || {});
     $('f-worker').addEventListener('change', () => {
+      rewriteAgents();
       drawWorkerDesc();
       drawNote(false);
       drawPrepared(false);
     });
+    $('f-verifier').addEventListener('change', rewriteAgents);
     $('btn-save').addEventListener('click', async () => {
       const res = await send('/api/settings', '保存しました。');
       if (!res) return;

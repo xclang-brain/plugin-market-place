@@ -567,13 +567,13 @@ def validate(values, raws, workdir, environ=None):
         files = []
     elif not isinstance(files, list):
         problems.append(
-            "files は [\"sensor_app\"] のようなリストにしてください（今の値：%s）。" % (files,))
+            "files は [\"my_app\"] のようなリストにしてください（今の値：%s）。" % (files,))
         files = []
     else:
         seen = {}
         for item in files:
             if not isinstance(item, str) or item.strip() == "":
-                problems.append("files に、ファイルの名前でない値があります：%s" % (item,))
+                problems.append("files に、ファイルの名前でない値があります（%s）。" % (item,))
                 continue
             rel = item.strip()
             path = rel if os.path.isabs(rel) else os.path.join(workdir, rel)
@@ -1079,6 +1079,13 @@ def deploy(settings, log):
     return state
 
 
+# file_mode が空のとき、送った後の権限について伝える文。
+# 送ったファイルの権限は機器の FTP サーバーが決め、ふつうは実行できない権限（644 など）になる。
+NO_MODE_SENTENCE = ("権限は付けていません（file_mode が空です）。"
+                    "FTP で送ったファイルは、ふつうは実行できない権限になります。"
+                    "機器でプログラムを実行するなら、file_mode に 755 などを書いてください。")
+
+
 def success_message(settings, state):
     names = [os.path.basename(r["local"]) for r in state["results"]]
     if len(names) > 3:
@@ -1088,6 +1095,8 @@ def success_message(settings, state):
     parts = ["機器 %s の %s に、%s を送りました。" % (settings["host"], state["remote_dir"], shown)]
     if settings["file_mode"]:
         parts.append("権限は %s にしました。" % settings["file_mode"])
+    else:
+        parts.append(NO_MODE_SENTENCE)
     if settings["checksum"] != "none":
         parts.append("サム値（%s）のファイルも一緒に送りました。" % settings["checksum"])
     if state["notes"]:
@@ -1121,13 +1130,21 @@ def cmd_config_path(workdir, config):
     return 0
 
 
+def as_sentence(text):
+    """文の終わりに「。」がなければ足す（次の文とつながって読めなくならないように）。"""
+    text = text.rstrip()
+    if text and not text.endswith(("。", "！", "？")):
+        text += "。"
+    return text
+
+
 def problems_message(problems, config, created):
     """設定の問題を、人に伝える1つの文にする。"""
     head = ""
     if created:
         head = "設定ファイルがなかったので、ひな形から作りました。"
     if len(problems) == 1:
-        return "%s%s設定ファイルは %s です。" % (head, problems[0], config)
+        return "%s%s設定ファイルは %s です。" % (head, as_sentence(problems[0]), config)
     return ("%s設定に直すところが %d 件あります。設定ファイル %s を直してください。"
             "各項目の意味は、項目のすぐ上のコメントに書いてあります。"
             % (head, len(problems), config))

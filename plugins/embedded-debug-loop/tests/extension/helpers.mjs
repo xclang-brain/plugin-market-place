@@ -24,14 +24,16 @@ export function tempDir(t) {
 /**
  * 偽物のセッション。登録されたツール・フックと、送った知らせ・止めた回数・子の設定の書き換えを残す。
  * cwd はセッションの作業フォルダ、current はチャットで選ばれているエージェント（Error なら読めない）。
+ * logFails が true なら、チャットへの知らせ（session.log）は失敗する。
  * missing に書いた RPC（'agent.getCurrent'、'metadata' など）は、ない版の Copilot CLI のように消しておく。
  */
-export function fakeCopilot({ agents, models, subagents = null, sendFails = false, onAbort, cwd = CWD, current = null, missing = [] } = {}) {
+export function fakeCopilot({ agents, models, subagents = null, sendFails = false, onAbort, logFails = false, cwd = CWD, current = null, missing = [] } = {}) {
   const handlers = [];
   const fake = {
     config: null,
     sent: [],
     aborts: 0,
+    logs: [], // チャットに出した知らせ：{ message, options }
     updates: [],
     subagents,
     cwd,
@@ -73,7 +75,10 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
       fake.aborts += 1;
       onAbort?.(fake);
     },
-    async log() {},
+    async log(message, options) {
+      if (logFails) throw new Error('知らせを出せません');
+      fake.logs.push({ message, options });
+    },
     rpc: {
       agent: {
         list: async () => ({

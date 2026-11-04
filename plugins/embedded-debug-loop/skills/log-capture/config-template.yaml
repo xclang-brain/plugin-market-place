@@ -17,7 +17,7 @@ baud: 115200
 login_user: "root"
 
 # ログインのパスワード。パスワードがなければ空のままにする。
-# ここに書きたくないときは、下の login_password_env を使う。
+# ファイルに書きたくないときは、login_password_env に、パスワードを入れた環境変数の名前を書く。
 login_password: ""
 
 # パスワードを入れた環境変数の名前。その環境変数があれば、login_password より優先する。
@@ -30,9 +30,9 @@ login_password_env: ""
 # 例：myboard:~# $
 prompt: "[#$] $"
 
-# 機器のシェルで、上から順に実行するコマンド。
+# 機器のシェルで、並べた順に実行するコマンド。
 # 空なら何も実行せず、listen_seconds の秒数だけ出力を記録する（そのときは listen_seconds を 1 以上にする）。
-# 例：["/opt/sensor/sensor_app"]
+# 例：["/opt/myapp/my_app"]
 # 例：["dmesg | tail -n 20", "cat /var/log/messages"]
 commands: []
 
@@ -44,6 +44,7 @@ command_timeout_seconds: 30
 # 例：10
 listen_seconds: 0
 
-# 終わったらログアウトする（exit を送る）か。このスキルがログインしたときだけ送る。
+# 終わったらログアウトする（exit を送る）か。
+# login_user でログインしたときだけ送る。つないだときにもうシェルが出ていたら送らない。
 # 選べる値：true / false
 logout: true

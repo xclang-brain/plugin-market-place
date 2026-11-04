@@ -259,12 +259,13 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       store.changed();
       saveRunNow();
     },
-    /** 止めている実行を、統括エージェントの記録なしで終える。結論に、止めた所と途中で変えたファイルを書く */
+    /** 止めている実行を、統括エージェントの記録なしで終える。結論に、止めた所と途中で変えたファイルを書く。終えたら true */
     finishStopped() {
       const run = store.run;
-      if (run?.status !== 'stopping') return;
+      if (run?.status !== 'stopping') return false;
       const place = run._stopPlace ?? stopPlace(run);
       store.finish({ outcome: 'stopped', conclusion: stoppedConclusion(place, store.changedFiles(run)), auto: true });
+      return true;
     },
     /**
      * ファイルを直すツールの呼び出しで、変えた（変えようとした）ファイルを覚える。

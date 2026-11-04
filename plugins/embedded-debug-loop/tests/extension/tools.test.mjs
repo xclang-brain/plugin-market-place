@@ -6,7 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { matchCriterion } from '../../com.github.copilot/extensions/embedded-debug-loop/core/store.mjs';
-import { VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
+import { listedAgentName } from '../../com.github.copilot/extensions/embedded-debug-loop/core/tools.mjs';
+import { CWD, VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
 
 test('ツールは6つで、ツール検索の裏に回さず、確認なしで動く', async (t) => {
   const { fake } = await startWith(t);
@@ -41,6 +42,81 @@ test('open：頼む作業が空なら断る。実行中なら URL を添えて�
   const busy = await fake.call('open', { request: '別の作業' });
   assert.equal(busy.ok, false);
   assert.match(busy.text, /^実行中です。.*URL：http:\/\/127\.0\.0\.1/);
+});
+
+test('open：worker（作業エージェントの名前）は任意で、説明は日本語', async (t) => {
+  const { fake } = await startWith(t);
+  const { parameters } = fake.tool('open');
+  assert.equal(parameters.properties.worker.type, 'string');
+  assert.match(parameters.properties.worker.description, /作業エージェントの名前/);
+  assert.match(parameters.properties.worker.description, /この作業フォルダの設定として保存する/);
+  assert.ok(!parameters.required.includes('worker'));
+});
+
+test('open：worker を渡すと、この作業フォルダの設定に保存してから、その名前で返事と準備の確認の頼みを書く', async (t) => {
+  const { fake, app, dataDir } = await startWith(t);
+  const r = await fake.call('open', { request: '表示を直す', criteria: ['完了と出る'], worker: ' host-sim-worker ' });
+  assert.ok(r.ok);
+  const lines = r.text.split('\n');
+  assert.match(lines[0], /^Web管理画面を開きました。URL：/);
+  assert.equal(lines[1], '作業エージェントを「host-sim-worker」にしました（この作業フォルダの設定として保存しました）。');
+  assert.ok(lines.includes('- 作業エージェント：host-sim-worker'));
+  assert.ok(lines.includes(`- 検証エージェント：${VERIFIER}`), 'ほかの設定は変えない');
+  assert.equal(lines[lines.length - 1], '次に、作業エージェント「host-sim-worker」に、準備の確認だけを頼んでください（作業はさせない）。返事を embedded-debug-loop_prepare で記録してください。');
+  assert.ok(!r.text.includes(WORKER), '既定の作業エージェントの名前は出さない');
+  assert.equal(app.store.snapshot().settings.worker, 'host-sim-worker');
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
+  assert.equal(saved.folders[CWD].worker, 'host-sim-worker');
+  assert.equal(saved.folders[CWD].verifier, VERIFIER);
+
+  // 次に開くときは、保存した名前を使う（worker を渡さなくても）
+  const again = await fake.call('open', { request: 'もう一度' });
+  assert.ok(again.text.includes('次に、作業エージェント「host-sim-worker」に'));
+  assert.ok(!again.text.includes('にしました'));
+});
+
+test('open：worker の名前は、エージェントの一覧の名前にそろえる（プラグインの名前の有無だけの違いのとき）', async (t) => {
+  const agents = [
+    { id: WORKER, name: 'helper-a' },
+    { id: VERIFIER, name: 'checker-b' },
+    { id: 'p1:twin', name: 'twin' },
+    { id: 'p2:twin', name: 'twin' },
+  ];
+  const { fake, app } = await startWith(t, { fake: { agents } });
+  const r = await fake.call('open', { request: '作業', worker: 'helper-a' });
+  assert.ok(r.text.includes(`作業エージェントを「${WORKER}」にしました`));
+  assert.equal(app.store.snapshot().settings.worker, WORKER);
+  await fake.call('open', { request: '作業', worker: 'twin' }); // 2つ当たるときは、言われたまま
+  assert.equal(app.store.snapshot().settings.worker, 'twin');
+  await fake.call('open', { request: '作業', worker: 'unknown-agent' }); // 一覧になくても、言われたまま
+  assert.equal(app.store.snapshot().settings.worker, 'unknown-agent');
+});
+
+test('listedAgentName：同じ名前 → そのまま、1つだけ当たる → 一覧の名前、ほかは言われたまま', () => {
+  const list = [{ name: 'a:x' }, { name: 'y' }, { name: 'b:z' }, { name: 'c:z' }];
+  assert.equal(listedAgentName('a:x', list), 'a:x');
+  assert.equal(listedAgentName('x', list), 'a:x');
+  assert.equal(listedAgentName('q:y', list), 'y');
+  assert.equal(listedAgentName('z', list), 'z');
+  assert.equal(listedAgentName('w', list), 'w');
+  assert.equal(listedAgentName('x', []), 'x');
+});
+
+test('open：worker を保存できなくても、その名前で進め、保存できなかったことを伝える', async (t) => {
+  const { fake, app, dataDir } = await startWith(t);
+  fs.mkdirSync(path.join(dataDir, 'settings.json'), { recursive: true }); // ファイルの場所にフォルダがあって書けない
+  const r = await fake.call('open', { request: '作業', worker: 'host-sim-worker' });
+  assert.ok(r.ok);
+  assert.ok(r.text.includes('作業エージェントを「host-sim-worker」にしました。ただし、設定をファイルに保存できませんでした'));
+  assert.ok(r.text.includes('次に、作業エージェント「host-sim-worker」に'));
+  assert.equal(app.store.snapshot().settings.worker, 'host-sim-worker');
+});
+
+test('open：実行中は worker を渡しても、設定を変えずに断る', async (t) => {
+  const { fake, app } = await startRun(t);
+  const busy = await fake.call('open', { request: '別の作業', worker: 'host-sim-worker' });
+  assert.equal(busy.ok, false);
+  assert.equal(app.store.snapshot().settings.worker, WORKER);
 });
 
 test('open：作業エージェントが決まっていなければ、画面で選んでもらうよう伝える', async (t) => {

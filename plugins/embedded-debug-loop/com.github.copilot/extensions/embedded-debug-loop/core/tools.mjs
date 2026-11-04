@@ -4,10 +4,11 @@
 import { execFile } from 'node:child_process';
 
 import { CHANGED_FILES_HEAD, MSG, TOOL, changedFilesLines, manualIssue, preparedNext, settingsLines } from './messages.mjs';
-import { OUTCOMES, matchCriterion, readCriteria, text } from './store.mjs';
+import { OUTCOMES, matchCriterion, readCriteria, sameAgent, text } from './store.mjs';
 
 const VERDICTS = ['pass', 'fail', 'unknown'];
 const ISSUE_TIMEOUT_MS = 30_000;
+const OPTIONS_WAIT_MS = 1_500;
 
 const fail = (message) => ({ textResultForLlm: message, resultType: 'failure' });
 // モデルが数や真偽を文字で渡すこともあるので、受け入れる
@@ -30,15 +31,37 @@ export function runCommand(command, args, timeoutMs) {
 
 const S = (description) => ({ type: 'string', description });
 
+/** 待つのは、長くても ms まで（待ちきれなくても先に進む） */
+async function waitAtMost(promise, ms) {
+  let timer;
+  try {
+    await Promise.race([Promise.resolve(promise).catch(() => {}), new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * チャットで言われた作業エージェントの名前を、エージェントの一覧の名前にそろえる。
+ * 一覧に同じ名前があれば、そのまま。プラグインの名前を付ける・付けないだけの違いで1つだけ当たれば、一覧の名前にする
+ */
+export function listedAgentName(name, agents = []) {
+  const names = agents.map((a) => text(a?.name)).filter(Boolean);
+  if (names.includes(name)) return name;
+  const hits = names.filter((n) => sameAgent(n, name));
+  return hits.length === 1 ? hits[0] : name;
+}
+
 const DEFINITIONS = {
   open: {
     description:
-      '統括エージェントが最初に呼ぶ。頼む作業と合格の条件を記録し、Web管理画面を開いて、URL と今の設定を返す。',
+      '統括エージェントが最初に呼ぶ。頼む作業と合格の条件を記録し、Web管理画面を開いて、URL と今の設定を返す。作業エージェントの名前を渡すと、その名前を設定にする。',
     parameters: {
       type: 'object',
       properties: {
         request: S('頼む作業。利用者の頼みを短くまとめた文'),
         criteria: { type: 'array', items: { type: 'string' }, description: '合格の条件。1つずつ、結果を見て確かめられる文で。番号（C1 など）は付けない' },
+        worker: S('使う作業エージェントの名前。利用者がチャットで名前を言ったときだけ入れる。入れると、この作業フォルダの設定として保存する'),
       },
       required: ['request'],
     },
@@ -131,6 +154,17 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
         return fail(`Web管理画面を開けませんでした（${error?.message ?? error}）。利用者に伝えてください。`);
       }
       await refreshFolder(); // 作業フォルダの設定を読んでから、設定を伝える
+      // 利用者がチャットで作業エージェントを名指ししたときは、この作業フォルダの設定にする
+      const named = text(args?.worker);
+      let chosen = '';
+      if (named) {
+        await waitAtMost(refreshOptions(), OPTIONS_WAIT_MS);
+        const worker = listedAgentName(named, store.options.agents);
+        const saved = store.setSettings({ ...store.settings, worker });
+        chosen = saved
+          ? `作業エージェントを「${worker}」にしました（この作業フォルダの設定として保存しました）。`
+          : `作業エージェントを「${worker}」にしました。ただし、設定をファイルに保存できませんでした（Copilot CLI を閉じるまでは、この設定で動きます）。`;
+      }
       store.draft = { request, criteria: readCriteria(args?.criteria), prepared: null };
       store.changed();
       refreshOptions();
@@ -138,7 +172,7 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       const next = w
         ? `次に、作業エージェント「${w}」に、準備の確認だけを頼んでください（作業はさせない）。返事を ${TOOL.prepare} で記録してください。`
         : '作業エージェントが決まっていません。利用者に URL を伝え、Web管理画面で作業エージェントを選んで「開始」を押すよう頼んで、手番を終えてください。';
-      return [`Web管理画面を開きました。URL：${url}`, '今の設定：', ...settingsLines(store.settings), next].join('\n');
+      return [`Web管理画面を開きました。URL：${url}`, ...(chosen ? [chosen] : []), '今の設定：', ...settingsLines(store.settings), next].join('\n');
     },
 
     async prepare(args) {

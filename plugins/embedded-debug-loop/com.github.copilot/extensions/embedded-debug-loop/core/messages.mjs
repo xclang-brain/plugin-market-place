@@ -23,8 +23,9 @@ export const MSG = Object.freeze({
   unexpected: '記録の処理で思わぬ失敗が起きました。同じことが続くときは、利用者に伝えてください。',
 });
 
-// 止めたときの結論で、途中で変えたファイルの一覧の見出し
-export const CHANGED_FILES_HEAD = '途中で変えたファイル（元に戻していません）：';
+// 止めたときの結論で、途中で変えたファイルの一覧の見出し。
+// 一覧は、ファイルを直すツールで変えたものだけ。コマンドで変わったファイルは分からないので、そう書いておく
+export const CHANGED_FILES_HEAD = '途中で変えたファイル（元に戻していません）（コマンドで変わったファイルは含みません）：';
 
 /** 途中で変えたファイルの一覧の行。なければ空の配列 */
 export function changedFilesLines(files) {
@@ -44,6 +45,14 @@ export function stoppedConclusion(place, files = []) {
   const lines = [MSG.stoppedConclusion];
   if (place && STOP_PLACE[place.step]) lines.push(STOP_PLACE[place.step](place.n));
   return [...lines, ...changedFilesLines(files)].join('\n');
+}
+
+/**
+ * 止めて自動で終えたときに、チャットに出す知らせ（結論と、結果の画面の URL）。
+ * 止めた後は統括エージェントの手番が来ないので、チャットには、止めたことしか出ないため。
+ */
+export function stoppedChatNotice(conclusion, url) {
+  return [conclusion, ...(url ? [`結果の画面：${url}#result`] : [])].join('\n');
 }
 
 /** prepare の結果の文。ready でなければ、すぐに「開始」を押すよう頼ませない */

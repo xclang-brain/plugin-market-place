@@ -232,6 +232,53 @@ class ShowTest(ToolTestCase):
         self.assertEqual(it["snapshot_interval_seconds"]["value"], 0.5)
         self.assertEqual(data["missing"], ["camera_ip"])
 
+    def test_show_table_for_the_final_report(self):
+        """終わりの報告にそのまま貼る表。空は（空）、パスワードは ＊＊＊、長い値は切る。"""
+        path = self.copy(CAMERA)
+        self.ok("set", path, "admin_user", "a|b")
+        self.ok("set", path, "camera_ip", "x" * 50)
+        data = self.ok("show", path)
+        lines = data["table"].split("\n")
+        self.assertEqual(lines[:2], ["| 項目 | 値 |", "| --- | --- |"])
+        self.assertEqual(len(lines), 2 + len(data["items"]))
+        rows = {}
+        for line in lines[2:]:
+            self.assertTrue(line.startswith("| ") and line.endswith(" |"), line)
+            key, _, cell = line[2:-2].partition(" | ")
+            rows[key] = cell
+        self.assertEqual(list(rows), [it["key"] for it in data["items"]])
+        self.assertEqual(rows["api_token"], MASK)
+        self.assertEqual(rows["motion_zones"], "（空）")
+        self.assertEqual(rows["rtsp_port"], "`554`")
+        self.assertEqual(rows["night_mode"], "`true`")
+        self.assertEqual(rows["admin_user"], "`a\\|b`")
+        self.assertEqual(rows["camera_ip"], "`" + "x" * 40 + "…`")
+        self.assertEqual(rows["recording_dirs"], '`["/mnt/rec1", "/mnt/録画 2"]`')
+        self.assertNotIn("tk-0123456789abcdef", data["table"])
+
+    def test_show_table_empty_secret(self):
+        path = self.copy(COFFEE)
+        table = self.ok("show", path)["table"]
+        self.assertIn("| maintenance_password | （空） |", table)
+        self.assertIn("| machine_name | （空） |", table)
+        self.assertIn("| greeting | `いらっしゃいませ` |", table)
+
+    def test_fill_recommended(self):
+        """必須ではないが、コメントに「必ず書く」とある項目。「必ずしも」は数えない。"""
+        path = self.write("r.yaml",
+                          "# 見本\n\n"
+                          "# 読み込むファイル。ふだん使うなら、必ず書く。\n# 例：/etc/a.conf\nenv_file: \"\"\n\n"
+                          "# 名前（必須）。必ず書く。\nname: \"\"\n\n"
+                          "# メモ。必ずしも要らない。\nmemo: \"\"\n\n"
+                          "# 色。\n# 例：必ず赤\ncolor: \"\"\n")
+        it = self.items(path)
+        self.assertTrue(it["env_file"]["fill_recommended"])
+        self.assertFalse(it["name"]["fill_recommended"])  # 必須の項目は required で扱う
+        self.assertFalse(it["memo"]["fill_recommended"])
+        self.assertFalse(it["color"]["fill_recommended"])  # 例の行は説明ではない
+        coffee = self.items(self.copy(COFFEE))
+        self.assertFalse(any(v["fill_recommended"] for v in coffee.values()))
+
     def test_secret_never_printed(self):
         path = self.copy(CAMERA)
         for args in (("show", path), ("get", path, "api_token"), ("list", "--dir", self.tmp)):

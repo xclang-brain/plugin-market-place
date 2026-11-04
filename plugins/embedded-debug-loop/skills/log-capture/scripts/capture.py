@@ -457,18 +457,18 @@ def validate(cfg):
 
     port = _text(cfg.get("port"))
     if port is None:
-        problems.append("port（シリアルポート）は、1つの文字列で書いてください。例：/dev/ttyUSB0")
+        problems.append("port（シリアルポート）は、1つの文字列で書いてください（例：/dev/ttyUSB0）。")
     elif port.strip() == "":
-        problems.append("port（機器につながるシリアルポート）が空です。例：/dev/ttyUSB0")
+        problems.append("port（機器につながるシリアルポート）が空です。/dev/ttyUSB0 のように書いてください。")
     s.port = (port or "").strip()
 
     baud = _number(cfg.get("baud"))
     s.baud = None
     if cfg.get("baud") is None or cfg.get("baud") == "":
-        problems.append("baud（シリアルの速さ）が空です。例：115200")
+        problems.append("baud（シリアルの速さ）が空です。115200 のように、機器と同じ速さを書いてください。")
     elif baud is None or int(baud) != baud or int(baud) not in BAUDS:
         problems.append(
-            "baud（シリアルの速さ）の %s は使えません。使える値の例：9600、38400、57600、115200、230400、460800、921600"
+            "baud（シリアルの速さ）の %s は使えません。使える値は、9600、38400、57600、115200、230400、460800、921600 などです。"
             % cfg.get("baud")
         )
     else:
@@ -476,7 +476,7 @@ def validate(cfg):
 
     user = _text(cfg.get("login_user"))
     if user is None:
-        problems.append("login_user（ログインするユーザー名）は、文字列で書いてください。例：root")
+        problems.append("login_user（ログインするユーザー名）は、文字列で書いてください（例：root）。")
         user = ""
     s.login_user = user.strip()
 
@@ -504,7 +504,7 @@ def validate(cfg):
 
     prompt = _text(cfg.get("prompt"))
     if prompt is None:
-        problems.append("prompt（シェルのプロンプトに合う正規表現）は、文字列で書いてください。例：[#$] $")
+        problems.append("prompt（シェルのプロンプトに合う正規表現）は、文字列で書いてください（例：[#$] $）。")
         prompt = ""
     if prompt == "":
         prompt = DEFAULT_PROMPT
@@ -513,7 +513,7 @@ def validate(cfg):
         s.prompt_re = re.compile(prompt)
     except re.error as e:
         s.prompt_re = None
-        problems.append("prompt の正規表現 %s が正しくありません（%s）。例：[#$] $" % (prompt, e))
+        problems.append("prompt の正規表現 %s が正しくありません（%s）。[#$] $ のように書いてください。" % (prompt, e))
 
     commands = cfg.get("commands")
     s.commands = []
@@ -535,9 +535,9 @@ def validate(cfg):
     t = _number(raw)
     s.command_timeout = 30
     if raw is None or raw == "":
-        problems.append("command_timeout_seconds（1つのコマンドの出力を待つ秒数）が空です。例：30")
+        problems.append("command_timeout_seconds（1つのコマンドの出力を待つ秒数）が空です。30 のように秒数を書いてください。")
     elif t is None or t <= 0:
-        problems.append("command_timeout_seconds は、0 より大きい数で書いてください。例：30")
+        problems.append("command_timeout_seconds は、0 より大きい数で書いてください（例：30）。")
     else:
         s.command_timeout = t
 
@@ -547,7 +547,7 @@ def validate(cfg):
     if raw is None or raw == "":
         pass
     elif t is None or t < 0:
-        problems.append("listen_seconds（さらに出力を記録する秒数）は、0 以上の数で書いてください。例：10")
+        problems.append("listen_seconds（さらに出力を記録する秒数）は、0 以上の数で書いてください（例：10）。")
     else:
         s.listen_seconds = t
 
@@ -757,7 +757,7 @@ def _not_found_message(path):
         msg += "port は /dev から書いてください（例：/dev/ttyUSB0）。"
     ports = find_ports()
     if ports:
-        msg += "この PC で見つかったシリアルポート：%s" % "、".join(ports)
+        msg += "この PC で見つかったシリアルポートは、%s です。" % "、".join(ports)
     return msg
 
 
@@ -1099,7 +1099,7 @@ def wake(con, s):
         % s.port
     )
     if seen:
-        msg += "最後に届いた行：%s" % seen.replace("\n", " / ")
+        msg += "最後に届いた行は「%s」です。" % seen.replace("\n", " / ")
     raise Failure(msg)
 
 
@@ -1137,7 +1137,7 @@ def login(con, s):
     )
     seen = _last_seen(con)
     if seen:
-        msg += "最後に届いた行：%s" % seen.replace("\n", " / ")
+        msg += "最後に届いた行は「%s」です。" % seen.replace("\n", " / ")
     raise Failure(msg)
 
 
@@ -1367,7 +1367,7 @@ class _Parser(argparse.ArgumentParser):
         m = re.match(r"argument (\S+?)(?:/\S+)?: expected one argument", message)
         if m:
             raise ArgError("%s の後に、値を書いてください。" % m.group(1))
-        raise ArgError(message)
+        raise ArgError(as_sentence(message))
 
 
 SUBCOMMANDS = ("run", "config-path", "check")
@@ -1397,7 +1397,7 @@ def parse_args(argv):
         if a.startswith("-"):
             i += 1
             continue
-        raise ArgError("「%s」は使えないサブコマンドです。使えるもの：run、config-path、check" % a)
+        raise ArgError("「%s」は使えないサブコマンドです。使えるのは run、config-path、check です。" % a)
     p = _Parser(add_help=False)
     p.add_argument("--workdir")
     p.add_argument("--config")
@@ -1413,7 +1413,7 @@ def parse_args(argv):
     if args.listen_only is not None:
         v = _number(args.listen_only)
         if v is None or v <= 0:
-            raise ArgError("--listen-only には、0 より大きい秒数を書いてください。例：--listen-only 10")
+            raise ArgError("--listen-only には、0 より大きい秒数を書いてください（例：--listen-only 10）。")
         args.listen_only = v
     if args.command:
         for c in args.command:
@@ -1456,11 +1456,19 @@ def cmd_config_path(args):
     return 0
 
 
+def as_sentence(text):
+    """文の終わりに「。」がなければ足す（次の文とつながって読めなくならないように）。"""
+    text = text.rstrip()
+    if text and not text.endswith(("。", "！", "？")):
+        text += "。"
+    return text
+
+
 def problems_message(problems, config, created):
     """設定の問題を、人に伝える文にする。"""
     head = "設定ファイルがなかったので、ひな形から作りました。" if created else ""
     if len(problems) == 1:
-        return "%s%s設定ファイルは %s です。" % (head, problems[0], config)
+        return "%s%s設定ファイルは %s です。" % (head, as_sentence(problems[0]), config)
     return ("%s設定に直すところが %d 件あります。設定ファイル %s を直してください。"
             "各項目の意味は、項目のすぐ上のコメントに書いてあります。"
             % (head, len(problems), config))

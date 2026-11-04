@@ -470,10 +470,10 @@ def normalize(raw, workdir):
             outputs.append(str(item).strip())
         if not outputs:
             problems.append(
-                "{}が空です（必須）。ビルドでできるファイルの名前を書いてください。"
-                "例：[\"sensor_app\"]".format(label("outputs")))
+                "{}が空です（必須）。ビルドでできるファイルの名前を書いてください"
+                "（例：[\"my_app\"]）。".format(label("outputs")))
     else:
-        problems.append("{}はリストで書いてください。例：[\"sensor_app\"]。今の値：{}".format(
+        problems.append("{}はリストで書いてください（例：[\"my_app\"]）。今の値：{}".format(
             label("outputs"), show_value(value)))
     s["outputs"] = outputs
 

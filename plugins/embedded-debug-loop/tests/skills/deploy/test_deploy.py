@@ -298,6 +298,35 @@ class YamlReaderTest(unittest.TestCase):
                     self.assertIn("（必須）", "\n".join(lines[j:i]), key)
         text = "\n".join(lines)
         self.assertIn("# 選べる値：none / crc32 / sum32", text)
+
+    def test_template_examples_are_generic(self):
+        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        with open(TEMPLATE, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("sensor", text)
+        self.assertIn('# 例：["my_app"]', text)
+        self.assertIn("# 例：/opt/myapp", text)
+
+    def test_template_comments_do_not_point_by_position(self):
+        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        with open(TEMPLATE, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        for i, line in enumerate(lines):
+            if not re.match(r"^[A-Za-z_]+:", line):
+                continue
+            j = i
+            while j > 0 and lines[j - 1].startswith("#"):
+                j -= 1
+            for comment in lines[j:i]:
+                for word in ("下の", "上の", "上から", "このスキル", "この項目"):
+                    self.assertNotIn(word, comment, comment)
+
+    def test_file_mode_comment_says_files_are_not_executable(self):
+        with open(TEMPLATE, encoding="utf-8") as fh:
+            text = fh.read()
+        block = re.search(r"((?:^#.*\n)+)file_mode:", text, re.M).group(1)
+        self.assertIn("実行できない権限", block)
+        self.assertNotIn("空なら変えない", block)
         self.assertIn("# 選べる値：true / false", text)
 
     def test_scalars_and_lists(self):
@@ -390,6 +419,28 @@ class ValidateTest(unittest.TestCase):
         _s, problems, _n, ready = deploy.validate(values, {}, ws.dir, {})
         self.assertEqual(len(problems), 3)
         self.assertFalse(ready)
+
+    def test_single_problem_message_is_punctuated(self):
+        """問題の文に「。」がないと、次の「設定ファイルは…」とつながって読めない。"""
+        msg = deploy.problems_message(["files に、ファイルの名前でない値があります：3"], "/w/c.yaml", False)
+        self.assertEqual(msg, "files に、ファイルの名前でない値があります：3。設定ファイルは /w/c.yaml です。")
+        msg = deploy.problems_message(["host（機器の IP アドレスかホスト名）が空です。"], "/w/c.yaml", True)
+        self.assertNotIn("。。", msg)
+
+    def test_every_problem_ends_a_sentence(self):
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        cfg = base_config(
+            70000, files=["missing.bin", 3, "sensor_app", "sensor_app"], checksum="md5", file_mode="rwx",
+            timeout_seconds=0, passive="yes", remote_dir="", user=5, host="a b")
+        _s, problems, _n, _ready = self.check(ws, **cfg)
+        self.assertGreater(len(problems), 5)
+        for p in problems:
+            self.assertTrue(p.endswith("。"), p)
+        _s, problems, _n, _ready = self.check(ws, files="x", host=["a"], checksum="crc32",
+                                              checksum_suffix="")
+        for p in problems:
+            self.assertTrue(p.endswith("。"), p)
 
     def test_mode_forms(self):
         self.assertEqual(deploy.normalize_mode("755"), "755")
@@ -677,6 +728,7 @@ class FtpServerTest(unittest.TestCase):
         self.assertIn("/.embedded-debug-loop/logs/", entry["checksum_local_file"])
         self.assertIn("127.0.0.1", data["message"])
         self.assertIn("755", data["message"])
+        self.assertNotIn("権限は付けていません", data["message"])
         # パスワードはどこにも出さない
         self.assertNotIn(PASSWORD, out)
         self.assertNotIn(PASSWORD, err)
@@ -713,6 +765,13 @@ class FtpServerTest(unittest.TestCase):
         self.assertIsNone(entry["mode"])
         self.assertIsNone(entry["checksum"])
         self.assertIsNone(entry["checksum_file"])
+        # 権限を付けていないことと、そのままでは実行できないことを伝える（「変更なし」とは言わない）
+        msg = data["message"]
+        self.assertIn("権限は付けていません（file_mode が空です）。", msg)
+        self.assertIn("ふつうは実行できない権限になります。", msg)
+        self.assertIn("file_mode に 755 などを書いてください。", msg)
+        self.assertNotIn("変更なし", msg)
+        self.assertNotIn("変えていません", msg)
 
     def test_nested_remote_dir_is_created(self):
         ws = Workspace(self)
@@ -942,6 +1001,21 @@ class IndependenceTest(unittest.TestCase):
                 self.assertIn("伝えません", line, line)
         self.assertNotRegex(text, r"[0-2] ?[がは]成功")
         self.assertIn("`.gitignore`", text)
+
+    def test_skill_md_hides_json_names(self):
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("JSON の項目名（`ok`、`mode`", section)
+        self.assertIn("利用者に見せません", section)
+        self.assertIn("設定ファイルの項目名（host、file_mode など）は、見せてかまいません", section)
+
+    def test_skill_md_does_not_say_unchanged_permissions(self):
+        """file_mode が空のとき「変更なし」と書くと、実行できるままだと思われる。"""
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("権限の欄に「付けていない」と書きます", text)
+        self.assertIn("「変更なし」とは書きません", text)
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""

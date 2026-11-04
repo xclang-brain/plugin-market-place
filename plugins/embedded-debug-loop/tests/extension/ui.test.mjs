@@ -153,3 +153,43 @@ test('くわしい記録：利用者の操作の行は「利用者」と出す',
   assert.equal(textOf(who), '利用者');
   assert.ok(who.classList.contains('who-u'));
 });
+
+// 選ぶ欄の選択肢（値）
+const choices = (select) => select.querySelectorAll('option').map((o) => o.getAttribute('value'));
+
+test('設定：作業エージェントの欄には選んでいる検証エージェントを、検証エージェントの欄には選んでいる作業エージェントを出さない', async () => {
+  const Z = 'demo-plugin:helper-z';
+  const { $, box, settle, poll } = await screen(snap({ draft: draftWith(null) }));
+  assert.deepEqual(choices($('f-worker')), [W, Z]);
+  assert.deepEqual(choices($('f-verifier')), [Z, V]);
+
+  // 作業エージェントを選び直すと、検証エージェントの欄が変わる（前の作業エージェントは選べるようになる）
+  $('f-worker').value = Z;
+  $('f-worker').dispatch('change');
+  assert.deepEqual(choices($('f-verifier')), [W, V]);
+  assert.equal($('f-verifier').value, V);
+  assert.deepEqual(choices($('f-worker')), [W, Z]);
+
+  // 検証エージェントを選び直すと、作業エージェントの欄が変わる
+  $('f-verifier').value = W;
+  $('f-verifier').dispatch('change');
+  assert.deepEqual(choices($('f-worker')), [Z, V]);
+  assert.equal($('f-worker').value, Z);
+  assert.deepEqual(choices($('f-verifier')), [W, V]);
+
+  // 読み直しても、選び直した値は残る。保存すると、その値を送る
+  await poll();
+  assert.equal($('f-worker').value, Z);
+  assert.equal($('f-verifier').value, W);
+  $('btn-save').dispatch('click');
+  await settle();
+  const sent = box.posts.find((p) => p.path === '/api/settings').body;
+  assert.deepEqual([sent.worker, sent.verifier], [Z, W]);
+});
+
+test('設定：名前の付け方（プラグインの名前の有無）が違っても、同じエージェントとみなして除く', async () => {
+  const { $ } = await screen(snap({ settings: { ...snap().settings, worker: 'helper-a', verifier: 'checker-b' } }));
+  // 今の値（一覧にない書き方）は最後に足して残す
+  assert.deepEqual(choices($('f-worker')), [W, 'demo-plugin:helper-z', 'helper-a']);
+  assert.deepEqual(choices($('f-verifier')), ['demo-plugin:helper-z', V, 'checker-b']);
+});

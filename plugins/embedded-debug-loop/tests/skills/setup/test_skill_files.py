@@ -106,9 +106,82 @@ class SkillMdTest(unittest.TestCase):
                 self.assertIn("空でない", line, line)
         self.assertIn("空の値は「（空）」と書きます。`secret` が true でも同じです。", self.body)
 
+    def section(self, start, end):
+        return self.body[self.body.index(start):self.body.index(end)]
+
     def test_empty_optional_item_can_stay_empty(self):
         self.assertIn("「空のまま」（必須でなく、今の値が空のとき）", self.body)
-        self.assertLess(self.body.index("「空のまま」（必須でなく"), self.body.index("`choices` の値を全部"))
+
+    def test_choice_order_puts_values_before_staying_empty(self):
+        """「空のまま」が先頭（既定）だと、Enter だけで大事な項目が空のままになる。
+        並びは、今の値 → 書ける値 → 空のまま。"""
+        section = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
+        current = section.index("「今の値のまま：<value>」")
+        values = section.index("「<値> と書く」")
+        empty = section.index("「空のまま」（必須でなく")
+        self.assertLess(current, values)
+        self.assertLess(values, empty)
+        self.assertIn("「空のまま」は、書ける値より前に置きません。", section)
+
+    def test_choices_show_the_value_that_is_written(self):
+        """「例：<値>」の選択肢では、「例：」まで書かれるのかが分からない。"""
+        section = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
+        self.assertIn("「my_app と書く」", section)
+        self.assertIn("「例：」は付けません。", section)
+        self.assertNotIn("「例：<値>」", self.body)
+        write = self.section("### 5. 答えを書き込む", "### 6. パスワードなど")
+        self.assertIn("「<値> と書く」を選んだら", write)
+
+    def test_fill_recommended_puts_first_example_first(self):
+        section = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
+        self.assertIn("`fill_recommended` が true の項目は、`examples` の1つ目を1番目に置きます。", section)
+        self.assertIn("「（おすすめ）」", section)
+        self.assertIn("`fill_recommended`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
+
+    def test_file_only_phrases_are_rephrased(self):
+        """コメントの「下の」「このスキル」は、チャットでは何を指すか分からない。"""
+        section = self.section("## 利用者に見せる言葉", "## 質問のしかた")
+        for word in ("「下の」", "「上の」", "「このスキル」", "「この項目」", "名前で言い換えます"):
+            self.assertIn(word, section, word)
+        ask = self.section("### 4. 1つの項目の聞き方", "### 5. 答えを書き込む")
+        self.assertIn("「利用者に見せる言葉」のとおりに言い換えてから使います", ask)
+        secret = self.section("### 6. パスワードなど", "### 7. 終わりの報告")
+        self.assertIn("「利用者に見せる言葉」のとおりに言い換えてから使います", secret)
+
+    def test_json_names_are_not_shown(self):
+        section = self.section("## 利用者に見せる言葉", "## 質問のしかた")
+        self.assertIn("JSON の名前", section)
+        self.assertIn("利用者に見せません", section)
+        self.assertIn("項目の名前（`key`）は、見せてかまいません", section)
+
+    def test_one_file_at_a_time(self):
+        """必須の項目を全部のファイルで先に聞くと、ファイルを2回行き来する。"""
+        section = self.section("### 2. ファイルごとに進める", "### 3. 聞く順番")
+        self.assertIn("1つのファイルについて、2〜6 を全部終えてから、次のファイルに進みます。", section)
+        self.assertIn("ほかのファイルの項目を、先にまとめて聞くことはしません。", section)
+
+    def test_named_items_come_first(self):
+        order = self.section("### 3. 聞く順番", "### 4. 1つの項目の聞き方")
+        named = order.index("直したい項目の名前を示したときは、その項目から聞きます。")
+        self.assertLess(named, order.index("必須で空の項目"))
+        files = self.section("### 1. 設定するファイルを決める", "### 2. ファイルごとに進める")
+        self.assertIn("その項目があるファイルを先にします", files)
+
+    def test_wording_of_the_rest_question(self):
+        self.assertNotIn("説明の1行目", self.body)
+        self.assertNotIn("残りの N 個", self.body)
+        self.assertIn("「ほかの N 個の項目は、今の値のままでよいですか。」", self.body)
+        self.assertIn("列は「項目」「今の値」「説明」です。", self.body)
+
+    def test_rewriting_by_hand_waits_for_the_user(self):
+        """自分で書き換えると答えたのに、待たずに先へ進むと、書く時間がない。"""
+        section = self.section("- 「自分でファイルを書き換える」なら", "### 7. 終わりの報告")
+        for word in ("ほかのコマンドは実行しません。次の項目にも進みません。",
+                     "「書き換えたら教えてください。」", "「書き換えた」「あとでやる」の2つ",
+                     "`show` でファイルを読み直します", "「あとで書き換える項目」"):
+            self.assertIn(word, section, word)
+        report = self.section("### 7. 終わりの報告", "## 守ること")
+        self.assertIn("「あとで書き換える項目：<key>」", report)
 
     def test_cancel_and_decline_are_handled(self):
         section = self.body[self.body.index("### 質問が取り消されたとき"):self.body.index("## 進め方")]
@@ -120,6 +193,17 @@ class SkillMdTest(unittest.TestCase):
         section = self.body[self.body.index("### 7. 終わりの報告"):self.body.index("## 守ること")]
         self.assertIn("どんな終わり方でも、最後に必ずこの報告をします", section)
         self.assertIn("途中で止めたときも同じです", section)
+
+    def test_final_report_is_shown_in_chat_before_anything_else(self):
+        """呼び出し元が続けて別の作業をすると、報告が抜けた（2回続けて）。"""
+        section = self.body[self.body.index("### 7. 終わりの報告"):self.body.index("## 守ること")]
+        for word in ("呼び出し元がこの後に別の作業を続けるときも、省きません。",
+                     "手番を返す前の最後のこと",
+                     "チャットの文として、利用者に必ず見せます。",
+                     "`show` と、ほかのコマンドやツールを、一緒に呼びません。",
+                     "報告を書く前に、ほかのコマンドやツールを呼びません。",
+                     "`table` を、そのまま貼ります"):
+            self.assertIn(word, section, word)
 
     def test_sentences_are_short(self):
         # 文は 60 文字ほどまで（表・コードは除く）。長すぎる文がないかを見る。
