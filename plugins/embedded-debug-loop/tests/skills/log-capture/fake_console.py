@@ -123,8 +123,8 @@ class FakeDevice(object):
     """機器側の pty で動く、ログインとシェルのまね。"""
 
     def __init__(self, relay, login=True, user="root", password="root", ansi=False,
-                 garbage=False, ticker=None, wrap=0, responses=None, ignore_interrupt=(),
-                 left_at_password=False):
+                 garbage=False, ticker=None, wrap=0, wrap_repeat=False, responses=None,
+                 ignore_interrupt=(), left_at_password=False):
         self.relay = relay
         self.fd = relay.dev_slave
         self.need_login = login
@@ -134,6 +134,7 @@ class FakeDevice(object):
         self.garbage = garbage
         self.ticker = ticker
         self.wrap = wrap
+        self.wrap_repeat = wrap_repeat
         self.responses = dict(DEFAULT_RESPONSES)
         if responses:
             self.responses.update(responses)
@@ -296,7 +297,10 @@ class FakeDevice(object):
             self.line += ch
             self.out(ch)
             self.col += 1
-            if self.wrap and self.col % self.wrap == 0:
+            if self.wrap and self.wrap_repeat and self.col > self.wrap and self.col % self.wrap == 1:
+                # bash（端末が vt102 など）のまね：次の行の頭の1文字を出し、\r の後にもう一度出す
+                self.raw(b"\r" + ch.encode("utf-8"))
+            elif self.wrap and not self.wrap_repeat and self.col % self.wrap == 0:
                 # 長い行を折り返すときの bash のまね（空白と \r を入れる）
                 self.raw(b" \r")
 

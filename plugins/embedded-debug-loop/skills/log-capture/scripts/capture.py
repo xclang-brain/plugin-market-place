@@ -112,6 +112,23 @@ class Disconnected(Exception):
     pass
 
 
+_OS_REASONS = {
+    errno.EACCES: "権限がありません",
+    errno.EPERM: "権限がありません",
+    errno.ENOENT: "見つかりません",
+    errno.ENOSPC: "ディスクに空きがありません",
+    errno.EROFS: "読み出し専用の場所です",
+    errno.EISDIR: "フォルダです",
+    errno.ENOTDIR: "途中にフォルダでないものがあります",
+    errno.EEXIST: "同じ名前のファイルがあります",
+}
+
+
+def os_reason(e):
+    """OSError の理由を、短い日本語にする。"""
+    return _OS_REASONS.get(getattr(e, "errno", None)) or e.strerror or str(e)
+
+
 # ---------------------------------------------------------------------------
 # YAML のごく一部を読む
 # ---------------------------------------------------------------------------
@@ -330,7 +347,7 @@ def ensure_config(path):
     if not os.path.isfile(TEMPLATE_PATH):
         raise Failure(
             "設定ファイルのひな形（%s）が見つかりません。スキルを入れ直してください。" % TEMPLATE_PATH,
-            kind="settings",
+            kind="settings", extra={"config": path},
         )
     folder = os.path.dirname(path)
     try:
@@ -340,8 +357,8 @@ def ensure_config(path):
     except OSError as e:
         raise Failure(
             "設定ファイル %s を作れません（%s）。フォルダに書き込めるかを確かめてください。"
-            % (path, e.strerror or e),
-            kind="settings",
+            % (path, os_reason(e)),
+            kind="settings", extra={"config": path},
         )
     return True
 
@@ -428,11 +445,9 @@ def validate(cfg):
         env_name = ""
     env_name = env_name.strip()
     s.password_env = env_name
-    s.password_from = "login_password" if password else ""
     if env_name:
         if env_name in os.environ:
             password = os.environ[env_name]
-            s.password_from = "環境変数 %s" % env_name
         elif s.login_user and not password:
             problems.append(
                 "login_password_env に書いた環境変数 %s がありません。"
@@ -549,15 +564,34 @@ def _squash(s):
     return re.sub(r"\s+", "", s)
 
 
+def _same_but_repeats(text, target, slack):
+    """text が target と同じか。ただし、すぐ前と同じ文字の余分は slack 個まで許す。
+
+    シェルは長いコマンドを折り返すとき、次の行の頭の1文字を
+    「a\\ra」のように2回出すことがある。\\r を除くと「aa」になる。
+    """
+    j = 0
+    extra = 0
+    for ch in text:
+        if j < len(target) and ch == target[j]:
+            j += 1
+        elif j > 0 and ch == target[j - 1] and extra < slack:
+            extra += 1
+        else:
+            return False
+    return j == len(target)
+
+
 def remove_echo(lines, command):
-    """出力の先頭にある、送ったコマンドの折り返し（エコー）を取り除く。"""
+    """出力の先頭にある、送ったコマンドの表示（エコー。折り返しを含む）を取り除く。"""
     target = _squash(command)
     if not target:
         return lines
+    slack = 1 + len(target) // 10
     acc = ""
     for i in range(min(len(lines), 6)):
         acc += _squash(lines[i])
-        if target in acc:
+        if target in acc or _same_but_repeats(acc, target, slack):
             return lines[i + 1:]
         if len(acc) > len(target) + 80:
             break
@@ -649,8 +683,8 @@ def open_port(path, baud):
     except PermissionError:
         raise Failure(
             "シリアルポート %s を開く権限がありません。"
-            "利用者を dialout グループに入れて（sudo usermod -aG dialout $USER）、"
-            "ログインし直してください。" % path
+            "今のユーザーを dialout グループに入れてから"
+            "（sudo usermod -aG dialout $USER）、PC にログインし直してください。" % path
         )
     except IsADirectoryError:
         raise Failure("%s はフォルダで、シリアルポートではありません。設定の port を確かめてください。" % path)
@@ -662,7 +696,7 @@ def open_port(path, baud):
                 "シリアルポート %s を開けません（つながる先の機器がありません）。"
                 "USB ケーブルを挿し直してください。" % path
             )
-        raise Failure("シリアルポート %s を開けません（%s）。" % (path, e.strerror or e))
+        raise Failure("シリアルポート %s を開けません（%s）。" % (path, os_reason(e)))
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -968,7 +1002,8 @@ def wake(con, s):
         raise Failure(_no_response(s.port))
     msg = (
         "シリアルポート %s から文字は届きますが、ログインの求めも、シェルのプロンプトも出ません。"
-        "設定の速さ（baud）が機器と合っているかと、prompt が機器のプロンプトに合っているかを確かめてください。"
+        "機器で前のプログラムが動いたままでないかを確かめてください。"
+        "また、設定の baud（速さ）と prompt が機器に合っているかも確かめてください。"
         % s.port
     )
     if seen:
@@ -1000,9 +1035,12 @@ def login(con, s):
         say("ログインしました。")
         return
     if hit in ("login", "password", "incorrect"):
+        where = "login_password "
+        if s.password_env and s.password_env in os.environ:
+            where = "環境変数 %s に入れたパスワード" % s.password_env
         raise Failure(
             "ユーザー %s でログインできませんでした（ユーザー名かパスワードが違います）。"
-            "設定の login_user と login_password を確かめてください。" % s.login_user
+            "設定の login_user と、%sを確かめてください。" % (s.login_user, where)
         )
     msg = (
         "ログインの後、シェルのプロンプトが出ません。"
@@ -1102,7 +1140,7 @@ def open_log(workdir, label):
     except OSError as e:
         raise Failure(
             "ログのファイルを %s に作れません（%s）。フォルダに書き込めるかを確かめてください。"
-            % (folder, e.strerror or e)
+            % (folder, os_reason(e))
         )
 
 
@@ -1140,6 +1178,12 @@ class ArgError(Exception):
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
+        m = re.match(r"unrecognized arguments: (.*)", message)
+        if m:
+            raise ArgError("「%s」は使えない引数です。" % m.group(1))
+        m = re.match(r"argument (\S+?)(?:/\S+)?: expected one argument", message)
+        if m:
+            raise ArgError("%s の後に、値を書いてください。" % m.group(1))
         raise ArgError(message)
 
 
@@ -1211,12 +1255,16 @@ def _load(config):
     except UnicodeDecodeError:
         return {}, ["設定ファイルが UTF-8 で書かれていません。UTF-8 で保存し直してください。"]
     except OSError as e:
-        return {}, ["設定ファイルを読めません（%s）。" % (e.strerror or e)]
+        return {}, ["設定ファイル %s を読めません（%s）。" % (config, os_reason(e))]
 
 
 def cmd_config_path(args):
     workdir, config = _paths(args)
-    created = ensure_config(config)
+    try:
+        created = ensure_config(config)
+    except Failure as f:
+        emit({"config": config, "created": False, "missing": list(REQUIRED_KEYS), "problems": [f.message]})
+        return 0
     cfg, problems = _load(config)
     out = {"config": config, "created": created, "missing": missing_keys(cfg) if not problems else list(REQUIRED_KEYS)}
     if problems:
@@ -1225,19 +1273,25 @@ def cmd_config_path(args):
     return 0
 
 
-def _settings_problem(config, created, problems, extra=None):
-    out = {
+def problems_message(problems, config, created):
+    """設定の問題を、人に伝える文にする。"""
+    head = "設定ファイルがなかったので、ひな形から作りました。" if created else ""
+    if len(problems) == 1:
+        return "%s%s設定ファイルは %s です。" % (head, problems[0], config)
+    return ("%s設定に直すところが %d 件あります。設定ファイル %s を直してください。"
+            "各項目の意味は、項目のすぐ上のコメントに書いてあります。"
+            % (head, len(problems), config))
+
+
+def _settings_problem(config, created, problems):
+    emit({
         "ok": False,
         "skill": SKILL,
-        "message": "設定に直すところがあります。設定ファイル %s を直してください。"
-                   "各項目の意味は、項目のすぐ上のコメントに書いてあります。" % config,
+        "message": problems_message(problems, config, created),
         "problems": problems,
         "config": config,
         "created": created,
-    }
-    if extra:
-        out.update(extra)
-    emit(out)
+    })
     return 2
 
 
@@ -1298,7 +1352,6 @@ def cmd_run(args):
         con = Console(fd, s.port, log)
         timed_out_cmd = None
         stuck = False
-        progress = {}
         if commands:
             state = wake(con, s)
             if state == "login":
@@ -1307,7 +1360,7 @@ def cmd_run(args):
             else:
                 say("シェルのプロンプトを確かめました（ログインは不要でした）。")
             for i, c in enumerate(commands):
-                progress = {"phase": "command", "command": c}
+                progress = {"phase": "command", "command": c, "rest": commands[i + 1:]}
                 r, back = run_command(con, s, c)
                 result["commands"].append(r)
                 if r["timed_out"] and timed_out_cmd is None:
@@ -1333,7 +1386,7 @@ def cmd_run(args):
             )
             if rest:
                 msg += "残りの %d 個のコマンドは実行していません。" % rest
-            msg += "機器の状態を確かめてください。そこまでの出力は記録しました。"
+            msg += "機器でコマンドが動いたままかもしれません。機器の状態を確かめてください。そこまでの出力は記録しました。"
             result["message"] = msg
             code = 1
         elif timed_out_cmd is not None:
@@ -1359,6 +1412,8 @@ def cmd_run(args):
                 msg += "そのあと %s 秒、出力を記録しました。" % _num(listen_seconds)
             result["message"] = msg
             code = 0
+        if result.get("logged_out") is False:
+            result["message"] += "exit を送りましたが、ログインの求めに戻ったかは確かめられませんでした。"
         result["ok"] = code == 0
     except Failure as f:
         result["message"] = f.message
@@ -1375,6 +1430,9 @@ def cmd_run(args):
         )
         if con is not None and progress.get("phase") == "command":
             result["commands"].append(partial_command(con, progress["command"]))
+            if progress["rest"]:
+                result["not_run"] = progress["rest"]
+                result["message"] += "残りの %d 個のコマンドは実行していません。" % len(progress["rest"])
         elif con is not None and progress.get("phase") == "listen":
             result["listen"] = partial_listen(con, listen_seconds)
         if result["commands"] or result["listen"]:
@@ -1401,19 +1459,13 @@ def cmd_check(args):
     workdir, config = _paths(args)
     created = ensure_config(config)
     cfg, problems = _load(config)
-    out = {"ok": False, "problems": [], "summary": summary_of(cfg), "config": config, "created": created}
+    out = {"ok": False, "skill": SKILL, "problems": [], "summary": summary_of(cfg),
+           "config": config, "created": created}
+    if not problems:
+        s, problems = validate(cfg)
     if problems:
         out["problems"] = problems
-        out["message"] = "設定ファイルが読めません。設定ファイル %s を直してください。" % config
-        emit(out)
-        return 2
-    s, problems = validate(cfg)
-    if problems:
-        out["problems"] = problems
-        out["message"] = (
-            "設定に直すところがあります。設定ファイル %s を直してください。"
-            "各項目の意味は、項目のすぐ上のコメントに書いてあります。" % config
-        )
+        out["message"] = problems_message(problems, config, created)
         emit(out)
         return 2
 
@@ -1433,7 +1485,7 @@ def cmd_check(args):
             out_ok = logout(con, s)
             message = (
                 "シリアルポート %s で機器につながり、%s でログインできました。" % (s.port, s.login_user)
-                + ("ログアウトしました。" if out_ok else "ログアウトの後、ログインの求めが戻るのは確かめられませんでした。")
+                + ("ログアウトしました。" if out_ok else "exit を送りましたが、ログインの求めに戻ったかは確かめられませんでした。")
             )
             out["summary"]["console"] = "ログインできた"
         else:
@@ -1486,8 +1538,11 @@ def main(argv=None):
             return cmd_check(args)
         return cmd_run(args)
     except Failure as f:
-        emit({"ok": False, "skill": SKILL, "message": f.message, "problems": [f.message]})
-        return 2 if f.kind == "settings" else 1
+        out = {"ok": False, "skill": SKILL, "message": f.message, "problems": [f.message]}
+        out.update(f.extra)
+        emit(out)
+        # check では、問題があれば 2 を返す決まり
+        return 2 if f.kind == "settings" or args.sub == "check" else 1
     except Exception as e:
         say(traceback.format_exc())
         emit({"ok": False, "skill": SKILL,

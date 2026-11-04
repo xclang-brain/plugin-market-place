@@ -200,6 +200,17 @@ class RunLoginAndCommands(CaptureTestCase):
         self.assertEqual(code, 0, data)
         self.assertEqual(data["commands"][0]["output"], "[DBG] start\n[DBG] AVG=3\nsensor_app: done")
 
+    def test_long_command_echo_with_repeated_char_at_wrap(self):
+        # 本物の bash は、折り返した行の頭の1文字を「a\ra」と2回出すことがある
+        command = "echo " + "a" * 70 + " end"
+        port = self.start_device(login=False, wrap=20, wrap_repeat=True,
+                                 responses={command: "a" * 70 + " end"})
+        self.write_config(port=port, commands=[command, "echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["commands"][0]["output"], "a" * 70 + " end")
+        self.assertEqual(data["commands"][1]["output"], "hi")
+
     def test_pause_in_output_does_not_cut_it(self):
         port = self.start_device(login=False)
         self.write_config(port=port, commands=["slow", "tricky"])
@@ -424,6 +435,8 @@ class RunFailures(CaptureTestCase):
         self.assertEqual(len(data["commands"]), 1)
         self.assertTrue(data["commands"][0]["interrupted"])
         self.assertIn("bye", data["commands"][0]["output"])
+        self.assertEqual(data["not_run"], ["echo hi"])
+        self.assertIn("残りの 1 個", data["message"])
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +520,22 @@ class Settings(CaptureTestCase):
         self.assertEqual(code, 0, data)
         self.assertEqual(data["config"], other)
         self.assertTrue(os.path.isfile(other))
+
+    def test_config_cannot_be_created(self):
+        blocker = os.path.join(self.tmp, "afile")
+        with open(blocker, "w") as f:
+            f.write("x")
+        bad = os.path.join(blocker, "log-capture.yaml")
+        code, data = self.capture("config-path", "--config", bad)
+        self.assertEqual(code, 0, data)
+        self.assertFalse(data["created"])
+        self.assertIn("作れません", data["problems"][0])
+        code, data = self.capture("run", "--config", bad)
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["config"], bad)
+        self.assertIn("作れません", data["message"])
+        code, data = self.capture("check", "--config", bad)
+        self.assertEqual(code, 2, data)
 
     def test_nothing_to_do(self):
         self.write_config(port="/dev/ttyUSB0", commands=[], listen_seconds=0)
@@ -638,6 +667,11 @@ class Parts(unittest.TestCase):
         self.assertEqual(f(["ls -l", "a", "b"], "ls -l"), ["a", "b"])
         self.assertEqual(f(["run-app /opt/sen ", "sor_app", "out"], "run-app /opt/sensor_app"), ["out"])
         self.assertEqual(f(["out"], "ls"), ["out"])  # 折り返しがないときは、そのまま
+        # 折り返しで1文字が2回出たとき（「…sen\rnsor…」の \r を除いたもの）
+        self.assertEqual(f(["run-app /opt/sennsor_app", "out"], "run-app /opt/sensor_app"), ["out"])
+        # コマンドと違う行は、取り除かない
+        error = ["run-app: /opt/sensor/sensor_app: Permission denied"]
+        self.assertEqual(f(error, "run-app /opt/sensor/sensor_app"), error)
 
     def test_template_is_read_as_expected(self):
         cfg = self.m.read_yaml(TEMPLATE)
