@@ -1,7 +1,7 @@
 // 中心の処理：開始（設計書 4.3、6.1、10章「開始」）
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 import { expectRefusal, LIMITS, makeHarness, PLUGIN, TASK } from './harness.mjs';
 
@@ -46,6 +46,21 @@ test('REQ-005 開始すると、選んだモデルで統括が起動され、指
   // 上書きしてから起動する順
   const order = h.port.calls.map((c) => c.method);
   assert.ok(order.indexOf('setSubagentSettings') < order.indexOf('startAgent'));
+});
+
+test('REQ-062 統括への指示文に、プラグインのフォルダの絶対パスが入る（エージェントがルールのスキルを絶対パスで読むため）', async (t) => {
+  const h = await makeHarness(t);
+  await h.core.open({ requestText: 'Coverity の警告をトリアージして' });
+  const p = h.core.start(h.settings());
+  await h.settle();
+  await p;
+  const prompt = h.port.argsOf('startAgent')[0].prompt;
+  assert.ok(isAbsolute(h.pluginRoot));
+  const section = `\n## プラグインのフォルダ\n${h.pluginRoot}\n`;
+  assert.equal(prompt.split(section).length, 2, prompt.slice(0, 300));
+  // 実行の番号の後、頼まれた作業の前に置く
+  assert.ok(prompt.indexOf(`実行の番号：${h.run().id}`) < prompt.indexOf(section));
+  assert.ok(prompt.indexOf(section) < prompt.indexOf('## 頼まれた作業'));
 });
 
 test('REQ-007 エージェントごとに選んだ思考の深さが、モデルと同じ上書きで渡る。統括の深さも上書きで渡す', async (t) => {

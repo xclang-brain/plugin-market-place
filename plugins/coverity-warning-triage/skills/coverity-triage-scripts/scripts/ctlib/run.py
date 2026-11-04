@@ -9,6 +9,7 @@ Layout (``<output_dir>/<run id>/``)::
     integration/  candidates.json  plan.json  (option agents.integration)
     work/         fix-<n>/  annotation-<n>/  analyzed/   (work copies; removed by ``summary``)
     cid/<ID>.html  patches/  fixed/<ID>/  summary.html  approvals.json  apply-plan.json  operations.log
+    apply-code.result.json   (the result of ``apply-code``, returned again for the same confirmation string)
     cid/<ID>.md  summary.md   (only with the option ``markdown``, and in runs made before approvals.json)
 """
 
@@ -79,6 +80,7 @@ class RunState(BaseModel):
     max_rework: int = 1
     # progress of the steps around the work items
     fetch_rounds: int = 0  # times the collector was started to fetch the warning paths
+    paths_checked: bool = False  # after the last fetch: the person was told of the paths that could not be fetched
     integrated: bool = False
     verified: bool = False
     roles: dict[str, dict[str, Any]] = Field(default_factory=dict)  # the collector/integrator/reviewer at work

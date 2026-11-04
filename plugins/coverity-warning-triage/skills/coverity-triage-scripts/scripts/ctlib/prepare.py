@@ -11,16 +11,16 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from .common import PLUGIN_ROOT, CtError, out_text, resolve_path, run_cmd
+from .common import CtError, out_text, plugin_path, resolve_path, run_cmd
 from .config import (CONFIG_DIR, CONFIG_FILE, DEFAULT_FILTER, DEFAULT_OUTPUT_DIR, DEFAULT_PARALLEL, FILTERS_DIR,
-                     KNOWLEDGE_TEMPLATE, FilterSpec, ProjectConfig, VerifyConfig, knowledge_path, load_config, output_dir)
+                     KNOWLEDGE_TEMPLATE, FilterSpec, ProjectConfig, VerifyConfig, knowledge_path, load_config, output_dir,
+                     read_text)
+from . import yamledit
 from .envvars import get_env
 from .vcs import detect as detect_vcs
 from .vcs import make_vcs
 from .verify import trial_build as run_trial_build
 
-SERVER_DIR = PLUGIN_ROOT / "server"
-AGENTS_DIR = PLUGIN_ROOT / "com.github.copilot" / "agents"
 AGENT_SUFFIX = ".agent.md"
 AGENT_PREFIX = "coverity-triage-"  # every agent of the plugin; others in the person's folder are not touched
 AGENT_ROLES = {"coverity-triage-collector": "取得", "coverity-triage-worker": "作業",
@@ -28,6 +28,10 @@ AGENT_ROLES = {"coverity-triage-collector": "取得", "coverity-triage-worker": 
 INITIAL_COMMANDS = ("cov-build", "cov-analyze", "cov-commit-defects")
 CONFIG_HEADER = ("# Coverity トリアージの設定（/coverity-setup で作成）。チームで共有するためコミットします。\n"
                  "# 認証情報はここに書きません（環境変数に置きます）。\n")
+COMMENTS_LOST = ("このファイルでは、注釈は動いたり消えたりします。注釈を元の場所に残せない書き方（「|」「>」で何行かに"
+                 "わたる値、「&」「*」で値を使い回す書き方など）があるため、ファイル全体を書き直します。行の頭の「#」の行は"
+                 "ファイルの先頭にまとめ、字下げした「#」の行と行の終わりの注釈は消えます（値は正しく保存されます）。"
+                 "注釈を残すときは、保存しないで、メモ帳などでファイルを直してください。")
 
 
 def _uv() -> str:
@@ -36,6 +40,24 @@ def _uv() -> str:
     if not uv:
         raise CtError("uv が見つかりません（/coverity-setup の手順で入れます）")
     return uv
+
+
+def server_dir() -> Path:
+    """The MCP server of the plugin (its uv project)."""
+    return plugin_path("server")
+
+
+def server_env() -> Path:
+    """The Python environment uv makes for the MCP server: the folder in ``UV_PROJECT_ENVIRONMENT`` when it
+    is set (uv takes a relative path from the server's folder and does not expand ``~``), ``server/.venv``
+    otherwise."""
+    server = server_dir()
+    return server / (os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
+
+
+def agents_dir() -> Path:
+    """The agent definitions of the plugin."""
+    return plugin_path("com.github.copilot", "agents")
 
 
 def user_agents_dir() -> Path:
@@ -51,7 +73,7 @@ def plugin_agents() -> dict[str, Path]:
     order of /coverity-run (collector, worker, integrator, reviewer)."""
     # Only this plugin's own agents: the folder also holds the orchestrator, worker and verifier of the work screen,
     # which the person's folder must not get.
-    found = {p.name[:-len(AGENT_SUFFIX)]: p for p in AGENTS_DIR.glob(f"{AGENT_PREFIX}*{AGENT_SUFFIX}")}
+    found = {p.name[:-len(AGENT_SUFFIX)]: p for p in agents_dir().glob(f"{AGENT_PREFIX}*{AGENT_SUFFIX}")}
     order = list(AGENT_ROLES)
     return dict(sorted(found.items(), key=lambda kv: (order.index(kv[0]) if kv[0] in order else len(order), kv[0])))
 
@@ -62,10 +84,11 @@ def plugin_agents() -> dict[str, Path]:
 def prewarm() -> dict[str, Any]:
     """Create the MCP server's Python environment now, so its first start is quick."""
     started = time.monotonic()
+    server = server_dir()
     uv = _uv()
     version = out_text(run_cmd([uv, "--version"]))
-    run_cmd([uv, "sync", "--native-tls", "--frozen", "--quiet", "--directory", str(SERVER_DIR)])
-    return {"ok": True, "uv": version, "environment": str(SERVER_DIR / ".venv"),
+    run_cmd([uv, "sync", "--native-tls", "--frozen", "--quiet", "--directory", str(server)])
+    return {"ok": True, "uv": version, "environment": str(server_env()),
             "seconds": round(time.monotonic() - started, 1)}
 
 
@@ -214,10 +237,19 @@ def doctor(repo_root: str) -> dict[str, Any]:
         found = shutil.which(vcs)
         checks.append(_check(f"{vcs} コマンド", "ok" if found else "ng", found or "見つかりません",
                              "" if found else f"{vcs} を入れて PATH を通してください"))
-    venv = (SERVER_DIR / ".venv").is_dir()
-    checks.append(_check("MCP サーバの Python 環境", "ok" if venv else "ng", str(SERVER_DIR / ".venv"),
-                         "" if venv else "ct.py prewarm を実行します"))
-    for name, agent in agent_state().items():
+    try:  # the plugin's files: a clear "ng" when ct.py is used outside the plugin
+        venv_dir = server_env()
+        venv = venv_dir.is_dir()
+        checks.append(_check("MCP サーバの Python 環境", "ok" if venv else "ng", str(venv_dir),
+                             "" if venv else "ct.py prewarm を実行します"))
+    except CtError as exc:
+        checks.append(_check("MCP サーバの Python 環境", "ng", str(exc)))
+    try:
+        agents = agent_state()
+    except CtError as exc:
+        agents = {}
+        checks.append(_check("サブエージェント", "ng", str(exc)))
+    for name, agent in agents.items():
         if agent["status"] == "stale":
             checks.append(_check(f"古いサブエージェント {name}", "warning",
                                  f"プラグインに無くなった定義が残っています（{agent['path']}）",
@@ -244,7 +276,7 @@ def doctor(repo_root: str) -> dict[str, Any]:
         filters = []
         for path in sorted((repo / CONFIG_DIR / FILTERS_DIR).glob("*.yaml")):
             try:
-                spec = FilterSpec.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+                spec = FilterSpec.model_validate(yaml.safe_load(read_text(path)) or {})
                 filters.append(path.name if len(spec.streams) == 1 else f"{path.name}（ストリームが 1 つでない）")
             except Exception as exc:  # noqa: BLE001 - report every broken file
                 filters.append(f"{path.name}（読めません: {str(exc)[:100]}）")
@@ -343,27 +375,43 @@ def trial_build(repo_root: str, setup_command: str, build_command: str, build_di
 
 def set_verify(repo_root: str, default: str, setup_command: str, build_command: str, build_dir: str,
                cov_build_args: str | None, cov_analyze_args: str | None, initial: bool | None = None,
-               cov_commit_args: str | None = None, timeout_minutes: int | None = None) -> dict[str, Any]:
+               cov_commit_args: str | None = None, timeout_minutes: int | None = None,
+               check: bool = False) -> dict[str, Any]:
     """Save the build verification and initial analysis settings the person agreed to.
 
-    The values given as None keep what the settings have."""
+    The values given as None keep what the settings have. Only the values that change are rewritten, and
+    the comments in the file stay where they are (yamledit); a file written in a way that cannot be kept
+    is written whole, as before ("comments": "lost"). ``check``: write nothing, only tell what would
+    become of the comments (asked before the person agrees)."""
     repo = resolve_path(repo_root)
     path = repo / CONFIG_DIR / CONFIG_FILE
-    text = path.read_text(encoding="utf-8")
-    header = "".join(line + "\n" for line in text.splitlines() if line.startswith("#"))
+    text = read_text(path)
+    header = "".join(line + "\n" for line in text.removeprefix("\ufeff").splitlines() if line.startswith("#"))
     data = yaml.safe_load(text) or {}
-    verify = {**(data.get("verify") or {}), "default": default, "setup_command": setup_command,
-              "build_dir": build_dir, "build_command": build_command}
-    for key, value in (("cov_build_args", cov_build_args), ("cov_analyze_args", cov_analyze_args),
-                       ("initial", initial), ("cov_commit_args", cov_commit_args),
-                       ("timeout_minutes", timeout_minutes)):
-        if value is not None:
+    current = data.get("verify") if isinstance(data.get("verify"), dict) else {}
+    agreed = {"default": default, "setup_command": setup_command, "build_dir": build_dir, "build_command": build_command,
+              "cov_build_args": cov_build_args, "cov_analyze_args": cov_analyze_args, "initial": initial,
+              "cov_commit_args": cov_commit_args, "timeout_minutes": timeout_minutes}
+    defaults = VerifyConfig().model_dump()
+    verify = dict(current)
+    for key, value in agreed.items():
+        # a value not in the file is written only when it differs from the default (REQ-102)
+        if value is not None and (key in current or value != defaults.get(key)):
             verify[key] = value
-    data["verify"] = verify
+    if verify or "verify" in data:
+        data["verify"] = verify
     try:
         ProjectConfig.model_validate(data)
     except ValidationError as exc:
         raise CtError("設定の値が正しくありません",
                       problems=[f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()]) from exc
-    path.write_text(header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    return {"ok": True, "written": str(path), "verify": verify}
+    out = yamledit.edit(text, data)
+    comments = "kept"
+    if out is None:
+        out = header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        comments = "lost" if yamledit.has_comments(text) else "kept"
+    if check:
+        return {"ok": True, "check": True, "comments": comments, "verify": verify,
+                **({"notice": COMMENTS_LOST} if comments == "lost" else {})}
+    path.write_text(out, encoding="utf-8")
+    return {"ok": True, "written": str(path), "verify": verify, "comments": comments}

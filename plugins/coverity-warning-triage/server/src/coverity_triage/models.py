@@ -50,10 +50,15 @@ class TriageAttributes(BaseModel):
 
 
 class TriageEntry(BaseModel):
-    """One write-back in the ``triage`` list of ``apply-plan.json`` (written by ``ct.py preview``)."""
+    """One write-back: an item of the ``triage`` list of a plan file, or of the ``entries`` argument.
+
+    ``stream`` is the stream of the warnings: the triage is written in the triage store that stream
+    uses. Without it, in the one of the settings. Left out when not given, so that the confirmation
+    token and the key of an entry without a stream are the same as before the field was added."""
 
     id: str
     cids: list[int] = Field(min_length=1)
+    stream: str | None = Field(default=None, min_length=1)
     classification: str = Field(min_length=1)
     action: str = Field(min_length=1)
     severity: str = ""

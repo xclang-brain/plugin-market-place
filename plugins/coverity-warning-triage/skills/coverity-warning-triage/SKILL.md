@@ -1,6 +1,6 @@
 ---
 name: "coverity-warning-triage"
-description: "Coverity の警告ごとに、真偽の見立てと確信度、修正案と逸脱コメント案、一覧と詳細レポートができあがる。「Coverity の警告をトリアージして」「/coverity-run High だけ」「未処理の Coverity 警告を調べて修正案と逸脱コメントを作って」と頼まれたときに使う。Coverity や MISRA・CERT の規則についての質問、プラグインの準備や困りごとの相談（/coverity-setup・/coverity-help）、承認済みの内容の反映（/coverity-apply）、このプラグインの試験には使わない。"
+description: "Coverity の警告ごとに、真偽の見立てと確信度、修正案と逸脱コメント案、一覧と詳細レポートができあがる。「Coverity の警告をトリアージして」「/coverity-run High だけ」「未処理の Coverity 警告を調べて修正案と逸脱コメントを作って」と頼まれたときに使う。Coverity や MISRA・CERT の規則についての質問、プラグインの準備や困りごとの相談（/coverity-setup・/coverity-help）、承認済みの内容の反映（/coverity-apply）、このプラグインの試験には使わない。1件の警告を示して、調べる・直す・逸脱コメントを書く・結果を確かめる頼みにも使わない（それぞれの手順書のスキルが受け持つ）。"
 ---
 
 # coverity-warning-triage

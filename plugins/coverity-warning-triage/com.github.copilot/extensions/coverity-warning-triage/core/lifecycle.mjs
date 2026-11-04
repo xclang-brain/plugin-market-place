@@ -17,6 +17,38 @@ function optionValue(o) {
   return typeof o === 'object' && o !== null ? o.value : o;
 }
 
+// 小数の桁の数（0.25 なら 2、1e-7 なら 7）
+function decimalDigits(x) {
+  const [mantissa, exponent] = String(x).toLowerCase().split('e');
+  return Math.max(0, (mantissa.split('.')[1] ?? '').length - Number(exponent ?? 0));
+}
+
+// 数の設定の範囲（作業の定義の min・max・step）。合えば渡す値（刻みにそろえた値）を返し、合わなければ null を返す。
+// step は min（なければ 0）から数えた刻み。刻みと数え始めが整数なら、ずれを許さずに確かめる（20.0000000001 は断る）。
+// 小数の刻み（0.1 など）は、計算のずれだけを許し、刻みの上の値に丸めて渡す
+function fitNumberRange(def, n) {
+  const inRange = (x) => (def.min == null || x >= def.min) && (def.max == null || x <= def.max);
+  if (!inRange(n)) return null;
+  if (def.step == null) return n;
+  const base = def.min ?? 0;
+  if (Number.isInteger(def.step) && Number.isInteger(base)) return Number.isInteger(n) && (n - base) % def.step === 0 ? n : null;
+  const steps = (n - base) / def.step;
+  const k = Math.round(steps);
+  if (Math.abs(steps - k) > 1e-9) return null;
+  const digits = Math.min(20, Math.max(decimalDigits(def.step), decimalDigits(base)));
+  const fitted = Number((base + k * def.step).toFixed(digits));
+  return inRange(fitted) ? fitted : null;
+}
+
+function numberRangeMessage(label, def) {
+  const range =
+    def.min != null && def.max != null ? `${def.min} から ${def.max} まで` : def.min != null ? `${def.min} 以上` : def.max != null ? `${def.max} 以下` : '';
+  const kind = def.step == null ? '数' : def.step === 1 ? '整数' : `${def.step} 刻みの数`;
+  // 刻みの数が続くときは、数字どうしがつながらないよう空白を入れる（「0 から 1 までの 0.1 刻みの数」）
+  const lead = range ? `${range}の${/^[\d.-]/.test(kind) ? ' ' : ''}` : '';
+  return `「${label}」は、${lead}${kind}で入力してください。`;
+}
+
 // 開始の設定を確かめる。合わなければ、平易な日本語の Error を投げる（必須の項目、上限の回数が 1 以上、選んだモデルと思考の深さが選択肢にあるか）。
 export function validateStart(ctx, input) {
   const setup = ctx.setup;
@@ -56,14 +88,19 @@ export function validateStart(ctx, input) {
         continue;
       }
       if (def.required) throw new Error(`「${label}」を入力してください。`);
-      task[def.key] = def.default ?? '';
+      // 値を渡さなかった（undefined）ときだけ、初めの値を使う。欄を空にしたとき（null や空の文字）は、未入力として渡す
+      task[def.key] = raw === undefined ? (def.default ?? '') : '';
       continue;
     }
     switch (def.type) {
       case 'number': {
         const n = typeof raw === 'number' ? raw : Number(raw);
-        if (!Number.isFinite(n)) throw new Error(`「${label}」は数で入力してください。`);
-        task[def.key] = n;
+        const ranged = def.min != null || def.max != null || def.step != null;
+        const fitted = Number.isFinite(n) ? fitNumberRange(def, n) : null;
+        if (fitted === null) {
+          throw new Error(ranged ? numberRangeMessage(label, def) : `「${label}」は数で入力してください。`);
+        }
+        task[def.key] = fitted;
         break;
       }
       case 'select': {
@@ -89,10 +126,12 @@ function formatSettingValue(def, value) {
 }
 
 // 統括への指示文（4.3）。決まった形で組み立てる。始めに、定義の手順で進めて作業・検証に任せる旨の 1 文を置く。
+// プラグインのフォルダの絶対パスを入れる（4.7）。エージェントが、ルールのスキルの SKILL.md とスクリプトを絶対パスで読めるようにするためである。
 export function buildInstruction(ctx, run) {
   const lines = [];
   lines.push(INSTRUCTION_HEAD, '');
   lines.push(`実行の番号：${run.id}`, '');
+  if (ctx.pluginRoot) lines.push('## プラグインのフォルダ', ctx.pluginRoot, '');
   lines.push('## 頼まれた作業', run.requestText || '（作業の文は渡されませんでした）', '');
   lines.push('## 繰り返しの上限', `${run.settings.maxIterations} 回`, '');
   lines.push('## 作業ごとの設定の値');

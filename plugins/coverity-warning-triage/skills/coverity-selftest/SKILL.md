@@ -6,6 +6,8 @@ allowed-tools: ["coverity-triage", "shell(uv run:*)"]
 
 # 動作確認
 
+人への返事は日本語で書く。ユーザーが別の言語で書いたら、その言語で書く。画面と README が日本語で書かれているためである。
+
 確認項目ごとに結果を記録し、最後に `report.md` を作ります。決まった判定は `ct.py selftest` が行い、あなたは手順を進めることと、スクリプトでは確かめられないこと（MCP のツール、サブエージェント（取得・作業・統合・検証）、利用者への質問）を担います。
 
 最初にスキル `coverity-triage-scripts` を読み、`ct.py` の場所と使い方を確かめます。以下の `ct.py X` はそこに書かれた方法で実行します。
@@ -27,7 +29,8 @@ allowed-tools: ["coverity-triage", "shell(uv run:*)"]
 ## ① 組み込み
 
 1. `ct.py selftest static --dir <dir>`（1-7：サブエージェント 4 つの定義と MCP サーバの Python 環境）。
-2. ② で作る見本のリポジトリを先に作る：`ct.py selftest sample --dir <dir>`（2-1）。結果の `repo_root` を「見本のリポジトリ」とする。
+2. ② で作る見本のリポジトリを先に作る：`ct.py selftest sample --dir <dir> --assets "<このスキルのフォルダ>/assets"`（2-1）。結果の `repo_root` を「見本のリポジトリ」とする。
+   - `<このスキルのフォルダ>` は、この SKILL.md があるフォルダの絶対パス。見本（見本のリポジトリと想定の結論 `expected.yaml`）は、このスキルのフォルダの `assets` にある。
 3. 1-1：MCP の `check_connection` を見本のリポジトリで呼ぶ。`ok` が true なら pass、ツールが無い・失敗なら fail（エラーの内容を記録）。
 4. サブエージェント `coverity-triage-worker` を名前を指定して起動し、次を渡す（汎用のサブエージェントで代わりにしない）。
    > これは動作確認です。作業はしません。次の 3 行だけを返してください。
@@ -46,13 +49,13 @@ allowed-tools: ["coverity-triage", "shell(uv run:*)"]
    - 1-9：`coverity-triage-integrator`（統合）。`TOOLS` にターミナルと `coverity-triage` のツールが無ければ pass、あれば fail。
    - 1-10：`coverity-triage-reviewer`（検証）。1-9 と同じ。
    - 起動できなければ fail（理由を記録）。どれも、返事をそのまま `--actual` に書く。
-6. 1-2：利用者に「チャット欄に `/` を入力してください。`coverity-setup`・`coverity-run`・`coverity-apply`・`coverity-help`・`coverity-selftest` の 5 つは出ていますか？」と聞く（VS Code では `/coverity-warning-triage:coverity-run` のようにプラグイン名が前に付く）。出ていれば pass、分からなければ review。表示された呼び方も記録する。
+6. 1-2：利用者に「チャット欄に `/` を入力してください。`coverity-setup`・`coverity-run`・`coverity-apply`・`coverity-help`・`coverity-selftest` の 5 つは出ていますか？」と聞く（VS Code では `/<プラグイン名>:coverity-run` のようにプラグイン名が前に付く）。出ていれば pass、分からなければ review。表示された呼び方も記録する。
 
 それぞれ `ct.py selftest record --dir <dir> --id <項目> --status <pass|fail|review|skip> --actual "<見たこと>"` で記録する。
 
 ## ② 偽データでの一連の流れ
 
-見本のリポジトリ（① の 2 で作ったもの。① をしないときはここで `ct.py selftest sample` を実行）で、`/coverity-run` と同じ手順を進めます。条件ファイルは `sample` の結果の `filter`（`all.yaml`）です。見本の設定では、初回解析・統合・検証・ビルドでの検証は使いません。
+見本のリポジトリ（① の 2 で作ったもの。① をしないときはここで、① の 2 と同じ `ct.py selftest sample` を実行）で、`/coverity-run` と同じ手順を進めます。条件ファイルは `sample` の結果の `filter`（`all.yaml`）です。見本の設定では、初回解析・統合・検証・ビルドでの検証は使いません。
 
 1. `ct.py new-run --repo <見本のリポジトリ> --filter all.yaml` を実行する。
 2. 「`ct.py tick` に従って進める」（下）のとおりに、`done` が true になるまで進める。取得のエージェントが警告を検索して警告経路を取り、作業のエージェントが `parallel` の数まで同時に調べる。

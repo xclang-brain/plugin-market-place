@@ -15,8 +15,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,12 +61,76 @@ class BatchResult:
     error: str = ""
 
 
+# The builds this process runs, while ``track_builds`` is on (the screen's trial build): each runs in a
+# process group of its own, so that ``stop_builds`` ends the shell and everything it started.
+_tracked: set[subprocess.Popen[bytes]] | None = None
+_stopped = False
+_track_lock = threading.Lock()
+
+
+def track_builds() -> None:
+    """Keep the builds of this process, for ``stop_builds`` (``ct.py gui`` calls it once at start)."""
+    global _tracked, _stopped
+    with _track_lock:
+        _tracked, _stopped = set(), False
+
+
+def stop_builds() -> None:
+    """End the builds running now, with their children; no build starts after this."""
+    global _stopped
+    with _track_lock:
+        _stopped = True
+        running = list(_tracked or ())
+    for proc in running:
+        if proc.poll() is None:
+            _stop_tree(proc)
+
+
+def _stop_tree(proc: subprocess.Popen[bytes]) -> None:
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+
+
 def _run_shell(command: str, cwd: Path, log: Path, drop: tuple[str, ...] = ()) -> bool:
     with open(log, "ab") as f:
         f.write(f"$ {command}\n".encode("utf-8"))
         f.flush()
-        proc = subprocess.run(command, cwd=cwd, shell=True, stdout=f, stderr=subprocess.STDOUT, env=build_env(drop=drop))
+        kwargs: dict[str, Any] = {"cwd": cwd, "shell": True, "stdout": f, "stderr": subprocess.STDOUT,
+                                  "env": build_env(drop=drop)}
+        with _track_lock:
+            tracked = _tracked
+            if tracked is None:
+                proc = None
+            elif _stopped:
+                return False
+            else:
+                group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32"
+                         else {"start_new_session": True})
+                proc = subprocess.Popen(command, **kwargs, **group)
+                tracked.add(proc)
+        if proc is None:  # ct.py itself: the build stays in the group of the command (Ctrl+C stops it)
+            return subprocess.run(command, **kwargs).returncode == 0
+        try:
+            proc.wait()
+        finally:
+            with _track_lock:
+                tracked.discard(proc)
     return proc.returncode == 0
+
+
+def _analyzed(json_path: Path, log: Path) -> bool:
+    """Whether the analysis output has no error; an error is written to the log (a failed analysis)."""
+    error = analysis_error(json_path)
+    if error:
+        with open(log, "ab") as f:
+            f.write(f"cov-format-errors の結果に error があります: {error}\n".encode("utf-8"))
+    return not error
 
 
 def _tail(log: Path) -> str:
@@ -78,6 +144,22 @@ def intermediate_dir(cov_analyze_args: str) -> str:
     if match:
         return match.group(1) if match.group(1) is not None else match.group(2)
     raise CtError("verify.cov_analyze_args に --dir（中間ディレクトリ）を指定してください")
+
+
+def no_ticker(args: str) -> str:
+    """``--ticker-mode none`` for cov-analyze and cov-commit-defects (unless the settings choose a mode):
+    the progress bars they print by default would fill the end of the log that is shown on a failure."""
+    return args if re.search(r"(?:^|\s)--ticker-mode\b", args) else f"--ticker-mode none {args}".rstrip()
+
+
+def analysis_error(json_path: Path) -> str | None:
+    """The ``error`` of the outer object of ``cov-format-errors --json-output-v7`` output (null when it
+    worked). With an error the issue list is empty, which must not count as every warning being gone."""
+    data = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+    error = data.get("error") if isinstance(data, dict) else None
+    if not error:
+        return None
+    return error if isinstance(error, str) else json.dumps(error, ensure_ascii=False)
 
 
 def load_analysis(json_path: Path) -> list[dict[str, Any]]:
@@ -130,8 +212,8 @@ def build_command_line(config: VerifyConfig, root: Path, mode: str, json_out: Pa
     elif mode == "build+analyze":
         idir = intermediate_dir(config.cov_analyze_args)
         steps += [f"cov-build {config.cov_build_args} {config.build_command}",
-                  f"cov-analyze {config.cov_analyze_args}",
-                  f'cov-format-errors --dir {idir} --json-output-v7 "{json_out}"']
+                  f"cov-analyze {no_ticker(config.cov_analyze_args)}",
+                  f'cov-format-errors --dir "{idir}" --json-output-v7 "{json_out}"']
     else:
         raise CtError("検証方法は build か build+analyze です")
     return " && ".join(steps)
@@ -195,6 +277,8 @@ class Verifier:
         after_json = self.dir / "after.json"
         result.build_ok = _run_shell(build_command_line(self._own_dirs("after"), after, mode, after_json), after, log,
                                      self.drop)
+        if result.build_ok and mode == "build+analyze":
+            result.build_ok = _analyzed(after_json, log)
         result.seconds = time.time() - started
 
         if not result.build_ok:
@@ -215,7 +299,7 @@ class Verifier:
         before_log.unlink(missing_ok=True)
         before_json = self.dir / "before.json"
         if _run_shell(build_command_line(self._own_dirs("before"), before, result.mode, before_json), before, before_log,
-                      self.drop):
+                      self.drop) and _analyzed(before_json, before_log):
             return load_analysis(before_json)
         # Not a problem of any fix: the unmodified code itself could not be built or analyzed.
         result.error = "修正前のコードのビルド・解析に失敗しました（設定のコマンドを確認してください）"

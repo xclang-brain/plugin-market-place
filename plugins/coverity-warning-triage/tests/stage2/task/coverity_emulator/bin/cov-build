@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Mock cov-build of the Coverity emulator (see coverity_emulator/analysis/build.py)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
+
+from coverity_emulator.analysis.build import main  # noqa: E402
+
+sys.exit(main())

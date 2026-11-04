@@ -111,7 +111,7 @@
     "id": "K-19",
     "kind": "other",
     "item": "受け取るもの",
-    "text": "条件を指定しないときの既定は「分類がまだの警告を 20 件まで」（条件ファイル untriaged.yaml、classification Unclassified、limit 20）。【1回の実行の上限は max_items（既定 100）。"
+    "text": "条件を指定しないときの既定は「分類がまだの警告を 20 件まで」（条件ファイル untriaged.yaml、classification Unclassified、limit 20）。1回の実行の上限は max_items（既定 100）。"
   },
   {
     "id": "K-20",

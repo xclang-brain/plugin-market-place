@@ -1,8 +1,9 @@
-"""The parts of the project settings the MCP server needs: the Coverity connection and a search filter.
+"""What the MCP server reads: the Coverity connection and a search filter.
 
-The project settings file (``.coverity-triage/config.yaml``) belongs to the scripts of the skill
-``coverity-triage-scripts``; the server reads only its ``coverity`` section.
-The search filter is the JSON file that ``ct.py new-run`` writes for one run.
+The settings file is ``<repo_root>/.coverity-triage/config.yaml``. The server reads only its
+``coverity`` section and ignores the other sections. A search filter is a JSON file or an object
+passed as a tool argument; both have the shape of :class:`FilterSpec`. The file may hold other keys
+(they are skipped); the argument may not (:class:`FilterArg`).
 """
 
 from __future__ import annotations
@@ -47,7 +48,8 @@ class TriageFilter(BaseModel):
 
 
 class FilterSpec(BaseModel):
-    """Issue selection. Values inside one key are OR-ed, keys are AND-ed."""
+    """Issue selection. Values inside one key are OR-ed, keys are AND-ed. ``project`` is not used to
+    search Coverity Connect (the stream decides which issues are searched)."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -60,17 +62,26 @@ class FilterSpec(BaseModel):
     limit: int | None = Field(default=None, ge=1)
 
 
+class FilterArg(FilterSpec):
+    """Issue selection. Values inside one key are OR-ed, keys are AND-ed. Other keys are refused.
+    ``project`` is not used to search Coverity Connect (the stream decides which issues are searched)."""
+
+    # A misspelt key (for example ``status`` outside ``triage``) would otherwise be dropped silently
+    # and the search not narrowed.
+    model_config = ConfigDict(extra="forbid")
+
+
 def load_coverity_config(repo_root: str | Path) -> CoverityConfig:
     path = Path(repo_root) / CONFIG_PATH
     if not path.is_file():
-        raise SettingsError(f"設定ファイルがありません: {path}（/coverity-setup で作成します）")
+        raise SettingsError(f"設定ファイルがありません: {path} を作り、coverity.url（Coverity Connect の URL）を書いてください")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         raise SettingsError(f"設定ファイルの書式が正しくありません: {path}: {exc}") from exc
     section = data.get("coverity") if isinstance(data, dict) else None
     if not isinstance(section, dict):
-        raise SettingsError(f"設定ファイルに coverity の項目がありません: {path}")
+        raise SettingsError(f"設定ファイルに coverity の項目がありません: {path} に coverity.url を書いてください")
     try:
         config = CoverityConfig.model_validate(section)
     except ValidationError as exc:
@@ -81,13 +92,27 @@ def load_coverity_config(repo_root: str | Path) -> CoverityConfig:
 
 
 def load_filter(path: str | Path) -> FilterSpec:
+    """A filter from a JSON file."""
     file = Path(path)
     if not file.is_file():
-        raise SettingsError(f"条件のファイルがありません: {file}（ct.py new-run が作ります）")
+        raise SettingsError(f"条件のファイルがありません: {file}")
     try:
         spec = FilterSpec.model_validate(json.loads(file.read_text(encoding="utf-8")))
     except (ValueError, ValidationError) as exc:
         raise SettingsError(f"条件のファイルが正しくありません: {file}\n{exc}") from exc
+    return _one_stream(spec)
+
+
+def parse_filter(data: FilterArg | dict) -> FilterSpec:
+    """A filter passed as a tool argument (the same shape as the file, without other keys)."""
+    try:
+        spec = data if isinstance(data, FilterSpec) else FilterArg.model_validate(data)
+    except ValidationError as exc:
+        raise SettingsError(f"条件（filter）が正しくありません\n{exc}") from exc
+    return _one_stream(spec)
+
+
+def _one_stream(spec: FilterSpec) -> FilterSpec:
     if len(spec.streams) != 1:
         raise SettingsError("条件にはストリームを 1 つだけ指定してください")
     return spec

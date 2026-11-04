@@ -81,6 +81,7 @@ nav.views button[aria-selected="true"] { background: var(--surface); color: var(
 
 /* layout */
 .layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; max-width: 1120px; margin: 0 auto; padding: 20px 24px 80px; }
+.layout > main { min-width: 0; }
 nav.tabs { position: sticky; top: 76px; align-self: start; display: flex; flex-direction: column; gap: 2px; }
 nav.tabs .group { font-size: 11.5px; color: var(--muted); margin: 14px 10px 4px; letter-spacing: .04em; }
 nav.tabs .group:first-child { margin-top: 0; }
@@ -162,9 +163,9 @@ details.more[open] > summary { margin-bottom: 12px; }
 .note.warn { background: var(--warn-soft); color: var(--text); }
 
 /* trial build */
-.build-result { margin-top: 12px; }
-.build-result pre { background: var(--surface-2); border-radius: 6px; padding: 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; margin: 8px 0 0; }
-.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -1px; margin-right: 6px; }
+.build-result { margin-top: 12px; overflow-wrap: anywhere; }
+.build-result pre { background: var(--surface-2); border-radius: 6px; padding: 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -1px; margin: 0 6px 0 3px; }  /* room for its corners while it turns */
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* filters */
@@ -356,14 +357,13 @@ table.items td.acts { white-space: nowrap; }
   .menu .mlabel { display: none; }
   .menu .micon { display: inline; }
   #menuBtn { padding: 6px 11px; }
-  .top .repo { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dirty { font-size: 0; }
   .dirty::before { font-size: 12.5px; margin: 0; }
   nav.views { order: 3; flex: 1 1 100%; }
   nav.views button { flex: 1; padding: 5px 8px; }
-  .layout { grid-template-columns: 1fr; padding: 12px 16px 80px; gap: 12px; }
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 80px; gap: 12px; }
   .wrap { padding: 12px 16px 80px; }
-  nav.tabs { position: static; flex-direction: row; overflow-x: auto; gap: 4px; }
+  nav.tabs { position: static; flex-direction: row; flex-wrap: wrap; gap: 4px; }
   nav.tabs .group { display: none; }
   nav.tabs button { white-space: nowrap; }
   .split { grid-template-columns: 1fr; }
@@ -602,7 +602,7 @@ table.items td.acts { white-space: nowrap; }
               <div class="help">既定 <code>--dir idir --all</code></div>
             </div>
           </div>
-          <div class="help" style="margin:-6px 0 14px" data-show="analyze">ビルドと再解析・初回解析では、ビルドのコマンドを <code>cov-build</code> の下で動かし、そのあと <code>cov-analyze</code> を実行します。</div>
+          <div class="help" style="margin:0 0 14px" data-show="analyze">ビルドと再解析・初回解析では、ビルドのコマンドを <code>cov-build</code> の下で動かし、そのあと <code>cov-analyze</code> を実行します。</div>
           <div class="row" data-show="initial">
             <div class="field">
               <label for="f-covc">cov-commit-defects に足す引数<span class="cond">初回解析のとき・任意</span></label>
@@ -615,7 +615,7 @@ table.items td.acts { white-space: nowrap; }
               <div class="help">既定 180。これを超えたら止めて、失敗として伝えます（固まったビルドを、見ていない間に止めるため）。</div>
             </div>
           </div>
-          <div class="help" style="margin:-6px 0 14px" data-show="initial">初回解析では、<code>cov-analyze</code> のあと <code>cov-commit-defects</code> でサーバに登録します。登録先は条件ファイルのストリーム、<code>--version</code> は開いているフォルダの今のリビジョンです。認証キーはコマンドに書かず、環境変数で渡します。</div>
+          <div class="help" style="margin:0 0 14px" data-show="initial">初回解析では、<code>cov-analyze</code> のあと <code>cov-commit-defects</code> でサーバに登録します。登録先は条件ファイルのストリーム、<code>--version</code> は開いているフォルダの今のリビジョンです。認証キーはコマンドに書かず、環境変数で渡します。</div>
           <div class="field">
             <button class="btn" type="button" id="trialBtn">試しにビルドする</button>
             <span class="help" style="margin-left:8px">修正前の最新のコードを、この画面の値でビルドします（時間がかかることがあります。サーバには登録しません）。保存の前に試すのがおすすめです。</span>
@@ -698,7 +698,7 @@ table.items td.acts { white-space: nowrap; }
     <!-- ================= filters ================= -->
     <section class="panel" id="tab-filters" role="tabpanel" hidden>
       <h2>条件</h2>
-      <p class="lead">調べる警告の絞り込み条件（<code>filters/*.yaml</code>）です。<code>/coverity-run</code> で使う条件を選べます。同じ項目の中の値は「どれか」、項目どうしは「すべて」を満たす警告を選びます。空の項目は条件にしません。</p>
+      <p class="lead">調べる警告の絞り込み条件（<code>filters/*.yaml</code>）です。<code>/coverity-run</code> で使う条件を選べます。1つの項目に値をいくつか書くと、そのどれかに当たる警告を、いくつかの項目を書くと、そのすべてに当たる警告を選びます。空の項目は条件にしません。</p>
       <div class="split">
         <div>
           <div class="flist" id="flist"></div>
@@ -762,6 +762,7 @@ table.items td.acts { white-space: nowrap; }
       <h2>知識</h2>
       <p class="lead">AI が警告を調べる前に読む、プロジェクトの知識（<code>knowledge.md</code>）です。1 項目 1 行で、コードで確かめられる事実と、判断の方針を書きます。</p>
       <div class="note" id="kn-new" hidden style="margin-bottom:12px">まだファイルがありません。保存すると、このひな形で作ります。</div>
+      <div class="note warn" id="kn-error" hidden style="margin-bottom:12px"></div>
       <textarea id="kn" class="knowledge mono" spellcheck="false" aria-label="knowledge.md"></textarea>
     </section>
 
@@ -891,7 +892,11 @@ let buildTimer = null;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const clone = (v) => JSON.parse(JSON.stringify(v));
+// A list from the server (a file may hold a value of another kind; the server sends the default then).
+const arr = (v) => (Array.isArray(v) ? v : []);
+const splitList = (text) => String(text || "").split(/[,、]/).map((s) => s.trim()).filter(Boolean);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const has = (map, key) => Object.prototype.hasOwnProperty.call(map || {}, key);
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -935,11 +940,11 @@ function readInput(input, current) {
     case "int": return v.trim() === "" ? null : Number(v);
     case "nullable": return v.trim() === "" ? null : v;
     case "lines": return v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    case "single": return v.trim() === "" ? [] : [v.trim()];
+    case "single": return splitList(v);  // shown joined with ", ": two names stay two (and are refused)
     case "others": {
       const known = KNOWN[input.dataset.known];
-      const extra = v.split(/[,、]/).map((s) => s.trim()).filter(Boolean);
-      return [...(current || []).filter((x) => known.includes(x)), ...extra.filter((x) => !known.includes(x))];
+      const extra = splitList(v);
+      return [...arr(current).filter((x) => known.includes(x)), ...extra.filter((x) => !known.includes(x))];
     }
     default: return v;
   }
@@ -948,9 +953,9 @@ function writeInput(input, value) {
   const kind = input.dataset.kind || "text";
   if (kind === "bool") input.checked = !!value;
   else if (kind === "radio") input.checked = input.value === value;
-  else if (kind === "lines") input.value = (value || []).join("\n");
-  else if (kind === "single") input.value = (value || []).join(", ");
-  else if (kind === "others") { const known = KNOWN[input.dataset.known]; input.value = (value || []).filter((x) => !known.includes(x)).join(", "); }
+  else if (kind === "lines") input.value = arr(value).join("\n");
+  else if (kind === "single") input.value = arr(value).join(", ");
+  else if (kind === "others") { const known = KNOWN[input.dataset.known]; input.value = arr(value).filter((x) => !known.includes(x)).join(", "); }
   else input.value = value == null ? "" : value;
 }
 
@@ -972,7 +977,8 @@ async function load(keepView) {
   };
   S = {
     config: clone(res.config),
-    filters: res.filters.map((f) => ({ file: f.file, data: clone(f.data), error: f.error, isNew: false, deleted: false })),
+    filters: res.filters.map((f) => ({ file: f.file, data: clone(f.data), error: f.error, isNew: false, deleted: false,
+      unreadable: !!f.unreadable, reset: f.reset || {} })),
     knowledge: res.knowledge.text,
     noGrouping: clone(res.no_grouping),
     user: res.credentials.user, key: "",
@@ -981,6 +987,9 @@ async function load(keepView) {
   // A radio group always has one choice (a value the screen does not know shows as the default).
   if (!["none", "build", "build+analyze"].includes(S.config.verify.default)) S.config.verify.default = "none";
   if (!["auto", "fake"].includes(S.config.coverity.api)) S.config.coverity.api = "auto";
+  // The kind of version control is the folder's (the screen cannot change it): a different saved one is
+  // put right when saving, and the table before saving shows it.
+  if (res.vcs && S.config.vcs.type !== res.vcs) S.config.vcs.type = res.vcs;
   if (!S.filters.length) S.filters.push(firstFilterDraft());
   if (!keepView) selected = 0;
   selected = Math.min(selected, S.filters.length - 1);
@@ -994,7 +1003,13 @@ function banner(items) {
 function stateBanners() {
   const items = [];
   if (!state.vcs) items.push({ kind: "ng", text: state.vcs_note });
-  if (state.config_error) items.push({ kind: "ng", text: "今の config.yaml に直すところがあります。画面で直して保存してください。\n" + state.config_error });
+  if (state.config_unreadable) items.push({ kind: "ng", text: "今の config.yaml に直すところがあります。ファイルを読めないため、画面には既定の値を出しています。"
+    + "メモ帳などでファイルを直すか、画面で直して保存してください（画面で保存すると、ファイル全体を画面の値で書き直します。今のファイルにあった値は残りません）。\n" + state.config_error });
+  else if (state.config_error) items.push({ kind: "ng", text: "今の config.yaml に直すところがあります。画面で直して保存してください。"
+    + (Object.keys(state.config_reset || {}).length ? "形の違う値は、画面では既定の値で出しています。形の違う値と使えない項目は、保存の前の表に今の値を並べて出します。" : "") + "\n" + state.config_error });
+  if (state.vcs && state.config_exists && !state.config_error && state.config.vcs.type !== state.vcs)
+    items.push({ kind: "warn", text: `config.yaml のバージョン管理の種類は ${state.config.vcs.type} ですが、このリポジトリは ${state.vcs} です。保存すると ${state.vcs} に直します。` });
+  if (state.knowledge.error) items.push({ kind: "ng", text: "知識 knowledge.md を読めないため、画面では表示も保存もしません。\n" + state.knowledge.error });
   if (!state.config_exists) items.push({ kind: "warn", text: "このリポジトリには、まだ設定がありません。基本設定を入れて保存すると作ります（チームで最初の人だけ）。" });
   return items;
 }
@@ -1003,7 +1018,9 @@ function stateBanners() {
 function renderAll() {
   for (const input of $$("[data-bind]")) writeInput(input, getPath(S.config, input.dataset.bind));
   $("#kn").value = S.knowledge;
+  $("#kn").readOnly = !!state.knowledge.error;
   $("#kn-new").hidden = state.knowledge.exists;
+  const knErr = $("#kn-error"); knErr.hidden = !state.knowledge.error; knErr.textContent = state.knowledge.error || "";
   const ngErr = $("#ng-error"); ngErr.hidden = !state.no_grouping_error; ngErr.textContent = state.no_grouping_error ? `今のファイルを読めませんでした: ${state.no_grouping_error}` : "";
   banner(stateBanners());
   renderFirst(); renderCred(); renderFilters(); renderChips(); renderTrial(); visibility(); markDirty();
@@ -1013,7 +1030,7 @@ function renderFirst() {
   const d = firstDraft();
   if (!d) return;
   $("#f-first-project").value = d.data.project || "";
-  $("#f-first-stream").value = (d.data.streams || []).join(", ");
+  $("#f-first-stream").value = arr(d.data.streams).join(", ");
 }
 function visibility() {
   const git = S.config.vcs.type === "git";
@@ -1035,9 +1052,13 @@ function renderCred() {
   $("#f-user").value = S.user;
   $("#f-key").value = S.key;
   $("#cred-cannot").hidden = c.can_save;
-  $("#f-user").disabled = $("#f-key").disabled = !c.can_save;
+  $("#f-key").disabled = !c.can_save;
+  // A user name variable that holds a key: its value is not shown (and the user name is not saved there).
+  $("#f-user").disabled = !c.can_save || !!c.user_hidden;
+  $("#f-user").placeholder = c.user_hidden ? "認証キーを入れる環境変数の名前なので、値は表示しません" : "";
+  const userSet = "user_set" in c ? !!c.user_set : !!c.user;
   const us = $("#user-state"), ks = $("#key-state");
-  us.className = "pill " + (c.user ? "ok" : "ng"); us.textContent = c.user ? "設定済み" : "未設定";
+  us.className = "pill " + (userSet ? "ok" : "ng"); us.textContent = userSet ? "設定済み" : "未設定";
   ks.className = "pill " + (c.key_set ? "ok" : "ng"); ks.textContent = c.key_set ? "設定済み" : "未設定";
   $("#f-key").placeholder = c.key_set ? "設定済み（変えるときだけ入れます）" : "認証キーを入れます";
 }
@@ -1050,7 +1071,8 @@ function refreshCredNames() {
     if (!res.ok) return;
     const untouched = S.user === (S.cred.user || "");
     S.cred = res;
-    if (untouched) S.user = res.user;
+    // A user name variable that holds a key: what was typed is dropped (it would be saved over the key).
+    if (untouched || res.user_hidden) S.user = res.user;
     renderCred(); markDirty();
   }, 400);
 }
@@ -1073,7 +1095,7 @@ function renderFilterList() {
     list.append(el("button", { type: "button", class: "item" + (f.deleted ? " deleted" : ""), "aria-current": i === selected ? "true" : "false",
       onclick: () => { selected = i; renderFilters(); } },
       el("div", { class: "file" }, f.file || "（名前なし）"),
-      el("div", { class: "sub" }, [f.data.name, (f.data.streams || []).join(", ")].filter(Boolean).join(" ・ ") || "—"),
+      el("div", { class: "sub" }, [f.data.name, arr(f.data.streams).join(", ")].filter(Boolean).join(" ・ ") || "—"),
       tags));
   });
 }
@@ -1085,12 +1107,12 @@ function renderFilterEditor() {
   for (const input of $$("[data-fbind]", editor)) { writeInput(input, getPath(f.data, input.dataset.fbind)); input.disabled = f.deleted; }
   for (const [key, box] of [["impacts", "#ff-impacts"], ["classification", "#ff-classification"], ["action", "#ff-action"], ["status", "#ff-status"]]) {
     const path = key === "impacts" ? "impacts" : "triage." + key;
-    const values = getPath(f.data, path) || [];
+    const values = arr(getPath(f.data, path));
     // Values not in the list (already in the file) stay as choices, so saving never drops them.
     const extra = key === "action" ? [] : values.filter((v) => !KNOWN[key].includes(v));
     $(box).replaceChildren(...[...KNOWN[key], ...extra].map((v) => el("label", { title: extra.includes(v) ? "一覧にない値（今のファイルに書いてある値）" : null },
       el("input", { type: "checkbox", value: v, checked: values.includes(v), disabled: f.deleted,
-        onchange: (e) => { const cur = (getPath(f.data, path) || []).filter((x) => x !== v); if (e.target.checked) cur.push(v); setPath(f.data, path, cur); renderFilterList(); changed(); } }), v)));
+        onchange: (e) => { const cur = arr(getPath(f.data, path)).filter((x) => x !== v); if (e.target.checked) cur.push(v); setPath(f.data, path, cur); renderFilterList(); changed(); } }), v)));
   }
   const file = $("#ff-file");
   file.value = f.file; file.readOnly = !f.isNew; file.disabled = f.deleted;
@@ -1131,35 +1153,56 @@ function fmt(v) {
   return String(v);
 }
 const normalUrl = (url) => (url || "").trim().replace(/\/+$/, "");
+// The rows of the table before saving (K-71: every value saving writes over is listed).
+// A file that cannot be read is written whole, as a new one: every value is listed. In a file read with
+// errors, the values the screen shows as the default (reset: the saved value as text) are listed with the
+// saved value, and the keys the settings do not know, which saving removes. changed: the person changed it.
+const UNREAD = "（読めません）";
+function unknownRows(reset, after) {
+  return Object.keys(reset).filter((k) => !has(after, k))
+    .map((k) => ({ what: `${k}（使えない項目）`, before: reset[k], after: "（消します）", changed: false }));
+}
 function configRows() {
   const before = flatten(initial.config), after = flatten(S.config);
   const svn = S.config.vcs.type === "svn";
+  const whole = !state.config_exists || !!state.config_unreadable;
+  const reset = whole ? {} : state.config_reset || {};
   after["coverity.url"] = normalUrl(after["coverity.url"]);
   return Object.keys(after).filter((k) => LABELS[k] && !(svn && /^vcs\.(base_branch|branch_prefix)$/.test(k)))
-    .filter((k) => k !== "coverity.fake_data" || S.config.coverity.api === "fake" || before[k])
-    .filter((k) => !state.config_exists || !same(before[k], after[k]))
-    .map((k) => ({ what: LABELS[k], before: state.config_exists ? fmt(before[k]) : "—", after: k === "verify.default" ? VERIFY_NAMES[after[k]] : fmt(after[k]) }));
+    .filter((k) => k !== "coverity.fake_data" || S.config.coverity.api === "fake" || before[k] || has(reset, k))
+    .filter((k) => whole || has(reset, k) || !same(before[k], after[k]))
+    .map((k) => ({ what: LABELS[k], before: whole ? (state.config_exists ? UNREAD : "—") : has(reset, k) ? reset[k] : fmt(before[k]),
+      after: k === "verify.default" ? VERIFY_NAMES[after[k]] : fmt(after[k]), changed: !same(before[k], after[k]) }))
+    .concat(unknownRows(reset, after));
 }
 function filterRows(f) {
-  const before = f.isNew ? {} : flatten(initial.filters[f.file] || {}), after = flatten(f.data);
-  return Object.keys(FILTER_LABELS).filter((k) => f.isNew ? !same(after[k], null) && !same(after[k], []) && after[k] !== "" : !same(before[k], after[k]))
-    .map((k) => ({ what: FILTER_LABELS[k], before: f.isNew ? "—" : fmt(before[k]), after: fmt(after[k]) }));
+  const whole = f.isNew || f.unreadable;
+  const reset = whole ? {} : f.reset || {};
+  const before = whole ? {} : flatten(initial.filters[f.file] || {}), after = flatten(f.data);
+  return Object.keys(FILTER_LABELS).filter((k) => whole ? !same(after[k], null) && !same(after[k], []) && after[k] !== "" : has(reset, k) || !same(before[k], after[k]))
+    .map((k) => ({ what: FILTER_LABELS[k], before: f.isNew ? "—" : f.unreadable ? UNREAD : has(reset, k) ? reset[k] : fmt(before[k]), after: fmt(after[k]) }))
+    .concat(unknownRows(reset, after));
 }
 function changes() {
   const out = { config: [], filters: [], knowledge: null, noGrouping: null, cred: [] };
-  out.config = configRows();
+  // config.yaml is written when the person changed a value in it (a new one always): values only shown
+  // as the default do not make the screen write the file.
+  const rows = configRows();
+  out.config = !state.config_exists || rows.some((r) => r.changed) ? rows : [];
   for (const f of S.filters) {
     if (f.deleted && !f.isNew) out.filters.push({ file: f.file, kind: "削除", rows: [] });
     else if (!f.deleted && f.isNew) out.filters.push({ file: f.file, kind: "新しく作る", rows: filterRows(f) });
-    else if (!f.deleted && !same(f.data, initial.filters[f.file])) out.filters.push({ file: f.file, kind: "変える", rows: filterRows(f) });
+    else if (!f.deleted && !same(f.data, initial.filters[f.file])) out.filters.push({ file: f.file, kind: f.unreadable ? "置き換える" : "変える", rows: filterRows(f),
+      note: f.unreadable ? "今のファイルは読めないため、ファイル全体を次の値で書き直します。今のファイルにあった値は残りません。" : "" });
   }
   if (S.knowledge !== initial.knowledge) out.knowledge = state.knowledge.exists ? "変える" : "作る";
   else if (!state.knowledge.exists && !state.config_exists) out.knowledge = "ひな形で作る";
   const added = S.noGrouping.filter((c) => !initial.noGrouping.includes(c));
   const removed = initial.noGrouping.filter((c) => !S.noGrouping.includes(c));
   if (added.length || removed.length) out.noGrouping = { added, removed };
-  if (S.cred.can_save && S.user.trim() && S.user.trim() !== (S.cred.user || "")) out.cred.push({ env: S.config.coverity.user_env, value: S.user.trim(), shown: S.user.trim() });
-  if (S.cred.can_save && S.key) out.cred.push({ env: S.config.coverity.key_env, value: S.key, shown: "（入力した値。表示しません）" });
+  if (S.cred.can_save && !S.cred.user_hidden && S.user.trim() && S.user.trim() !== (S.cred.user || ""))
+    out.cred.push({ kind: "user", env: S.config.coverity.user_env, value: S.user.trim(), shown: S.user.trim() });
+  if (S.cred.can_save && S.key) out.cred.push({ kind: "key", env: S.config.coverity.key_env, value: S.key, shown: "（入力した値。表示しません）" });
   return out;
 }
 function countChanges(c) {
@@ -1167,12 +1210,14 @@ function countChanges(c) {
 }
 function markDirty() {
   const c = changes();
-  // A new setup lists every value as a change; mark it only once the person has typed something.
-  const shown = state.config_exists || userTouched;
-  const configChanged = state.config_exists && c.config.length > 0;
+  // A new setup (or a config.yaml that cannot be read, written whole) lists every value as a change;
+  // mark it only once the person has typed something.
+  const whole = !state.config_exists || !!state.config_unreadable;
+  const shown = !whole || userTouched;
+  const configChanged = !whole && c.config.length > 0;
   $("#dirty").hidden = !shown || countChanges(c) === 0;
   setViewMark("settings", $("#dirty").hidden ? "" : "changed", $("#dirty").hidden ? "" : "保存していない設定の変更があります");
-  const basicKeys = new Set(["Coverity の URL", "取り込み先のブランチ", "結果を置く場所"]);
+  const basicKeys = new Set(["Coverity の URL", "バージョン管理", "取り込み先のブランチ", "結果を置く場所"]);
   const basicChanged = (configChanged && c.config.some((r) => basicKeys.has(r.what))) || c.cred.length > 0;
   const optionsChanged = configChanged && c.config.some((r) => !basicKeys.has(r.what));
   const errs = triedSave ? validate() : [];
@@ -1180,15 +1225,20 @@ function markDirty() {
     basic: [basicChanged, errs.some((e) => e.tab === "basic")],
     options: [optionsChanged, errs.some((e) => e.tab === "options")],
     filters: [shown && c.filters.length > 0, errs.some((e) => e.tab === "filters") || S.filters.some((f) => f.error && !f.deleted)],
-    knowledge: [!!c.knowledge && S.knowledge !== initial.knowledge, false],
+    knowledge: [!!c.knowledge && S.knowledge !== initial.knowledge, !!state.knowledge.error],
     nogroup: [!!c.noGrouping, !!state.no_grouping_error],
   };
-  for (const [tab, [chg, err]] of Object.entries(marks)) {
-    const m = $(`nav [data-tab="${tab}"] .mark`);
-    m.className = "mark" + (err ? " error" : chg ? " changed" : "");
-    m.textContent = err || chg ? "●" : "";
-    m.title = err ? "直すところがあります" : chg ? "保存していない変更があります" : "";
-  }
+  for (const [tab, [chg, err]] of Object.entries(marks)) setMark($(`nav [data-tab="${tab}"] .mark`), "mark", err ? "error" : chg ? "changed" : "");
+}
+// The marks differ in shape too, not only in color: ⚠ something to change, ● changes not saved.
+const MARKS = { error: ["⚠", "直すところがあります"], changed: ["●", "保存していない変更があります"] };
+function setMark(m, base, kind, title) {
+  const [symbol, label] = own(MARKS, kind) || ["", ""];
+  m.className = base + (kind ? " " + kind : "");
+  m.textContent = symbol;
+  m.title = title || label;
+  if (symbol) { m.setAttribute("role", "img"); m.setAttribute("aria-label", title || label); }
+  else { m.removeAttribute("role"); m.removeAttribute("aria-label"); }
 }
 let userTouched = false;
 let triedSave = false;     // show the marks of missing values only after the first try
@@ -1203,7 +1253,9 @@ function validate() {
   const d = firstDraft();
   if (d && S.filters.filter((f) => !f.deleted).length === 1) {
     if (!(d.data.project || "").trim()) add("basic", "#f-first-project", "最初の条件のプロジェクト名を入れてください");
-    if (!(d.data.streams || []).length) add("basic", "#f-first-stream", "最初の条件のストリーム名を入れてください");
+    const streams = arr(d.data.streams).length;
+    if (!streams) add("basic", "#f-first-stream", "最初の条件のストリーム名を入れてください");
+    else if (streams > 1) add("basic", "#f-first-stream", "最初の条件のストリーム名は、1 つだけ入れてください");
   }
   if (c.vcs.type === "git" && !(c.vcs.base_branch || "").trim()) add("basic", "#f-base", "取り込み先のブランチを入れてください");
   if (!(c.output_dir || "").trim()) add("basic", "#f-out", "結果を置く場所を入れてください");
@@ -1211,6 +1263,8 @@ function validate() {
   if (!Number.isInteger(c.parallel) || c.parallel < 1 || c.parallel > 8) add("options", "#f-par", "同時に調べる数は 1〜8 の整数にしてください");
   for (const [sel, key, label] of [["#f-uenv", "user_env", "ユーザ名"], ["#f-kenv", "key_env", "認証キー"]])
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(c.coverity[key] || "")) add("options", sel, `${label}の環境変数の名前は、英字・数字・_ だけにしてください`);
+  if (c.coverity.user_env && String(c.coverity.user_env).toUpperCase() === String(c.coverity.key_env || "").toUpperCase())
+    add("options", "#f-uenv", "ユーザ名と認証キーの環境変数には、別の名前を入れてください");
   if (c.verify.default !== "none" && !(c.verify.build_command || "").trim()) add("options", "#f-bcmd", "ビルドでの検証を使うときは、ビルドのコマンドを入れてください");
   else if (c.verify.initial && !(c.verify.build_command || "").trim()) add("options", "#f-bcmd", "初回解析を使うときは、ビルドのコマンドを入れてください");
   if (!Number.isInteger(c.verify.timeout_minutes) || c.verify.timeout_minutes < 1) add("options", "#f-timeout", "初回解析の時間の上限は 1 以上の整数（分）にしてください");
@@ -1225,7 +1279,7 @@ function validate() {
     if (!/^[^\\/:*?"<>|.][^\\/:*?"<>|]*\.yaml$/.test(f.file)) errs.push({ ...where("#ff-file"), msg: `条件ファイルの名前「${f.file}」は使えません（.yaml で終わる名前）` });
     if (names.has(f.file)) errs.push({ ...where("#ff-file"), msg: `条件ファイルの名前「${f.file}」が重なっています` });
     names.add(f.file);
-    if ((f.data.streams || []).length !== 1 && !(f.first && d === f && active.length === 1)) errs.push({ ...where("#ff-stream"), msg: `${f.file}: ストリームを 1 つだけ入れてください` });
+    if (arr(f.data.streams).length !== 1 && !(f.first && d === f && active.length === 1)) errs.push({ ...where("#ff-stream"), msg: `${f.file}: ストリームを 1 つだけ入れてください` });
     if (f.data.limit != null && (!Number.isInteger(f.data.limit) || f.data.limit < 1)) errs.push({ ...where("#ff-limit"), msg: `${f.file}: 上限は 1 以上の整数にしてください` });
   });
   return errs;
@@ -1259,7 +1313,7 @@ function payload(c) {
   if (save.length || del.length) body.filters = { save, delete: del };
   if (c.knowledge) body.knowledge = S.knowledge;
   if (c.noGrouping) body.no_grouping = S.noGrouping;
-  if (c.cred.length) body.credentials = c.cred.map(({ env, value }) => ({ env, value }));
+  if (c.cred.length) body.credentials = c.cred.map(({ kind, env, value }) => ({ kind, env, value }));
   return body;
 }
 function table(rows) {
@@ -1276,11 +1330,25 @@ function goTo(err) {
   const target = $(err.selector);
   if (target) { target.setAttribute("aria-invalid", "true"); target.focus(); }
 }
-function openSave() {
+// config.yaml の注釈（REQ-102）：変えた値の行だけを書き換えて、注釈は元の場所に残す。残せない書き方のファイルだけ、
+// 保存の前に知らせる（知らせの文はサーバが返す。/coverity-setup の set-verify --check と同じ文）
+async function commentsNotice(c) {
+  try {
+    const res = await api("/api/save-check", { config: payload(c).config });
+    return res && res.ok && res.comments === "lost" ? res.notice : null;
+  } catch (e) {
+    return null;  // the save itself tells what is wrong
+  }
+}
+let saveSeq = 0;  // the save button pressed again while the server is asked: only the last one opens the dialog
+async function openSave() {
+  const seq = ++saveSeq;
   triedSave = true; markDirty();
   $$("[aria-invalid]").forEach((n) => n.removeAttribute("aria-invalid"));
   const errs = validate();
   const c = changes();
+  const notice = !errs.length && c.config.length && state.config_exists && !state.config_unreadable ? await commentsNotice(c) : null;
+  if (seq !== saveSeq) return;
   const body = $("#dlg-body"); body.replaceChildren();
   const ok = $("#dlgOk");
   if (errs.length) {
@@ -1295,14 +1363,22 @@ function openSave() {
   } else {
     $("#dlg-title").textContent = "保存する内容";
     body.append(el("p", { class: "help" }, "次の内容で保存します。確かめて「保存する」を押してください。"));
-    if (c.config.length) body.append(el("div", { class: "dlg-section" }, state.config_exists ? "設定 config.yaml を変える" : "設定 config.yaml を作る"), table(c.config));
+    if (c.config.length) {
+      body.append(el("div", { class: "dlg-section" }, !state.config_exists ? "設定 config.yaml を作る" : state.config_unreadable ? "設定 config.yaml を置き換える" : "設定 config.yaml を変える"));
+      if (state.config_unreadable) body.append(el("p", { class: "help" }, "今の config.yaml は読めないため、ファイル全体を次の値で書き直します。今のファイルにあった値は残りません（残すときは、保存しないで、メモ帳などでファイルを直してください）。"));
+      else if (notice) body.append(el("p", { class: "help", id: "dlg-comments" }, notice));
+      body.append(table(c.config));
+    }
     for (const f of c.filters) {
       body.append(el("div", { class: "dlg-section" }, `条件 ${f.file} を${f.kind}`));
+      if (f.note) body.append(el("p", { class: "help" }, f.note));
       if (f.rows.length) body.append(table(f.rows));
     }
     if (c.knowledge) body.append(el("div", { class: "dlg-section" }, `知識 knowledge.md を${c.knowledge}`));
     if (c.noGrouping) body.append(el("div", { class: "dlg-section" }, "グループ化しない CID を変える"),
       el("p", {}, [c.noGrouping.added.length ? `足す: ${c.noGrouping.added.join(", ")}` : "", c.noGrouping.removed.length ? `外す: ${c.noGrouping.removed.join(", ")}` : ""].filter(Boolean).join("　")));
+    if (c.noGrouping && state.no_grouping_error)  // a file that cannot be read is written whole
+      body.append(el("p", { class: "help" }, `今のファイルは読めないため、ファイル全体を次の CID で書き直します: ${S.noGrouping.join(", ") || "（なし）"}。今のファイルにあった CID は残りません。`));
     if (c.cred.length) body.append(el("div", { class: "dlg-section" }, "この PC の環境変数に保存する"),
       table(c.cred.map((x) => ({ what: x.env, before: "—", after: x.shown }))));
     const w = warnings(c);
@@ -1397,7 +1473,7 @@ function wire() {
     const d = firstDraft(); if (!d) return;
     input.removeAttribute("aria-invalid");
     if (input.dataset.first === "project") d.data.project = input.value.trim() || null;
-    else d.data.streams = input.value.trim() ? [input.value.trim()] : [];
+    else d.data.streams = splitList(input.value);
     changed();
   });
   $("#f-user").addEventListener("input", (e) => { S.user = e.target.value; changed(); });
@@ -1553,6 +1629,7 @@ let route = { view: "settings", run: null, item: null };
 let runs = null;           // /api/runs, newest first (null until read)
 let runsNote = "";
 let runsError = "";
+let runsUnreadable = [];   // runs whose run.json cannot be read: told, not listed
 let autoRun = false;       // the monitor chose the run (not the person), so it may move to a newer run
 
 function parseHash() {
@@ -1604,10 +1681,7 @@ function showView(view) {
   document.title = VIEW_TITLES[view];
 }
 function setViewMark(view, kind, title) {
-  const m = $(`nav.views [data-view="${view}"] .vmark`);
-  m.className = "vmark" + (kind ? " " + kind : "");
-  m.textContent = kind ? "●" : "";
-  m.title = title || "";
+  setMark($(`nav.views [data-view="${view}"] .vmark`), "vmark", kind, title);
 }
 
 // ---------- small helpers ----------
@@ -1648,6 +1722,7 @@ async function refreshRuns() {
         .sort((a, b) => (a.run_id < b.run_id) - (a.run_id > b.run_id));
       runsNote = res.note || "";
       runsError = "";
+      runsUnreadable = arr(res.unreadable).filter((u) => u && typeof u === "object");
     } else {
       runsError = res.error || "実行の一覧を読めませんでした。";
     }
@@ -2202,9 +2277,12 @@ function renderRunList() {
     el("div", {}, el("h2", {}, "実行の一覧"), el("p", { class: "lead" }, "結果を見る実行を選びます。新しい順です。")),
     el("div", { class: "res-actions" }, el("button", { class: "btn small", type: "button", onclick: () => enterResults() }, "新しくする")));
   if (runs === null) { box.replaceChildren(head, runsError ? el("div", { class: "note warn" }, runsError) : loading()); return; }
+  const broken = runsUnreadable.length ? el("div", { class: "note warn", style: "margin-bottom:14px;white-space:pre-wrap" },
+    "次の実行は、記録のファイル（run.json）を読めないため、一覧に出していません。\n"
+    + runsUnreadable.map((u) => `${String(u.run_id ?? "")}: ${String(u.error ?? "")}`).join("\n")) : null;
   if (!runs.length) {
-    box.replaceChildren(head, el("div", { class: "card" }, el("p", { style: "margin:0" },
-      runsError || runsNote || "まだ実行がありません。チャットで /coverity-run を実行すると、ここに出ます。")));
+    fill(box, head, broken, el("div", { class: "card" }, el("p", { style: "margin:0" },
+      runsError || (broken ? "読める実行はありません。" : runsNote) || "まだ実行がありません。チャットで /coverity-run を実行すると、ここに出ます。")));
     return;
   }
   const rows = runs.map((r) => {
@@ -2220,7 +2298,7 @@ function renderRunList() {
         el("a", { class: "btn small", href: hashFor({ view: "summary", run: r.run_id }), onclick: (e) => { e.preventDefault(); open(); } }, "結果"), " ",
         el("a", { class: "btn small", href: hashFor({ view: "monitor", run: r.run_id }), onclick: (e) => { e.preventDefault(); chooseRun(r.run_id, "monitor"); } }, "監視"))));
   });
-  fill(box, head, runsError ? el("div", { class: "note warn", style: "margin-bottom:14px" }, runsError) : null,
+  fill(box, head, runsError ? el("div", { class: "note warn", style: "margin-bottom:14px" }, runsError) : null, broken,
     el("div", { class: "card table-card" }, el("div", { class: "table-wrap" }, el("table", { class: "items" },
       el("thead", {}, el("tr", {}, ["実行", "条件", "進み具合", "状態", ""].map((h) => el("th", {}, h)))),
       el("tbody", {}, rows)))));
@@ -2242,16 +2320,19 @@ function renderSummary() {
       el("a", { class: "btn small", href: hashFor({ view: "monitor", run: sum.run }) }, "監視"),
       d.summary_html ? el("a", { class: "btn small", href: `/files/${enc(sum.run)}/summary.html`, target: "_blank", rel: "noopener" }, "一覧のページを開く") : null,
       el("button", { class: "btn small", type: "button", onclick: () => enterResults() }, "新しくする")));
+  const wait = approvalWait(d);
   const parts = [head, el("div", { class: "tiles", id: "sumTiles" }),
-    el("p", { class: "note", style: "margin:0 0 14px" }, "承認は、表の「承認」で選ぶとすぐに保存します（はじめは AI の推奨が入っています）。"
+    ...arr(d.notes).filter((n) => typeof n === "string" && n).map((n) => el("p", { class: "note warn", style: "margin:0 0 14px;white-space:pre-wrap" }, n)),
+    wait ? el("p", { class: "note warn", style: "margin:0 0 14px" }, "この実行の一覧（summary.html）はまだできていません。" + wait + "。")
+      : el("p", { class: "note", style: "margin:0 0 14px" }, "承認は、表の「承認」で選ぶとすぐに保存します（はじめは AI の推奨が入っています）。"
       + "「反映しない」の行は反映しません。逸脱コメントを直すときは、行を押して詳細を開きます。承認を確かめたら、チャットで /coverity-apply を実行して反映します。"),
-    d.summary_html ? null : el("p", { class: "note warn", style: "margin:0 0 14px" }, "この実行の一覧（summary.html）はまだできていません。"
+    d.summary_html || wait ? null : el("p", { class: "note warn", style: "margin:0 0 14px" }, "この実行の一覧（summary.html）はまだできていません。"
       + "一覧は /coverity-run の最後に作ります。それまでは /coverity-apply で反映できません（ここで選んだ承認は保存されます）。")];
   if (items.length) {
     parts.push(el("div", { class: "card table-card" }, el("h3", {}, "作業の一覧（確信度の低い順）"),
       el("div", { class: "table-wrap" }, el("table", { class: "items" },
         el("thead", {}, el("tr", {}, ["承認", "ID", "推奨", "確信度", "見立て", "状態"].map((h) => el("th", {}, h)))),
-        el("tbody", {}, items.map(itemRow))))));
+        el("tbody", {}, items.map((it) => itemRow(it, wait)))))));
   } else {
     parts.push(el("div", { class: "card" }, el("p", { style: "margin:0" }, "終わった作業はまだありません。")));
   }
@@ -2289,9 +2370,14 @@ function renderTiles() {
     tile("エラー", errors, "処理できなかった作業", errors ? "bad" : ""),
     rest ? tile("未処理", rest, "まだの作業", "warn") : null);
 }
-function itemRow(it) {
+// Why approvals cannot be chosen yet (K-80: the integration and the review may still change the results).
+function approvalWait(d) {
+  return d && typeof d.approval_wait === "string" ? d.approval_wait.replace(/。$/, "") : "";
+}
+function itemRow(it, wait) {
   const mark = el("span", { class: "edited", hidden: !it.edited }, "✎ 推奨から変更");
   const sel = decisionSelect(it.decision, `${itemTitle(it)} の承認`);
+  if (wait) { sel.disabled = true; sel.title = wait; }
   sel.addEventListener("change", () => saveRowDecision(it, sel, mark));
   const open = () => go({ item: String(it.id) });
   return el("tr", { onclick: (e) => { if (!e.target.closest("select, button, a, input, label")) open(); } },
@@ -2307,7 +2393,7 @@ async function saveRowDecision(it, sel, mark) {
   const value = sel.value;
   sel.disabled = true;
   const res = await postApproval(sum.run, String(it.id), value, null);
-  sel.disabled = false;
+  sel.disabled = !!approvalWait(sum && sum.data);
   if (!res.ok) {
     sel.value = it.decision || "";
     showResMsg("warn", `${itemTitle(it)} の承認を保存できませんでした。\n${errorText(res)}`);
@@ -2404,12 +2490,14 @@ function setFrame(target, scroll) {
 }
 function approvalPanel() {
   const d = det.data, it = d.item || {}, f = det.form;
+  const wait = approvalWait(d);
   const sel = decisionSelect(f.decision, "承認", "apDecision");
+  sel.disabled = !!wait;
   sel.addEventListener("change", () => { f.decision = sel.value; formChanged(); });
   const field = (key, label, list) => {
     const id = "ap-" + key;
-    const input = key === "comment" ? el("textarea", { id, rows: 7, spellcheck: "false" })
-      : el("input", { id, type: "text", list, autocomplete: "off", spellcheck: "false" });
+    const input = key === "comment" ? el("textarea", { id, rows: 7, spellcheck: "false", disabled: !!wait })
+      : el("input", { id, type: "text", list, autocomplete: "off", spellcheck: "false", disabled: !!wait });
     input.value = f[key];
     input.addEventListener("input", () => { f[key] = input.value; formChanged(); });
     return el("div", { class: "field" },
@@ -2423,6 +2511,7 @@ function approvalPanel() {
     it.summary ? el("p", { class: "ap-summary" }, it.summary) : null,
     el("p", { class: "help", style: "margin:2px 0 12px;overflow-wrap:anywhere" }, [it.checker, where(it)].filter(Boolean).join("・")),
     applied ? el("div", { class: "note warn", style: "margin-bottom:12px" }, "この作業はもう反映しています。ここで承認を変えても、反映した内容は元に戻りません。") : null,
+    wait ? el("div", { class: "note warn", style: "margin-bottom:12px" }, wait + "。") : null,
     el("div", { class: "field" },
       el("label", { for: "apDecision" }, "承認", el("span", { class: "diffmark", id: "apDecision-mark", hidden: true }, "推奨から変更")), sel,
       el("div", { class: "help" }, it.already_fixed
@@ -2435,7 +2524,7 @@ function approvalPanel() {
       field("severity", "Severity", "dl-severity"), field("comment", "逸脱コメント")),
     el("div", { class: "ap-actions" },
       el("button", { class: "btn primary", type: "button", id: "apSave", onclick: saveDetail }, "保存"),
-      el("button", { class: "btn", type: "button", onclick: resetToAi }, "AI の案に戻す")),
+      el("button", { class: "btn", type: "button", onclick: resetToAi, disabled: !!wait }, "AI の案に戻す")),
     el("div", { class: "ap-state", id: "apState", role: "status" }),
     el("div", { class: "note ap-msg", id: "apMsg", hidden: true }),
     fileLinks(d));
@@ -2465,7 +2554,7 @@ function formChanged() {
   const st = $("#apState");
   st.className = "ap-state" + (dirty ? " dirty-state" : "");
   st.textContent = dirty ? "● 保存していない変更があります" : det.savedAt ? `${det.savedAt} に保存しました` : "";
-  $("#apSave").disabled = !dirty || serverDown;
+  $("#apSave").disabled = !dirty || serverDown || !!approvalWait(det.data);
 }
 function showApMsg(kind, text) {
   const m = $("#apMsg");

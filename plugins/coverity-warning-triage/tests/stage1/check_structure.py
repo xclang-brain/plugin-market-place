@@ -67,7 +67,8 @@ CATALOG: Dict[str, Tuple[List[str], str]] = {
     "task": (["REQ-011"], "作業の定義（task.json）が task.schema.json に合う"),
     "eval": (["REQ-011"], "EVAL の課題が採点のしかたの決まりに合い、基準の番号と文が作業の定義の写しと同じ"),
     # ナレッジの番号の突き合わせは、生成プラグインの要件ではなく設計書 7章の試験なので、要件の番号の代わりに節を付ける
-    "knowledge": ([], "ナレッジの番号がそれぞれの置き場所にある（設計書 7章）"),
+    "knowledge": ([], "ナレッジの番号がそれぞれの置き場所にあり、外した番号を指したままの箇所がない（設計書 7章）"),
+    "standalone": (["REQ-062"], "入口のほかのスキルが、そのスキルのフォルダだけで使え、スキルの決まりの文がほかの部品に写されていない"),
     "agent-tools": (["REQ-010"], "統括・作業・検証の定義がそろい、作業と検証に tools があり、統括に tools がなく、検証エージェントに書き込みとコマンドがない"),
     "tool-names": (["REQ-010"], "記録のツールの名前の頭がプラグインの名前"),
     "marketplace": (["REQ-004"], "marketplace.json に名前・持ち主・プラグインの一覧があり、一覧のプラグインの名前が plugin.json と同じ"),
@@ -155,6 +156,7 @@ class Context:
         self.agents: Dict[str, Tuple[Dict[str, Any], str]] = {}   # ファイル名（.agent.md を除く）-> (フロントマター, 本文)
         self.task: Optional[Dict[str, Any]] = None
         self.task_path: Optional[str] = None
+        self.knowledge: List[Dict[str, Any]] = []                 # tests/knowledge.json の読めた項目
 
 
 # ---------------------------------------------------------------- 読み込みの部品
@@ -661,15 +663,21 @@ def check_layout(ctx: Context, c: Check) -> None:
                 c.error("com.github.copilot/extensions/%s/: 入口のファイル（extension.mjs）がない" % entry)
 
 
+# plugin-creator が改善・設計変更のときに作る、作業用の一時フォルダ（下書きと下見。終わったら消える。ひな形の .gitignore）。
+# プラグインのフォルダが Copilot CLI を起動したフォルダと同じときは、プラグインのフォルダの中にできるので、フォルダ全体を歩く検査では飛ばす。
+# 下見の中の古い文（外した番号など）を拾わないためである。
+WORK_DIR = ".plugin-creator-work"
+
 # Copilot CLI に読み込まれない、試験の道具の置き場所（git にも入れない。ひな形の .gitignore）。仮想環境の bin/python は
-# 外の Python へのリンクなので、中を調べると、仮想環境を作っただけで必ず不合格になる。調べないのはこの2つのフォルダだけ。
+# 外の Python へのリンクなので、中を調べると、仮想環境を作っただけで必ず不合格になる。調べないのは、この2つのフォルダと、
+# 作業用の一時フォルダ（WORK_DIR）だけ。
 TOOL_FOLDERS = (("tests", ".venv"), ("tests", "node_modules"))
 
 
 def check_symlinks(ctx: Context, c: Check) -> None:
     tool_folders = {os.path.join(ctx.root, *parts) for parts in TOOL_FOLDERS}
     for directory, dirs, files in os.walk(ctx.root):
-        dirs[:] = [d for d in dirs if d != ".git" and os.path.join(directory, d) not in tool_folders]
+        dirs[:] = [d for d in dirs if d not in (".git", WORK_DIR) and os.path.join(directory, d) not in tool_folders]
         for entry in dirs + files:
             path = os.path.join(directory, entry)
             if os.path.islink(path) and not is_within(os.path.realpath(path), ctx.real_root):
@@ -747,8 +755,12 @@ CHECK_TYPES: Dict[str, Tuple[List[str], List[str]]] = {   # 種類 -> (必須の
     "not_contains": (["file", "text"], []),
     "regex": (["file", "pattern"], ["flags"]),
     "unchanged": (["file"], []),   # file に当てはまる課題の入力のファイルが、もとのまま残っている
+    "agent_ran": (["agent"], []),  # その実行で、agent のエージェント（com.github.copilot/agents/<agent>.agent.md）が動いた。file を持たない
 }
 REGEX_FLAGS = "imsu"
+# 課題の bin に書ける、ただ1つの場所。擬似の機器の道具（差し替えのスクリプト）を置く、課題の入力のフォルダ。
+# test-plugin は、作業フォルダに写したこのフォルダを、その課題の実行の PATH の先頭に足す。
+BIN_DIR = "inputs/bin"
 Regexes = List[Tuple[str, str, str]]   # (場所, pattern, flags)
 
 
@@ -842,6 +854,8 @@ def check_problems(check: Any, label: str, regexes: Regexes) -> List[str]:
     out += ["%s に %s がない（%s には要る）" % (label, k, check["type"]) for k in spec[0] if k not in check]
     if "file" in check:
         out += glob_problems(check["file"], label + ".file")
+    if check["type"] == "agent_ran" and "agent" in check and not (isinstance(check["agent"], str) and AGENT_ID.match(check["agent"])):
+        out.append("%s.agent は、エージェントの名前（com.github.copilot/agents/<名前>.agent.md の <名前>。プラグインの名前は付けない）で書く" % label)
     if check["type"] in ("contains", "not_contains") and "text" in check and not is_text(check["text"]):
         out.append("%s.text は、探す文字を空でない文字で書く" % label)
     if check["type"] == "regex" and "pattern" in check:
@@ -871,6 +885,17 @@ def model_check_problems(check: Any, label: str) -> List[str]:
     return out
 
 
+def bin_problems(task: Dict[str, Any], label: str) -> List[str]:
+    """課題の bin（擬似の機器の道具のフォルダ）の形。inputs/bin だけを書け、inputs に inputs/bin かその下のファイルがある。"""
+    if task["bin"] != BIN_DIR:
+        return ["%s.bin は \"%s\" だけを書ける（擬似の機器の道具を置く、課題の入力のフォルダ）" % (label, BIN_DIR)]
+    items = task.get("inputs") if isinstance(task.get("inputs"), list) else []
+    under = [i for i in items if is_text(i) and (posixpath.normpath(normalize_rel(i)) + "/").startswith(BIN_DIR + "/")]
+    if not under:
+        return ["%s.inputs に、%s か、その下のファイルがない（bin のフォルダも、課題の入力として作業フォルダに写す）" % (label, BIN_DIR)]
+    return []
+
+
 def eval_task_problems(task: Any, label: str, regexes: Regexes) -> List[str]:
     """eval.json の1課題の形を確かめる。"""
     if not isinstance(task, dict):
@@ -887,6 +912,8 @@ def eval_task_problems(task: Any, label: str, regexes: Regexes) -> List[str]:
             for i, item in enumerate(task["inputs"]):
                 if not is_text(item) or item.startswith("/") or re.match(r"^[A-Za-z]:", item) or ".." in normalize_rel(item).split("/"):
                     out.append("%s.inputs[%d] は、課題のフォルダの中の相対の場所で書く" % (label, i))
+    if "bin" in task:
+        out += bin_problems(task, label)
     if "settings" in task:
         settings = task["settings"]
         if not isinstance(settings, dict):
@@ -1095,6 +1122,8 @@ def input_check_problems(task: Dict[str, Any], files: List[InputFile], label: st
             continue
         where = "%s.criteria[%d].check" % (label, i)
         check = item["check"]
+        if check["type"] == "agent_ran":   # 作業フォルダのファイルを見ない種類
+            continue
         matcher = glob_to_regex(check["file"])
         if check["type"] == "unchanged":
             if not any(matcher.match(f[0]) for f in files):
@@ -1147,6 +1176,19 @@ def js_regex_hits(probes: RegexProbes) -> Dict[str, str]:
     return {where: hit for (where, _, _, _), hit in zip(probes, results) if hit}
 
 
+def agent_ran_problems(ctx: Context, task: Dict[str, Any], label: str) -> List[str]:
+    """agent_ran の基準のエージェントの定義が、このプラグインにあるか（grade.mjs と tasks.mjs の loadTasks と同じ決まり）。"""
+    out = []
+    for i, item in enumerate(task.get("criteria") or []):
+        check = item.get("check") if isinstance(item, dict) and item.get("grading") == "program" else None
+        if isinstance(check, dict) and check.get("type") == "agent_ran":
+            agent = check["agent"]
+            if not os.path.isfile(os.path.join(ctx.root, "com.github.copilot", "agents", agent + ".agent.md")):
+                out.append("%s.criteria[%d].check.agent「%s」のエージェントの定義（com.github.copilot/agents/%s.agent.md）がない"
+                           % (label, i, agent, agent))
+    return out
+
+
 def check_eval(ctx: Context, c: Check) -> None:
     base = os.path.join(ctx.root, "tests", "eval")
     names = sorted(d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))) if os.path.isdir(base) else []
@@ -1183,6 +1225,9 @@ def check_eval(ctx: Context, c: Check) -> None:
         if isinstance(data.get("inputs"), list):
             found_inputs = input_problems(os.path.dirname(path), data["inputs"], label)
             for problem in found_inputs:
+                c.error(problem)
+        if not problems:
+            for problem in agent_ran_problems(ctx, data, label):
                 c.error(problem)
         if not problems and not found_inputs:   # 入力のままで当てはまってしまう採点や、入力に当てはまらない unchanged は、形が正しく入力がそろうときに確かめる
             before = len(probes)
@@ -1228,24 +1273,120 @@ def check_eval(ctx: Context, c: Check) -> None:
 
 KNOWLEDGE_ID = re.compile(r"^K-[0-9]+$")
 KNOWLEDGE_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])K-[0-9]+(?![0-9])")
-SKIP_DIRS = {".git", "node_modules", "__pycache__"}
+SKIP_DIRS = {".git", "node_modules", "__pycache__", WORK_DIR}
+
+
+def read_text_file(path: str) -> Optional[str]:
+    """文字のファイルの中身（先頭の 5MB）。0 のバイトがあるファイル（フォントや画像など）、読めないファイル、シンボリックリンクは None。
+    0 のバイトがあるファイルを見ないのは、中のバイトの並びが、たまたま K-数字 に見えることがあるため。"""
+    if os.path.islink(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            data = f.read(5 * 1024 * 1024)
+    except OSError:
+        return None
+    if b"\0" in data:
+        return None
+    return data.decode("utf-8", errors="ignore")
+
+
+def walk_files(base: str) -> List[str]:
+    """base の下のファイル（SKIP_DIRS のフォルダの中は見ない）。"""
+    found = []
+    for directory, dirs, files in os.walk(base):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        found += [os.path.join(directory, f) for f in sorted(files)]
+    return found
+
+
+def files_outside_tests(ctx: Context) -> List[str]:
+    """作業の定義と、根の tests/ のフォルダを除くファイル。"""
+    found = []
+    for directory, dirs, files in os.walk(ctx.root):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not (directory == ctx.root and d == "tests"))
+        found += [os.path.join(directory, f) for f in sorted(files) if os.path.join(directory, f) != ctx.task_path]
+    return found
 
 
 def knowledge_tokens_outside_tests(ctx: Context) -> Set[str]:
-    """作業の定義とテストのフォルダを除くファイルに書かれたナレッジの番号。"""
+    """作業の定義とテストのフォルダを除く、文字のファイルに書かれたナレッジの番号。"""
     found: Set[str] = set()
-    for directory, dirs, files in os.walk(ctx.root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not (directory == ctx.root and d == "tests")]
-        for file in files:
-            path = os.path.join(directory, file)
-            if path == ctx.task_path or os.path.islink(path):
-                continue
-            try:
-                with open(path, "rb") as f:
-                    text = f.read(5 * 1024 * 1024).decode("utf-8", errors="ignore")
-            except OSError:
-                continue
+    for path in files_outside_tests(ctx):
+        text = read_text_file(path)
+        if text is not None:
             found.update(KNOWLEDGE_TOKEN.findall(text))
+    return found
+
+
+REMOVED_FILE = "tests/knowledge-removed.json"
+
+
+def knowledge_entry_problem(item: Any, where: str) -> Optional[str]:
+    """ナレッジの1件（tests/knowledge.json と tests/knowledge-removed.json で同じ形）の誤り。なければ None。"""
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not KNOWLEDGE_ID.match(item["id"]):
+        return "%s: id は K-数字 の形にする（例：K-01）" % where
+    if item.get("kind") not in ("criterion", "other"):
+        return "%s（%s）: kind は criterion か other にする" % (where, item["id"])
+    if not isinstance(item.get("text"), str) or not item["text"].strip():
+        return "%s（%s）: text（ナレッジの文）がない" % (where, item["id"])
+    return None
+
+
+def read_removed_knowledge(ctx: Context, c: Check, current: Set[str]) -> Dict[str, Dict[str, Any]]:
+    """外した決まりの一覧（tests/knowledge-removed.json）。番号 -> 項目。ないときは空（1件も外していない）。"""
+    path = os.path.join(ctx.root, *REMOVED_FILE.split("/"))
+    if not os.path.isfile(path):
+        return {}
+    data = read_json_file(path, REMOVED_FILE, c)
+    if data is None:
+        return {}
+    if not isinstance(data, list):
+        c.error("%s: 外した決まりの並び（リスト）になっていない" % REMOVED_FILE)
+        return {}
+    removed: Dict[str, Dict[str, Any]] = {}
+    for i, item in enumerate(data):
+        where = "%s の %d 番目" % (REMOVED_FILE, i + 1)
+        problem = knowledge_entry_problem(item, where)
+        if problem:
+            c.error(problem)
+            continue
+        if item["id"] in current:
+            c.error("%s: 番号 %s が tests/knowledge.json にもある（外した番号は、ほかの決まりに使わない）" % (where, item["id"]))
+        elif item["id"] in removed:
+            c.error("%s: 番号 %s が重なっている" % (where, item["id"]))
+        removed[item["id"]] = item
+    for item in removed.values():
+        to = item.get("replacedBy")
+        if "replacedBy" in item and not (isinstance(to, str) and KNOWLEDGE_ID.match(to) and to != item["id"] and (to in current or to in removed)):
+            c.error("%s の %s: replacedBy %s が、tests/knowledge.json にも %s にもない番号になっている（中身を直した後の番号を書く）"
+                    % (REMOVED_FILE, item["id"], short(to), REMOVED_FILE))
+    return removed
+
+
+def latest_number(removed: Dict[str, Dict[str, Any]], kid: str) -> Optional[str]:
+    """外した番号 kid の、今の番号（replacedBy をたどった先）。中身を直さずに外したものは None。"""
+    seen = {kid}
+    to = removed[kid].get("replacedBy")
+    while isinstance(to, str) and to in removed and to not in seen:
+        seen.add(to)
+        to = removed[to].get("replacedBy")
+    return to if isinstance(to, str) and to not in removed else None
+
+
+def removed_hint(removed: Dict[str, Dict[str, Any]], kid: str) -> str:
+    now = latest_number(removed, kid)
+    return "今の番号は %s。%s に直す" % (now, now) if now else "外した決まりなので、指している箇所を消す"
+
+
+def files_for_removed_numbers(ctx: Context) -> List[str]:
+    """外した番号を探すファイル：作業の定義と tests/ を除くファイル、EVAL の課題（tests/eval/*/eval.json）、作業ごとの試験（tests/stage2/task/）。
+    課題の入力（tests/eval/*/inputs/）はユーザーのデータなので見ない。"""
+    found = files_outside_tests(ctx)
+    found += sorted(glob.glob(os.path.join(ctx.root, "tests", "eval", "*", "eval.json")))
+    task_tests = os.path.join(ctx.root, "tests", "stage2", "task")
+    if os.path.isdir(task_tests):
+        found += walk_files(task_tests)
     return found
 
 
@@ -1264,19 +1405,24 @@ def check_knowledge(ctx: Context, c: Check) -> None:
     seen: Set[str] = set()
     for i, item in enumerate(data):
         where = "tests/knowledge.json の %d 番目" % (i + 1)
-        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not KNOWLEDGE_ID.match(item["id"]):
-            c.error("%s: id は K-数字 の形にする（例：K-01）" % where)
-            continue
-        if item.get("kind") not in ("criterion", "other"):
-            c.error("%s（%s）: kind は criterion か other にする" % (where, item["id"]))
-            continue
-        if not isinstance(item.get("text"), str) or not item["text"].strip():
-            c.error("%s（%s）: text（ナレッジの文）がない" % (where, item["id"]))
+        problem = knowledge_entry_problem(item, where)
+        if problem:
+            c.error(problem)
             continue
         if item["id"] in seen:
             c.error("%s: 番号 %s が重なっている" % (where, item["id"]))
         seen.add(item["id"])
         entries.append(item)
+    ctx.knowledge = entries
+    removed = read_removed_knowledge(ctx, c, seen)
+    if removed:   # 外した番号や、中身を直す前の番号を指したままの箇所（改善・設計変更の後に残りやすい）
+        for path in files_for_removed_numbers(ctx):
+            text = read_text_file(path)
+            if text is None:
+                continue
+            for number, line in enumerate(text.splitlines(), 1):
+                for kid in sorted(set(KNOWLEDGE_TOKEN.findall(line)) & set(removed)):
+                    c.error("%s:%d が、外した決まり %s を指している（%s）" % (rel(ctx, path), number, kid, removed_hint(removed, kid)))
     if ctx.task is None:
         c.error("作業の定義が読めないので、番号を突き合わせられない")
         return
@@ -1290,8 +1436,212 @@ def check_knowledge(ctx: Context, c: Check) -> None:
             c.error("%s がエージェントの指示などのファイル（作業の定義とテストのフォルダを除く）にない: 「%s」" % (e["id"], e["text"]))
     for cid, criterion in task_criteria(ctx.task).items():
         k = criterion.get("knowledge")
-        if k is not None and (k not in by_id or by_id[k]["kind"] != "criterion"):
+        if isinstance(k, str) and k in removed:
+            c.error("基準 %s の knowledge %s は、外した決まりの番号（%s）" % (cid, k, removed_hint(removed, k)))
+        elif k is not None and (k not in by_id or by_id[k]["kind"] != "criterion"):
             c.error("基準 %s の knowledge %s が、ナレッジの一覧にある「合否の決め方」の番号でない" % (cid, k))
+
+
+# ---- 部品の独立性（REQ-062）。入口のほかのスキル（ルールのスキル）は、そのスキルのフォルダだけで使える。
+# 入口のスキル（本文に <名前>_open がある）は、統括エージェントを始めることが仕事なので見ない。
+
+RULE_TEXT_MIN = 15   # これより短い文は、ほかの文にたまたま含まれやすいので、写しを探さない（決まりの文の1文ごとの字数）
+SKILL_FOLDERS = ("scripts", "references", "assets")
+# コードの中の scripts/・references/・assets/ のパス（例：`python3 <このスキルのフォルダ>/scripts/build.py`）。
+# 置き場所の書き方（<名前> や *）が続くものは、決まったファイルを指していないので見ない。どのフォルダの下かは path_base で決める
+SKILL_PATH = re.compile(r"(?<![A-Za-z0-9_.-])((?:%s)/[^\s`\"'()<>\[\]{}|;,、。（）「」*?]+)" % "|".join(SKILL_FOLDERS))
+MD_LINK = re.compile(r"!?\[[^\]\n]*\]\(\s*<?([^)\s>]+)>?(?:\s+[^)]*)?\)")
+URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+OTHER_SKILL = re.compile(r"(?<![A-Za-z0-9_.-])skills/([A-Za-z0-9][A-Za-z0-9_.-]*)/")
+# エージェントの定義の中の、プラグインのファイルのパス（skills/<名前>/… と scripts/…）
+AGENT_PLUGIN_PATH = re.compile(r"(?<![A-Za-z0-9_.-])((?:skills/([A-Za-z0-9][A-Za-z0-9_.-]*)/|scripts/)[A-Za-z0-9_.~/+@%-]*)")
+DATA_FILES = re.compile(r"(?<![A-Za-z0-9_-])(?:task|knowledge)\.json")
+PLACEHOLDER_DIR = re.compile(r"<([^<>\n]*)>/$")       # 前にある置き場所の書き方（例：<このスキルのフォルダ>/）
+PATH_TAIL = re.compile(r"[A-Za-z0-9_.~$/\\{}-]*$")   # パスの前に続く、フォルダの部分
+SKILL_WORD = re.compile(r"スキル|skill", re.I)
+PLUGIN_WORD = re.compile(r"プラグイン|plugin", re.I)
+KNOWLEDGE_MARK = re.compile(r"[（(]K-[0-9]+(?:[、,・]K-[0-9]+)*[）)]")   # 文に添えた番号（例：（K-03））。空白を除いた後の形
+SENTENCE_END = re.compile(r"[。．！？!?]|\.(?=\s|$)")
+
+
+def path_base(text: str, at: int) -> Optional[str]:
+    """text の at から始まるパスが、どのフォルダからのパスか。前に何もない（か ./）なら ""（相対パス）、
+    前に置き場所の書き方 <…>/ があればその中の言葉、そのほかのフォルダの下（例：src/、../、${PLUGIN_ROOT}/）なら None。"""
+    line = text[text.rfind("\n", 0, at) + 1:at]
+    holder = PLACEHOLDER_DIR.search(line)
+    if holder:
+        return holder.group(1)
+    tail = PATH_TAIL.search(line).group(0)
+    return "" if tail in ("", "./") else None
+
+
+def plugin_relative(text: str, at: int) -> bool:
+    """at から始まるパスが、プラグインのフォルダの中を指すか（相対パスか、<プラグインのフォルダ>/ のように書いたもの）。"""
+    base = path_base(text, at)
+    return base == "" or (base is not None and bool(PLUGIN_WORD.search(base)))
+
+
+def split_code(text: str) -> Tuple[str, str]:
+    """Markdown を、(コードの外の文, コードの中の文) に分ける。コードは ``` か ~~~ の囲みと、`…` の中。"""
+    prose, code, fence = [], [], None
+    for line in text.splitlines():
+        mark = re.match(r"\s*(`{3,}|~{3,})", line)
+        if fence is None and mark:
+            fence = mark.group(1)[0] * 3
+        elif fence is not None and line.strip().startswith(fence):
+            fence = None
+        elif fence is not None:
+            code.append(line)
+        else:
+            prose.append(line)
+    outside = "\n".join(prose)
+    code += re.findall(r"`([^`\n]+)`", outside)
+    return re.sub(r"`[^`\n]+`", " ", outside), "\n".join(code)
+
+
+def skill_markdown(skill_dir: str) -> List[str]:
+    """スキルの本文と参考の文書（SKILL.md と references/ の .md）。"""
+    files = [os.path.join(skill_dir, "SKILL.md")]
+    refs = os.path.join(skill_dir, "references")
+    if os.path.isdir(refs):
+        files += [p for p in walk_files(refs) if p.lower().endswith(".md")]
+    return files
+
+
+def inside(path: str, base: str) -> bool:
+    return is_within(os.path.realpath(path), os.path.realpath(base))
+
+
+def link_problems(ctx: Context, skill_dir: str, path: str, prose: str, code: str) -> List[str]:
+    """本文が指すファイル（Markdown のリンクと、コードの中の scripts/・references/・assets/ のパス）が、スキルのフォルダの中にあるか。"""
+    out = []
+    label = rel(ctx, path)
+    folder = rel(ctx, skill_dir)
+    for target in MD_LINK.findall(prose):
+        if URL_SCHEME.match(target) or target.startswith("#"):
+            continue
+        target = target.split("#", 1)[0]
+        candidates = [] if target.startswith("/") else [os.path.normpath(os.path.join(os.path.dirname(path), target)),
+                                                         os.path.normpath(os.path.join(skill_dir, target))]
+        if not any(inside(p, skill_dir) and os.path.exists(p) for p in candidates):
+            out.append("%s: リンク %s が指すファイルが、スキルのフォルダ（%s/）の中にない（スキルが使うファイルはスキルのフォルダに置き、"
+                       "そのフォルダからの相対パスで指す）" % (label, target, folder))
+    targets = set()
+    for m in SKILL_PATH.finditer(code):
+        # スキルのフォルダからの相対パスか、<このスキルのフォルダ>/ のように書いたものだけを見る。
+        # ほかのフォルダの下のもの（例：<ソースのフォルダ>/scripts/、src/assets/、URL の中）は、スキルのファイルを指していない
+        base = path_base(code, m.start())
+        # 「scripts/build-*.sh」のような、いくつものファイルを表す書き方は、1つのファイルを指していない
+        if code[m.end():m.end() + 1] in ("*", "?"):
+            continue
+        if base == "" or (base is not None and SKILL_WORD.search(base)):
+            targets.add(m.group(1).rstrip(".:"))
+    for target in sorted(targets):
+        full = os.path.normpath(os.path.join(skill_dir, target))
+        if not (inside(full, skill_dir) and os.path.exists(full)):
+            out.append("%s: %s が、スキルのフォルダ（%s/）の中にない（スキルが使うスクリプトや参考の文書は、プラグインの根でなく、"
+                       "スキルのフォルダの scripts/・references/・assets/ に置く）" % (label, target, folder))
+    return out
+
+
+def forbidden_problems(ctx: Context, folder: str, path: str, text: str) -> List[str]:
+    """ルールのスキルが、ほかの部品やスキルのフォルダの外に頼っていないか。単体で使うと、どれも意味をなさないため。
+    ほかのスキルのフォルダは、プラグインの中を指すもの（skills/<名前>/ か <プラグインのフォルダ>/skills/<名前>/）だけを数える。"""
+    label = rel(ctx, path)
+    found = []
+    if "../" in text:
+        found.append("../（スキルのフォルダの外）")
+    for word in ("${PLUGIN_ROOT}", "${CLAUDE_SKILL_DIR}"):
+        if word in text:
+            found.append("%s（スキルの本文では展開されない）" % word)
+    others = sorted({m.group(1) for m in OTHER_SKILL.finditer(text) if m.group(1) != folder and plugin_relative(text, m.start())})
+    found += ["skills/%s/（ほかのスキルのフォルダ）" % m for m in others]
+    if "com.github.copilot/" in text:
+        found.append("com.github.copilot/（エージェントやエクステンションの場所）")
+    if ctx.plugin_name:
+        name = re.escape(ctx.plugin_name)
+        tools = sorted(set(m.group(0) for m in re.finditer(r"(?<![A-Za-z0-9_.-])%s_(?:%s)(?![A-Za-z0-9_])" % (name, RECORD_SUFFIXES), text)))
+        found += ["%s（記録のツール）" % t for t in tools]
+        agents = sorted(set(re.findall(r"(?<![A-Za-z0-9_.-])%s:[a-z0-9][a-z0-9-]*" % name, text)))
+        found += ["%s（エージェント）" % a for a in agents]
+    files = sorted(set(DATA_FILES.findall(text)))
+    found += ["%s（作業の定義かナレッジの一覧）" % f for f in files]
+    if not found:
+        return []
+    return ["%s: %s を書いている（入口のほかのスキルは、そのスキルのフォルダの中のファイルだけで仕事を終えられるようにする。"
+            "プラグインの流れの中での使い方は、エージェントの定義に書く）" % (label, "、".join(found))]
+
+
+def compact(text: str) -> str:
+    """決まりの文の写しを探すための形。Unicode の正規化をそろえ、空白と改行と、文に添えた番号（（K-03）など）を除く
+    （折り返しや、番号の添え方の違いを見ないため）。"""
+    return KNOWLEDGE_MARK.sub("", re.sub(r"\s+", "", unicodedata.normalize("NFC", text)))
+
+
+def rule_sentences(text: str) -> List[str]:
+    """決まりの文を1文ずつに分けた、写しを探す形（RULE_TEXT_MIN 字以上の文だけ）。
+    文の終わりの句点は除く。写すときに、番号を句点の前に添える（「…消す（K-03）。」）ためである。"""
+    pieces = SENTENCE_END.split(unicodedata.normalize("NFC", text))
+    return [p for p in (compact(piece) for piece in pieces) if len(p) >= RULE_TEXT_MIN]
+
+
+def check_standalone(ctx: Context, c: Check) -> None:
+    if not ctx.plugin_name:
+        c.error("plugin.json の name が読めないので、入口のスキル（<名前>_open を呼ぶスキル）を見分けられない")
+        return
+    entry_word = ctx.plugin_name + "_open"
+    rules: Dict[str, str] = {}      # ルールのスキルの名前 -> フォルダ
+    corpus: Dict[str, str] = {}     # 場所（skills/<名前>/、エージェントの定義）-> 中の文字（compact）
+    for folder, skill_path in skill_folders(ctx):
+        skill_dir = os.path.dirname(skill_path)
+        texts = [t for t in (read_text_file(p) for p in walk_files(skill_dir)) if t is not None]
+        corpus["skills/%s/" % folder] = compact("\n".join(texts))
+        body = read_text_file(skill_path) or ""
+        if entry_word not in body:
+            rules[folder] = skill_dir
+    for folder, skill_dir in sorted(rules.items()):
+        for path in skill_markdown(skill_dir):
+            text = read_text_file(path)
+            if text is None:
+                continue
+            prose, code = split_code(text)
+            for problem in link_problems(ctx, skill_dir, path, prose, code) + forbidden_problems(ctx, folder, path, text):
+                c.error(problem)
+    agents_dir = os.path.join(ctx.root, "com.github.copilot", "agents")
+    for file in sorted(os.listdir(agents_dir)) if os.path.isdir(agents_dir) else []:
+        path = os.path.join(agents_dir, file)
+        text = read_text_file(path) if file.endswith(".agent.md") else None
+        if text is None:
+            continue
+        label = rel(ctx, path)
+        corpus[label] = compact(text)
+        if "${PLUGIN_ROOT}" in text:
+            c.error("%s: ${PLUGIN_ROOT} を書いている（エージェントの本文では展開されない。<プラグインのフォルダ>/… と書き、"
+                    "プラグインのフォルダは統括エージェントからの頼みで受け取る）" % label)
+        relative, named = [], set()
+        for m in AGENT_PLUGIN_PATH.finditer(text):
+            found = m.group(1).rstrip(".")
+            if path_base(text, m.start()) == "" and found not in relative:
+                relative.append(found)
+            if m.group(2) and plugin_relative(text, m.start()):
+                named.add(m.group(2))
+        for found in relative:
+            c.error("%s: %s を相対パスで書いている（エージェントは利用者の作業フォルダで動くので、相対パスではプラグインのファイルに届かない。"
+                    "<プラグインのフォルダ>/%s と書く。利用者のファイルなら、<作業フォルダ>/… のように、どのフォルダの中かを書く）" % (label, found, found))
+        for name in sorted(named):
+            if not os.path.isfile(os.path.join(ctx.root, "skills", name, "SKILL.md")):
+                c.error("%s: skills/%s/ を指しているが、そのスキル（skills/%s/SKILL.md）がない" % (label, name, name))
+    rule_places = {"skills/%s/" % f for f in rules}
+    for entry in ctx.knowledge:
+        copied: Set[str] = set()
+        for sentence in rule_sentences(entry["text"]):   # 1文ずつ比べる。1文だけ写しても、決まりが2か所になるため
+            places = {place for place, text in corpus.items() if sentence in text}
+            if len(places) > 1 and places & rule_places:
+                copied |= places
+        if copied:
+            c.error("%s の決まりの文「%s」が、%s に書かれている（決まりの文は、受け持つスキルの1か所にだけ書く。"
+                    "エージェントの定義やほかのスキルには、スキルの場所と番号だけを書く）"
+                    % (entry["id"], short_text(entry["text"]), "、".join(p for p in corpus if p in copied)))
 
 
 ROLE_FILES = (("orchestrator", "統括"), ("worker", "作業"), ("verifier", "検証"))
@@ -1332,7 +1682,7 @@ def check_agent_tools(ctx: Context, c: Check) -> None:
                         c.error("%s tools にコマンドのツール %s がある（検証エージェントはコマンドを動かせない）" % (where, tool))
 
 
-RECORD_SUFFIXES = "open|plan|verdict|show|review|issue|finish"
+RECORD_SUFFIXES = "open|plan|verdict|show|review|issue|finish|ask|answer"
 RECORD_TOOL = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*?)_(%s)$" % RECORD_SUFFIXES)
 BACKTICKED = re.compile(r"`([^`\s]+)`")
 
@@ -1547,6 +1897,7 @@ def run_checks(root: str, kind: str = "generated") -> Report:
         check_task(ctx, report.new("task"))
         check_eval(ctx, report.new("eval"))
         check_knowledge(ctx, report.new("knowledge"))
+        check_standalone(ctx, report.new("standalone"))
         check_agent_tools(ctx, report.new("agent-tools"))
         check_tool_names(ctx, report.new("tool-names"))
         check_marketplace(ctx, report.new("marketplace"))

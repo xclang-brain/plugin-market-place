@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -134,11 +135,61 @@ def config_dir(repo: Path) -> Path:
     return repo / CONFIG_DIR
 
 
+NOT_UTF8 = "文字コードが UTF-8 ではないため読めません（メモ帳などで、文字コードを UTF-8 にして保存し直してください）"
+
+# What is wrong with a value, by the kind of pydantic's error (its own text is English).
+ERROR_TEXT = {
+    "missing": "入力してください",
+    "greater_than_equal": "{ge} 以上にしてください",
+    "less_than_equal": "{le} 以下にしてください",
+    "int_parsing": "整数にしてください",
+    "int_type": "整数にしてください",
+    "int_from_float": "整数にしてください",
+    "string_type": "文字列にしてください",
+    "bool_type": "オン / オフで指定してください",
+    "bool_parsing": "オン / オフで指定してください",
+    "list_type": "値を並べる形（1 行に 1 つ「- 値」）にしてください",
+    "dict_type": "「キー: 値」の形にしてください",
+    "model_type": "「キー: 値」の形にしてください",
+    "model_attributes_type": "「キー: 値」の形にしてください",
+    "literal_error": "次のどれかにしてください: {expected}",
+    "extra_forbidden": "この項目は使えません",
+}
+
+
+def problems(exc: ValidationError, where: str) -> list[str]:
+    """The errors of a settings file, one line each: ``<where> の <key>: <what to change>``."""
+    out = []
+    for err in exc.errors():
+        field = ".".join(str(p) for p in err["loc"]) or "（全体）"
+        ctx = dict(err.get("ctx") or {})
+        if "expected" in ctx:  # "'auto' or 'fake'"
+            ctx["expected"] = " / ".join(re.findall(r"'([^']*)'", str(ctx["expected"]))) or ctx["expected"]
+        template = ERROR_TEXT.get(err["type"])
+        try:
+            text = template.format(**ctx) if template else "値が正しくありません"
+        except (KeyError, IndexError):
+            text = "値が正しくありません"
+        out.append(f"{where} の {field}: {text}")
+    return out
+
+
+def read_text(path: Path) -> str:
+    """A settings file as text; a file not saved in UTF-8, or that cannot be read, is a CtError that says so."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise CtError(f"{path.name} の{NOT_UTF8}: {path}") from None
+    except OSError as exc:  # no permission to read, a folder of that name, ...
+        raise CtError(f"{path.name} を読めません（{exc.strerror or exc}）: {path}") from None
+
+
 def _yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise CtError(f"ファイルがありません: {path}")
+    text = read_text(path)
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
         raise CtError(f"YAML の書式が正しくありません: {path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -150,7 +201,7 @@ def _validate(model: type[BaseModel], data: dict[str, Any], source: Path) -> Any
     try:
         return model.model_validate(data)
     except ValidationError as exc:
-        raise CtError(f"設定の値が正しくありません: {source}\n{exc}") from exc
+        raise CtError(f"設定の値が正しくありません: {source}\n" + "\n".join(problems(exc, source.name))) from exc
 
 
 def load_config(repo: Path) -> ProjectConfig:

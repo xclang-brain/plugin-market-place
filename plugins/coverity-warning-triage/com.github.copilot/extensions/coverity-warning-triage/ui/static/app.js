@@ -265,7 +265,8 @@
         fact('最後に動いた時刻', time ?? '（まだ動いていません）'),
       ),
       agent.replySummary ? h('p', { class: 'reply-summary' }, agent.replySummary) : null,
-      agent.agentId ? replyFold(agent.agentId, '最後の返事の全文を開く') : null,
+      // 返事がまだないエージェントには出さない（開いても、取れる全文がない）。hasReply がない状態では、これまでどおり出す
+      agent.agentId && agent.hasReply !== false ? replyFold(agent.agentId, '最後の返事の全文を開く') : null,
     );
   }
 
@@ -527,7 +528,9 @@
         },
       );
       const taskFields = (setup.taskSettings ?? []).map((def) => {
-        const field = settingField(def, ui.draft.task[def.key] ?? def.default, (k, value) => {
+        // 初めの値は、まだ触っていない欄（下書きにキーがない）にだけ使う。空にした欄（null）は空のまま描き直す
+        const drafted = Object.prototype.hasOwnProperty.call(ui.draft.task, def.key);
+        const field = settingField(def, drafted ? (ui.draft.task[def.key] ?? '') : def.default, (k, value) => {
           ui.draft.task[k] = value;
         });
         fields.task.push([def, field]);
@@ -614,6 +617,9 @@
     const judged = criteria.length > 0 && criteria.every((c) => verdicts.some((v) => v.criterionId === c.id));
     const summary = !judged ? badge('評価前', 'standby') : failed || verdicts.length === 0 ? badge('不合格あり', 'failed') : badge('すべて合格', 'completed');
     const agents = (iteration.agentIds ?? []).map((item, index) => (typeof item === 'object' && item ? item : { agentId: item, label: `エージェント ${index + 1}` }));
+    // 返事がまだないエージェントには、全文を開く欄を出さない（replied がない状態では、これまでどおり出す）
+    const replied = Array.isArray(iteration.replied) ? new Set(iteration.replied) : null;
+    const hasReply = (agent) => agent.agentId && (!replied || replied.has(agent.agentId));
     return h(
       'article',
       { class: 'iteration', dataset: { iteration: iteration.n } },
@@ -640,7 +646,7 @@
       agents.length
         ? collapsible(
             { key: `agents:${iteration.n}`, summary: `この試行で動いたエージェント（${agents.length}体）を開く`, open: ui.open },
-            h('ul', { class: 'plain-list' }, agents.map((agent) => h('li', null, h('span', null, agent.label ?? ROLES[agent.role] ?? 'エージェント'), agent.agentId ? replyFold(agent.agentId, '最後の返事の全文を開く') : null))),
+            h('ul', { class: 'plain-list' }, agents.map((agent) => h('li', null, h('span', null, agent.label ?? ROLES[agent.role] ?? 'エージェント'), hasReply(agent) ? replyFold(agent.agentId, '最後の返事の全文を開く') : null))),
           )
         : null,
     );

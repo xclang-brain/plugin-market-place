@@ -6,6 +6,7 @@ with the same confirmation string; it reads the ``triage`` list of ``apply-plan.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from .run import Run
 from .vcs import GitVcs, SvnVcs
 
 PLAN_FILE = "apply-plan.json"
+CODE_RESULT_FILE = "apply-code.result.json"  # the result of apply-code for one confirmation string
 LABELS = {"fix": "修正", "deviation": "逸脱", "reject": "却下"}
 
 
@@ -60,7 +62,9 @@ def preview(run_dir: str) -> dict[str, Any]:
                 except CtError as exc:
                     problems.append(f"{item.id}: {exc}")
                     continue
-                triage.append({"id": item.id, "cids": item.cids, **attrs.model_dump(), "comment": comment})
+                # stream: the triage is written in the triage store that the stream of the warnings uses (MCP update_triage)
+                triage.append({"id": item.id, "cids": item.cids, "stream": run.state.stream, **attrs.model_dump(),
+                               "comment": comment})
             if "annotation" in todo:
                 code.append({"id": item.id, "cids": item.cids, "kind": "annotation", **saved["annotation"]})
         else:
@@ -88,10 +92,10 @@ def preview(run_dir: str) -> dict[str, Any]:
 
 
 def _pr_text(run: Run, entry: dict[str, Any]) -> tuple[str, str]:
-    from .triage import review_of  # late import: triage is the larger module
+    from .triage import review_of, verify_results  # late import: triage is the larger module
 
     result = TriageResult.model_validate(read_json(run.result_file(entry["id"])))
-    verify = read_json(run.dir / "verify.json", {}).get(entry["id"]) if (run.dir / "verify.json").is_file() else None
+    verify = verify_results(run).get(entry["id"])
     result = assess.effective(result, review_of(run, run.state.item(entry["id"])), verify)  # as the reports show it
     cids = entry["cids"]
     title = f"Coverity CID {', '.join(map(str, cids[:5]))}{' ほか' if len(cids) > 5 else ''}: {result.fix.summary}"
@@ -105,20 +109,85 @@ def _pr_text(run: Run, entry: dict[str, Any]) -> tuple[str, str]:
     return title[:200], body
 
 
+ERRORS_NOTE = "errors があれば人に伝える（反映されなかった項目は、もう一度 /coverity-apply で反映できる）。"
+# update_triage records "Coverity REST PUT ... が失敗しました（500）: ..." for a write the server failed.
+SERVER_ERROR = re.compile(r"(?:HTTP\s*|[（(]\s*)5\d\d(?!\d)|(?<![0-9A-Za-z])5xx(?![0-9A-Za-z])", re.IGNORECASE)
+
+
+def _coverity_failures(result: dict[str, Any], token: str, not_written: list[str]) -> dict[str, str]:
+    """The reason of each item update_triage sent for this plan and Coverity did not take
+    (``failed`` of apply-plan.result.json). A failure recorded for another plan is left out."""
+    out: dict[str, str] = {}
+    for record in (result.get("failed") or {}).values():
+        if (isinstance(record, dict) and record.get("id") in not_written
+                and record.get("token", token) == token):
+            out[record["id"]] = str(record.get("error") or "理由は記録されていません")
+    return out
+
+
+def _not_written_note(not_written: list[str], failures: dict[str, str]) -> str:
+    def reasons(ids: list[str]) -> str:
+        return "、".join(f"{i}: {failures[i]}" for i in ids)
+
+    server = [i for i in not_written if i in failures and SERVER_ERROR.search(failures[i])]
+    refused = [i for i in not_written if i in failures and i not in server]
+    unsent = [i for i in not_written if i not in failures]
+    note = ""
+    if unsent:
+        note += (f"逸脱 {len(unsent)} 件（{', '.join(unsent)}）は、まだ Coverity に書き戻していません"
+                 "（MCP の update_triage の結果 apply-plan.result.json にありません）。書き戻すときは、MCP の update_triage を"
+                 "（repo_root, plan_file, confirmation_token）で done まで呼び、そのあと同じ確認用の文字列で ct.py apply-code"
+                 " をもう一度実行する（push はし直しません）。")
+    if refused:
+        note += (f"逸脱 {len(refused)} 件は、Coverity が書き戻しを断りました（{reasons(refused)}）。"
+                 "値を直して ct.py preview からやり直す。")
+    if server:
+        note += (f"逸脱 {len(server)} 件は、Coverity の不具合か一時的な失敗で書き戻せませんでした（{reasons(server)}）。"
+                 "少し待って、MCP の update_triage を同じ確認用の文字列で呼び直し、そのあと ct.py apply-code を"
+                 "もう一度実行する（push はし直しません）。")
+    return note
+
+
+def _repeat(run: Run, plan: dict[str, Any], previous: dict[str, Any], written_ids: set[str],
+            failures: dict[str, str]) -> dict[str, Any]:
+    """apply-code again with the same confirmation string: the code was applied already, so nothing is
+    pushed (or patched) again and the earlier result is returned; only write-backs to Coverity that
+    update_triage made since then are recorded."""
+    out = previous["result"]
+    registered = sorted(written_ids & {e["id"] for e in plan["triage"]})
+    newly = [i for i in registered if i not in out["coverity"]["registered"]]
+    if newly:
+        with run.update() as state:
+            for item_id in newly:
+                state.item(item_id).applied.update({"coverity": "登録済み"}, at=now())
+    not_written = [e["id"] for e in plan["triage"] if e["id"] not in written_ids]
+    oplog.log(run.dir, "apply-code", outcome={i: {"coverity": "登録済み"} for i in newly}, errors=[], repeated=True)
+    return {**out, "coverity": {"registered": registered, "not_registered": not_written}, "repeated": True,
+            "next": (f"この確認用の文字列の反映は、前に済んでいます（{previous['at']}）。push も差分の適用もし直さず、"
+                     "前の結果を返しました。プルリクエストは作り直さない。") + (ERRORS_NOTE if out.get("errors") else "")
+                    + _not_written_note(not_written, failures)}
+
+
 def apply_code(run_dir: str, token: str) -> dict[str, Any]:
     run = Run(run_dir)
     path = run.dir / PLAN_FILE
     if not path.is_file() or _token(path) != token.strip():
         raise CtError("確認用の文字列が反映の内容と一致しません。ct.py preview からやり直してください")
     plan = read_json(path)
+
+    # Coverity: what update_triage reported.
+    triage_result = read_json(path.with_name("apply-plan.result.json"), {})
+    written = triage_result.get("written", {})
+    written_ids = {v["id"] for v in written.values()}
+    not_written = [e["id"] for e in plan["triage"] if e["id"] not in written_ids]
+    failures = _coverity_failures(triage_result, token.strip(), not_written)
+    previous = read_json(run.dir / CODE_RESULT_FILE, {})
+    if previous.get("token") == token.strip():
+        return _repeat(run, plan, previous, written_ids, failures)
+
     vcs = run.vcs
     outcome: dict[str, dict[str, Any]] = {}
     pull_requests, svn_applied, errors = [], [], []
-
-    # Coverity: what update_triage reported.
-    written = read_json(path.with_name("apply-plan.result.json"), {}).get("written", {})
-    written_ids = {v["id"] for v in written.values()}
-    not_written = [e["id"] for e in plan["triage"] if e["id"] not in written_ids]
     for entry in plan["triage"]:
         if entry["id"] in written_ids:
             outcome.setdefault(entry["id"], {})["coverity"] = "登録済み"
@@ -172,11 +241,14 @@ def apply_code(run_dir: str, token: str) -> dict[str, Any]:
     if run.config.options.metrics:
         metrics.record(run, plan)
     oplog.log(run.dir, "apply-code", outcome=outcome, errors=errors)
-    return {"ok": True, "pull_requests": pull_requests, "svn_applied": svn_applied,
-            "coverity": {"registered": sorted(written_ids & {e["id"] for e in plan["triage"]}),
-                         "not_registered": not_written},
-            "rejected": [r["id"] for r in plan["reject"]], "errors": errors,
-            "next": ("errors があれば人に伝える（反映されなかった項目は、もう一度 /coverity-apply で反映できる）。" if errors else "") + ("pull_requests の各項目について、GitHub のプルリクエストを作る（Copilot の GitHub の機能が"
-                     "使えればそれで。使えなければ compare_url を人に示す）" if pull_requests else
-                     "svn の変更はワーキングコピーに入りました。内容を確かめてコミットするよう人に伝える" if svn_applied
-                     else "反映は終わりました")}
+    out = {"ok": True, "pull_requests": pull_requests, "svn_applied": svn_applied,
+           "coverity": {"registered": sorted(written_ids & {e["id"] for e in plan["triage"]}),
+                        "not_registered": not_written},
+           "rejected": [r["id"] for r in plan["reject"]], "errors": errors,
+           "next": (ERRORS_NOTE if errors else "") + _not_written_note(not_written, failures) + ("pull_requests の各項目について、GitHub のプルリクエストを作る（Copilot の GitHub の機能が"
+                    "使えればそれで。使えなければ compare_url を人に示す）" if pull_requests else
+                    "svn の変更はワーキングコピーに入りました。内容を確かめてコミットするよう人に伝える" if svn_applied
+                    else "反映は終わりました")}
+    # A second call with the same confirmation string returns this, and never pushes again (no second pull request).
+    write_json(run.dir / CODE_RESULT_FILE, {"token": token.strip(), "at": now(), "result": out})
+    return out

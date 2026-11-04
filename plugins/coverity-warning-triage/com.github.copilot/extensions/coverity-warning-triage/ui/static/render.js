@@ -172,10 +172,10 @@
   // ---- 表示の部品（kv、table、progress、text、image、file） ----------------------
   //
   // 値の形
-  //   text      文字
+  //   text      文字（中の http・https の URL は、押せるリンクにする）
   //   kv        { "見出し": "値" } か [{ label, value }]
   //   table     { columns: ["見出し", ...], rows: [["値", ...], ...] }
-  //   progress  0〜100 の数、または { value, max, label }
+  //   progress  0〜100 の数、または { value, max, label }（max が 0 のときは 0%）
   //   image     { fileId, name }（fileId は記録のツールで知らされたファイルの番号）
   //   file      { fileId, name }
 
@@ -186,16 +186,41 @@
     return h('p', { class: 'muted' }, 'まだありません');
   }
 
+  /** 値は送られたが、中身が0件（行のない表、項目のない一覧） */
+  function emptyList() {
+    return h('p', { class: 'muted' }, 'ありません');
+  }
+
   function invalid() {
     return h('p', { class: 'muted' }, '表示できない形の値です');
+  }
+
+  // 文章の中の http・https の URL。URL に入れるのは ASCII の表示できる文字だけで、空白・< > " ' ` と、
+  // ASCII でない文字（ひらがな・漢字・全角の句読点など）で切る。終わりの英字の句読点は URL に入れない
+  const URL_IN_TEXT = /https?:\/\/[!#-&(-;=?-_a-~]+/g;
+  const URL_TAIL = /[.,;:!?)\]}]+$/;
+
+  /** 文章を、文字のノードと、URL のリンク（新しいタブで開く）に分ける。文字は文字のまま出す。 */
+  function linkedText(text) {
+    const parts = [];
+    let last = 0;
+    for (const match of text.matchAll(URL_IN_TEXT)) {
+      const url = match[0].replace(URL_TAIL, '');
+      if (!/^https?:\/\/[^/?#]/.test(url) || safeUrl(url) === null) continue;
+      if (match.index > last) parts.push(text.slice(last, match.index));
+      parts.push(h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, url));
+      last = match.index + url.length;
+    }
+    if (last < text.length) parts.push(text.slice(last));
+    return parts;
   }
 
   function textPart(value, ctx) {
     const text = String(value);
     if (text === '') return none();
     const long = text.length > LONG_TEXT_CHARS || text.split('\n').length > LONG_TEXT_LINES;
-    if (!long) return h('p', { class: 'text-block' }, text);
-    return collapsible({ key: ctx.foldKey, summary: `全文を開く（${text.length}文字）`, open: ctx.open }, h('p', { class: 'text-block' }, text));
+    if (!long) return h('p', { class: 'text-block' }, linkedText(text));
+    return collapsible({ key: ctx.foldKey, summary: `全文を開く（${text.length}文字）`, open: ctx.open }, h('p', { class: 'text-block' }, linkedText(text)));
   }
 
   function kvPart(value) {
@@ -205,7 +230,7 @@
         ? Object.entries(value)
         : null;
     if (!pairs) return invalid();
-    if (pairs.length === 0) return none();
+    if (pairs.length === 0) return emptyList();
     return h(
       'dl',
       { class: 'kv' },
@@ -215,7 +240,7 @@
 
   function tablePart(value) {
     if (!value || !Array.isArray(value.columns) || !Array.isArray(value.rows)) return invalid();
-    if (value.rows.length === 0) return none();
+    if (value.rows.length === 0) return emptyList();
     return h(
       'div',
       { class: 'table-wrap', tabindex: '0', role: 'region', 'aria-label': '表' },

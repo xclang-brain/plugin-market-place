@@ -64,6 +64,9 @@
           "default": { "description": "初めの値。text と path は文字、number は数、checkbox は真偽、select は選択肢のどれか" },
           "required": { "type": "boolean", "description": "必須か" },
           "help": { "type": "string", "description": "説明" },
+          "min": { "type": "number", "description": "number の最小の値。範囲の外なら開始しない" },
+          "max": { "type": "number", "description": "number の最大の値。範囲の外なら開始しない" },
+          "step": { "type": "number", "exclusiveMinimum": 0, "description": "number の刻み（1 なら整数）。min（なければ 0）から数える" },
           "options": {
             "type": "array",
             "items": { "type": "string", "minLength": 1 },

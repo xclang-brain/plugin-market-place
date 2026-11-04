@@ -23,14 +23,13 @@ from urllib.parse import urlparse
 import yaml
 
 from . import approvals
-from .common import PLUGIN_ROOT, CtError, out_text, read_json, resolve_path, run_cmd, write_json, write_text
+from .common import CtError, out_text, plugin_path, read_json, resolve_path, run_cmd, write_json, write_text
 from .config import CONFIG_DIR, CONFIG_FILE, load_config
 from .envvars import get_env
 from .models import IssueDetail
-from .prepare import SERVER_DIR, agent_state, doctor
+from .prepare import agent_state, doctor, server_env
 from .run import Run
 
-ASSETS = PLUGIN_ROOT / "skills" / "coverity-selftest" / "assets"
 STATE_FILE = "selftest.json"
 REPORT_FILE = "report.md"
 SECTIONS = {"1": "組み込み", "2": "偽データでの一連の流れ", "3": "社内の Coverity（読み取りだけ）",
@@ -179,7 +178,7 @@ def start(sections: str, repo: str | None, client: str, base: str | None) -> dic
         raise CtError("③ と ④ には対象のリポジトリ（--repo）が要ります")
     folder = Path(base or Path.home() / "coverity-triage-selftest") / datetime.now().strftime("%Y%m%d-%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
-    plugin = read_json(PLUGIN_ROOT / "plugin.json")
+    plugin = read_json(plugin_path("plugin.json"))
     state = {"started": datetime.now().isoformat(timespec="seconds"), "sections": picked,
              "repo_root": _home_relative(resolve_path(repo)) if repo else None, "client": client,
              "environment": {"os": platform.platform(), "python": platform.python_version(),
@@ -203,7 +202,7 @@ def start(sections: str, repo: str | None, client: str, base: str | None) -> dic
 def static(folder: str) -> dict[str, Any]:
     result = Result(folder)
     agents = agent_state()  # every agent of the plugin, and old ones it no longer has ("stale")
-    venv = (SERVER_DIR / ".venv").is_dir()
+    venv = server_env().is_dir()  # the place doctor and prewarm use (UV_PROJECT_ENVIRONMENT)
     behind = {name: a["status"] for name, a in agents.items() if a["status"] != "current"}
     ok = not behind and venv
     count = sum(a["status"] != "stale" for a in agents.values())
@@ -218,15 +217,27 @@ def static(folder: str) -> dict[str, Any]:
     return {"ok": True, "1-7": result.state["checks"]["1-7"]}
 
 
-def sample(folder: str) -> dict[str, Any]:
+def _assets(path: str | None) -> Path:
+    """The folder of the sample (sample-target and expected.yaml), given by the caller."""
+    if not path:
+        raise CtError("--assets に見本のフォルダ（sample-target と expected.yaml があるフォルダ）を渡してください")
+    assets = resolve_path(path)
+    missing = [name for name in ("sample-target", "expected.yaml") if not (assets / name).exists()]
+    if missing:
+        raise CtError(f"見本のフォルダに {'、'.join(missing)} がありません: {assets}")
+    return assets
+
+
+def sample(folder: str, assets_dir: str | None) -> dict[str, Any]:
     """A git repository with fake Coverity data, and a bare repository as its origin."""
+    assets = _assets(assets_dir)
     result = Result(folder)
     repo = result.dir / "sample-target"
     origin = result.dir / "origin.git"
     for path in (repo, origin):
         if path.exists():
             shutil.rmtree(path)
-    shutil.copytree(ASSETS / "sample-target", repo)
+    shutil.copytree(assets / "sample-target", repo)
     config_path = repo / CONFIG_DIR / CONFIG_FILE
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["output_dir"] = str(result.dir / "out")
@@ -239,6 +250,7 @@ def sample(folder: str) -> dict[str, Any]:
     run_cmd(["git", "remote", "add", "origin", str(origin)], repo)
     run_cmd(["git", "push", "--quiet", "origin", "main"], repo)
     result.state["sample_repo"] = str(repo)
+    result.state["assets"] = str(assets)  # check-run reads expected.yaml from the same folder
     result.record("2-1", "pass", "見本のリポジトリを作りました", str(repo))
     result.save()
     return {"ok": True, "repo_root": str(repo), "filter": "all.yaml",
@@ -271,7 +283,9 @@ def check_run(folder: str, run_dir: str) -> dict[str, Any]:
     result.record("2-3", "fail" if problems else "pass", "問題なし" if not problems else f"{len(problems)} 件の問題",
                   "\n".join(problems))
 
-    expected = yaml.safe_load((ASSETS / "expected.yaml").read_text(encoding="utf-8"))
+    if not result.state.get("assets"):
+        raise CtError("見本のフォルダが記録されていません（ct.py selftest sample --assets <見本のフォルダ> から始めます）")
+    expected = yaml.safe_load((Path(result.state["assets"]) / "expected.yaml").read_text(encoding="utf-8"))
     group = set(expected["group"]["cids"])
     grouped = [i for i in run.state.items if i.is_group and set(i.cids) == group]
     split = [i for i in run.state.items if i.split_from and set(i.cids) <= group]
@@ -438,7 +452,10 @@ def add_commands(sub: Any) -> None:
     s.add_argument("--client", default="")
     s.add_argument("--base")
     for name in ("static", "sample", "check-build", "report"):
-        steps.add_parser(name).add_argument("--dir", required=True)
+        s = steps.add_parser(name)
+        s.add_argument("--dir", required=True)
+        if name == "sample":
+            s.add_argument("--assets", help="見本のフォルダ（sample-target と expected.yaml があるフォルダ）")
     for name in ("check-run", "check-apply", "check-coverity"):
         s = steps.add_parser(name)
         s.add_argument("--dir", required=True)
@@ -458,7 +475,7 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if step == "static":
         return static(args.dir)
     if step == "sample":
-        return sample(args.dir)
+        return sample(args.dir, args.assets)
     if step == "check-run":
         return check_run(args.dir, args.run)
     if step == "check-apply":
