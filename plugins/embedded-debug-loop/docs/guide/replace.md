@@ -45,13 +45,18 @@
 1. 新しいスキルを作ります。
    - 置き場所：プロジェクトの `.github/skills/deploy-scp/`（自分だけで使うなら `~/.copilot/skills/deploy-scp/`）。
    - `SKILL.md` に、上の3つの依頼への応え方を書きます。今の `deploy` スキルの SKILL.md が手本になります（[GitHub の plugins/embedded-debug-loop/skills/deploy/](https://github.com/xclang-brain/plugin-market-place/tree/main/plugins/embedded-debug-loop/skills/deploy)）。
+   - `SKILL.md` の先頭には、`name`（フォルダの名前と同じ）と `description`（何をするか・いつ使うか）を書きます。
    - 設定のひな形（例：`config-template.yaml`）と、作業をするスクリプトを置きます。
 2. 作業エージェントを写します。
    - プラグインの `com.github.copilot/agents/device-worker.agent.md`（[GitHub](https://github.com/xclang-brain/plugin-market-place/tree/main/plugins/embedded-debug-loop/com.github.copilot/agents)）を、プロジェクトの `.github/agents/my-device-worker.agent.md` に写します。
    - プラグインのファイルを直接直すと、プラグインを更新したときに消えるためです。
-3. 写した作業エージェントの「使うスキル」の表で、「機器への転送」のスキルの名前を `deploy-scp` に替えます。ほかは変えません（文の中の `embedded-debug-loop:device-worker` だけは、`my-device-worker` に替えます）。
+3. 写した作業エージェントの「使うスキル」の表で、「機器への転送」のスキルの名前を `deploy-scp` に替えます。
+   - 表には、SKILL.md の `name` をそのまま書きます。`embedded-debug-loop:` のような前置きは付けません。
+   - ほかに替えるのは、次の2つだけです。文の中の `embedded-debug-loop:device-worker` を `my-device-worker` に。先頭の `description` を、違いが分かる説明に（例：「…転送は scp で行う」を足す）。`/agent` や Web管理画面の一覧で、元の作業エージェントと見分けるためです。
 4. 新しいスキルを、それだけで試します（例：`/deploy-scp 設定を確かめて`）。
+   - Copilot CLI を起動したままスキルを足したときは、`/skills reload` で読み直します（または、起動し直します）。エージェントは、足すとすぐに `/agent` に出ます。
 5. `/agent` で `my-device-worker` を選び、「セットアップしたい」と頼みます。新しいスキルの設定ファイルも、対話で埋められます。
+   - スキルどうしは互いを知らないので、同じ値（機器の IP アドレスなど）を、スキルごとに聞かれることがあります。
 6. 「ビルドして、機器で動かして、ログを見せて」と頼み、全体がつながるかを確かめます。
 7. 3段階目で使うときは、Web管理画面の設定で、作業エージェントに `my-device-worker` を選びます。
 
@@ -74,7 +79,11 @@
 ### 手順
 
 1. `device-worker.agent.md` を写し、名前を替えます（例：`.github/agents/mcu-worker.agent.md`）。
-2. 役割の説明、「使うスキル」の表、「調べ方のこつ」を、その機器に合わせて書き替えます。
+2. その機器に合わせて、次を書き替えます。
+   - 名前と役割の説明（ファイルの頭の `description` と、最初の段落）
+   - 「使うスキル」の表（機器向けのスキルを先に作ります。作り方は、上の「スキルを置き換える」と同じです）
+   - 「A-2」の例（合格の条件の例など）と、「調べ方のこつ」
+   - 「ビルド」「転送」「ログ取得」のような役割の言葉が合わなければ、その機器の作業の言葉に
    - 次の見出しの中身は残します（統括エージェントとの約束の部分です）：「2つの使われ方」「B. ほかのエージェントから作業役として頼まれたとき」（B-1・B-2 の返す形を含む）、「うまくいかなかったとき」の B の行。
    - 文の中の `embedded-debug-loop:device-worker` は、新しい名前に替えます。
 3. `/agent` で選び、それだけで使えるかを試します。

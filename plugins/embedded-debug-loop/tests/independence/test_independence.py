@@ -154,7 +154,7 @@ class WorkerIndependence(unittest.TestCase):
         table = self.skills_table()
         outside = self.text.replace(table, "")
         for skill in SKILL_NAMES:
-            self.assertIn(f"embedded-debug-loop:{skill}", table, f"表に {skill} がありません")
+            self.assertIn(f"`{skill}`", table, f"表に {skill} がありません（skill ツールで使う名前で書く）")
             self.assertIsNone(token(skill).search(outside), f"表の外に、スキルの名前 {skill} があります")
 
     def test_no_skill_internals(self):

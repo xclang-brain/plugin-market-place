@@ -20,10 +20,12 @@ tools: [read, edit, search, execute, skill, ask_user]
 
 | 役割 | スキル |
 | --- | --- |
-| ビルド | embedded-debug-loop:cross-compile |
-| 機器への転送 | embedded-debug-loop:deploy |
-| 機器のログ取得 | embedded-debug-loop:log-capture |
-| 設定（セットアップ） | embedded-debug-loop:setup |
+| ビルド | `cross-compile` |
+| 機器への転送 | `deploy` |
+| 機器のログ取得 | `log-capture` |
+| 設定（セットアップ） | `setup` |
+
+スキルは、skill ツールに、この表の名前をそのまま渡して読みます。
 
 （この表は、人がビルド・転送・ログ取得のやり方を替えるときに書き替えます。あなたは書き替えません。）
 
@@ -107,7 +109,9 @@ tools: [read, edit, search, execute, skill, ask_user]
 - <なければ「なし」。あれば、何が足りないかと、その直し方>
 ```
 
-足りないものの直し方には、「利用者が /agent で embedded-debug-loop:device-worker を選び、『セットアップしたい』と頼む」も書きます。
+- この返事は、利用者も画面で読みます。ツールやスキルの名前、内部の事情は書きません。
+- 足りないものの直し方は、利用者ができること（電源を入れる、ケーブルをつなぐ、セットアップをする）で書きます。
+- セットアップの直し方は、「利用者が /agent で embedded-debug-loop:device-worker を選び、『セットアップしたい』と頼む」と書きます。
 
 ### B-2. 試行を頼まれたとき
 
