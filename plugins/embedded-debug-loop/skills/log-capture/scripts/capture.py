@@ -49,6 +49,7 @@ DRAIN_MAX = 1.0
 WRITE_WAIT = 5.0
 OUTPUT_LINES = 60
 MASK = "＊＊＊"
+GITIGNORE_TEXT = "*\n"  # 設定（パスワード）やログが、誤って git に入らないようにする
 
 LOGIN_RE = re.compile(r"login:\s*$")
 PASSWORD_RE = re.compile(r"[Pp]assword:\s*$")
@@ -340,6 +341,38 @@ def default_config_path(workdir):
     return os.path.join(workdir, CONFIG_DIR_NAME, SKILL + ".yaml")
 
 
+def _config_dir_of(path):
+    """path か、その上にある .embedded-debug-loop フォルダの場所。なければ None。"""
+    p = os.path.abspath(path)
+    while True:
+        if os.path.basename(p) == CONFIG_DIR_NAME:
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
+def make_dirs(path):
+    """フォルダを作る。.embedded-debug-loop フォルダを新しく作ったときは、
+    中に .gitignore（中身は * の1行）も作る。すでにあれば、そのままにする。"""
+    top = _config_dir_of(path)
+    fresh = top is not None and not os.path.exists(top)
+    os.makedirs(path, exist_ok=True)
+    if fresh:
+        try:
+            fd = os.open(os.path.join(top, ".gitignore"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except OSError:
+            return
+        try:
+            os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
 def ensure_config(path):
     """設定ファイルがなければ、ひな形から作る。作ったら True。"""
     if os.path.exists(path):
@@ -352,7 +385,7 @@ def ensure_config(path):
     folder = os.path.dirname(path)
     try:
         if folder:
-            os.makedirs(folder, exist_ok=True)
+            make_dirs(folder)
         shutil.copyfile(TEMPLATE_PATH, path)
     except OSError as e:
         raise Failure(
@@ -696,7 +729,8 @@ def open_port(path, baud):
                 "シリアルポート %s を開けません（つながる先の機器がありません）。"
                 "USB ケーブルを挿し直してください。" % path
             )
-        raise Failure("シリアルポート %s を開けません（%s）。" % (path, os_reason(e)))
+        raise Failure("シリアルポート %s を開けません（%s）。"
+                      "USB ケーブルと、設定の port を確かめてください。" % (path, os_reason(e)))
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -725,7 +759,8 @@ def open_port(path, baud):
             termios.tcsetattr(fd, termios.TCSANOW, new)
             termios.tcflush(fd, termios.TCIFLUSH)
         except termios.error as e:
-            raise Failure("シリアルポート %s の速さなどを設定できません（%s）。" % (path, e))
+            raise Failure("シリアルポート %s の速さなどを設定できません（%s）。"
+                          "設定の port と baud を確かめてください。" % (path, e))
         return fd, old
     except BaseException:
         os.close(fd)
@@ -1035,12 +1070,9 @@ def login(con, s):
         say("ログインしました。")
         return
     if hit in ("login", "password", "incorrect"):
-        where = "login_password "
-        if s.password_env and s.password_env in os.environ:
-            where = "環境変数 %s に入れたパスワード" % s.password_env
         raise Failure(
             "ユーザー %s でログインできませんでした（ユーザー名かパスワードが違います）。"
-            "設定の login_user と、%sを確かめてください。" % (s.login_user, where)
+            % s.login_user + login_hint(s)
         )
     msg = (
         "ログインの後、シェルのプロンプトが出ません。"
@@ -1050,6 +1082,22 @@ def login(con, s):
     if seen:
         msg += "最後に届いた行：%s" % seen.replace("\n", " / ")
     raise Failure(msg)
+
+
+def login_hint(s):
+    """ログインできないときに、確かめることの文。パスワードが空なら、そう言う。"""
+    config = getattr(s, "config", None) or "設定ファイル"
+    if s.password == "":
+        if s.password_env:
+            return ("環境変数 %s の中身が空です。その環境変数にパスワードを入れるか、"
+                    "%s の login_password に書いてください。" % (s.password_env, config))
+        return ("設定の login_password も login_password_env も空です。"
+                "機器のパスワードを、%s の login_password に書くか、"
+                "login_password_env にパスワードを入れた環境変数の名前を書いてください。" % config)
+    where = "login_password "
+    if s.password_env and s.password_env in os.environ:
+        where = "環境変数 %s に入れたパスワード" % s.password_env
+    return "設定の login_user と、%sを確かめてください。" % where
 
 
 def _shell_back(con):
@@ -1145,7 +1193,7 @@ def open_log(workdir, label):
 
 
 def _open_log(folder, label):
-    os.makedirs(folder, exist_ok=True)
+    make_dirs(folder)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     path = os.path.join(folder, "%s-%s.log" % (SKILL, stamp))
     n = 2
@@ -1304,6 +1352,7 @@ def cmd_run(args):
     s, problems = validate(cfg)
     if problems:
         return _settings_problem(config, created, problems)
+    s.config = config
 
     commands = list(s.commands)
     listen_seconds = s.listen_seconds
@@ -1386,7 +1435,9 @@ def cmd_run(args):
             )
             if rest:
                 msg += "残りの %d 個のコマンドは実行していません。" % rest
-            msg += "機器でコマンドが動いたままかもしれません。機器の状態を確かめてください。そこまでの出力は記録しました。"
+            msg += ("機器でコマンドが動いたままかもしれません。"
+                    "機器のコンソールでプログラムを止めるか、機器の電源を入れ直してください。"
+                    "そこまでの出力は記録しました。")
             result["message"] = msg
             code = 1
         elif timed_out_cmd is not None:
@@ -1463,6 +1514,7 @@ def cmd_check(args):
            "config": config, "created": created}
     if not problems:
         s, problems = validate(cfg)
+        s.config = config
     if problems:
         out["problems"] = problems
         out["message"] = problems_message(problems, config, created)

@@ -6,7 +6,7 @@ import nodeHttp from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 
-import { EXT_DIR, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
+import { CWD, EXT_DIR, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
 
 async function opened(t, options) {
   const ctx = await startWith(t, options);
@@ -72,6 +72,8 @@ test('状態：設定・選べるエージェントとモデル・下書き・�
   assert.deepEqual(data.draft, { request: '表示を直す', criteria: ['完了と出る'], prepared: null });
   assert.equal(data.run, null);
   assert.deepEqual(data.runs, []);
+  assert.equal(data.waiting, null);
+  assert.equal(data.folder, CWD);
 });
 
 test('状態：エージェントの一覧が読めなくても、前の一覧のまま返す', async (t) => {
@@ -92,7 +94,7 @@ test('設定の保存：ファイルに残り、起動し直しても読み直�
   assert.equal(r.status, 200);
   assert.equal(r.data.ok, true);
   const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
-  assert.deepEqual(saved, { worker: 'x-plugin:other', verifier: VERIFIER, maxIterations: 7, workerModel: 'model-y', workerEffort: 'high', verifierModel: '', verifierEffort: '' });
+  assert.deepEqual(saved, { folders: { [CWD]: { worker: 'x-plugin:other', verifier: VERIFIER, maxIterations: 7, workerModel: 'model-y', workerEffort: 'high', verifierModel: '', verifierEffort: '' } } });
   const state = (await http(a.api('/api/state'))).data;
   assert.deepEqual(state.draft.criteria, ['条件1', '条件2']);
   assert.equal(state.draft.request, '書き直した作業');
@@ -247,4 +249,87 @@ test('同梱の画面のファイル（index.html）は、直接書いたスク�
     assert.match(m[1] ?? '', /\ssrc\s*=/i, 'index.html に、src のない <script> があります');
     assert.equal(m[2].trim(), '');
   }
+});
+
+test('設定は作業フォルダごとに保存し、ほかの作業フォルダには持ち越さない', async (t) => {
+  const dataDir = path.join(tempDir(t), 'data');
+  const file = path.join(dataDir, 'settings.json');
+  const a = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  await http(a.api('/api/settings'), { method: 'POST', body: { worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4 } });
+  assert.equal(a.app.store.snapshot().folder, '/w/a');
+
+  const b = await opened(t, { dataDir, fake: { cwd: '/w/b' } });
+  let state = (await http(b.api('/api/state'))).data;
+  assert.equal(state.folder, '/w/b');
+  assert.equal(state.settings.worker, WORKER, 'ほかのフォルダでは、既定（defaults.json）のまま');
+  assert.equal(state.settings.maxIterations, 3);
+  const r = await b.fake.call('open', { request: '別の作業' });
+  assert.ok(r.text.includes(`作業エージェント「${WORKER}」`), 'open も、その作業フォルダの設定を伝える');
+  await http(b.api('/api/settings'), { method: 'POST', body: { worker: WORKER, verifier: VERIFIER, maxIterations: 6 } });
+
+  const c = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  state = (await http(c.api('/api/state'))).data;
+  assert.equal(state.settings.worker, 'only-a:helper');
+  assert.equal(state.settings.maxIterations, 4);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(Object.keys(saved.folders).sort(), ['/w/a', '/w/b']);
+  assert.equal(saved.folders['/w/b'].maxIterations, 6);
+});
+
+test('設定：フォルダで分けていない古い設定のファイルは読まず、既定を使う', async (t) => {
+  const dataDir = path.join(tempDir(t), 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ worker: 'leaked:worker', verifier: VERIFIER, maxIterations: 9 }));
+  const { app, api } = await opened(t, { dataDir });
+  const state = (await http(api('/api/state'))).data;
+  assert.equal(state.settings.worker, WORKER);
+  assert.equal(app.store.settings.maxIterations, 3);
+});
+
+test('設定：セッションの作業フォルダを読む RPC がなければ、このプロセスの今のフォルダを使う', async (t) => {
+  const { app, dataDir } = await startWith(t, { fake: { missing: ['metadata'] } });
+  await app.control.saveSettings({ worker: 'here:helper', verifier: VERIFIER, maxIterations: 2 });
+  assert.equal(app.store.folder, process.cwd());
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
+  assert.equal(saved.folders[process.cwd()].worker, 'here:helper');
+});
+
+test('作業・検証の選択肢から、統括エージェント（defaults.json の名前）と、チャットで選ばれているエージェントを除く', async (t) => {
+  const agents = [
+    { name: 'helper-a', id: WORKER, description: '手伝う' },
+    { name: 'lead-c', id: 'demo-plugin:lead-c', description: '統括' },
+    { name: 'boss', id: 'team:boss', description: 'チャットで選ばれている' },
+    { name: 'checker-b', id: VERIFIER, description: '確かめる' },
+  ];
+  const { api } = await opened(t, { fake: { agents, current: { name: 'boss', id: 'team:boss' } } });
+  const names = (await http(api('/api/state'))).data.options.agents.map((a) => a.name);
+  assert.deepEqual(names, [WORKER, VERIFIER]);
+});
+
+test('選択肢：チャットで選ばれているのが、いま選んでいる作業エージェントなら除かない。読めなければ統括エージェントだけを除く', async (t) => {
+  const agents = [
+    { name: 'helper-a', id: WORKER, description: '手伝う' },
+    { name: 'lead-c', id: 'demo-plugin:lead-c', description: '統括' },
+    { name: 'boss', id: 'team:boss', description: 'ほかのエージェント' },
+    { name: 'checker-b', id: VERIFIER, description: '確かめる' },
+  ];
+  const names = async (fake) => {
+    const { api } = await opened(t, { fake: { agents, ...fake } });
+    return (await http(api('/api/state'))).data.options.agents.map((x) => x.name);
+  };
+  assert.deepEqual(await names({ current: { name: 'helper-a', id: WORKER } }), [WORKER, 'team:boss', VERIFIER], 'いまの作業エージェントは残す');
+  assert.deepEqual(await names({ current: new Error('読めない') }), [WORKER, 'team:boss', VERIFIER]);
+  assert.deepEqual(await names({ missing: ['agent.getCurrent'] }), [WORKER, 'team:boss', VERIFIER], 'この RPC がない版');
+  assert.deepEqual(await names({ current: null }), [WORKER, 'team:boss', VERIFIER], '既定のエージェントで話しているとき');
+});
+
+test('設定：作業フォルダが変わったら（/cd）、そのフォルダの設定を読み直す', async (t) => {
+  const dataDir = path.join(tempDir(t), 'data');
+  const a = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  await a.app.control.saveSettings({ worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4 });
+  a.app.store.useFolder('/w/b');
+  assert.equal(a.app.store.settings.worker, WORKER);
+  a.app.store.useFolder('/w/a/');
+  assert.equal(a.app.store.folder, '/w/a', '末尾の / は同じフォルダとみなす');
+  assert.equal(a.app.store.settings.worker, 'only-a:helper');
 });

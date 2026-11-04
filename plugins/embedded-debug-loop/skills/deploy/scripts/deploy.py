@@ -37,6 +37,7 @@ REQUIRED_KEYS = ("host", "files", "remote_dir")
 CHECKSUM_KINDS = ("none", "crc32", "sum32")
 MASK = "＊＊＊"
 CHUNK = 64 * 1024
+GITIGNORE_TEXT = "*\n"  # 設定（パスワード）や記録が、誤って git に入らないようにする
 
 # 文字列として扱う項目。数字だけの値（例：file_mode: 0755）も、書かれた文字のまま使う。
 STRING_KEYS = (
@@ -121,11 +122,43 @@ class Log(object):
             self._fh = None
 
 
+def _config_dir_of(path):
+    """path か、その上にある .embedded-debug-loop フォルダの場所。なければ None。"""
+    p = os.path.abspath(path)
+    while True:
+        if os.path.basename(p) == CONFIG_DIR_NAME:
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
+def make_dirs(path):
+    """フォルダを作る。.embedded-debug-loop フォルダを新しく作ったときは、
+    中に .gitignore（中身は * の1行）も作る。すでにあれば、そのままにする。"""
+    top = _config_dir_of(path)
+    fresh = top is not None and not os.path.exists(top)
+    os.makedirs(path, exist_ok=True)
+    if fresh:
+        try:
+            fd = os.open(os.path.join(top, ".gitignore"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except OSError:
+            return
+        try:
+            os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
 def open_log(workdir):
     """<作業フォルダ>/.embedded-debug-loop/logs/deploy-YYYYmmdd-HHMMSS.log を作る。"""
     logs_dir = os.path.join(workdir, CONFIG_DIR_NAME, "logs")
     try:
-        os.makedirs(logs_dir, exist_ok=True)
+        make_dirs(logs_dir)
     except OSError:
         return Log(None)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -365,7 +398,7 @@ def ensure_config(path):
             "設定のひな形 %s が見つかりません。スキルのファイルがそろっているかを確かめてください。"
             % TEMPLATE_PATH)
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        make_dirs(os.path.dirname(path))
         shutil.copyfile(TEMPLATE_PATH, path)
     except OSError as e:
         raise ConfigError("設定ファイル %s を作れません（%s）。" % (path, _os_reason(e)))
@@ -713,10 +746,11 @@ def connect_error_message(host, port, timeout, e):
                 "ケーブルと IP アドレス、PC のネットワークの設定を確かめてください。")
     if isinstance(e, (EOFError, ConnectionResetError, ConnectionAbortedError)):
         return ("機器 %s の %s 番ポートにつながりましたが、すぐに切られました。"
-                "FTP サーバーが動いているかと、ポート番号を確かめてください。" % (host, port))
+                "FTP サーバーが動いているかと、設定の port を確かめてください。" % (host, port))
     if isinstance(e, ftplib.Error):
         return (where + "（FTP サーバーの答え：%s）。"
-                "少し待ってから、機器の FTP サーバーのようすを確かめてください。" % _reply_text(e))
+                "機器の FTP サーバーが動いているかと、ほかの PC からつないでいないかを"
+                "確かめてください。" % _reply_text(e))
     return (where + "（%s）。機器の電源とケーブル、IP アドレスを確かめてください。"
             % _os_reason(e))
 
@@ -728,7 +762,8 @@ def session_error_message(what, timeout, e, data_transfer=False):
         reply = _reply_text(e)
         if code in ("550", "553"):
             return (what + "（機器が断りました：%s）。"
-                    "書き込む権限があるか、パスが正しいかを確かめてください。" % reply)
+                    "設定の user に書き込む権限があるかと、"
+                    "remote_dir（機器の送り先のフォルダ）が正しいかを確かめてください。" % reply)
         if code in ("452", "552"):
             return (what + "（機器の空き容量が足りません：%s）。"
                     "機器の空き容量を確かめてください。" % reply)
@@ -737,7 +772,7 @@ def session_error_message(what, timeout, e, data_transfer=False):
                     "設定の user と password を確かめてください。" % reply)
         if code == "421":
             return (what + "（機器の FTP サーバーが接続を切りました：%s）。"
-                    "機器のようすを確かめてください。" % reply)
+                    "機器の電源と、FTP サーバーが動いているかを確かめてください。" % reply)
         return (what + "（機器の FTP サーバーの答え：%s）。"
                 "くわしくは記録のファイルを見てください。" % reply)
     if _is_timeout(e):
@@ -745,7 +780,7 @@ def session_error_message(what, timeout, e, data_transfer=False):
         if data_transfer:
             hint = "設定の passive を変えると直ることがあります。"
         return (what + "（%s 秒待っても機器の応答がありません）。"
-                "機器のようすとケーブルを確かめてください。%s"
+                "機器の電源とケーブルを確かめてください。%s"
                 % (_fmt_seconds(timeout), hint))
     if isinstance(e, (EOFError, ConnectionResetError, ConnectionAbortedError,
                       BrokenPipeError)):
@@ -765,6 +800,24 @@ def _fmt_seconds(value):
 
 
 FTP_ERRORS = ftplib.all_errors + (EOFError,)
+
+
+def login_hint(settings):
+    """ログインできないときに、確かめることの文。パスワードが空なら、そう言う。"""
+    config = settings.get("config_path") or "設定ファイル"
+    if not settings.get("user"):
+        return ("設定の user が空なので、anonymous でログインしようとしました。"
+                "機器のユーザー名とパスワードを、%s の user と password に書いてください。"
+                % config)
+    if settings.get("password") == "":
+        env_name = settings.get("password_env")
+        if env_name:
+            return ("環境変数 %s の中身が空です。その環境変数にパスワードを入れるか、"
+                    "%s の password に書いてください。" % (env_name, config))
+        return ("設定の password も password_env も空です。"
+                "機器のパスワードを、%s の password に書くか、"
+                "password_env にパスワードを入れた環境変数の名前を書いてください。" % config)
+    return "設定の user と password を確かめてください。"
 
 
 def ftp_login(settings, log):
@@ -792,10 +845,10 @@ def ftp_login(settings, log):
         if _reply_code(e) == "530":
             raise DeployError(
                 "機器 %s に FTP でログインできません（ユーザー名かパスワードが違います）。"
-                "設定の user と password を確かめてください。" % host, _reply_text(e))
+                % host + login_hint(settings), _reply_text(e))
         raise DeployError(
             "機器 %s に FTP でログインできません（FTP サーバーの答え：%s）。"
-            "設定の user と password を確かめてください。" % (host, _reply_text(e)),
+            % (host, _reply_text(e)) + login_hint(settings),
             _reply_text(e))
     except FTP_ERRORS as e:
         _close(ftp)
@@ -895,7 +948,7 @@ def _make_checksum_dir(log):
         return None
     path = base + "-checksums"
     try:
-        os.makedirs(path, exist_ok=True)
+        make_dirs(path)
     except OSError:
         return None
     return path
@@ -1099,6 +1152,7 @@ def cmd_check(workdir, config):
     login_error = None
     if values is not None:
         settings, problems, notes, connect_ready = validate(values, raws, workdir)
+        settings["config_path"] = config
         summary = summary_of(settings)
         for n in notes:
             log.say(n)
@@ -1157,6 +1211,7 @@ def cmd_run(workdir, config):
     settings = None
     if values is not None:
         settings, problems, notes, _ready = validate(values, raws, workdir)
+        settings["config_path"] = config
         for n in notes:
             log.say(n)
     if problems:

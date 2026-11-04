@@ -329,6 +329,24 @@ class RunLoginAndCommands(CaptureTestCase):
         self.assertEqual(self.device.login_attempts, [("root", False)])
         self.assertEqual(self.device.executed, [])
 
+    def test_empty_password_says_where_to_write_it(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="", login_password_env="", commands=["echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("ログインできませんでした", data["message"])
+        self.assertIn("login_password も login_password_env も空", data["message"])
+        self.assertIn(self.config_path, data["message"])
+        self.assertEqual(self.device.executed, [])
+
+    def test_empty_password_from_environment_variable(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="", login_password_env="EDL_TEST_SERIAL_PW",
+                          commands=["echo hi"])
+        code, data = self.capture("run", env={"EDL_TEST_SERIAL_PW": ""})
+        self.assertEqual(code, 1, data)
+        self.assertIn("環境変数 EDL_TEST_SERIAL_PW の中身が空", data["message"])
+
 
 # ---------------------------------------------------------------------------
 # run：時間切れ、応答なし、ポートの問題
@@ -514,6 +532,23 @@ class Settings(CaptureTestCase):
         code, data = self.capture("config-path")
         self.assertEqual(data["missing"], [])
 
+    def test_new_folder_gets_gitignore(self):
+        self.capture("config-path")
+        gi = os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")
+        with open(gi, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
+        with open(gi, "w", encoding="utf-8") as f:
+            f.write("logs/\n")
+        self.capture("config-path")
+        with open(gi, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "logs/\n")  # あるときは、そのまま
+
+    def test_gitignore_only_when_the_folder_is_made(self):
+        os.makedirs(os.path.join(self.tmp, ".embedded-debug-loop"))
+        self.capture("config-path")
+        self.assertTrue(os.path.isfile(self.config_path))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")))
+
     def test_config_option_points_to_another_file(self):
         other = os.path.join(self.tmp, "sub", "my.yaml")
         code, data = self.capture("config-path", "--config", other)
@@ -646,6 +681,14 @@ class Check(CaptureTestCase):
         code, data = self.capture("check")
         self.assertEqual(code, 2, data)
         self.assertIn("ログインできませんでした", data["problems"][0])
+
+    def test_check_empty_password(self):
+        port = self.start_device(login=True)
+        self.write_config(port=port, login_password="")
+        code, data = self.capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertIn("login_password も login_password_env も空", data["problems"][0])
+        self.assertEqual(data["summary"]["login_password"], "")
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +838,23 @@ class Independence(unittest.TestCase):
         self.assertTrue(names <= STDLIB_ALLOWED, names - STDLIB_ALLOWED)
         self.assertNotIn("sys.path", source)
         self.assertNotIn("../", source)
+
+    def test_skill_md_does_not_show_exit_codes(self):
+        """終了コードで場合分けを書くと、モデルが利用者に見せてしまう。"""
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        for line in text.splitlines():
+            if "終了コード" in line or "終わりのコード" in line:
+                self.assertIn("伝えません", line, line)
+        self.assertNotRegex(text, r"[0-2] ?[がは](成功|問題)")
+        self.assertIn("`.gitignore`", text)
+
+    def test_messages_that_ask_to_check_name_concrete_things(self):
+        """「確かめてください」の文は、何を確かめるかを具体的に言う。"""
+        with open(SCRIPT, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("状態を確かめて", text)
+        self.assertNotIn("ようすを確かめて", text)
 
     def test_skill_files_are_only_its_own(self):
         rel = sorted(os.path.relpath(p, SKILL_DIR) for p in self.skill_files())

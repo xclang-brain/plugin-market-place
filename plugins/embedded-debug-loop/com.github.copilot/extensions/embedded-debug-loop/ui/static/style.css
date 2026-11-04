@@ -1269,6 +1269,35 @@ select {
 .crit {
   font-weight: 700;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 条件の番号（C1 など） */
+.crit-no {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+/* 検証エージェントを呼ばずに評価した試行の印 */
+.no-verifier {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--line-strong);
+  font-size: 0.875rem;
+}
+
+/* 設定を保存する作業フォルダ */
+.folder-line {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
 }
 
 .reason {

@@ -449,6 +449,22 @@ class ValidateTest(unittest.TestCase):
         _s, problems, _n, _r = self.check(ws, **base_config(21, files=["a/app", "b/app"]))
         self.assertTrue(any("同じ名前" in p for p in problems))
 
+    def test_login_hint_names_empty_password_and_where_to_write(self):
+        conf = "/w/.embedded-debug-loop/deploy.yaml"
+        hint = deploy.login_hint({"user": "root", "password": "", "password_env": "",
+                                  "config_path": conf})
+        self.assertIn("password も password_env も空", hint)
+        self.assertIn(conf, hint)
+        hint = deploy.login_hint({"user": "root", "password": "", "password_env": "MY_PW",
+                                  "config_path": conf})
+        self.assertIn("環境変数 MY_PW の中身が空", hint)
+        hint = deploy.login_hint({"user": "", "password": "", "password_env": "",
+                                  "config_path": conf})
+        self.assertIn("user が空", hint)
+        hint = deploy.login_hint({"user": "root", "password": "x", "password_env": "",
+                                  "config_path": conf})
+        self.assertEqual(hint, "設定の user と password を確かめてください。")
+
     def test_summary_masks_password(self):
         ws = Workspace(self)
         ws.file("sensor_app", APP)
@@ -472,6 +488,31 @@ class CommandWithoutServerTest(unittest.TestCase):
         code, data, _out, _err = ws.run("config-path")
         self.assertEqual(code, 0)
         self.assertFalse(data["created"])
+
+    def test_new_folder_gets_gitignore(self):
+        ws = Workspace(self)
+        ws.run("config-path")
+        gi = os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")
+        self.assertEqual(read_file(gi), b"*\n")
+        # 2回目は、そのまま（書き直さない）
+        with open(gi, "wb") as fh:
+            fh.write(b"logs/\n")
+        ws.run("config-path")
+        self.assertEqual(read_file(gi), b"logs/\n")
+
+    def test_gitignore_only_when_the_folder_is_made(self):
+        ws = Workspace(self)
+        os.makedirs(os.path.join(ws.dir, ".embedded-debug-loop"))
+        ws.run("config-path")
+        self.assertTrue(os.path.isfile(ws.config))
+        self.assertFalse(os.path.exists(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")))
+
+    def test_gitignore_when_only_the_log_folder_is_made(self):
+        ws = Workspace(self)
+        other = os.path.join(ws.dir, "conf", "my-deploy.yaml")
+        ws.run("check", "--config", other)
+        self.assertEqual(read_file(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")),
+                         b"*\n")
 
     def test_config_option(self):
         ws = Workspace(self)
@@ -721,6 +762,27 @@ class FtpServerTest(unittest.TestCase):
         self.assertNotIn("wrong-one", out)
         self.assertEqual(os.listdir(root), [])
 
+    def test_empty_password_530_says_where_to_write_it(self):
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        root = self.root()
+        with ftp_server(root) as port:
+            ws.write_config(**base_config(port, password="", password_env=""))
+            code, data, _out, _e = ws.run()
+            self.assertEqual(code, 1)
+            self.assertIn("ログインできません", data["message"])
+            self.assertIn("password も password_env も空", data["message"])
+            self.assertIn(ws.config, data["message"])
+            code, data, _out, _e = ws.run("check")
+            self.assertEqual(code, 2)
+            self.assertIn("password も password_env も空", data["message"])
+            self.assertEqual(data["summary"]["password"], "")
+            # 環境変数はあるが、中身が空のとき
+            ws.write_config(**base_config(port, password="", password_env="DEPLOY_TEST_PW"))
+            code, data, _out, _e = ws.run(env={"DEPLOY_TEST_PW": ""})
+            self.assertEqual(code, 1)
+            self.assertIn("環境変数 DEPLOY_TEST_PW の中身が空", data["message"])
+
     def test_password_from_env(self):
         ws = Workspace(self)
         ws.file("sensor_app", APP)
@@ -769,6 +831,8 @@ class FtpServerTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("/opt", data["message"])
         self.assertIn("権限", data["message"])
+        self.assertIn("user", data["message"])
+        self.assertIn("remote_dir", data["message"])
 
     def test_active_mode(self):
         ws = Workspace(self)
@@ -868,6 +932,23 @@ class IndependenceTest(unittest.TestCase):
         self.assertRegex(m.group(1), r"(?m)^description: .+")
         for sub in ("run", "config-path", "check"):
             self.assertIn("scripts/deploy.py " + sub, text)
+
+    def test_skill_md_does_not_show_exit_codes(self):
+        """終了コードで場合分けを書くと、モデルが利用者に見せてしまう。"""
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        for line in text.splitlines():
+            if "終了コード" in line:
+                self.assertIn("伝えません", line, line)
+        self.assertNotRegex(text, r"[0-2] ?[がは]成功")
+        self.assertIn("`.gitignore`", text)
+
+    def test_messages_that_ask_to_check_name_concrete_things(self):
+        """「確かめてください」の文は、何を確かめるかを具体的に言う。"""
+        with open(SCRIPT, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("ようすを確かめて", text)
+        self.assertNotIn("状態を確かめて", text)
 
 
 if __name__ == "__main__":

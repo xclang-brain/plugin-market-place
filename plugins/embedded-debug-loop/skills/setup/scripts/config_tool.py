@@ -661,10 +661,23 @@ def write_atomic(path, data):
 # 結果の形
 # ---------------------------------------------------------------------------
 
+EMPTY_WORD = "（空）"
+
+
 def masked(item, value):
+    """secret の項目の値は、空でなければ ＊＊＊ にする。空の値は、空のまま返す。"""
     if item.secret and not is_empty(value):
         return MASK
     return value
+
+
+def shown_value(item, value):
+    """文の中に書く値。空なら（空）、secret なら ＊＊＊。"""
+    if is_empty(value):
+        return EMPTY_WORD
+    if item.secret:
+        return MASK
+    return render_value(value)
 
 
 def item_info(doc, item):
@@ -723,7 +736,7 @@ def _type_error(item, new_type):
                          key=key, expected=want, given=new_type)
     if want == "number":
         return ToolError("「{}」は数の項目です。数だけを書いてください（今の値：{}）。".format(
-            key, masked(item, render_scalar(item.value))), key=key, expected=want, given=new_type)
+            key, shown_value(item, item.value)), key=key, expected=want, given=new_type)
     if want == "boolean":
         return ToolError("「{}」は true か false の項目です。どちらかを書いてください。".format(key),
                          key=key, expected=want, given=new_type)
@@ -740,7 +753,7 @@ def _guess_type(item):
 def convert_input(item, raw, use_json):
     key = item.key
     want = item.type
-    shown = MASK if item.secret else raw
+    shown = (EMPTY_WORD if raw == "" else MASK) if item.secret else raw
     if want == "null" and not use_json:
         guess = _guess_type(item)
         if guess != "string":

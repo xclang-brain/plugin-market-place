@@ -43,23 +43,28 @@ test('3段階目のファイルに、作業の中身の言葉がない', () => {
   assert.deepEqual(problems, []);
 });
 
-test('作業エージェントと検証エージェントの名前は、defaults.json にだけある', () => {
+test('作業・検証・統括エージェントの名前は、defaults.json にだけある（エクステンションのコードに書かない）', () => {
   const defaults = JSON.parse(fs.readFileSync(path.join(EXT_DIR, 'defaults.json'), 'utf8'));
   assert.ok(defaults.worker);
   assert.ok(defaults.verifier);
+  assert.ok(defaults.orchestrator);
   for (const file of layer3Files().filter((f) => f.startsWith(EXT_DIR))) {
     const body = fs.readFileSync(file, 'utf8');
     assert.ok(!body.includes(defaults.worker), `${path.relative(PLUGIN_ROOT, file)} に作業エージェントの名前があります`);
     assert.ok(!body.includes(defaults.verifier), `${path.relative(PLUGIN_ROOT, file)} に検証エージェントの名前があります`);
+    assert.ok(!body.includes(defaults.orchestrator), `${path.relative(PLUGIN_ROOT, file)} に統括エージェントの名前があります`);
   }
 });
 
-test('同梱の defaults.json を読み、名前をそのまま使う', async (t) => {
+test('同梱の defaults.json を読み、名前をそのまま使う（統括エージェントは選択肢から除く）', async (t) => {
   const defaults = JSON.parse(fs.readFileSync(path.join(EXT_DIR, 'defaults.json'), 'utf8'));
-  const { fake } = await startWith(t, { defaults });
+  const agents = [defaults.worker, defaults.orchestrator, defaults.verifier].map((id) => ({ id, name: id.split(':').pop(), description: '' }));
+  const { fake, app } = await startWith(t, { defaults, fake: { agents } });
   const r = await fake.call('open', { request: '作業' });
   assert.ok(r.text.includes(`作業エージェント「${defaults.worker}」`));
   assert.ok(r.text.includes(`検証エージェント：${defaults.verifier}`));
+  const state = await app.control.state();
+  assert.deepEqual(state.options.agents.map((a) => a.name), [defaults.worker, defaults.verifier]);
 });
 
 test('作業エージェントを、まったく別の名前のエージェントに差し替えても、開始から終わりまで動く', async (t) => {

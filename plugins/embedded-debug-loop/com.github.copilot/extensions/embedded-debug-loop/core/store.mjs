@@ -43,6 +43,24 @@ export function readCriteria(value) {
   return list.map(stripCriterionNo).filter(Boolean);
 }
 
+// 評価の criterion：「C1」だけ、「C1：文」、または条件の文そのもの
+const VERDICT_NO = /^[CcＣｃ]\s*([0-9０-９]+)\s*(?:[：:.．]\s*([\s\S]*))?$/;
+
+/**
+ * 評価の criterion を、実行の合格の条件と結び付ける。
+ * 返す no は条件の番号（分からなければ null）、text は条件の文（実行の条件の文を優先する）。
+ */
+export function matchCriterion(raw, criteria = []) {
+  const value = text(raw);
+  const m = VERDICT_NO.exec(value);
+  if (m) {
+    const no = Number(m[1].normalize('NFKC'));
+    return { no, text: stripCriterionNo(criteria[no - 1]) || text(m[2]) };
+  }
+  const i = criteria.findIndex((c) => stripCriterionNo(c) === value);
+  return { no: i >= 0 ? i + 1 : null, text: value };
+}
+
 const effortOf = (value) => {
   const v = text(value);
   return v === '既定' || v === 'default' ? '' : v;

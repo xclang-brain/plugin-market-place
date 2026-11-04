@@ -139,6 +139,29 @@
   function isActive(run) {
     return !!run && (run.status === 'running' || run.status === 'stopping');
   }
+  // チャットで答えを待っていること。実行の前や、終わった後でも出す
+  function waitingOf(snap) {
+    if (snap.waiting) return snap.waiting;
+    return isActive(snap.run) ? snap.run.waiting || null : null;
+  }
+  // 「<プラグイン>:<名前>」と「<名前>」を同じエージェントとみなす
+  function sameAgent(a, b) {
+    const bare = (x) => str(x).trim().slice(str(x).trim().lastIndexOf(':') + 1);
+    return !!str(a).trim() && !!str(b).trim() && (str(a).trim() === str(b).trim() || bare(a) === bare(b));
+  }
+  // 評価の条件の、番号と文。記録に番号と文がない（古い記録の）ときは、「C1」を実行の条件の文に引き当てる
+  function criterionOf(run, v) {
+    const raw = str(v.criterion).trim();
+    if (v.no || v.text) return { no: Number(v.no) || 0, text: str(v.text) || raw };
+    const m = /^C(\d+)$/i.exec(raw);
+    const list = arr(run && run.criteria);
+    if (m && list[Number(m[1]) - 1]) return { no: Number(m[1]), text: str(list[Number(m[1]) - 1]) };
+    return { no: 0, text: raw };
+  }
+  function criterionLine(run, v) {
+    const c = criterionOf(run, v);
+    return h('span', { class: 'crit' }, c.no ? h('span', { class: 'crit-no' }, `C${c.no}`) : null, c.text);
+  }
   function stagePhase(snap) {
     if (isActive(snap.run)) return 'running';
     if (snap.draft) return 'draft';
@@ -340,13 +363,12 @@
     pill.textContent = text;
     $('run-dot').hidden = phase !== 'running';
 
-    const waiting = isActive(run) && run.waiting;
+    const waiting = waitingOf(snap);
     document.title = `${waiting ? '【チャットで答えを待っています】' : phase === 'running' ? '【実行中】' : ''}Web管理画面`;
   }
 
   function drawWaiting() {
-    const run = ui.snap.run;
-    const w = isActive(run) ? run.waiting : null;
+    const w = waitingOf(ui.snap);
     const box = $('waiting');
     if (!changed('waiting', w)) return;
     if (!w) {
@@ -544,6 +566,11 @@
       note.textContent = 'チャットで統括エージェントに作業を頼むと、頼む作業と合格の条件がここに入ります。ここに直接書いてもかまいません。';
     }
 
+    // 設定は作業フォルダごとに保存する
+    const folder = $('settings-folder');
+    folder.textContent = snap.folder ? `設定は、作業フォルダごとに保存します（いまの作業フォルダ：${str(snap.folder)}）。` : '';
+    folder.hidden = !snap.folder;
+
     drawPrepared(locked);
   }
 
@@ -570,16 +597,24 @@
       return;
     }
     const ready = prep.ready === true;
-    badge.className = `badge ${ready ? 'badge-ok' : 'badge-ng'}`;
-    badge.textContent = ready ? 'できている' : 'できていない';
+    // 準備を確かめたのとは別の作業エージェントを選んだときは、その返事で「できている・できていない」と言わない
+    const selected = locked ? str(snap.run.worker) : $('f-worker').value;
+    const changedWorker = !!(selected && str(prep.worker) && !sameAgent(selected, prep.worker));
+    if (changedWorker) {
+      badge.className = 'badge badge-unk';
+      badge.textContent = 'まだ確かめていない（開始すると確かめます）';
+    } else {
+      badge.className = `badge ${ready ? 'badge-ok' : 'badge-ng'}`;
+      badge.textContent = ready ? 'できている' : 'できていない';
+    }
     meta.textContent = `確かめた作業エージェント：${str(prep.worker)}${prep.at ? `（${hm(prep.at)}）` : ''}`;
     meta.hidden = false;
-    const selected = locked ? str(snap.run.worker) : $('f-worker').value;
-    other.hidden = !(selected && str(prep.worker) && selected !== str(prep.worker));
+    other.hidden = !changedWorker;
     other.textContent = 'いま選んでいる作業エージェントとは違うエージェントの返事です。開始の後に、統括エージェントが確かめ直します。';
     report.textContent = normalize(prep.report) || '（返事の中身がありません）';
     report.classList.remove('is-empty');
-    say(ready ? '作業エージェントの準備ができています。' : '作業エージェントの準備ができていません。', 'prepared');
+    say(changedWorker ? '選んだ作業エージェントの準備は、まだ確かめていません。'
+      : ready ? '作業エージェントの準備ができています。' : '作業エージェントの準備ができていません。', 'prepared');
   }
 
   // 誤りの説明の欄 → 入力の欄
@@ -707,8 +742,9 @@
     const c = cycleOf(run);
     const a = run.active;
     const time = a && a.since ? since(a.since) : '';
-    if (run.waiting) {
-      return { text: run.waiting.kind === 'permission' ? 'チャットで、許可を待っています。' : 'チャットで、あなたの答えを待っています。', time: '' };
+    const w = waitingOf(ui.snap);
+    if (w) {
+      return { text: w.kind === 'permission' ? 'チャットで、許可を待っています。' : 'チャットで、あなたの答えを待っています。', time: '' };
     }
     if (!a && !arr(run.iterations).length) return { text: '統括エージェントが動き出すのを待っています', time: '' };
     if (!a) return { text: 'いまは、どのエージェントも動いていません。チャットのようすを確かめてください。', time: '' };
@@ -908,9 +944,13 @@
       const vopen = !!ui.open[vkey];
       studyBody = [
         h('ul', { class: 'verdicts' }, arr(st2.verdicts).map((v) => h('li', null,
-          h('div', { class: 'verdict-head' }, verdictChip(v.result), h('span', { class: 'crit' }, str(v.criterion))),
+          h('div', { class: 'verdict-head' }, verdictChip(v.result), criterionLine(run, v)),
           v.reason ? h('p', { class: 'reason' }, str(v.reason)) : null))),
         st2.next ? h('div', { class: 'next' }, h('p', { class: 'k' }, '次にすること'), h('p', { class: 'pre' }, normalize(st2.next))) : null,
+        // 検証エージェントを呼ばずに評価したとき（作業が進めなかったとき）は、空の欄の代わりにそのことを書く
+        !st2.verifierReport && st2.verifierCalled === false
+          ? h('p', { class: 'muted no-verifier' }, '評価：作業が進めなかったため、検証エージェントは呼んでいません')
+          : null,
         st2.verifierReport ? h('details', {
           class: 'sub-details',
           open: vopen,
@@ -926,9 +966,10 @@
     } else {
       studyBody = h('p', { class: 'muted' }, 'まだ評価はありません。');
     }
+    const noVerifier = !!(it.study && !it.study.verifierReport && it.study.verifierCalled === false);
     const studyCol = h('section', { class: 'pds-col pds-v' },
       h('h4', null, h('span', { class: 'pds-no', 'aria-hidden': 'true' }, '3'), '評価',
-        h('span', { class: 'pds-who' }, `検証エージェント${it.study && it.study.at ? `・${hm(it.study.at)}` : ''}`)),
+        h('span', { class: 'pds-who' }, `${noVerifier ? '統括エージェント' : '検証エージェント'}${it.study && it.study.at ? `・${hm(it.study.at)}` : ''}`)),
       studyBody);
 
     return h('details', {
@@ -1083,10 +1124,10 @@
         h('h2', { id: 'h-criteria' }, '合格の条件と、最後の評価'),
         lv ? h('p', { class: 'help' }, `試行 ${lv.n} の評価です。`) : null,
         h('ul', { class: 'verdicts' },
-          (lv ? lv.verdicts : arr(run.criteria).map((c) => ({ criterion: c, result: null }))).map((v) => h('li', null,
+          (lv ? lv.verdicts : arr(run.criteria).map((c, i) => ({ no: i + 1, text: c, result: null }))).map((v) => h('li', null,
             h('div', { class: 'verdict-head' },
               v.result ? verdictChip(v.result) : h('span', { class: 'chip chip-unk' }, '評価なし'),
-              h('span', { class: 'crit' }, str(v.criterion))),
+              criterionLine(run, v)),
             v.reason ? h('p', { class: 'reason' }, str(v.reason)) : null)))),
       h('section', { class: 'card', 'aria-labelledby': 'h-table' },
         h('h2', { id: 'h-table' }, '試行ごとのまとめ'),

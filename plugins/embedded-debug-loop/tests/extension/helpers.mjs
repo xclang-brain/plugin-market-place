@@ -12,6 +12,8 @@ export const EXT_DIR = path.join(PLUGIN_ROOT, 'com.github.copilot', 'extensions'
 
 export const WORKER = 'demo-plugin:helper-a';
 export const VERIFIER = 'demo-plugin:checker-b';
+export const LEAD = 'demo-plugin:lead-c'; // 統括エージェント（defaults.json の orchestrator）
+export const CWD = '/w/project'; // セッションの作業フォルダ
 
 export function tempDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edl-ext-'));
@@ -19,8 +21,12 @@ export function tempDir(t) {
   return dir;
 }
 
-/** 偽物のセッション。登録されたツール・フックと、送った知らせ・止めた回数・子の設定の書き換えを残す */
-export function fakeCopilot({ agents, models, subagents = null, sendFails = false, onAbort } = {}) {
+/**
+ * 偽物のセッション。登録されたツール・フックと、送った知らせ・止めた回数・子の設定の書き換えを残す。
+ * cwd はセッションの作業フォルダ、current はチャットで選ばれているエージェント（Error なら読めない）。
+ * missing に書いた RPC（'agent.getCurrent'、'metadata' など）は、ない版の Copilot CLI のように消しておく。
+ */
+export function fakeCopilot({ agents, models, subagents = null, sendFails = false, onAbort, cwd = CWD, current = null, missing = [] } = {}) {
   const handlers = [];
   const fake = {
     config: null,
@@ -28,6 +34,8 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
     aborts: 0,
     updates: [],
     subagents,
+    cwd,
+    current,
     tool(name) {
       return fake.config.tools.find((t) => t.name === `embedded-debug-loop_${name}`);
     },
@@ -71,10 +79,16 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
         list: async () => ({
           agents: agents ?? [
             { name: 'helper-a', id: WORKER, displayName: 'A', description: '手伝う' },
+            { name: 'lead-c', id: LEAD, displayName: 'C', description: 'まとめる' },
             { name: 'checker-b', id: VERIFIER, displayName: 'B', description: '確かめる' },
           ],
         }),
+        getCurrent: async () => {
+          if (fake.current instanceof Error) throw fake.current;
+          return { agent: fake.current };
+        },
       },
+      metadata: { snapshot: async () => ({ sessionId: 's1', workingDirectory: fake.cwd }) },
       model: { list: async () => ({ list: models ?? [{ id: 'model-x', name: 'モデル X' }, { id: 'model-y' }] }) },
       tools: {
         getSubagentSettings: async () => ({ subagents: fake.subagents }),
@@ -86,6 +100,11 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
       },
     },
   };
+  for (const where of missing) {
+    const keys = where.split('.');
+    const last = keys.pop();
+    delete keys.reduce((o, k) => o[k], fake.session.rpc)[last];
+  }
   fake.joinSession = async (config) => {
     fake.config = config;
     return fake.session;
@@ -97,7 +116,7 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
 export async function startWith(t, options = {}) {
   const dir = tempDir(t);
   const defaultsFile = path.join(dir, 'defaults.json');
-  fs.writeFileSync(defaultsFile, JSON.stringify({ worker: WORKER, verifier: VERIFIER, maxIterations: 3, issueRepo: 'owner/repo', ...options.defaults }));
+  fs.writeFileSync(defaultsFile, JSON.stringify({ worker: WORKER, verifier: VERIFIER, orchestrator: LEAD, maxIterations: 3, issueRepo: 'owner/repo', ...options.defaults }));
   const staticDir = path.join(dir, 'static');
   fs.mkdirSync(staticDir);
   fs.writeFileSync(path.join(staticDir, 'index.html'), '<!doctype html><title>画面</title><script src="app.js"></script>');

@@ -4,7 +4,7 @@
 import { execFile } from 'node:child_process';
 
 import { MSG, TOOL, manualIssue, settingsLines } from './messages.mjs';
-import { OUTCOMES, readCriteria, text } from './store.mjs';
+import { OUTCOMES, matchCriterion, readCriteria, text } from './store.mjs';
 
 const VERDICTS = ['pass', 'fail', 'unknown'];
 const ISSUE_TIMEOUT_MS = 30_000;
@@ -198,7 +198,8 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       if (bad) return fail('verdicts に、条件ごとの criterion と result（pass・fail・unknown のどれか）と reason を入れてください。');
       const next = text(args?.next);
       it.study = {
-        verdicts: verdicts.map((v) => ({ criterion: text(v.criterion), result: v.result, reason: text(v.reason) })),
+        // criterion はモデルが書いたまま。no と text は、実行の合格の条件の番号と文（画面に出す）
+        verdicts: verdicts.map((v) => ({ criterion: text(v.criterion), ...matchCriterion(v.criterion, run.criteria), result: v.result, reason: text(v.reason) })),
         next,
         verifierReport: it._verifierReport ?? '',
         // 検証エージェントを呼ばずに評価したか（作業が進めなかったときなど）。後から呼べば true に変わる

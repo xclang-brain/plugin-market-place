@@ -120,9 +120,12 @@ class Project(object):
         return run_script(list(args) + ["--workdir", self.dir], **kw)
 
 
-def run_script(args, cwd=None, timeout=120):
+def run_script(args, cwd=None, timeout=120, env=None):
+    if env is None:
+        # 試験を動かす端末の CC に左右されないよう、外しておく
+        env = {k: v for k, v in os.environ.items() if k != "CC"}
     r = subprocess.run([sys.executable, SCRIPT] + args, cwd=cwd, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, timeout=timeout)
+                       stderr=subprocess.PIPE, timeout=timeout, env=env)
     out = r.stdout.decode("utf-8")
     try:
         data = json.loads(out)
@@ -189,6 +192,14 @@ class TemplateTest(unittest.TestCase):
         blocks = re.findall(r"((?:^#.*\n)+)([A-Za-z_]+):", text, re.M)
         required = [key for comment, key in blocks if "必須" in comment]
         self.assertEqual(required, ["outputs"])
+
+    def test_sdk_env_comment_says_it_is_needed_for_the_device(self):
+        with open(TEMPLATE, encoding="utf-8") as f:
+            text = f.read()
+        block = re.search(r"((?:^#.*\n)+)sdk_env:", text, re.M).group(1)
+        self.assertIn("機器向けにビルドするなら、必ず書く", block)
+        self.assertIn("PC 用", block)
+        self.assertNotIn("必須", block, "必須の印を付けると、空のときにビルドできなくなる")
 
     def test_template_values(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -301,6 +312,31 @@ class LinePickTest(unittest.TestCase):
         lines = ["x.c:{}: error: bad".format(i) for i in range(50)]
         self.assertEqual(len(BUILD.error_lines_of(lines)), 20)
 
+    def test_elf_arch(self):
+        tmp = tempfile.mkdtemp(prefix="cc-elf-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+
+        def elf(name, cls, order, machine):
+            head = b"\x7fELF" + bytes([cls, order, 1]) + b"\0" * 11
+            head += machine.to_bytes(2, "little" if order == 1 else "big")
+            path = os.path.join(tmp, name)
+            with open(path, "wb") as f:
+                f.write(head + b"\0" * 40)
+            return path
+
+        self.assertEqual(BUILD.elf_arch(elf("arm", 1, 1, 40)), "ARM")
+        self.assertEqual(BUILD.elf_arch(elf("x64", 2, 1, 62)), "x86-64")
+        self.assertEqual(BUILD.elf_arch(elf("a64", 2, 1, 183)), "ARM aarch64")
+        self.assertEqual(BUILD.elf_arch(elf("ppc", 1, 2, 20)), "PowerPC")
+        text = os.path.join(tmp, "text")
+        with open(text, "w") as f:
+            f.write("hello\n")
+        self.assertIsNone(BUILD.elf_arch(text))
+        self.assertIsNone(BUILD.elf_arch(os.path.join(tmp, "none")))
+        self.assertEqual(BUILD.kind_of(None, "ASCII text, with no line terminators"), "ASCII text")
+        self.assertEqual(BUILD.kind_of(None, None), "不明")
+        self.assertEqual(BUILD.kind_of("ARM", "ELF 32-bit LSB executable, ARM"), "ARM")
+
     def test_first_word(self):
         self.assertEqual(BUILD.first_word("make -j4 all"), "make")
         self.assertEqual(BUILD.first_word("CC=gcc V=1 make"), "make")
@@ -323,6 +359,9 @@ class ConfigPathTest(unittest.TestCase):
         self.assertEqual(data["config"], p.config)
         self.assertTrue(data["created"])
         self.assertEqual(data["missing"], ["outputs"])
+        self.assertEqual(data["empty_recommended"], ["sdk_env"])
+        self.assertIn("sdk_env", data["message"])
+        self.assertIn("機器向け", data["message"])
         self.assertTrue(os.path.isfile(p.config))
         with open(TEMPLATE, encoding="utf-8") as a, open(p.config, encoding="utf-8") as b:
             self.assertEqual(a.read(), b.read())
@@ -336,6 +375,32 @@ class ConfigPathTest(unittest.TestCase):
         p.configure(outputs=["app"])
         code, data, _ = p.run("config-path")
         self.assertEqual(data["missing"], [])
+        self.assertEqual(data["empty_recommended"], ["sdk_env"])
+
+        p.configure(outputs=["app"], sdk_env="/opt/sdk/environment-setup-x")
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["empty_recommended"], [])
+        self.assertNotIn("機器向け", data["message"])
+
+    def test_new_folder_gets_gitignore(self):
+        p = Project(self)
+        p.run("config-path")
+        with open(p.path(".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
+
+    def test_existing_gitignore_is_kept(self):
+        p = Project(self)
+        p.write(".embedded-debug-loop/.gitignore", "logs/\n")
+        p.run("config-path")
+        with open(p.path(".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "logs/\n")
+
+    def test_gitignore_only_when_the_folder_is_made(self):
+        p = Project(self)
+        os.makedirs(p.path(".embedded-debug-loop"))
+        p.run("config-path")
+        self.assertTrue(os.path.isfile(p.config))
+        self.assertFalse(os.path.exists(p.path(".embedded-debug-loop", ".gitignore")))
 
     def test_default_workdir_is_current_folder(self):
         p = Project(self)
@@ -393,6 +458,44 @@ class CheckTest(unittest.TestCase):
                          os.path.realpath(p.dir))
         self.assertFalse(os.path.exists(p.path("app")), "check でビルドしてはいけない")
 
+    def test_empty_sdk_env_is_noted_not_failed(self):
+        """sdk_env が空でも失敗にはしないが、PC 用のプログラムになると、はっきり言う。"""
+        p = Project(self)
+        p.configure(outputs=["app"])
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(len(data["notes"]), 1)
+        note = data["notes"][0]
+        for word in ("sdk_env", "SDK を読み込みません", "PC のコンパイラー", "PC 用", "機器用ではありません"):
+            self.assertIn(word, note)
+        self.assertIn(note, data["message"])
+        self.assertEqual(data["summary"]["compiler"], "cc")
+        if have("cc"):
+            self.assertEqual(data["summary"]["compiler_path"], shutil.which("cc"))
+            self.assertIn(shutil.which("cc"), note)
+
+    def test_compiler_from_environment_is_named(self):
+        p = Project(self)
+        p.configure(outputs=["app"])
+        code, data, _ = run_script(["check", "--workdir", p.dir],
+                                   env=dict(os.environ, CC="gcc -O2"))
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["summary"]["compiler"], "gcc -O2")
+        note = data["notes"][0]
+        self.assertIn("環境変数 CC", note)
+        self.assertNotIn("PC 用", note, "CC が決まっているときは、PC 用とは言い切らない")
+
+    def test_sdk_env_set_means_no_note(self):
+        p = Project(self)
+        sdk = p.write("sdk/env", "export CC=gcc\n")
+        p.configure(outputs=["app"], sdk_env=sdk)
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["notes"], [])
+        self.assertEqual(data["summary"]["compiler"], "gcc")
+        self.assertNotIn("PC 用", data["message"])
+
     def test_new_config_reports_required_item(self):
         p = Project(self)
         code, data, _ = p.run("check")
@@ -402,6 +505,7 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(data["config"], p.config)
         self.assertTrue(any("outputs" in x and "必須" in x for x in data["problems"]),
                         data["problems"])
+        self.assertTrue(any("sdk_env" in x for x in data["notes"]), data["notes"])
 
     def test_missing_sdk_env(self):
         p = Project(self)
@@ -496,6 +600,14 @@ class RunTest(unittest.TestCase):
         self.assertEqual(out["path"], p.path("app"))
         self.assertTrue(out["exists"])
         self.assertTrue(out["updated"])
+        # できたファイルの種類（この PC の CPU）を、メッセージにも書く
+        self.assertEqual(out["arch"], BUILD.pc_arch())
+        self.assertIn("app（", data["message"])
+        self.assertIn("種類：" + out["arch"], data["message"])
+        # SDK を読み込んでいないので、PC 用のプログラムだと言う（失敗にはしない）
+        self.assertTrue(any("PC 用" in n for n in data["notes"]), data["notes"])
+        self.assertIn("機器用ではありません", data["message"])
+        self.assertTrue(data["compiler"])
         self.assertEqual(out["size"], os.path.getsize(p.path("app")))
         self.assertRegex(out["mtime"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
         if have("file"):
@@ -524,7 +636,10 @@ class RunTest(unittest.TestCase):
         self.assertTrue(data["created"])
         self.assertEqual(data["config"], p.config)
         self.assertTrue(data["problems"])
+        self.assertTrue(any("sdk_env" in n for n in data["notes"]), data["notes"])
         self.assertFalse(os.path.exists(p.path("app")))
+        with open(p.path(".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
 
     def test_compile_error(self):
         p = Project(self, source=BAD_C)
@@ -542,6 +657,9 @@ class RunTest(unittest.TestCase):
         self.assertLessEqual(len(data["tail"]), 30)
         self.assertIn("ビルドが失敗しました", data["message"])
         self.assertIn("error", data["message"])
+        # 失敗したときは「できたのは PC 用」とは言わない
+        self.assertTrue(data["notes"])
+        self.assertNotIn("できたのは", data["notes"][0])
 
     def test_stale_output_is_reported(self):
         p = Project(self)
@@ -555,6 +673,7 @@ class RunTest(unittest.TestCase):
         self.assertFalse(data["outputs"][0]["updated"])
         self.assertIn("前のビルドのまま", data["message"])
         self.assertIn("clean_command", data["message"])
+        self.assertIn("種類：", data["message"])
 
         p.configure(outputs=["app"], clean_command="make clean")
         code, data, _ = p.run("run")
@@ -599,6 +718,9 @@ class RunTest(unittest.TestCase):
         self.assertEqual(code, 0, data)
         with open(data["log"], encoding="utf-8") as f:
             self.assertIn("greeting=from-the-sdk", f.read())
+        self.assertEqual(data["notes"], [])
+        self.assertEqual(data["compiler"], "gcc")
+        self.assertNotIn("PC 用", data["message"])
 
     def test_sdk_env_failure(self):
         p = Project(self)
@@ -680,6 +802,9 @@ class RunTest(unittest.TestCase):
         self.assertEqual(code, 0, data)
         self.assertEqual(data["outputs"][0]["path"], p.path(sub, "app"))
         self.assertFalse(os.path.exists(p.config))
+        # ログのために .embedded-debug-loop を作ったときも、.gitignore を作る
+        with open(p.path(".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
 
     def test_unexpected_error_is_logged_in_the_work_folder(self):
         p = Project(self)
@@ -721,6 +846,8 @@ class ArmSdkTest(unittest.TestCase):
         code, data, _ = p.run("check")
         self.assertEqual(code, 0, data)
         self.assertIn("arm-linux-gnueabihf-gcc", data["summary"].get("compiler", ""))
+        self.assertTrue(data["summary"]["compiler_path"])
+        self.assertEqual(data["notes"], [])
 
     def test_build_arm_binary(self):
         p = Project(self)
@@ -736,6 +863,10 @@ class ArmSdkTest(unittest.TestCase):
         self.assertEqual(int.from_bytes(head[18:20], "little"), 40, "ARM（EM_ARM=40）のはず")
         if have("file"):
             self.assertIn("ARM", out["file_type"])
+        self.assertEqual(out["arch"], "ARM")
+        self.assertIn("種類：ARM", data["message"])
+        self.assertEqual(data["notes"], [])
+        self.assertIn("arm-linux-gnueabihf-gcc", data["compiler"])
         with open(data["log"], encoding="utf-8") as f:
             self.assertIn("arm-linux-gnueabihf-gcc", f.read())
 
@@ -832,6 +963,18 @@ class SkillDocTest(unittest.TestCase):
         for heading in ("## 何をするスキルか", "## 頼まれ方と、すること", "## 結果の伝え方",
                         "## 守ること"):
             self.assertIn(heading, self.text)
+
+    def test_exit_codes_are_not_shown_to_the_user(self):
+        """見出しや場合分けに終了コードを書くと、モデルが利用者に見せてしまう。"""
+        for line in self.text.splitlines():
+            if "終了コード" in line:
+                self.assertIn("伝えません", line, line)
+        self.assertNotRegex(self.text, r"[0-2] ?[がは]成功")
+
+    def test_mentions_notes_compiler_and_gitignore(self):
+        for word in ("`notes`", "`empty_recommended`", "`compiler`", "`.gitignore`",
+                     "`stale_outputs`"):
+            self.assertIn(word, self.text)
 
 
 if __name__ == "__main__":

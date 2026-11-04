@@ -158,3 +158,95 @@ test('壊れたイベントでも例外を投げない', async (t) => {
   assert.equal(fake.subagentStop(null), undefined);
   assert.equal(fake.config.hooks.onSubagentStop(undefined), undefined);
 });
+
+test('ask_user の質問（elicitation）：実行中は待っていることを示し、答えが出たら消す', async (t) => {
+  const { fake, app } = await startRun(t);
+  fake.emit('assistant.turn_start', {});
+  fake.emit('elicitation.requested', {
+    requestId: 'e1',
+    message: '作業エージェントが進めません。\nどうしますか？',
+    mode: 'form',
+    requestedSchema: { type: 'object', properties: { answer: { type: 'string' } } },
+  });
+  let s = app.store.snapshot();
+  assert.deepEqual(s.waiting, { kind: 'question', text: '作業エージェントが進めません。\nどうしますか？' });
+  assert.deepEqual(s.run.waiting, s.waiting);
+  fake.emit('elicitation.completed', { requestId: 'other', action: 'accept' });
+  assert.ok(app.store.snapshot().waiting, '別の求めの答えでは消さない');
+  fake.emit('elicitation.completed', { requestId: 'e1', action: 'accept', content: { answer: '続ける' } });
+  s = app.store.snapshot();
+  assert.equal(s.waiting, null);
+  assert.equal(s.run.waiting, null);
+});
+
+test('実行の前（下書き）・実行のないとき・終わった後の質問も、待っていることとして示す', async (t) => {
+  const a = await startWith(t);
+  a.fake.emit('elicitation.requested', { requestId: 'e0', message: '何をしますか？' });
+  assert.deepEqual(a.app.store.snapshot().waiting, { kind: 'question', text: '何をしますか？' }, '下書きもないとき');
+  a.fake.emit('elicitation.completed', { requestId: 'e0', action: 'accept' });
+  await a.fake.call('open', { request: '作業' });
+  a.fake.emit('elicitation.requested', { requestId: 'e1', message: '条件はこれでよいですか？' });
+  let s = a.app.store.snapshot();
+  assert.equal(s.run, null);
+  assert.deepEqual(s.waiting, { kind: 'question', text: '条件はこれでよいですか？' }, '下書きのとき');
+  a.fake.emit('elicitation.completed', { requestId: 'e1', action: 'accept' });
+  assert.equal(a.app.store.snapshot().waiting, null);
+
+  const b = await startRun(t);
+  await b.fake.call('finish', { outcome: 'success', conclusion: 'できた', retro: '頼み方を短く' });
+  b.fake.emit('elicitation.requested', { requestId: 'e2', message: '振り返りの改善の案を Issue にしますか？' });
+  s = b.app.store.snapshot();
+  assert.equal(s.run.status, 'finished');
+  assert.deepEqual(s.waiting, { kind: 'question', text: '振り返りの改善の案を Issue にしますか？' }, '終わった後');
+  b.fake.emit('elicitation.completed', { requestId: 'e2', action: 'decline' });
+  assert.equal(b.app.store.snapshot().waiting, null);
+});
+
+test('待っていることが重なったら、新しいものを示し、答えたものだけを消す。セッションが止まれば、すべて消す', async (t) => {
+  const { fake, app } = await startRun(t);
+  const waiting = () => app.store.snapshot().waiting;
+  fake.emit('permission.requested', { requestId: 'p1', permissionRequest: { kind: 'shell', fullCommandText: 'ls out' } }, 'w1');
+  fake.emit('elicitation.requested', { requestId: 'e1', message: '続けますか？' });
+  assert.deepEqual(waiting(), { kind: 'question', text: '続けますか？' });
+  fake.emit('elicitation.completed', { requestId: 'e1', action: 'accept' });
+  assert.deepEqual(waiting(), { kind: 'permission', text: 'ls out' }, '残っている許可の求めにもどる');
+  fake.emit('user_input.requested', { requestId: 'q1', question: 'どちらにしますか？' });
+  fake.emit('session.idle', {});
+  assert.equal(waiting(), null);
+  assert.equal(app.store.snapshot().run.waiting, null);
+});
+
+test('質問の文は、行の区切りを残し、長いものは切る', async (t) => {
+  const { fake, app } = await startRun(t);
+  fake.emit('elicitation.requested', { requestId: 'e1', message: `  1行目  \n\n  2行目 ${'あ'.repeat(500)}` });
+  const text = app.store.snapshot().waiting.text;
+  assert.ok(text.startsWith('1行目\n2行目 あ'));
+  assert.equal(text.length, 401);
+  assert.ok(text.endsWith('…'));
+});
+
+test('検証エージェントを呼ばずに評価したときは、その印を残す。呼んだときは付けない', async (t) => {
+  const { fake, app } = await startRun(t);
+  const study = (n) => app.store.snapshot().run.iterations[n - 1].study;
+  const verdicts = [{ criterion: 'C1', result: 'unknown', reason: '作業が進めなかった' }];
+
+  await fake.call('plan', { iteration: 1, plan: 'p1' });
+  fake.emit('subagent.started', { agentType: WORKER, toolCallId: 't1' }, 'w1');
+  fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: 'ツールが使えず、進めませんでした' });
+  fake.emit('subagent.completed', {}, 'w1');
+  await fake.call('study', { iteration: 1, verdicts, next: '利用者に聞く' });
+  assert.equal(study(1).verifierCalled, false);
+  assert.equal(study(1).verifierReport, '');
+
+  await fake.call('plan', { iteration: 2, plan: 'p2' });
+  fake.emit('subagent.started', { agentType: VERIFIER, toolCallId: 't2' }, 'v1');
+  await fake.call('study', { iteration: 2, verdicts, next: 'n' });
+  assert.equal(study(2).verifierCalled, true, '返事の前でも、呼んでいれば印は付けない');
+
+  await fake.call('plan', { iteration: 3, plan: 'p3' });
+  await fake.call('study', { iteration: 3, verdicts, next: 'n' });
+  assert.equal(study(3).verifierCalled, false);
+  fake.subagentStop({ agentType: VERIFIER, agentId: 'v2', response: '後から届いた返事' });
+  assert.equal(study(3).verifierCalled, true, '評価の後に呼んだときは、印を外す');
+  assert.equal(study(3).verifierReport, '後から届いた返事');
+});

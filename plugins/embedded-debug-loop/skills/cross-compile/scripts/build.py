@@ -37,6 +37,9 @@ CONFIG_DIR_NAME = ".embedded-debug-loop"
 COMMANDS = ("run", "config-path", "check")
 
 REQUIRED_KEYS = ("outputs",)
+# 必須ではないが、機器向けにビルドするなら書く項目
+RECOMMENDED_KEYS = ("sdk_env",)
+GITIGNORE_TEXT = "*\n"  # 設定やログが、誤って git に入らないようにする
 LABELS = {
     "source_dir": "ビルドするフォルダ",
     "sdk_env": "SDK の環境設定ファイル",
@@ -299,6 +302,38 @@ def resolve_paths(opts):
     return workdir, config
 
 
+def _config_dir_of(path):
+    """path か、その上にある .embedded-debug-loop フォルダの場所。無ければ None。"""
+    p = os.path.abspath(path)
+    while True:
+        if os.path.basename(p) == CONFIG_DIR_NAME:
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
+def make_dirs(path):
+    """フォルダを作る。.embedded-debug-loop フォルダを新しく作ったときは、
+    中に .gitignore（中身は * の1行）も作る。すでにあれば、そのままにする。"""
+    top = _config_dir_of(path)
+    fresh = top is not None and not os.path.exists(top)
+    os.makedirs(path, exist_ok=True)
+    if fresh:
+        try:
+            fd = os.open(os.path.join(top, ".gitignore"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except OSError:
+            return
+        try:
+            os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
 def ensure_config(path):
     """設定ファイルが無ければ、ひな形を写して作る。作ったら True。"""
     if os.path.exists(path):
@@ -309,7 +344,7 @@ def ensure_config(path):
         raise SettingsProblem([
             "設定のひな形 {} がありません。スキルを入れ直してください。".format(TEMPLATE)], path)
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        make_dirs(os.path.dirname(path))
         shutil.copyfile(TEMPLATE, path)
     except OSError as e:
         raise SettingsProblem([
@@ -340,6 +375,39 @@ def is_empty(value):
 
 def missing_required(raw):
     return [k for k in REQUIRED_KEYS if is_empty(raw.get(k))]
+
+
+def empty_recommended(raw):
+    return [k for k in RECOMMENDED_KEYS if is_empty(raw.get(k))]
+
+
+def sdk_note(compiler=None, when="plan", cc_from_env=False, other_arch=None):
+    """sdk_env が空のときの注意の文。
+
+    when は "plan"（これからビルドする）、"built"（できた）、"failed"（失敗した）。
+    """
+    done = when != "plan"
+    head = "{}が空なので、SDK を読み込{}。".format(
+        label("sdk_env"), "みませんでした" if done else "みません")
+    tail = "機器向けにビルドするなら、sdk_env を書いてください。"
+    if other_arch:
+        # PC とは違う種類のファイルができた（Makefile などでコンパイラーを決めている）
+        return head + "できたファイルの種類は {} です。".format(other_arch)
+    if cc_from_env:
+        cc = "環境変数 CC のコンパイラー（{}）".format(compiler)
+    else:
+        cc = "PC のコンパイラー" + ("（{}）".format(compiler) if compiler else "")
+    if when == "plan":
+        body = "{}でビルドします。".format(cc)
+        if not cc_from_env:
+            body += "できるのは PC 用のプログラムで、機器用ではありません。"
+    elif when == "built":
+        body = "{}でビルドしました。".format(cc)
+        if not cc_from_env:
+            body += "できたのは PC 用のプログラムで、機器用ではありません。"
+    else:
+        body = "{}でビルドしました。".format(cc)
+    return head + body + tail
 
 
 def _text(raw, key, problems):
@@ -470,7 +538,7 @@ def new_log_path(workdir):
     logs = os.path.join(workdir, CONFIG_DIR_NAME, "logs")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     try:
-        os.makedirs(logs, exist_ok=True)
+        make_dirs(logs)
         n = 1
         while True:
             name = "{}-{}{}.log".format(SKILL, stamp, "" if n == 1 else "-{}".format(n))
@@ -531,6 +599,42 @@ def describe_file(path):
         return None
 
 
+# ELF の e_machine の番号と、その呼び名（file コマンドと同じ呼び名）
+ELF_MACHINES = {
+    2: "SPARC", 3: "Intel 80386", 8: "MIPS", 20: "PowerPC", 21: "64-bit PowerPC",
+    22: "IBM S/390", 40: "ARM", 42: "Renesas SH", 43: "SPARC V9", 62: "x86-64",
+    183: "ARM aarch64", 243: "UCB RISC-V", 258: "LoongArch",
+}
+
+
+def elf_arch(path):
+    """ELF のファイルなら、どの CPU 向けか（例：ARM、x86-64）。ELF でなければ None。"""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(20)
+    except OSError:
+        return None
+    if len(head) < 20 or head[:4] != b"\x7fELF" or head[5] not in (1, 2):
+        return None
+    order = "little" if head[5] == 1 else "big"
+    machine = int.from_bytes(head[18:20], order)
+    return ELF_MACHINES.get(machine, "CPU の番号 {}".format(machine))
+
+
+def kind_of(arch, file_type):
+    """メッセージに書く、ファイルの種類の短い呼び名。"""
+    if arch:
+        return arch
+    if file_type:
+        return short(file_type.split(",")[0], 40)
+    return "不明"
+
+
+def pc_arch():
+    """この PC の CPU の呼び名（Python の実行ファイルから調べる）。"""
+    return elf_arch(os.path.realpath(sys.executable))
+
+
 def short(text, limit=160):
     text = text.strip()
     return text if len(text) <= limit else text[:limit - 1] + "…"
@@ -545,12 +649,14 @@ def cmd_config_path(opts):
     created = ensure_config(config)
     raw, problems = read_config(config)
     missing = missing_required(raw) if not problems else []
+    recommended = empty_recommended(raw) if not problems else []
     result = {
         "ok": not problems,
         "skill": SKILL,
         "config": config,
         "created": created,
         "missing": missing,
+        "empty_recommended": recommended,
     }
     if created:
         msg = "設定ファイルをひな形から作りました：{}。".format(config)
@@ -558,6 +664,9 @@ def cmd_config_path(opts):
         msg = "設定ファイルはここにあります：{}。".format(config)
     if missing:
         msg += "まだ空の必須の項目があります：{}。".format("、".join(label(k) for k in missing))
+    if recommended:
+        msg += "機器向けにビルドするなら書く項目が、まだ空です：{}。".format(
+            "、".join(label(k) for k in recommended))
     if problems:
         result["problems"] = problems
         msg += "ただし、ファイルに読めない所があります。"
@@ -584,11 +693,11 @@ if ! cd "$source_dir" 1>&2; then printf 'cd_failed\n'; exit 0; fi
 for w in "${words[@]}"; do
   if command -v "$w" >/dev/null 2>&1; then printf 'found\t%s\n' "$w"; else printf 'missing\t%s\n' "$w"; fi
 done
-if [ -n "$sdk_env" ] && [ -n "${CC-}" ]; then
-  read -r ccw _rest <<< "$CC"
-  if command -v "$ccw" >/dev/null 2>&1; then printf 'cc_found\t%s\n' "$ccw"; else printf 'cc_missing\t%s\n' "$ccw"; fi
-  printf 'cc\t%s\n' "$CC"
-fi
+if [ -n "${CC-}" ]; then printf 'cc_set\n'; fi
+cc_cmd=${CC:-cc}
+read -r ccw _rest <<< "$cc_cmd"
+if ccp=$(command -v "$ccw" 2>/dev/null); then printf 'cc_path\t%s\n' "$ccp"; else printf 'cc_missing\t%s\n' "$ccw"; fi
+printf 'cc\t%s\n' "$cc_cmd"
 printf 'end\n'
 '''
 
@@ -632,12 +741,22 @@ def cmd_check(opts):
     src_ok = settings is not None and os.path.isdir(settings["source_dir"])
     sdk_ok = settings is not None and (
         not settings["sdk_env"] or os.path.isfile(settings["sdk_env"]))
+    cc = None
     if src_ok and sdk_ok:
         progress("設定を確かめています（SDK の読み込みと、コマンドの有無）…")
-        probe_problems, compiler = probe(settings, words)
+        probe_problems, cc = probe(settings, words)
         problems.extend(probe_problems)
-        if compiler:
-            result["summary"]["compiler"] = compiler
+        if cc:
+            result["summary"]["compiler"] = cc["command"]
+            result["summary"]["compiler_path"] = cc["path"]
+
+    notes = []
+    if settings is not None and not settings["sdk_env"]:
+        if cc:
+            notes.append(sdk_note(cc["path"] or cc["command"], cc_from_env=cc["from_env"]))
+        else:
+            notes.append(sdk_note())
+    result["notes"] = notes
 
     result["ok"] = not problems
     if problems:
@@ -646,7 +765,7 @@ def cmd_check(opts):
         else:
             result["message"] = problems_message(problems)
         return 2, result
-    result["message"] = "設定に問題はありません。ビルドの準備ができています。"
+    result["message"] = "設定に問題はありません。ビルドの準備ができています。" + "".join(notes)
     return 0, result
 
 
@@ -675,6 +794,8 @@ def probe(settings, words):
     err = r.stderr.decode("utf-8", "replace").strip()
     found = {}
     ended = False
+    cc = {"command": None, "path": None, "from_env": False}
+    cc_missing = None
     for line in out:
         parts = line.split("\t", 1)
         tag = parts[0]
@@ -687,18 +808,26 @@ def probe(settings, words):
             return ["{}の {} に移れません。".format(label("source_dir"), settings["source_dir"])], None
         if tag in ("found", "missing"):
             found[val] = tag == "found"
+        elif tag == "cc_set":
+            cc["from_env"] = True
+        elif tag == "cc_path":
+            cc["path"] = val
         elif tag == "cc_missing":
-            problems.append(
-                "SDK を読み込んだ後のコンパイラー {} が見つかりません。"
-                "SDK が正しく入っているかを確かめてください。".format(val))
+            cc_missing = val
         elif tag == "cc":
-            compiler = val
+            cc["command"] = val
         elif tag == "end":
             ended = True
     if not ended:
         msg = "{}の {} を読み込むと、途中で終わってしまいます。".format(
             label("sdk_env"), settings["sdk_env"])
         return [msg + sdk_said(err) + "SDK が正しく入っているかを確かめてください。"], None
+    if cc_missing and settings["sdk_env"] and cc["from_env"]:
+        problems.append(
+            "SDK を読み込んだ後のコンパイラー {} が見つかりません。"
+            "SDK が正しく入っているかを確かめてください。".format(cc_missing))
+    if cc["command"]:
+        compiler = cc
     after = "（SDK を読み込んだ後で探しました）" if settings["sdk_env"] else ""
     for key, w in words:
         if not found.get(w, False):
@@ -720,6 +849,7 @@ def build_script(clean_command, build_command):
         'phase_file=$1',
         'sdk_env=$2',
         'source_dir=$3',
+        'cc_file=$4',
         'set --',
         "printf 'sdk_env' > \"$phase_file\"",
         'if [ -n "$sdk_env" ]; then',
@@ -728,6 +858,10 @@ def build_script(clean_command, build_command):
         'fi',
         "printf 'cd' > \"$phase_file\"",
         'cd "$source_dir" || exit $?',
+        # make が使うコンパイラー（CC が無ければ cc）と、その場所を書き残す
+        '{ [ -n "${CC-}" ] && echo env || echo default; echo "${CC:-cc}"; '
+        'read -r _cc_word _cc_rest <<< "${CC:-cc}"; '
+        'command -v "$_cc_word" 2>/dev/null; } > "$cc_file"',
         'set -e',
         'set -o pipefail',
     ]
@@ -785,8 +919,9 @@ def cmd_run(opts):
             msg = "設定ファイルを新しく作りました。空の必須の項目を書いてから、もう一度ビルドしてください。"
         else:
             msg = "設定に問題があるため、ビルドしませんでした。" + problems_message(problems)
+        notes = [sdk_note()] if settings is not None and not settings["sdk_env"] else []
         return 2, {"ok": False, "skill": SKILL, "message": msg, "problems": problems,
-                   "config": config, "created": created, "log": None}
+                   "notes": notes, "config": config, "created": created, "log": None}
 
     s = settings
     log_path = new_log_path(workdir)
@@ -814,6 +949,8 @@ def cmd_run(opts):
 
     fd, phase_file = tempfile.mkstemp(prefix="build-phase-")
     os.close(fd)
+    fd, cc_file = tempfile.mkstemp(prefix="build-cc-")
+    os.close(fd)
     script = build_script(s["clean_command"], s["build_command"])
     progress("ビルドを始めます：{}（フォルダ：{}）".format(s["build_command"], s["source_dir"]))
     start = time.time()
@@ -823,7 +960,8 @@ def cmd_run(opts):
             offset = logf.tell()
             try:
                 proc = subprocess.Popen(
-                    ["bash", "-c", script, "build", phase_file, s["sdk_env"], s["source_dir"]],
+                    ["bash", "-c", script, "build", phase_file, s["sdk_env"], s["source_dir"],
+                     cc_file],
                     stdin=subprocess.DEVNULL, stdout=logf, stderr=subprocess.STDOUT,
                     cwd=workdir, start_new_session=True)
             except FileNotFoundError:
@@ -846,11 +984,20 @@ def cmd_run(opts):
                 phase = f.read().strip()
         except OSError:
             phase = ""
-    finally:
         try:
-            os.unlink(phase_file)
+            with open(cc_file, encoding="utf-8", errors="replace") as f:
+                cc_lines = f.read().splitlines()
         except OSError:
-            pass
+            cc_lines = []
+    finally:
+        for path in (phase_file, cc_file):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    cc_from_env = bool(cc_lines) and cc_lines[0] == "env"
+    compiler = cc_lines[1].strip() if len(cc_lines) > 1 and cc_lines[1].strip() else None
+    compiler_path = cc_lines[2].strip() if len(cc_lines) > 2 and cc_lines[2].strip() else None
 
     with open(log_path, "rb") as f:
         f.seek(offset)
@@ -870,9 +1017,12 @@ def cmd_run(opts):
         "exit_code": rc,
         "timed_out": timed_out,
         "duration_seconds": duration,
+        "compiler": compiler,
+        "compiler_path": compiler_path,
         "outputs": [],
         "error_lines": errors,
         "warning_lines": warnings,
+        "notes": [],
     }
 
     failed_step = None
@@ -891,7 +1041,7 @@ def cmd_run(opts):
         missing, stale = [], []
         for name, path in outputs:
             info = {"name": name, "path": path, "exists": False, "updated": False,
-                    "size": None, "mtime": None, "file_type": None}
+                    "size": None, "mtime": None, "file_type": None, "arch": None}
             try:
                 st = os.stat(path)
             except OSError:
@@ -902,7 +1052,8 @@ def cmd_run(opts):
             now = (st.st_mtime_ns, st.st_ino, st.st_size)
             updated = old is None or now != old
             info.update({"exists": True, "updated": updated, "size": st.st_size,
-                         "mtime": iso_time(st.st_mtime), "file_type": describe_file(path)})
+                         "mtime": iso_time(st.st_mtime), "file_type": describe_file(path),
+                         "arch": elf_arch(path)})
             if not updated:
                 stale.append(name)
             result["outputs"].append(info)
@@ -914,8 +1065,9 @@ def cmd_run(opts):
         else:
             parts = []
             for o in result["outputs"]:
-                parts.append("{}（{:,} バイト）".format(o["name"], o["size"]))
-            msg = "ビルドに成功しました（{} 秒）。できたファイル：{}".format(
+                parts.append("{}（{:,} バイト、種類：{}）".format(
+                    o["name"], o["size"], kind_of(o["arch"], o["file_type"])))
+            msg = "ビルドに成功しました（{} 秒）。できたファイル：{}。".format(
                 duration, "、".join(parts))
             if stale:
                 # ビルドのコマンドは成功したが、ファイルは作り直されなかった（ソースが変わっていないなど）。
@@ -923,10 +1075,21 @@ def cmd_run(opts):
                 result["stale_outputs"] = stale
                 msg = ("ビルドのコマンドは成功しましたが、{} は作り直されず、前のビルドのままです。"
                        "ソースが前のビルドから変わっていないためと考えられます。"
-                       "毎回作り直すには、{}に make clean などを書いてください。").format(
-                           "、".join(stale), label("clean_command"))
+                       "毎回作り直すには、{}に make clean などを書いてください。"
+                       "今あるファイル：{}。").format(
+                           "、".join(stale), label("clean_command"), "、".join(parts))
             result["ok"] = True
 
+    if not s["sdk_env"]:
+        here = pc_arch()
+        other = [o["arch"] for o in result["outputs"]
+                 if o["arch"] and here and o["arch"] != here]
+        note = sdk_note(compiler_path or compiler, when="built" if result["ok"] else "failed",
+                        cc_from_env=cc_from_env,
+                        other_arch="、".join(sorted(set(other))) if other else None)
+        result["notes"].append(note)
+        if result["ok"]:
+            msg += note
     result["message"] = msg
     if not result["ok"]:
         result["failed_step"] = failed_step
@@ -936,11 +1099,13 @@ def cmd_run(opts):
         "",
         "==== ビルドの出力（ここまで） ====",
         "終了コード：{}（{} 秒）{}".format(rc, duration, "　時間切れで止めました" if timed_out else ""),
+        "コンパイラー：{}{}".format(compiler or "（分かりません）",
+                                 "（{}）".format(compiler_path) if compiler_path else ""),
     ]
     for o in result["outputs"]:
         if o["exists"]:
             footer.append("できたファイル：{}　{} バイト　{}　{}".format(
-                o["path"], o["size"], o["mtime"], o["file_type"] or ""))
+                o["path"], o["size"], o["mtime"], o["file_type"] or o["arch"] or ""))
         else:
             footer.append("できていないファイル：{}".format(o["path"]))
     footer.append("結果：{}".format(msg))

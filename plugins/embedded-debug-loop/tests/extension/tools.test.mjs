@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
+import { matchCriterion } from '../../com.github.copilot/extensions/embedded-debug-loop/core/store.mjs';
 import { VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
 
 test('ツールは6つで、ツール検索の裏に回さず、確認なしで動く', async (t) => {
@@ -271,4 +272,56 @@ test('ツールの処理が思わず失敗しても、例外を投げずに失�
   const r = await fake.call('issue', { title: '題', body: '本文' });
   assert.equal(r.ok, false);
   assert.match(r.text, /思わぬ失敗/);
+});
+
+test('合格の条件の頭の番号（C1：など）は取り除く：open・設定の保存・開始のどこから入っても', async (t) => {
+  const { fake, app } = await startWith(t);
+  await fake.call('open', { request: '作業', criteria: ['C1：画面に「完了」と出る', 'C2: テストが通る', '- C3：警告が出ない', 'Ｃ４：全角の番号', 'Cで始まる条件'] });
+  assert.deepEqual(app.store.snapshot().draft.criteria, ['画面に「完了」と出る', 'テストが通る', '警告が出ない', '全角の番号', 'Cで始まる条件']);
+
+  await app.control.saveSettings({ criteria: 'C1：一つ目\nC2:二つ目\n' });
+  assert.deepEqual(app.store.snapshot().draft.criteria, ['一つ目', '二つ目']);
+
+  await app.control.start({ criteria: ['C1：開始のときの条件'] });
+  assert.deepEqual(app.store.snapshot().run.criteria, ['開始のときの条件']);
+  assert.ok(fake.sent[0].split('\n').includes('- C1：開始のときの条件'), '開始の知らせで番号が二重にならない');
+  assert.ok(!fake.sent[0].includes('C1：C1'));
+});
+
+test('評価の criterion：番号でも文でも、実行の合格の条件の番号と文に結び付ける', async (t) => {
+  const { fake, app } = await startRun(t); // 条件は「画面に「完了」と出る」「テストがすべて通る」
+  await fake.call('plan', { iteration: 1, plan: 'p1' });
+  await fake.call('study', {
+    iteration: 1,
+    verdicts: [
+      { criterion: 'C1', result: 'pass', reason: '出た' },
+      { criterion: 'テストがすべて通る', result: 'fail', reason: '1件落ちた' },
+      { criterion: 'C2：言い方を変えた条件', result: 'fail', reason: 'r' },
+      { criterion: 'ほかの条件', result: 'unknown', reason: 'r' },
+    ],
+    next: 'n',
+  });
+  const v = app.store.snapshot().run.iterations[0].study.verdicts;
+  assert.deepEqual(v.map((x) => [x.criterion, x.no, x.text]), [
+    ['C1', 1, '画面に「完了」と出る'],
+    ['テストがすべて通る', 2, 'テストがすべて通る'],
+    ['C2：言い方を変えた条件', 2, 'テストがすべて通る'],
+    ['ほかの条件', null, 'ほかの条件'],
+  ]);
+});
+
+test('matchCriterion：番号の書き方の違いを受け、範囲の外の番号は文なしで返す', () => {
+  const criteria = ['落ちない', '値が出る'];
+  assert.deepEqual(matchCriterion('c2', criteria), { no: 2, text: '値が出る' });
+  assert.deepEqual(matchCriterion('Ｃ１', criteria), { no: 1, text: '落ちない' });
+  assert.deepEqual(matchCriterion('C1. 落ちない', criteria), { no: 1, text: '落ちない' });
+  assert.deepEqual(matchCriterion('C5', criteria), { no: 5, text: '' });
+  assert.deepEqual(matchCriterion('C5：足した条件', criteria), { no: 5, text: '足した条件' });
+  assert.deepEqual(matchCriterion('C1は満たした', criteria), { no: null, text: 'C1は満たした' });
+});
+
+test('open と study の説明で、番号の付け方を伝える', async (t) => {
+  const { fake } = await startWith(t);
+  assert.match(fake.tool('open').parameters.properties.criteria.description, /番号（C1 など）は付けない/);
+  assert.match(fake.tool('study').parameters.properties.verdicts.items.properties.criterion.description, /番号（C1 など）/);
 });

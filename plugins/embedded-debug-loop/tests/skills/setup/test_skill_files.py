@@ -80,15 +80,46 @@ class SkillMdTest(unittest.TestCase):
 
     def test_dialogue_is_described(self):
         body = self.body
-        for word in ("ask_user", "`question`", "`choices`",
+        for word in ("ask_user", "`choices`",
                      "config_tool.py", "list", "show", "set", "--json", "--stdin",
-                     "必須で空の項目", "今の値のまま", "例：", "あとで決める",
-                     "secret", "env_alternative", "＊＊＊",
+                     "必須で空の項目", "今の値のまま", "空のまま", "例：", "あとで決める",
+                     "secret", "env_alternative", "＊＊＊", "（空）",
                      "終わりの報告", "項目のすぐ上のコメント",
                      "推測で書きません"):
             self.assertIn(word, body, word)
         # 聞く順番：必須で空の項目を先に聞く
         self.assertLess(body.index("必須で空の項目"), body.index("1つずつ確かめる"))
+
+    def test_ask_user_parameters_are_not_named(self):
+        """ask_user の引数の名前は、Copilot CLI の版で変わる（question/choices と
+        message/requestedSchema）。名前を書かず、「質問の文と選択肢」と書く。"""
+        for word in ("`question`", "requestedSchema", "`message`", "`choices` に選択肢"):
+            self.assertNotIn(word, self.body, word)
+
+    def test_exit_codes_are_not_mentioned(self):
+        self.assertNotIn("終了コード", self.body)
+
+    def test_empty_secret_is_shown_as_empty(self):
+        """中身が空のパスワードを ＊＊＊ と書くと、もう入っているように見える。"""
+        for line in self.body.split("\n"):
+            if "＊＊＊" in line and "secret" in line:
+                self.assertIn("空でない", line, line)
+        self.assertIn("空の値は「（空）」と書きます。`secret` が true でも同じです。", self.body)
+
+    def test_empty_optional_item_can_stay_empty(self):
+        self.assertIn("「空のまま」（必須でなく、今の値が空のとき）", self.body)
+        self.assertLess(self.body.index("「空のまま」（必須でなく"), self.body.index("`choices` の値を全部"))
+
+    def test_cancel_and_decline_are_handled(self):
+        section = self.body[self.body.index("### 質問が取り消されたとき"):self.body.index("## 進め方")]
+        for word in ("Esc", "断った", "それ以上は聞きません", "書き換えた項目", "`changed`",
+                     "7. 終わりの報告", "ファイルの場所"):
+            self.assertIn(word, section, word)
+
+    def test_final_report_is_always_given(self):
+        section = self.body[self.body.index("### 7. 終わりの報告"):self.body.index("## 守ること")]
+        self.assertIn("どんな終わり方でも、最後に必ずこの報告をします", section)
+        self.assertIn("途中で止めたときも同じです", section)
 
     def test_sentences_are_short(self):
         # 文は 60 文字ほどまで（表・コードは除く）。長すぎる文がないかを見る。

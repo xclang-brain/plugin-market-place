@@ -199,6 +199,9 @@ class ShowTest(ToolTestCase):
         self.assertTrue(it["cleaning_days"]["required"])
         self.assertFalse(it["cleaning_days"]["empty"])
         self.assertTrue(it["maintenance_password"]["secret"])
+        # 空のパスワードは ＊＊＊ にせず、空と分かるように返す
+        self.assertEqual(it["maintenance_password"]["value"], "")
+        self.assertTrue(it["maintenance_password"]["empty"])
         self.assertEqual(it["maintenance_password"]["env_alternative"], "maintenance_password_env")
         self.assertFalse(it["maintenance_password_env"]["secret"])
         self.assertEqual(it["maintenance_password_env"]["env_for"], "maintenance_password")
@@ -543,6 +546,15 @@ class RefuseTest(ToolTestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("p@ss", out)
         self.assertEqual(self.value(coffee, "maintenance_password"), MASK)
+
+    def test_empty_secret_is_not_masked_in_errors(self):
+        path = self.write("pin.yaml", "# 見本\n\n# 暗証の番号\n# 例：1234\nsecret_pin: 0\n"
+                                      "\n# 空の暗証\napi_token: \"\"\n")
+        data, out = self.fail_("set", path, "secret_pin", "abc")
+        self.assertIn(MASK, data["error"])  # 空でない値は伏せる
+        data, out = self.fail_("set", path, "api_token", "", "--json")
+        self.assertNotIn(MASK, data["error"])
+        self.assertIn("（空）", data["error"])
 
     def test_secret_not_shown_in_parse_errors(self):
         cases = [
