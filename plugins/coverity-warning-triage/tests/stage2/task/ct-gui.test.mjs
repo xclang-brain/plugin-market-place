@@ -1803,6 +1803,8 @@ if (SKIP) {
         assert.doesNotMatch(shown, PY_ERROR);
         await v.page.getByText('← 一覧に戻る').click();
         await summaryReady(v.page);
+        // 一覧の表は、まとめの札より後に描かれることがある（込み合っているとき）。行が出るまで待ってから数える
+        await v.page.locator('#resBody table.items tbody tr').first().waitFor({ timeout: 15_000 });
         assert.equal(await v.page.locator('#resBody table.items tbody tr').count(), 8, '一覧は出る');
       } finally {
         await v.close();
