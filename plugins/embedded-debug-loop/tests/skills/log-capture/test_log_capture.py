@@ -40,9 +40,15 @@ TEMPLATE_KEYS = [
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("log_capture_script", SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # スキルのフォルダに __pycache__ を作らない
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location("log_capture_script", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = saved
     return mod
 
 

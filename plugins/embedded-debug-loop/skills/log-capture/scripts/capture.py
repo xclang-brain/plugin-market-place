@@ -131,7 +131,7 @@ _FLOAT_RE = re.compile(r"^[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+(?:\.[0-9]*)?[eE
 _DQ_ESCAPES = {
     "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n",
     "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"',
-    "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0", "L": " ", "P": " ",
+    "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
 }
 _DQ_HEX = {"x": 2, "u": 4, "U": 8}
 
@@ -435,8 +435,8 @@ def validate(cfg):
             s.password_from = "環境変数 %s" % env_name
         elif s.login_user and not password:
             problems.append(
-                "環境変数 %s が設定されていません（login_password_env）。"
-                "パスワードを入れた環境変数を設定するか、login_password に書いてください。" % env_name
+                "login_password_env に書いた環境変数 %s がありません。"
+                "その環境変数にパスワードを入れるか、login_password に直接書いてください。" % env_name
             )
         elif s.login_user:
             say("環境変数 %s がないため、login_password の値を使います。" % env_name)
@@ -462,7 +462,7 @@ def validate(cfg):
     if isinstance(commands, str):
         commands = [commands]
     if not isinstance(commands, list):
-        problems.append("commands（機器で実行するコマンド）は、並びで書いてください。例：[\"run-app /opt/sensor/sensor_app\"]")
+        problems.append("commands（機器で実行するコマンド）は、[\"コマンド1\", \"コマンド2\"] の形で書いてください。")
         commands = []
     for i, c in enumerate(commands, 1):
         t = _text(c)

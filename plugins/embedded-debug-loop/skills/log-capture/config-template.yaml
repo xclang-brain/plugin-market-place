@@ -21,11 +21,12 @@ login_user: "root"
 # ここに書きたくないときは、下の login_password_env を使う。
 login_password: ""
 
-# パスワードを入れた環境変数の名前。空でなければ、login_password より優先する。
+# パスワードを入れた環境変数の名前。その環境変数があれば、login_password より優先する。
 # 例：DEVICE_PASSWORD
 login_password_env: ""
 
-# シェルのプロンプトの終わりに合う正規表現。空なら "[#$] $"（# か $ と空白で終わる）。
+# シェルのプロンプトの終わりに合う正規表現。空なら [#$] $ を使う。
+# [#$] $ は、「# 」か「$ 」で終わるプロンプトに合う。
 # 例：[#$] $
 # 例：sensor-board:~# $
 prompt: "[#$] $"

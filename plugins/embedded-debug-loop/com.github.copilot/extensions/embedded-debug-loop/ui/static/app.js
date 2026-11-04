@@ -352,6 +352,7 @@
     if (!w) {
       box.hidden = true;
       box.replaceChildren();
+      ui.spoken.waiting = ''; // 次に待つときも、読み上げる
       return;
     }
     const permission = w.kind === 'permission';
@@ -660,7 +661,11 @@
       drawPrepared(false);
     });
     $('btn-save').addEventListener('click', async () => {
-      if (await send('/api/settings', '保存しました。')) poll();
+      const res = await send('/api/settings', '保存しました。');
+      if (!res) return;
+      // ファイルに保存できなかったときなどの注意は、そのまま見せる
+      if (res.warning) showFormMsg(str(res.warning), 'info');
+      poll();
     });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

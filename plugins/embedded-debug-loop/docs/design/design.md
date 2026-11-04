@@ -98,7 +98,38 @@
 
 ## 4. エクステンションの中
 
-（実装の後に書き足す）
+置き場所：`com.github.copilot/extensions/embedded-debug-loop/`。追加のパッケージは使わない。
+
+| ファイル | 役目 |
+| --- | --- |
+| `extension.mjs` | 入口。Copilot SDK の `joinSession` を `adapter.mjs` に渡すだけ |
+| `adapter.mjs` | Copilot CLI とのつなぎ。ツール・フック・イベントを登録し、`session.send`・`session.abort`・`session.rpc` を中の処理に渡す |
+| `defaults.json` | 既定の値（作業エージェント・検証エージェントの名前、繰り返しの上限、Issue の起票先）。データとして扱い、コードは中身を知らない |
+| `core/messages.mjs` | モデルと利用者に見せる文、開始の知らせの文 |
+| `core/store.mjs` | 状態（設定・下書き・実行・過去の実行）と、画面に渡す形（スナップショット） |
+| `core/persist.mjs` | 記録のファイルの読み書き |
+| `core/tools.mjs` | 記録のツール（3.4 の表） |
+| `core/events.mjs` | Copilot CLI のイベントを、試行の記録・いま動いているエージェント・待ちの知らせ・くわしい記録の行にする |
+| `core/guard.mjs` | フック `onPreToolUse` の判断（止めた後の拒否、実行中の統括エージェントの拒否） |
+| `core/control.mjs` | 画面からの操作（設定の保存、開始、止める、過去の実行） |
+| `ui/server.mjs` | 画面のサーバー。127.0.0.1 だけで受け、合言葉（`k`）がない求めを断る |
+| `ui/static/` | 画面（`index.html`、`app.js`、`style.css`）。1.5 秒ごとに状態を読み直す |
+
+画面のサーバーの窓口：
+
+| 窓口 | すること |
+| --- | --- |
+| `GET /api/state` | 今の状態（設定、選べるエージェントとモデル、下書き、実行、過去の実行の一覧） |
+| `POST /api/settings` | 設定を保存する |
+| `POST /api/start` | 開始する（3.4） |
+| `POST /api/stop` | 止める（3.4） |
+| `GET /api/runs/<実行の番号>` | 過去の実行の記録 |
+
+記録の置き場所：`<COPILOT_HOME または ~/.copilot>/plugin-data/embedded-debug-loop/`
+
+- `settings.json`：画面の設定
+- `runs/<実行の番号>/run.json`：実行の記録
+- `runs/<実行の番号>/events.jsonl`：出来事の記録（振り返りに使う）
 
 ## 5. 試験
 
