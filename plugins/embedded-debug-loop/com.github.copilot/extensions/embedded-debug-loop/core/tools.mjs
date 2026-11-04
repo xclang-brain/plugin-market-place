@@ -38,7 +38,7 @@ const DEFINITIONS = {
       type: 'object',
       properties: {
         request: S('頼む作業。利用者の頼みを短くまとめた文'),
-        criteria: { type: 'array', items: { type: 'string' }, description: '合格の条件。1つずつ、結果を見て確かめられる文で' },
+        criteria: { type: 'array', items: { type: 'string' }, description: '合格の条件。1つずつ、結果を見て確かめられる文で。番号（C1 など）は付けない' },
       },
       required: ['request'],
     },
@@ -75,7 +75,7 @@ const DEFINITIONS = {
           items: {
             type: 'object',
             properties: {
-              criterion: S('合格の条件（C1 など）'),
+              criterion: S('合格の条件の番号（C1 など）'),
               result: { type: 'string', enum: VERDICTS, description: 'pass は合格、fail は不合格、unknown は判断できない' },
               reason: S('理由'),
             },
@@ -109,7 +109,7 @@ const DEFINITIONS = {
   },
 };
 
-export function createTools({ store, ensureServer, refreshOptions = () => {}, issueRepo = '', run = runCommand }) {
+export function createTools({ store, ensureServer, refreshOptions = () => {}, refreshFolder = async () => {}, issueRepo = '', run = runCommand }) {
   const urlLine = () => (store.url ? `URL：${store.url}` : '');
   const running = () => {
     const r = store.activeRun();
@@ -130,6 +130,7 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, is
       } catch (error) {
         return fail(`Web管理画面を開けませんでした（${error?.message ?? error}）。利用者に伝えてください。`);
       }
+      await refreshFolder(); // 作業フォルダの設定を読んでから、設定を伝える
       store.draft = { request, criteria: readCriteria(args?.criteria), prepared: null };
       store.changed();
       refreshOptions();
@@ -200,10 +201,13 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, is
         verdicts: verdicts.map((v) => ({ criterion: text(v.criterion), result: v.result, reason: text(v.reason) })),
         next,
         verifierReport: it._verifierReport ?? '',
+        // 検証エージェントを呼ばずに評価したか（作業が進めなかったときなど）。後から呼べば true に変わる
+        verifierCalled: Boolean(it._verifierCalled || it._verifierReport),
         at: store.iso(),
       };
       delete it._verifierReport;
-      store.log('study', { iteration: n, verdicts: it.study.verdicts, next });
+      delete it._verifierCalled;
+      store.log('study', { iteration: n, verdicts: it.study.verdicts, next, verifierCalled: it.study.verifierCalled });
       store.changed();
       if (it.study.verdicts.every((v) => v.result === 'pass')) {
         return `すべての条件が合格です。${TOOL.finish}（outcome は success）で終えてください。`;

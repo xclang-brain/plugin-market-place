@@ -1,5 +1,5 @@
 // Copilot CLI のイベントを、実行の記録にする。
-// - だれが動いているか（統括・作業・検証・その他）と、待っていること（質問・許可）
+// - だれが動いているか（統括・作業・検証・その他）と、待っていること（質問・許可。実行の前や後でも示す）
 // - くわしい記録の行（ツールの呼び出しを、ふつうの言葉にしたもの）
 // - 作業エージェントと検証エージェントの返事（フック onSubagentStop で届く）
 // エージェントの役は、名前が設定の作業エージェント・検証エージェントと同じかどうかだけで決める。
@@ -13,11 +13,17 @@ const RECORD_NAME = { open: 'Web管理画面を開く', prepare: '準備', plan:
 // くわしい記録に出さない、細かいツール
 const QUIET = new Set(['report_intent', 'read_bash', 'list_bash', 'read_powershell', 'list_powershell', 'read_agent', 'list_agents', 'think']);
 const MAX_LINE = 160;
+const MAX_QUESTION = 400;
 const MAX_CALLS = 500;
 
 const oneLine = (value) => {
   const s = String(value ?? '').replace(/\s+/g, ' ').trim();
   return s.length > MAX_LINE ? `${s.slice(0, MAX_LINE)}…` : s;
+};
+// 質問の文は、行の区切りを残す（長いものは切る）
+const question = (value) => {
+  const s = String(value ?? '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  return s.length > MAX_QUESTION ? `${s.slice(0, MAX_QUESTION)}…` : s;
 };
 const argsOf = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
@@ -85,11 +91,12 @@ export function createEventSink({ store }) {
     }
   }
 
-  function setWaiting(value) {
-    const run = store.activeRun();
-    if (!run) return;
-    run.waiting = value;
-    store.changed();
+  // いまの試行で、検証エージェントを呼んだかの印。評価の記録の後に呼んだときは、評価の側に付ける
+  function markVerifierCalled() {
+    const it = store.current();
+    if (!it) return;
+    if (it.study) it.study.verifierCalled = true;
+    else it._verifierCalled = true;
   }
 
   function onEvent(event) {
@@ -99,9 +106,13 @@ export function createEventSink({ store }) {
       const at = Number.isFinite(Date.parse(event.timestamp)) ? new Date(event.timestamp).toISOString() : store.iso();
       const run = store.activeRun();
       switch (event.type) {
-        case 'subagent.started':
-          if (event.agentId) store.live.agents.set(event.agentId, { role: roleOf(text(data.agentType) || data.agentName), since: at });
+        case 'subagent.started': {
+          if (!event.agentId) break;
+          const role = roleOf(text(data.agentType) || data.agentName);
+          store.live.agents.set(event.agentId, { role, since: at });
+          if (role === 'verifier') markVerifierCalled();
           break;
+        }
         case 'subagent.completed':
         case 'subagent.failed': {
           const agent = store.live.agents.get(event.agentId);
@@ -144,19 +155,24 @@ export function createEventSink({ store }) {
           }
           break;
         }
+        // ask_user の質問。Copilot CLI の版によって、user_input と elicitation のどちらかで届く
         case 'user_input.requested':
-          setWaiting({ kind: 'question', text: oneLine(data.question), requestId: data.requestId });
+          store.setWaiting(data.requestId, { kind: 'question', text: question(data.question) });
+          break;
+        case 'elicitation.requested':
+          store.setWaiting(data.requestId, { kind: 'question', text: question(data.message) });
           break;
         case 'permission.requested': {
           if (data.resolvedByHook) break;
           const r = argsOf(data.permissionRequest);
           const what = r.fullCommandText ?? r.fileName ?? r.path ?? r.url ?? r.toolName ?? r.intention ?? r.kind;
-          setWaiting({ kind: 'permission', text: oneLine(what), requestId: data.requestId });
+          store.setWaiting(data.requestId, { kind: 'permission', text: oneLine(what) });
           break;
         }
         case 'user_input.completed':
+        case 'elicitation.completed':
         case 'permission.completed':
-          if (run?.waiting && (!data.requestId || run.waiting.requestId === data.requestId)) setWaiting(null);
+          if (store.pending.size > 0) store.setWaiting(data.requestId, null);
           break;
         case 'session.error':
           if (run) store.activity(WHO.other, `エラー：${oneLine(data.message)}`);
@@ -165,7 +181,7 @@ export function createEventSink({ store }) {
           if (event.agentId) break; // セッション全体が止まったときだけを見る
           store.live.mainSince = null;
           store.live.agents.clear();
-          if (run?.waiting) setWaiting(null);
+          if (store.pending.size > 0) store.setWaiting(null, null);
           if (run?.status === 'stopping') store.finishStopped();
           break;
         default:
@@ -190,6 +206,7 @@ export function createEventSink({ store }) {
         store.log('worker.reply', { iteration: it.n, report: response });
         store.changed();
       } else if (role === 'verifier' && it) {
+        markVerifierCalled();
         if (it.study) it.study.verifierReport = response;
         else it._verifierReport = response;
         store.log('verifier.reply', { iteration: it.n, report: response });

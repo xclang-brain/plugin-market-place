@@ -2,7 +2,8 @@
 // - 記録のツールと、フック（onPreToolUse・onSubagentStop）を登録する。
 // - セッションのイベントを受けて、実行の記録にする。
 // - Web管理画面のサーバーは、最初に open のツールが呼ばれたときに起動する。
-// 作業エージェント・検証エージェントの名前などの既定は、同じフォルダの defaults.json から読む（中身はただの文字として扱う）。
+// 作業エージェント・検証エージェント・統括エージェントの名前などの既定は、同じフォルダの defaults.json から読む（中身はただの文字として扱う）。
+// 設定は、セッションの作業フォルダごとに保存する。
 // 標準出力は Copilot CLI との通信に使われるので、console.log は使わない。
 
 import { readFileSync } from 'node:fs';
@@ -63,8 +64,20 @@ export async function startAdapter({ joinSession, dataDir, defaultsFile, staticD
     updateSubagentSettings: (value) => need().rpc.tools.updateSubagentSettings(value),
     listAgents: () => need().rpc.agent.list(),
     listModels: () => need().rpc.model.list(),
+    // チャットで選ばれているエージェント。この版の Copilot CLI になければ null
+    currentAgent: async () => (typeof need().rpc.agent.getCurrent === 'function' ? need().rpc.agent.getCurrent() : null),
+    // セッションの作業フォルダ（/cd で変わる）。読めなければ、このプロセスの今のフォルダ
+    workingDirectory: async () => {
+      try {
+        const dir = (await need().rpc.metadata?.snapshot?.())?.workingDirectory;
+        if (typeof dir === 'string' && dir.trim()) return dir;
+      } catch (error) {
+        console.error('[Web管理画面] セッションの作業フォルダを読めませんでした：', error?.message ?? error);
+      }
+      return process.cwd();
+    },
   };
-  const control = createControl({ store, port, persist });
+  const control = createControl({ store, port, persist, orchestrator: String(defaults.orchestrator ?? '') });
 
   let server = null;
   let opening = null;
@@ -79,12 +92,20 @@ export async function startAdapter({ joinSession, dataDir, defaultsFile, staticD
   }
 
   const sink = createEventSink({ store });
-  const tools = createTools({ store, ensureServer, refreshOptions: control.refreshOptions, issueRepo: String(defaults.issueRepo ?? ''), run });
+  const tools = createTools({
+    store,
+    ensureServer,
+    refreshOptions: control.refreshOptions,
+    refreshFolder: control.refreshFolder,
+    issueRepo: String(defaults.issueRepo ?? ''),
+    run,
+  });
   session = await joinSession({
     tools,
     hooks: { onPreToolUse: createGuard({ store, mainSessionId: () => session?.sessionId }), onSubagentStop: sink.onSubagentStop },
   });
   const unsubscribe = session.on((event) => sink.onEvent(event));
+  control.refreshFolder(); // 作業フォルダの設定を、先に読んでおく（待たない）
 
   let closing = null;
   function shutdown() {

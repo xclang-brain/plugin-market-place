@@ -1,6 +1,7 @@
 // Web管理画面からの操作：状態を見る、設定を保存する、開始する、止める、過去の実行を見る。
 // Copilot CLI への呼び出しは port（adapter.mjs が作る）を通す。
-// port：send(prompt)、abort()、getSubagentSettings()、updateSubagentSettings(value)、listAgents()、listModels()
+// port：send(prompt)、abort()、getSubagentSettings()、updateSubagentSettings(value)、listAgents()、listModels()、
+//       currentAgent()（チャットで選ばれているエージェント）、workingDirectory()（作業フォルダ）
 
 import { startNotice } from './messages.mjs';
 import { RUN_ID } from './persist.mjs';
@@ -9,11 +10,12 @@ import { UserError, publicRun, readCriteria, readSettingsInput, sameAgent, text 
 const OPTIONS_TTL_MS = 10_000;
 const OPTIONS_WAIT_MS = 1_500;
 
-// エージェントの一覧の要素から、選ぶときの名前と説明を取り出す
-function readAgents(listed) {
+// エージェントの一覧の要素から、選ぶときの名前と説明を取り出す。hidden の名前（id か name）に当たるものは除く
+function readAgents(listed, hidden = []) {
   const out = [];
   for (const a of Array.isArray(listed?.agents) ? listed.agents : []) {
     const name = text(a?.id) || text(a?.name);
+    if (hidden.includes(text(a?.id)) || hidden.includes(text(a?.name))) continue;
     if (name && !out.some((x) => x.name === name)) out.push({ name, description: text(a?.description) });
   }
   return out;
@@ -47,9 +49,48 @@ export async function applyModelSettings(port, s) {
   return true;
 }
 
-export function createControl({ store, port, persist }) {
+/**
+ * @param {object} options
+ * @param {string} [options.orchestrator] 統括エージェントの名前（defaults.json の値）。作業・検証の選択肢から除く
+ */
+export function createControl({ store, port, persist, orchestrator = '' }) {
   let optionsAt = 0;
   let refreshing = null;
+  let folderAt = 0;
+  let folderReading = null;
+
+  // 作業・検証の選択肢から除く名前：統括エージェントと、いまチャットで選ばれているエージェント
+  // （いま作業・検証に選んでいるエージェントがチャットで選ばれているときは、それは除かない）
+  async function hiddenAgents() {
+    const hidden = [text(orchestrator)];
+    try {
+      const current = (await port.currentAgent?.())?.agent;
+      const s = store.settings;
+      const chosen = [current?.id, current?.name].some((n) => sameAgent(n, s.worker) || sameAgent(n, s.verifier));
+      if (current && !chosen) hidden.push(text(current.id), text(current.name));
+    } catch {
+      // 読めなければ、統括エージェントの名前だけで除く
+    }
+    return hidden.filter(Boolean);
+  }
+
+  /** 作業フォルダを確かめ、変わっていれば、そのフォルダの設定を読む（10 秒に1回まで） */
+  function refreshFolder() {
+    if (!folderReading && (store.folder === null || Date.now() - folderAt >= OPTIONS_TTL_MS)) {
+      folderAt = Date.now();
+      folderReading = (async () => {
+        try {
+          store.useFolder(await port.workingDirectory());
+        } catch (error) {
+          console.error('[Web管理画面] 作業フォルダを読めませんでした：', error?.message ?? error);
+          if (store.folder === null) store.useFolder(process.cwd());
+        }
+      })().finally(() => {
+        folderReading = null;
+      });
+    }
+    return folderReading ?? Promise.resolve();
+  }
 
   /** エージェントとモデルの一覧を読み直す（10 秒に1回まで。読めなければ前のものを残す） */
   function refreshOptions() {
@@ -57,7 +98,8 @@ export function createControl({ store, port, persist }) {
       optionsAt = Date.now();
       refreshing = (async () => {
         try {
-          store.options.agents = readAgents(await port.listAgents());
+          const listed = await port.listAgents();
+          store.options.agents = readAgents(listed, await hiddenAgents());
         } catch (error) {
           console.error('[Web管理画面] エージェントの一覧を読めませんでした：', error?.message ?? error);
         }
@@ -74,7 +116,7 @@ export function createControl({ store, port, persist }) {
   }
 
   async function state() {
-    const waiting = refreshOptions();
+    const waiting = Promise.all([refreshFolder(), refreshOptions()]);
     await Promise.race([waiting, new Promise((resolve) => setTimeout(resolve, OPTIONS_WAIT_MS).unref?.())]);
     return store.snapshot();
   }
@@ -98,6 +140,7 @@ export function createControl({ store, port, persist }) {
   async function saveSettings(body) {
     const busy = busyError();
     if (busy) throw new UserError(409, '実行中は設定を変えられません。');
+    await refreshFolder();
     const next = readSettingsInput(body, store.settings);
     keepDraft(body);
     const saved = store.setSettings(next);
@@ -110,6 +153,7 @@ export function createControl({ store, port, persist }) {
   async function start(body) {
     const busy = busyError();
     if (busy) throw busy;
+    await refreshFolder();
     const settings = readSettingsInput(body, store.settings);
     const request = text(body?.request ?? store.draft?.request);
     const criteria = readCriteria(body?.criteria ?? store.draft?.criteria);
@@ -173,5 +217,5 @@ export function createControl({ store, port, persist }) {
     return saved;
   }
 
-  return { state, saveSettings, start, stop, runDetail, refreshOptions };
+  return { state, saveSettings, start, stop, runDetail, refreshOptions, refreshFolder };
 }

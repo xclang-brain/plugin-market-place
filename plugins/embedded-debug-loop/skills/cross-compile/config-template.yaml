@@ -6,7 +6,9 @@
 # 例：firmware/app
 source_dir: "."
 
-# ビルドの前に読み込む、SDK の環境設定ファイル。空なら読み込まない。
+# ビルドの前に読み込む、SDK の環境設定ファイル。
+# 機器向けにビルドするなら、必ず書く。
+# 空なら SDK を読み込まず、PC のコンパイラーで PC 用のプログラムができる。
 # 例：/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
 sdk_env: ""
 

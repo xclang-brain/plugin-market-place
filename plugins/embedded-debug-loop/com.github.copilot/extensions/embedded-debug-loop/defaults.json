@@ -1,6 +1,7 @@
 {
   "worker": "embedded-debug-loop:device-worker",
   "verifier": "embedded-debug-loop:verifier",
+  "orchestrator": "embedded-debug-loop:orchestrator",
   "maxIterations": 5,
   "issueRepo": "xclang-brain/plugin-market-place"
 }

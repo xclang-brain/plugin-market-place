@@ -21,7 +21,7 @@
 
 ## 進め方
 
-1. `/agent` で `embedded-debug-loop:orchestrator` を選びます。
+1. `/agent` と打ち、一覧から `orchestrator · plugin` を選びます（正式な名前は `embedded-debug-loop:orchestrator`）。
 2. 直してほしいことを頼みます。
 
    ```text
@@ -38,8 +38,8 @@
 
 ### 準備が「できていない」と出たとき
 
-1. `/agent` で `embedded-debug-loop:device-worker` を選び、「セットアップしたい」と頼みます。
-2. 終わったら、`/agent` で `embedded-debug-loop:orchestrator` に戻し、最初の依頼をもう一度送ります。
+1. `/agent` で `device-worker · plugin` を選び、「セットアップしたい」と頼みます。
+2. 終わったら、`/agent` で `orchestrator · plugin` に戻し、最初の依頼をもう一度送ります。
 3. 「作業エージェントの準備」が「できている」になったのを確かめて、「開始」を押します。
 
 「できていない」のまま「開始」を押すと、統括エージェントが準備を確かめ直してから始めます。

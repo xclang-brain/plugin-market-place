@@ -39,7 +39,7 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 最初に一度、ビルド・転送・ログ取得のやり方（SDK の場所、機器の IP アドレス、シリアルポートなど）を設定します。
 プロジェクトのフォルダで Copilot CLI を起動して、次のようにします。
 
-1. `/agent` と打ち、`embedded-debug-loop:device-worker`（作業エージェント）を選びます。
+1. `/agent` と打ち、一覧から `device-worker · plugin`（作業エージェント。正式な名前は `embedded-debug-loop:device-worker`）を選びます。
 2. 「セットアップしたい」と頼みます。
 3. 作業エージェントが、項目ごとに質問します。答えると、設定ファイルに書き込みます。
 4. 最後に、作業エージェントが、機器につながるかを確かめて伝えます。
@@ -63,7 +63,7 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 
 ## 2段階目：作業エージェントに任せる
 
-1. `/agent` で `embedded-debug-loop:device-worker` を選びます。
+1. `/agent` で `device-worker · plugin` を選びます。
 2. 直してほしいことを、ふつうの文で頼みます。
 
 ```text
@@ -77,7 +77,7 @@ sensor_app を機器で動かすと、平均値が AVG=3 と出ます。正し�
 
 1. Copilot CLI を起動したときに「… wants elevated permissions」と聞かれたら、「Yes」を選びます（3段階目の Web管理画面を動かすエクステンションの確認です。1段階目と2段階目だけを使うなら、「No」でもかまいません）。
 2. 聞かれず、統括エージェントが URL を出せないときは、[統括エージェントと Web管理画面](docs/guide/3-orchestrator.md) の「準備」を見てください。
-3. `/agent` で `embedded-debug-loop:orchestrator` を選び、直してほしいことを頼みます。
+3. `/agent` で `orchestrator · plugin`（統括エージェント）を選び、直してほしいことを頼みます。
 4. 統括エージェントがチャットに出す URL を、同じ PC のブラウザーで開きます。
 5. 設定と、作業エージェントの準備の内容を確かめて、「開始」を押します。
 

@@ -1,6 +1,8 @@
 // 状態の置き場。設定・下書き・実行・過去の実行の一覧を持ち、Web管理画面に渡す形（スナップショット）を作る。
 // 作業エージェントと検証エージェントの名前は、ただの文字として扱う（中身は知らない）。
 
+import path from 'node:path';
+
 import { MSG } from './messages.mjs';
 
 export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
@@ -29,10 +31,16 @@ export function sameAgent(a, b) {
   return x === y || bare(x) === bare(y);
 }
 
-/** 合格の条件：配列でも、1行に1つの文でも受ける */
+// 合格の条件の頭に付いた番号（「C1：」「- C2:」など）。番号は、記録するときにこちらで付ける
+const CRITERION_NO = /^\s*(?:[-・*]\s*)?[CcＣｃ]\s*[0-9０-９]+\s*[：:]\s*/;
+
+/** 合格の条件の文から、頭の番号を取り除く */
+export const stripCriterionNo = (value) => text(value).replace(CRITERION_NO, '').trim();
+
+/** 合格の条件：配列でも、1行に1つの文でも受ける。頭の番号は取り除く */
 export function readCriteria(value) {
   const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n/) : [];
-  return list.map(text).filter(Boolean);
+  return list.map(stripCriterionNo).filter(Boolean);
 }
 
 const effortOf = (value) => {
@@ -82,25 +90,33 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     verifierModel: '',
     verifierEffort: '',
   };
-  let settings = base;
-  try {
-    const saved = persist.readSettings();
-    if (saved) settings = readSettingsInput(saved, base);
-  } catch {
-    settings = base; // 保存された設定が壊れていたら、既定に戻す
+  // 作業フォルダの設定。保存がなければ既定（defaults.json）。保存が壊れていても既定に戻す
+  function settingsOf(folder) {
+    try {
+      const saved = persist.readSettings(folder);
+      return saved ? readSettingsInput(saved, base) : { ...base };
+    } catch {
+      return { ...base };
+    }
   }
 
   let saveTimer = null;
+  let unnamed = 0; // 番号のない求めに付ける仮の番号
   const store = {
     version: 1,
     url: null,
-    settings,
+    // 設定は作業フォルダごと。フォルダが分かるまでは既定を使う
+    folder: null,
+    settings: { ...base },
     draft: null,
     run: null,
     runs: persist.listRuns(),
     options: { agents: [], models: [] },
     // エージェントが動いているかの見張り（events.mjs が更新する）
     live: { agents: new Map(), mainSince: null },
+    // チャットで答えを待っている求め（番号 → { kind, text }）。実行がなくても持つ
+    pending: new Map(),
+    waiting: null,
   };
 
   const iso = () => now().toISOString();
@@ -129,11 +145,31 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       const run = store.activeRun();
       return run && run.iteration > 0 ? run.iterations[run.iteration - 1] : null;
     },
-    /** 設定を変えてファイルに書く。書けなければ false */
+    /** 作業フォルダが分かったとき・変わったときに、そのフォルダの設定を読む */
+    useFolder(dir) {
+      const folder = text(dir) ? path.resolve(text(dir)) : '';
+      if (!folder || folder === store.folder) return;
+      store.folder = folder;
+      store.settings = settingsOf(folder);
+      store.changed();
+    },
+    /** 設定を変えて、作業フォルダの設定としてファイルに書く。書けなければ false */
     setSettings(next) {
       store.settings = next;
       store.changed();
-      return persist.writeSettings(next);
+      return persist.writeSettings(store.folder ?? path.resolve('.'), next);
+    },
+    /** チャットで待っていること。新しい求めを足すか（value あり）、答えが出た求めを消す（value が null） */
+    setWaiting(requestId, value) {
+      const id = text(requestId);
+      if (value) store.pending.set(id || `#${(unnamed += 1)}`, value);
+      else if (id) store.pending.delete(id);
+      else store.pending.clear(); // 番号のない答えは、すべての求めへの答えとみなす
+      const list = [...store.pending.values()];
+      store.waiting = list.length ? { ...list[list.length - 1] } : null;
+      const run = store.activeRun();
+      if (run) run.waiting = store.waiting ? { ...store.waiting } : null;
+      store.changed();
     },
     /** あとで振り返るための記録。動いている実行がなければ書かない */
     log(type, data = {}) {
@@ -170,7 +206,7 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
         prepared: prepared ?? null,
         iteration: 0,
         active: null,
-        waiting: null,
+        waiting: store.waiting ? { ...store.waiting } : null,
         iterations: [],
         finish: null,
         activity: [],
@@ -203,6 +239,8 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
           : null,
         run: store.run ? publicRun(store.run, false) : null,
         runs: store.runs.map((r) => ({ ...r })),
+        waiting: store.waiting ? { ...store.waiting } : null,
+        folder: store.folder,
       };
     },
   });
