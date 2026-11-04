@@ -56,6 +56,29 @@ export async function applyModelSettings(port, s) {
  * @param {string} [options.orchestrator] 統括エージェントの名前（defaults.json の値）。作業・検証の選択肢から除く
  */
 export function createControl({ store, port, persist, orchestrator = '' }) {
+  // 「開始」の知らせは、チャットでいま選ばれているエージェントに届く。統括エージェントでなければ、先に選び直す。
+  // 選び直せない版の Copilot CLI では、利用者に選んでもらうよう断る。
+  async function ensureOrchestratorSelected() {
+    const name = text(orchestrator);
+    if (!name || typeof port.currentAgent !== 'function') return;
+    let current = null;
+    try {
+      const got = await port.currentAgent();
+      current = text(got?.agent?.name ?? got?.name ?? '');
+    } catch {
+      return; // 今のエージェントが分からないときは、そのまま送る
+    }
+    if (current && sameAgent(current, name)) return;
+    let selected = false;
+    try {
+      selected = typeof port.selectAgent === 'function' ? await port.selectAgent(name) : false;
+    } catch {
+      selected = false;
+    }
+    if (!selected) {
+      throw new Error(`チャットで統括エージェントが選ばれていません。/agent で「${name}」を選んでから、もう一度「開始」を押してください`);
+    }
+  }
   let optionsAt = 0;
   let refreshing = null;
   let folderAt = 0;
@@ -181,6 +204,7 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     if (warning) store.activity(WHO.other, warning);
     store.changed();
     try {
+      await ensureOrchestratorSelected();
       await port.send(startNotice(run, prepared));
     } catch (error) {
       store.run = previous;

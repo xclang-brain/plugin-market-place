@@ -30,7 +30,7 @@ login_password_env: ""
 # 例：myboard:~# $
 prompt: "[#$] $"
 
-# 機器のシェルで、並べた順に実行するコマンド。
+# 機器のシェルで、並べた順に実行するコマンド。機器でプログラムを動かしてログを取るなら、必ず書く。
 # 空なら何も実行せず、listen_seconds の秒数だけ出力を記録する（そのときは listen_seconds を 1 以上にする）。
 # 例：["/opt/myapp/my_app"]
 # 例：["dmesg | tail -n 20", "cat /var/log/messages"]

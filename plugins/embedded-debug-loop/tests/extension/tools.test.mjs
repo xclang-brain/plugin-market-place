@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { matchCriterion } from '../../com.github.copilot/extensions/embedded-debug-loop/core/store.mjs';
 import { listedAgentName } from '../../com.github.copilot/extensions/embedded-debug-loop/core/tools.mjs';
-import { CWD, VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
+import { CWD, LEAD, VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
 
 test('ツールは6つで、ツール検索の裏に回さず、確認なしで動く', async (t) => {
   const { fake } = await startWith(t);
@@ -180,6 +180,24 @@ test('開始：チャットに開始の知らせを送る（準備ずみなら�
   assert.equal(run.status, 'running');
   assert.equal(run.prepared.ready, true);
   assert.equal(app.store.snapshot().draft, null);
+});
+
+test('開始：チャットで別のエージェントが選ばれていれば、統括エージェントを選んでから知らせを送る', async (t) => {
+  const { fake, app } = await startWith(t);
+  await fake.call('open', { request: '作業', criteria: ['条件'] });
+  fake.current = { name: 'helper-a', id: WORKER };
+  await app.control.start({});
+  assert.deepEqual(fake.selected, [LEAD]);
+  assert.equal(fake.sent.length, 1);
+});
+
+test('開始：統括エージェントがもう選ばれていれば、選び直さない', async (t) => {
+  const { fake, app } = await startWith(t);
+  await fake.call('open', { request: '作業', criteria: ['条件'] });
+  fake.current = { name: 'lead-c', id: LEAD };
+  await app.control.start({});
+  assert.equal(fake.selected, undefined);
+  assert.equal(fake.sent.length, 1);
 });
 
 test('開始：準備していない・作業エージェントを変えたときは、準備の確認を頼む行を付ける', async (t) => {

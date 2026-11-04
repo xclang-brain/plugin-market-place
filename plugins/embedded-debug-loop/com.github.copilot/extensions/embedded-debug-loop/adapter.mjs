@@ -68,6 +68,12 @@ export async function startAdapter({ joinSession, dataDir, defaultsFile, staticD
     listModels: () => need().rpc.model.list(),
     // チャットで選ばれているエージェント。この版の Copilot CLI になければ null
     currentAgent: async () => (typeof need().rpc.agent.getCurrent === 'function' ? need().rpc.agent.getCurrent() : null),
+    // チャットで使うエージェントを選ぶ（「開始」の知らせを統括エージェントに届けるため）。この版になければ false
+    selectAgent: async (name) => {
+      if (typeof need().rpc.agent.select !== 'function') return false;
+      await need().rpc.agent.select({ name });
+      return true;
+    },
     // セッションの作業フォルダ（/cd で変わる）。読めなければ、このプロセスの今のフォルダ
     workingDirectory: async () => {
       try {

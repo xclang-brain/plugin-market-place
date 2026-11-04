@@ -92,6 +92,11 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
           if (fake.current instanceof Error) throw fake.current;
           return { agent: fake.current };
         },
+        select: async ({ name }) => {
+          fake.selected = [...(fake.selected ?? []), name];
+          fake.current = { name, id: name };
+          return { agent: fake.current };
+        },
       },
       metadata: { snapshot: async () => ({ sessionId: 's1', workingDirectory: fake.cwd }) },
       model: { list: async () => ({ list: models ?? [{ id: 'model-x', name: 'モデル X' }, { id: 'model-y' }] }) },
