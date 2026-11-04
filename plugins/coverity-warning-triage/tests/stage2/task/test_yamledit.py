@@ -172,6 +172,42 @@ class KeepsComments(unittest.TestCase):
     def test_nothing_changed(self):
         self.assertEqual(yamledit.edit(CT, yaml.safe_load(CT)), CT)
 
+    def test_reordered_list_values_take_their_comments(self):
+        out = self.edit(lambda d: d["coverity"].__setitem__("path_strip_prefixes", ["C:/build/envmon/", "/build/agent/work/envmon/"]))
+        self.assertEqual(out, CT.replace("  - /build/agent/work/envmon/   # CI\n  # 手元のビルド\n  - C:/build/envmon/\n",
+                                         "  # 手元のビルド\n  - C:/build/envmon/\n  - /build/agent/work/envmon/   # CI\n"))
+
+    def test_list_value_changed_and_another_added_keeps_the_comments(self):
+        out = self.edit(lambda d: d["coverity"].__setitem__("path_strip_prefixes", ["/build/agent/work/envmon/", "D:/b/", "/opt/"]))
+        self.assertEqual(out, CT.replace("  - C:/build/envmon/\n", "  - D:/b/\n  - /opt/\n"))
+
+    def test_list_value_added_at_the_start_under_a_comment_with_a_blank_line(self):
+        text = CT.replace("  - /build/agent/work/envmon/   # CI\n", "  # 先頭から順に試す\n\n  - /build/agent/work/envmon/   # CI\n")
+        out = self.edit(lambda d: strip_prefixes(d).insert(0, "/x/"), text)
+        self.assertEqual(out, text.replace("  path_strip_prefixes:\n", "  path_strip_prefixes:\n  - /x/\n"))
+
+    def test_comment_line_with_a_blank_line_above_a_removed_value_stays(self):
+        text = CT.replace("  # 社内 CA の証明書\n", "  # ---- 証明書（チームで決めた） ----\n\n  # 社内 CA の証明書\n")
+        out = self.edit(lambda d: d["coverity"].pop("ca_file"), text)
+        self.assertEqual(out, text.replace("  # 社内 CA の証明書\n  ca_file: C:/certs/ca.pem\n", ""))
+
+    def test_no_line_break_at_the_end_of_the_file(self):
+        text = "# 見出し\ncoverity:\n  url: x   # u\n  path_strip_prefixes:\n  - /a/"
+        out = self.edit(lambda d: strip_prefixes(d).append("/b/"), text)
+        self.assertEqual(out, text + "\n  - /b/\n")
+
+    def test_bom_is_kept(self):
+        out = self.edit(lambda d: d.__setitem__("max_items", 5), "\ufeff" + CT)
+        self.assertEqual(out, "\ufeff" + CT.replace("max_items: 20   #", "max_items: 5   #"))
+        text = "\ufeffmax_items: 20   # n\ncoverity:\n  url: x\n"
+        self.assertEqual(self.edit(lambda d: d.__setitem__("max_items", 5), text), text.replace("20", "5"))
+        self.assertTrue(yamledit.has_comments("\ufeff# 見出し\ncoverity:\n  url: x   # u\n"))
+
+    def test_unchanged_one_line_map(self):
+        text = CT + "options: {}   # 既定のまま\n"
+        out = self.edit(lambda d: d.__setitem__("max_items", 5), text)
+        self.assertEqual(out, text.replace("max_items: 20   #", "max_items: 5   #"))
+
 
 @unittest.skipIf(yaml is None, "PyYAML がない")
 class Unsupported(unittest.TestCase):
@@ -237,6 +273,25 @@ class Check(unittest.TestCase):
     def test_refuses_wrong_values(self):
         new = changed(CT, lambda d: d.__setitem__("max_items", 5))
         self.assertFalse(yamledit.check(CT, CT, new))
+        one = changed(CT, lambda d: d.__setitem__("max_items", 1))
+        self.assertFalse(yamledit.check(CT, CT.replace("max_items: 20", "max_items: true"), one), "型の違う値")
+        self.assertFalse(yamledit.check(CT, CT.replace("max_items: 20   # 夜間に 20 件まで", "max_items: 20   # 夜間に 20 件まで\nmax_items: 1"), one),
+                         "同じキーが2つ（人は前の値を読む）")
+
+    def test_refuses_comment_lines_moved_or_split(self):
+        text = CT.replace("  # 社内 CA の証明書\n", "  # ---- 証明書 ----\n\n  # 社内 CA の証明書\n")
+        new = changed(text, lambda d: d["coverity"].pop("ca_file"))
+        good = yamledit.edit(text, new)
+        self.assertTrue(yamledit.check(text, good, new))
+        self.assertFalse(yamledit.check(text, good.replace("  # ---- 証明書 ----\n\n", ""), new), "空の行で離れた注釈の行まで消した")
+        self.assertFalse(yamledit.check(text, good.replace("  # ---- 証明書 ----\n\n", "").replace("  type: git\n", "  # ---- 証明書 ----\n\n  type: git\n"), new),
+                         "消した項目の上の、空の行で離れた注釈の行を、別の所に移した")
+        same = yaml.safe_load(CT)
+        self.assertFalse(yamledit.check(CT, CT.replace("  # 手元のビルド\n", "  # 手元のビルド\n\n"), same), "注釈の行とその値の間に空の行が入った")
+        swapped = CT.replace("# --- ここからバージョン管理（チームで決めた） ---\n", "# 2行目\n# --- ここからバージョン管理（チームで決めた） ---\n")
+        self.assertFalse(yamledit.check(swapped, swapped.replace("# 2行目\n# --- ここからバージョン管理（チームで決めた） ---\n",
+                                                                  "# --- ここからバージョン管理（チームで決めた） ---\n# 2行目\n"), same),
+                         "注釈の行の順が変わった")
 
     def test_has_comments(self):
         self.assertTrue(yamledit.has_comments(CT))
@@ -309,6 +364,8 @@ class Random(unittest.TestCase):
             if rnd.random() < .3:
                 n += 1
                 out.append(" " * (len(line) - len(line.lstrip())) + f"# 上の注釈{n}")
+                if rnd.random() < .2:
+                    out.append("")  # 注釈の行と値の間の空の行
             following = i + 1 < len(lines) and cont(lines[i + 1])
             if rnd.random() < .3 and not line.rstrip().endswith(":") and not following:
                 n += 1
@@ -327,11 +384,16 @@ class Random(unittest.TestCase):
                 d["coverity"]["ca_file"] = "D:/x.pem"
         if r() < .5:
             values = d["coverity"]["path_strip_prefixes"]
-            kind = rnd.choice(["add", "insert", "del", "chg", "empty"])
+            kind = rnd.choice(["add", "insert", "del", "chg", "empty", "swap", "chg+add"])
             if kind == "add":
                 values.append("/new/")
             elif kind == "insert":
                 values.insert(0, "/first/")
+            elif kind == "swap" and len(values) > 1:
+                values.reverse()
+            elif kind == "chg+add" and values:
+                values[-1] = "/chg/"
+                values.append("/new/")
             elif kind == "del" and values:
                 values.pop(rnd.randrange(len(values)))
             elif kind == "chg" and values:
@@ -351,7 +413,7 @@ class Random(unittest.TestCase):
 
     def test_random_changes_keep_every_comment_with_its_line(self):
         rnd = random.Random(20261104)
-        for round_ in range(300):
+        for round_ in range(400):
             with self.subTest(round=round_):
                 text = self.comment(rnd, self.base(rnd))
                 new = copy.deepcopy(yaml.safe_load(text))

@@ -1717,6 +1717,30 @@ if (SKIP) {
       }
     });
 
+    test('REQ-102 設定：ファイルにある空の CA 証明書の行は、ほかの値を変えて保存しても、注釈ごと残る。保存を2回押しても、確認は1つ', async () => {
+      const restore = keepSettings();
+      const withEmpty = W.configText.replace('vcs:\n', "  # 社内 CA の証明書を使うときは、ここにファイルの場所を書く\n  ca_file: ''   # 今は使わない\nvcs:\n");
+      assert.notEqual(withEmpty, W.configText);
+      fs.writeFileSync(cfgFile(), withEmpty, 'utf8');
+      const v = await open('#view=settings');
+      try {
+        await settingsReady(v.page);
+        await tab(v.page, 'options');
+        await v.page.locator('#more > summary').click();
+        await v.page.locator('#f-par').fill('2');
+        await v.page.locator('#saveBtn').dblclick();
+        await v.page.locator('#dlg').waitFor({ state: 'visible' });
+        await v.page.waitForTimeout(500);
+        assert.equal(await v.page.locator('#dlg-body table.changes').count(), 1, '確認の表が2つ出た');
+        await v.page.locator('#dlgOk').click();
+        await waitText(v.page, '#toast', '保存しました');
+        assert.equal(fs.readFileSync(cfgFile(), 'utf8'), withEmpty.replace(/^parallel: \d+$/m, 'parallel: 2'), '空の ca_file の行か注釈が消えた');
+      } finally {
+        await v.close();
+        restore();
+      }
+    });
+
     test('REQ-102 設定：ファイルにない設定の項目は、既定の値から変えたときだけ足される', async () => {
       const restore = keepSettings();
       const line = (key) => W.configText.match(new RegExp(`^ *${key}: .*$`, 'm'))[0];

@@ -593,6 +593,18 @@ class SetupTest(CtCase):
         self.ok("set-verify", "--repo", str(repo), "--build-command", "make -j4 all", "--build-dir", "src")
         self.assertEqual(path.read_text(encoding="utf-8"), saved.replace("build_command: make all", "build_command: make -j4 all"))
 
+    def test_req102_set_verify_adds_only_values_that_differ_from_the_default(self) -> None:
+        """ファイルにない項目は、既定の値から変えたときだけ足す（空の環境設定のコマンドなどは足さない）"""
+        repo = self.git_repo("small", with_config=False)
+        self.ok("init-config", "--repo", str(repo), "--url", "https://cov.example.co.jp:8443", "--project", "Proj",
+                "--stream", STREAM, "--output-dir", str(self.tmp / "small-results"))
+        path = repo / ".coverity-triage" / "config.yaml"
+        small = f"# チームの設定\ncoverity:\n  url: https://cov.example.co.jp:8443   # 社内\nvcs:\n  type: git\noutput_dir: {self.tmp / 'small-results'}\n"
+        path.write_text(small, encoding="utf-8")
+        self.ok("set-verify", "--repo", str(repo), "--build-command", "make all", "--default", "build", "--no-initial")
+        self.assertEqual(path.read_text(encoding="utf-8"), small + "verify:\n  default: build\n  build_command: make all\n")
+        self.ok("doctor", "--repo", str(repo))
+
     def test_req102_set_verify_tells_when_the_comments_cannot_be_kept(self) -> None:
         """注釈を残せない書き方（「|」の値）なら、--check が lost と知らせの文を返し、書くときは全体を書き直す（値は正しい）"""
         repo = self.git_repo("block", with_config=False)

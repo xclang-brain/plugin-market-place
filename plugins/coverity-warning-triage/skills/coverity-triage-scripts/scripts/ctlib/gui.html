@@ -1340,11 +1340,15 @@ async function commentsNotice(c) {
     return null;  // the save itself tells what is wrong
   }
 }
+let saveSeq = 0;  // the save button pressed again while the server is asked: only the last one opens the dialog
 async function openSave() {
+  const seq = ++saveSeq;
   triedSave = true; markDirty();
   $$("[aria-invalid]").forEach((n) => n.removeAttribute("aria-invalid"));
   const errs = validate();
   const c = changes();
+  const notice = !errs.length && c.config.length && state.config_exists && !state.config_unreadable ? await commentsNotice(c) : null;
+  if (seq !== saveSeq) return;
   const body = $("#dlg-body"); body.replaceChildren();
   const ok = $("#dlgOk");
   if (errs.length) {
@@ -1362,10 +1366,7 @@ async function openSave() {
     if (c.config.length) {
       body.append(el("div", { class: "dlg-section" }, !state.config_exists ? "設定 config.yaml を作る" : state.config_unreadable ? "設定 config.yaml を置き換える" : "設定 config.yaml を変える"));
       if (state.config_unreadable) body.append(el("p", { class: "help" }, "今の config.yaml は読めないため、ファイル全体を次の値で書き直します。今のファイルにあった値は残りません（残すときは、保存しないで、メモ帳などでファイルを直してください）。"));
-      else if (state.config_exists) {
-        const notice = await commentsNotice(c);
-        if (notice) body.append(el("p", { class: "help", id: "dlg-comments" }, notice));
-      }
+      else if (notice) body.append(el("p", { class: "help", id: "dlg-comments" }, notice));
       body.append(table(c.config));
     }
     for (const f of c.filters) {

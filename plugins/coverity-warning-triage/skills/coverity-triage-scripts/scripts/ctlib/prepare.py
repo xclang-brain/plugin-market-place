@@ -386,16 +386,20 @@ def set_verify(repo_root: str, default: str, setup_command: str, build_command: 
     repo = resolve_path(repo_root)
     path = repo / CONFIG_DIR / CONFIG_FILE
     text = read_text(path)
-    header = "".join(line + "\n" for line in text.splitlines() if line.startswith("#"))
+    header = "".join(line + "\n" for line in text.removeprefix("\ufeff").splitlines() if line.startswith("#"))
     data = yaml.safe_load(text) or {}
-    verify = {**(data.get("verify") or {}), "default": default, "setup_command": setup_command,
-              "build_dir": build_dir, "build_command": build_command}
-    for key, value in (("cov_build_args", cov_build_args), ("cov_analyze_args", cov_analyze_args),
-                       ("initial", initial), ("cov_commit_args", cov_commit_args),
-                       ("timeout_minutes", timeout_minutes)):
-        if value is not None:
+    current = data.get("verify") if isinstance(data.get("verify"), dict) else {}
+    agreed = {"default": default, "setup_command": setup_command, "build_dir": build_dir, "build_command": build_command,
+              "cov_build_args": cov_build_args, "cov_analyze_args": cov_analyze_args, "initial": initial,
+              "cov_commit_args": cov_commit_args, "timeout_minutes": timeout_minutes}
+    defaults = VerifyConfig().model_dump()
+    verify = dict(current)
+    for key, value in agreed.items():
+        # a value not in the file is written only when it differs from the default (REQ-102)
+        if value is not None and (key in current or value != defaults.get(key)):
             verify[key] = value
-    data["verify"] = verify
+    if verify or "verify" in data:
+        data["verify"] = verify
     try:
         ProjectConfig.model_validate(data)
     except ValidationError as exc:

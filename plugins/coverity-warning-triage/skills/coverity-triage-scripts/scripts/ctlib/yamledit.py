@@ -5,19 +5,23 @@ Only the text of the values that change is replaced. Where a value is in the fil
 does not handle and for a result that does not pass the check; the caller then writes the file
 whole, as before (the comment lines at the top are kept, the other comments are lost).
 
-What is lost on purpose: the comments of a setting or a list value that is removed (the comment at
-the end of its line and the comment lines right above it). The check compares the old and the new
-text on their own (values read back, and every comment on the same element as before), not by
-following the steps of the rewrite."""
+A comment belongs to an element (a setting or a list value): the comment at the end of a line to the
+element of that line, a run of comment lines to the element of the next line with data. What is lost
+on purpose: the comments of a setting or a list value that is removed (the comment at the end of its
+line, and the run of comment lines right above it with no blank line between). A list value that
+moves (the list is put in another order) takes its comments along. The check compares the old and
+the new text on their own (values read back, and each comment on the same element, at the same
+place, as before), not by following the steps of the rewrite."""
 from __future__ import annotations
 
 import difflib
 from collections import Counter
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
 WIDE = 10 ** 9  # no folding of a value written in place
+BOM = "﻿"
 
 
 class Unsupported(Exception):
@@ -26,27 +30,29 @@ class Unsupported(Exception):
 
 def edit(text: str, new: dict[str, Any]) -> str | None:
     """``text`` with its values changed to ``new``, its comments kept; ``None`` when that cannot be done."""
+    bom = BOM if text.startswith(BOM) else ""
+    body = text[len(bom):]
     try:
-        if _unsupported(text):
+        if _unsupported(body):
             return None
-        root = yaml.compose(text)
+        root = yaml.compose(body)
         if not isinstance(root, yaml.MappingNode) or not isinstance(new, dict):
             return None
-        out = _Rewrite(text).run(root, new)
-        return out if check(text, out, new) else None
+        out = _Rewrite(body).run(root, new)
+        return bom + out if check(body, out, new) else None
     except (Unsupported, yaml.YAMLError, ValueError, TypeError, IndexError, KeyError, RecursionError):
         return None
 
 
 def has_comments(text: str) -> bool:
     """Whether writing the file whole would lose comments: a comment after the first line with data."""
+    text = text.removeprefix(BOM)
     try:
         found = _comments(text)
     except (yaml.YAMLError, ValueError):
         return "#" in text
     lines = text.splitlines()
-    data = [i for i, line in enumerate(lines)
-            if line.strip() and not (i in found and not line[:found[i][0]].strip())]
+    data = [i for i, line in enumerate(lines) if line.strip() and not _is_comment_line(lines, found, i)]
     if not data:
         return False  # only the lines at the top, which the whole rewrite keeps
     return any(i >= data[0] or not lines[i].startswith("#") for i in found)
@@ -56,9 +62,9 @@ def has_comments(text: str) -> bool:
 
 
 def _unsupported(text: str) -> bool:
-    """「|」「>」の値、「&」「*」、タグ、文書が2つ以上"""
-    if any(char in text for char in "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
-        return True  # line breaks that yaml and Python count differently
+    """「|」「>」の値、「&」「*」、タグ、文書が2つ以上、yaml と Python で数え方の違う改行"""
+    if any(char in text for char in "\r\x0b\x0c\x1c\x1d\x1e\x85  "):
+        return True
     documents = 0
     for token in yaml.scan(text):
         if isinstance(token, (yaml.AnchorToken, yaml.AliasToken, yaml.TagToken, yaml.DirectiveToken)):
@@ -79,7 +85,14 @@ def _value(node: yaml.Node) -> Any:
 
 
 def _same(a: Any, b: Any) -> bool:
-    return type(a) is type(b) and a == b
+    """Equal, and of the same types all the way down (True is not 1, 1.0 is not 1)."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    return a == b
 
 
 def _comments(text: str) -> dict[int, tuple[int, str]]:
@@ -101,6 +114,10 @@ def _comments(text: str) -> dict[int, tuple[int, str]]:
     return found
 
 
+def _is_comment_line(lines: list[str], comments: dict[int, tuple[int, str]], line: int) -> bool:
+    return line in comments and not lines[line][:comments[line][0]].strip()
+
+
 def _last_line(node: yaml.Node) -> int:
     """The last line that has text of ``node`` (the end mark of a block collection is on the next line)."""
     if isinstance(node, yaml.ScalarNode) or node.flow_style or not node.value:
@@ -110,7 +127,44 @@ def _last_line(node: yaml.Node) -> int:
     return _last_line(last[1] if isinstance(node, yaml.MappingNode) else last)
 
 
+def _pairs(old: list[Any], new: list[Any]) -> dict[int, int]:
+    """Which old list value each new one is (new index → old index); the others are new or removed.
+
+    Values that stay in order first, then the same value somewhere else (it moved), then, in a part that
+    was replaced, the values in their order (a value that was changed)."""
+    keys_old, keys_new = [repr(x) for x in old], [repr(x) for x in new]
+    blocks = difflib.SequenceMatcher(a=keys_old, b=keys_new, autojunk=False).get_opcodes()
+    pairs: dict[int, int] = {}
+    for tag, i1, i2, j1, j2 in blocks:
+        if tag == "equal":
+            pairs.update({j1 + k: i1 + k for k in range(i2 - i1)})
+    taken = set(pairs.values())
+    for j, key in enumerate(keys_new):
+        if j in pairs:
+            continue
+        i = next((i for i, other in enumerate(keys_old) if other == key and i not in taken), None)
+        if i is not None:
+            pairs[j] = i
+            taken.add(i)
+    for tag, i1, i2, j1, j2 in blocks:
+        if tag == "replace":
+            olds = [i for i in range(i1, i2) if i not in taken]
+            news = [j for j in range(j1, j2) if j not in pairs]
+            for i, j in zip(olds, news):
+                pairs[j] = i
+                taken.add(i)
+    return pairs
+
+
 # ---- rewriting ---------------------------------------------------------------------------------------
+
+
+class _Block(NamedTuple):
+    """The lines of one list value: [start, adjacent) blank lines and comment runs with a blank line after
+    them; [adjacent, end] the comment lines right above the value, and the value."""
+    start: int
+    adjacent: int
+    end: int
 
 
 class _Rewrite:
@@ -141,12 +195,14 @@ class _Rewrite:
     def line_start(self, line: int) -> int:
         return self.offs[min(line, len(self.lines))]
 
-    def _full_comment(self, line: int) -> bool:
-        return 0 <= line < len(self.lines) and line in self.comment_lines and not self.lines[line][:self.comment_lines[line][0]].strip()
+    def lines_text(self, first: int, last: int) -> str:
+        """Lines ``first`` to ``last``, ending with a line break (the last line of the file may have none)."""
+        text = self.text[self.line_start(first):self.line_start(last + 1)]
+        return text if not text or text.endswith("\n") else text + "\n"
 
     def top(self, line: int, floor: int) -> int:
         """The first of the comment lines right above ``line`` (no blank line between), not above ``floor``."""
-        while line - 1 > floor and self._full_comment(line - 1):
+        while line - 1 > floor and _is_comment_line(self.lines, self.comment_lines, line - 1):
             line -= 1
         return line
 
@@ -154,6 +210,8 @@ class _Rewrite:
 
     def _map(self, node: yaml.MappingNode, new: dict[str, Any], floor: int = -1) -> None:
         if node.flow_style:
+            if _same(_value(node), new):
+                return
             raise Unsupported("1行に書いたマップ")
         present: dict[str, tuple[yaml.Node, yaml.Node]] = {}
         for key, value in node.value:
@@ -193,10 +251,8 @@ class _Rewrite:
         start, end = self.pos(value.start_mark), self.pos(value.end_mark)
         text = _scalar(want)
         if start == end:  # 「キー:」だけで値がない
-            start = end = self.pos(key.end_mark)
-            rest = self.text[start:]
-            colon = rest.index(":")
-            start = end = start + colon + 1
+            after = self.pos(key.end_mark)
+            start = end = after + self.text[after:].index(":") + 1
             text = " " + text
         self.edits.append((start, end, text))
 
@@ -207,57 +263,70 @@ class _Rewrite:
         if any(not isinstance(item, yaml.ScalarNode) for item in items) or any(isinstance(x, (dict, list)) for x in want):
             raise Unsupported("リストの中のマップやリスト")
         old = [_value(item) for item in items]
-        if len(old) == len(want) and all(_same(a, b) for a, b in zip(old, want)):
+        if _same(old, want):
             return
         if seq.flow_style:
-            if items or not want:
-                self.edits.append((self.pos(seq.start_mark), self.pos(seq.end_mark), _scalar(want)))
-                return
-            # 「キー: []」に値を入れる：[] を消し、次の行から「- 値」で書く（キーの行の注釈は残る）
-            if seq.start_mark.line != key.start_mark.line:
-                raise Unsupported("[] がキーと別の行")
-            self.edits.append((self.pos(key.end_mark), self.pos(seq.end_mark), ":"))
-            at = self.line_start(key.start_mark.line + 1)
-            block = "".join(" " * (key.start_mark.column + 2) + "- " + _scalar(x) + "\n" for x in want)
-            if at == len(self.text) and not self.text.endswith("\n"):
-                block = "\n" + block
-            self.edits.append((at, at, block))
+            self._flow_list(key, seq, want)
             return
-        if not want:
-            # 空にする：「キー: []」にして、キーの行の終わりの注釈は残す
-            line = key.start_mark.line
-            note = self.comment_lines.get(line)
-            keep = "   " + note[1] if note and note[0] > key.end_mark.column else ""
-            if _last_line(key) != line:
-                raise Unsupported("キーが何行か")
-            self.edits.append((self.pos(key.end_mark), self.line_start(_last_line(seq) + 1), ": []" + keep + "\n"))
-            return
+        if _last_line(key) != key.start_mark.line or seq.start_mark.line == key.start_mark.line:
+            raise Unsupported("キーとリストの書き方")
         first_line = self.lines[items[0].start_mark.line]
         dash = first_line.index("-", 0, items[0].start_mark.column)
         gap = items[0].start_mark.column - dash
         if any(self.lines[item.start_mark.line][dash:dash + 1] != "-" for item in items):
             raise Unsupported("リストの字下げがそろっていない")
-        floor = key.start_mark.line
-        matcher = difflib.SequenceMatcher(a=[repr(x) for x in old], b=[repr(x) for x in want], autojunk=False)
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == "equal":
+        blocks, previous = [], key.start_mark.line
+        for item in items:
+            blocks.append(_Block(previous + 1, self.top(item.start_mark.line, previous), _last_line(item)))
+            previous = _last_line(item)
+        start, end = self.line_start(blocks[0].start), self.line_start(blocks[-1].end + 1)
+        pairs = _pairs(old, want)
+        kept = set(pairs.values())
+        # The comment runs with a blank line after them, of values that are removed, stay where they were:
+        # right before the next value that stays (or at the end of the list).
+        stays: dict[int | None, list[str]] = {}
+        for i, block in enumerate(blocks):
+            if i in kept or block.adjacent == block.start:
                 continue
-            if tag == "replace" and i2 - i1 == j2 - j1:
-                for k in range(i2 - i1):
-                    item = items[i1 + k]
-                    self.edits.append((self.pos(item.start_mark), self.pos(item.end_mark), _scalar(want[j1 + k])))
+            loose = self.lines_text(block.start, block.adjacent - 1)
+            if loose.strip():
+                following = next((k for k in range(i + 1, len(items)) if k in kept), None)
+                stays.setdefault(following, []).append(loose)
+        if not want:
+            # 空にする：「キー: []」にして、キーの行の終わりの注釈は残す
+            note = self.comment_lines.get(key.start_mark.line)
+            keep = "   " + note[1] if note and note[0] > key.end_mark.column else ""
+            self.edits.append((self.pos(key.end_mark), end, ": []" + keep + "\n" + "".join(stays.get(None, []))))
+            return
+        pieces: list[str] = []
+        for j, value in enumerate(want):
+            i = pairs.get(j)
+            if i is None:
+                pieces.append(" " * dash + "-" + " " * (gap - 1) + _scalar(value) + "\n")
                 continue
-            if tag in ("delete", "replace"):
-                for item in items[i1:i2]:
-                    start = self.top(item.start_mark.line, floor)
-                    self.edits.append((self.line_start(start), self.line_start(_last_line(item) + 1), ""))
-            if tag in ("insert", "replace"):
-                if i1 > 0:
-                    at = self.line_start(_last_line(items[i1 - 1]) + 1)
-                else:
-                    at = self.line_start(self.top(items[0].start_mark.line, floor))
-                block = "".join(" " * dash + "-" + " " * (gap - 1) + _scalar(x) + "\n" for x in want[j1:j2])
-                self.edits.append((at, at, block))
+            pieces.extend(stays.get(i, []))
+            block = self.lines_text(blocks[i].start, blocks[i].end)
+            if not _same(old[i], value):
+                base = self.line_start(blocks[i].start)
+                a, b = self.pos(items[i].start_mark) - base, self.pos(items[i].end_mark) - base
+                block = block[:a] + _scalar(value) + block[b:]
+            pieces.append(block)
+        pieces.extend(stays.get(None, []))
+        self.edits.append((start, end, "".join(pieces)))
+
+    def _flow_list(self, key: yaml.Node, seq: yaml.SequenceNode, want: list[Any]) -> None:
+        if seq.value or not want:
+            self.edits.append((self.pos(seq.start_mark), self.pos(seq.end_mark), _scalar(want)))
+            return
+        # 「キー: []」に値を入れる：[] を消し、次の行から「- 値」で書く（キーの行の注釈は残る）
+        if seq.start_mark.line != key.start_mark.line or seq.end_mark.line != key.start_mark.line:
+            raise Unsupported("[] がキーと別の行")
+        self.edits.append((self.pos(key.end_mark), self.pos(seq.end_mark), ":"))
+        at = self.line_start(key.start_mark.line + 1)
+        block = "".join(" " * (key.start_mark.column + 2) + "- " + _scalar(x) + "\n" for x in want)
+        if at == len(self.text) and not self.text.endswith("\n"):
+            block = "\n" + block
+        self.edits.append((at, at, block))
 
 
 def _scalar(value: Any) -> str:
@@ -280,35 +349,69 @@ def _block(name: str, value: Any, indent: int) -> str:
 
 
 def check(old_text: str, new_text: str, new: dict[str, Any]) -> bool:
-    """The new text reads back as ``new``, and each comment is where it was.
+    """The new text reads back as ``new`` (same types, no key twice), and each comment is where it was.
 
-    A comment is on an element (a setting or a list value): the comment at the end of a line is on the
-    element of that line, a comment line is on the element of the next line with data. Each comment of an
-    element that is still there must be on that same element, with nothing between (a list value is
-    followed by its position in the new list). The comments of removed elements may go; their comment lines
-    may also stay. No other comment may come in."""
-    if yaml.safe_load(new_text) != new or _unsupported(new_text):
+    A comment at the end of a line must be at the end of the line of the same element. A comment line must
+    be above the same element, at the same place in its run of comment lines, with or without a blank
+    line before that element as before. The comments of a removed element go: the one at the end of its
+    line, and the run right above it. A run with a blank line after it stays, above the next element that
+    stays. A list value is followed to its place in the new list. Nothing else may change."""
+    old_text, new_text = old_text.removeprefix(BOM), new_text.removeprefix(BOM)
+    if _unsupported(new_text) or not _same(yaml.safe_load(new_text), new):
         return False
     old_root, new_root = yaml.compose(old_text), yaml.compose(new_text)
+    if _twice(new_root):
+        return False
     moves = _moves(old_root, new)
     expected: Counter = Counter()
-    allowed: Counter = Counter()
-    for kind, note, where in _notes(old_text, old_root):
-        target = _follow(where, moves, new)
-        (expected if target is not None else allowed)[(kind, note, target)] += 1
-    found = Counter(_notes(new_text, new_root))
-    for entry, count in expected.items():
-        if found[entry] < count:
-            return False
-        found[entry] -= count
-    # What is left may only be comment lines of removed elements that stayed where they were (a comment line
-    # with a blank line between it and the removed setting is not right above it, and is not removed with it).
-    # A comment at the end of a removed line cannot stay: it would be on another line.
-    left = Counter({(kind, note): n for (kind, note, _), n in found.items() if n > 0})
-    gone = Counter()
-    for (kind, note, _), n in allowed.items():
-        gone[(kind, note)] += n
-    return all(kind == "line" and gone[(kind, note)] >= n for (kind, note), n in left.items())
+    for note in _notes(old_text, old_root):
+        if note.kind == "end":
+            target = _follow(note.owners[0], moves, new)
+            if target is not None:
+                expected[("end", note.text, target, False, 0)] += 1
+            continue
+        target = _follow(note.owners[0], moves, new) if note.owners else ("end",)
+        if target is None:
+            if note.adjacent:
+                continue  # the run right above a removed element goes with it
+            target = next((t for t in (_follow(o, moves, new) for o in note.owners[1:]) if t is not None), ("end",))
+        expected[("line", note.text, target, note.adjacent, note.depth)] += 1
+    found = Counter((note.kind, note.text, note.owners[0] if note.owners else ("end",),
+                     note.adjacent if note.kind == "line" else False, note.depth)
+                    for note in _notes(new_text, new_root))
+    return found == expected
+
+
+class _Note(NamedTuple):
+    kind: str  # "end": at the end of a line; "line": a comment line
+    text: str
+    owners: tuple  # the element of the line ("end"), or of each line with data after it, in order ("line")
+    adjacent: bool  # a comment line: no blank line between its run and the next line with data
+    depth: int  # a comment line: how many comment lines of its run are below it
+
+
+def _notes(text: str, root: yaml.Node) -> list[_Note]:
+    comments = _comments(text)
+    lines = text.splitlines()
+    owners = _owners(root)
+    data = [n for n in range(len(lines)) if lines[n].strip() and not _is_comment_line(lines, comments, n)]
+    notes = []
+    for line, (_, note) in sorted(comments.items()):
+        if not _is_comment_line(lines, comments, line):
+            notes.append(_Note("end", note, (owners.get(line, ("?", line)),), False, 0))
+            continue
+        below = line
+        while _is_comment_line(lines, comments, below + 1):
+            below += 1
+        after = []
+        for n in data:
+            if n > below:
+                owner = owners.get(n, ("?", n))
+                if not after or after[-1] != owner:
+                    after.append(owner)
+        adjacent = below + 1 < len(lines) and bool(lines[below + 1].strip())
+        notes.append(_Note("line", note, tuple(after), adjacent, below - line))
+    return notes
 
 
 def _owners(root: yaml.Node) -> dict[int, tuple]:
@@ -342,20 +445,14 @@ def _owners(root: yaml.Node) -> dict[int, tuple]:
     return owners
 
 
-def _notes(text: str, root: yaml.Node) -> list[tuple[str, str, tuple]]:
-    """(kind, comment, the element it is on). kind: "end" (end of a line) or "line" (a comment line)."""
-    comments = _comments(text)
-    lines = text.splitlines()
-    owners = _owners(root)
-    notes = []
-    for line, (col, note) in sorted(comments.items()):
-        if lines[line][:col].strip():
-            notes.append(("end", note, owners.get(line, ("?", line))))
-            continue
-        nxt = next((n for n in range(line + 1, len(lines))
-                    if lines[n].strip() and not (n in comments and not lines[n][:comments[n][0]].strip())), None)
-        notes.append(("line", note, owners.get(nxt, ("end",)) if nxt is not None else ("end",)))
-    return notes
+def _twice(root: yaml.Node) -> bool:
+    """A key written twice in one map (the reader takes the last; a person reads the first)."""
+    if isinstance(root, yaml.MappingNode):
+        names = [key.value for key, _ in root.value]
+        return len(names) != len(set(names)) or any(_twice(value) for _, value in root.value)
+    if isinstance(root, yaml.SequenceNode):
+        return any(_twice(item) for item in root.value)
+    return False
 
 
 def _moves(old_root: yaml.Node, new: Any) -> dict[tuple, tuple | None]:
@@ -368,12 +465,9 @@ def _moves(old_root: yaml.Node, new: Any) -> dict[tuple, tuple | None]:
                 if key.value in want:
                     walk(value, want[key.value], path + (("k", key.value),))
         elif isinstance(node, yaml.SequenceNode) and isinstance(want, list):
-            old = [repr(_value(item)) for item in node.value]
-            matcher = difflib.SequenceMatcher(a=old, b=[repr(x) for x in want], autojunk=False)
-            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-                same = tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1)
-                for k in range(i2 - i1):
-                    moves[path + (("i", i1 + k),)] = path + (("i", j1 + k),) if same else None
+            back = {i: j for j, i in _pairs([_value(item) for item in node.value], want).items()}
+            for i in range(len(node.value)):
+                moves[path + (("i", i),)] = path + (("i", back[i]),) if i in back else None
 
     walk(old_root, new, ())
     return moves

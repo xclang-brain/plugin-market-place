@@ -406,7 +406,8 @@ def _config_header(path: Path) -> str:
 
     A file that cannot be read as UTF-8 is replaced whole (the screen showed the defaults for it)."""
     try:
-        kept = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("#")]
+        text = path.read_text(encoding="utf-8").removeprefix("\ufeff")  # a BOM before the first comment line
+        kept = [line for line in text.splitlines() if line.startswith("#")]
     except (OSError, UnicodeDecodeError):
         kept = []
     return "".join(line + "\n" for line in kept) if kept else prepare.CONFIG_HEADER
@@ -432,6 +433,23 @@ def _only_changed(full: dict[str, Any], raw: dict[str, Any], default: dict[str, 
     return out
 
 
+def _keep_unchanged(target: dict[str, Any], raw: dict[str, Any], same, at: tuple[str, ...] = ()) -> None:
+    """Settings in the file that the screen leaves out when it writes the whole file (an empty ca_file or
+    fake_data, base_branch and branch_prefix with svn) stay as they are written, when they mean the same:
+    the person did not remove them (their comments stay too)."""
+    node = target
+    for name in at:
+        node = node[name]
+    for key, value in raw.items():
+        if key in node:
+            if isinstance(node[key], dict) and isinstance(value, dict):
+                _keep_unchanged(target, value, same, at + (key,))
+            continue
+        node[key] = value
+        if not same(target):
+            del node[key]
+
+
 def config_text(path: Path, config: ProjectConfig) -> tuple[str, str]:
     """The new config.yaml, and what becomes of its comments (REQ-102).
 
@@ -448,13 +466,21 @@ def config_text(path: Path, config: ProjectConfig) -> tuple[str, str]:
         return whole, "kept"
     if not isinstance(raw, dict):
         return whole, "kept"
-    target = _only_changed(full, raw, _config_yaml(ProjectConfig.model_validate(
-        {"coverity": {"url": config.coverity.url}, "vcs": {"type": config.vcs.type}})))
-    try:
-        same = _config_yaml(ProjectConfig.model_validate(target)) == full
-    except ValidationError:
-        same = False
-    out = yamledit.edit(text, target if same else full)
+
+    def same(candidate: dict[str, Any]) -> bool:  # read back, it is the config to save
+        try:
+            return _config_yaml(ProjectConfig.model_validate(candidate)) == full
+        except ValidationError:
+            return False
+
+    default = _config_yaml(ProjectConfig.model_validate({"coverity": {"url": ""}, "vcs": {"type": config.vcs.type}}))
+    del default["coverity"]["url"], default["vcs"]["type"]  # required: always written
+    target = _only_changed(full, raw, default)
+    if same(target):
+        _keep_unchanged(target, raw, same)
+    else:
+        target = full
+    out = yamledit.edit(text, target)
     if out is not None:
         return out, "kept"
     return whole, "lost" if yamledit.has_comments(text) else "kept"
