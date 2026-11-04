@@ -1,242 +1,321 @@
-import { LIMITS } from './constants.mjs';
-import { callWithTimeout, clone } from './util.mjs';
-import { isActiveAgent, slotByName, slotNameForType, slotNameOf, syncSlot, currentIteration, roleForType } from './run.mjs';
-import { roleOfAgentType } from './analysis.mjs';
-import { logEntry } from './log.mjs';
-import { requestClose } from './lifecycle.mjs';
+// Copilot CLI のイベントを、実行の記録にする。
+// - だれが動いているか（統括・作業・検証・その他）と、待っていること（質問・許可。実行の前や後でも示す）
+// - くわしい記録の行（ツールの呼び出しを、ふつうの言葉にしたもの）
+// - 作業エージェントと検証エージェントの返事（フック onSubagentStop で届く）。試行の記録に入れない返事も、理由を付けて events.jsonl に残す
+// エージェントの役は、名前が設定の作業エージェント・検証エージェントと同じかどうかだけで決める。
 
-// つなぎ口から届く中立のイベント（BLUEPRINT 3.1）を、実行の状態に反映する（4.4、4.5、4.14、6.1）。
-// handleEvent は順番待ちの列の中で、1 件ずつ動く。
+import { IGNORED, TOOL_PREFIX } from './messages.mjs';
+import { sameAgent, text } from './store.mjs';
 
-const EXTENSION_PERMISSION_KINDS = new Set(['extension-permission-access', 'extension-env-access']);
+export const WHO = Object.freeze({ orchestrator: '統括', worker: '作業', verifier: '検証', other: 'その他', user: '利用者' });
+const ROLE_NAME = { orchestrator: '統括エージェント', worker: '作業エージェント', verifier: '検証エージェント' };
+const RECORD_NAME = { open: 'Web管理画面を開く', prepare: '準備', plan: '計画', study: '評価', finish: '終わり', issue: 'Issue' };
+// くわしい記録に出さない、細かいツール
+const QUIET = new Set(['report_intent', 'read_bash', 'list_bash', 'read_powershell', 'list_powershell', 'read_agent', 'list_agents', 'think']);
+const MAX_LINE = 160;
+const MAX_COMMAND = 1000;
+const MAX_QUESTION = 400;
+const MAX_CALLS = 500;
 
-function activeRun(ctx) {
-  const run = ctx.run;
-  return run && run.status !== 'finished' ? run : null;
+const oneLine = (value) => {
+  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > MAX_LINE ? `${s.slice(0, MAX_LINE)}…` : s;
+};
+// コマンドの文は、長くても頭と終わり（動かしたものの名前と引数）を残す。画面では、さらに真ん中を省いて見せる
+const commandLine = (value) => {
+  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (s.length <= MAX_COMMAND) return s;
+  const half = Math.floor((MAX_COMMAND - 1) / 2);
+  return `${s.slice(0, half)}…${s.slice(-half)}`;
+};
+// 質問の文は、行の区切りを残す（長いものは切る）
+const question = (value) => {
+  const s = String(value ?? '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  return s.length > MAX_QUESTION ? `${s.slice(0, MAX_QUESTION)}…` : s;
+};
+const argsOf = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+
+// パッチの文の中の、ファイルの行（*** Add File: など）
+const PATCH_FILE = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to):[ \t]*(.+?)[ \t]*$/gm;
+
+/** ファイルを直すツール（edit・create・apply_patch）が変えるファイルのパス。ほかのツールなら空の配列 */
+export function editedPaths(name, rawArgs) {
+  const a = argsOf(rawArgs);
+  if (name !== 'edit' && name !== 'create' && name !== 'apply_patch') return [];
+  if (text(a.path)) return [text(a.path)];
+  if (name !== 'apply_patch') return [];
+  const patch = typeof rawArgs === 'string' ? rawArgs : typeof a.input === 'string' ? a.input : typeof a.patch === 'string' ? a.patch : '';
+  return [...new Set([...patch.matchAll(PATCH_FILE)].map((m) => m[1]))];
 }
 
-function logEvent(ctx, run, e, at, patch = null) {
-  logEntry(ctx, run, { t: 'event', at, e: patch ? { ...e, ...patch } : e });
+/**
+ * 子のエージェントが終わったときの、くわしい記録の行。
+ * cancelled は、返事をせずに途中で切られた印（「止める」で止めたときなど）。返事をしたとは書かない
+ */
+function endLine(role, type, data, run) {
+  const name = ROLE_NAME[role] ?? 'エージェント';
+  if (type === 'subagent.failed') return `${name}が失敗しました：${oneLine(data.error?.message ?? data.error)}`;
+  if (data.cancelled === true) return `${name}は途中で止まりました${run.status === 'stopping' ? '（利用者が止めたため）' : ''}`;
+  return `${name}が返事をしました`;
 }
 
-// どの実行の根でもない統括、または拒む一覧のエージェントの子を取り消す。同じ番号は 1 回だけ。
-export function cancelStray(ctx, agentId) {
-  ctx.deny.add(agentId);
-  if (ctx.strayHandled.has(agentId)) return;
-  ctx.strayHandled.add(agentId);
-  ctx.queue
-    .enqueue(() => callWithTimeout(ctx.clock, () => ctx.port.cancelAgent(agentId), LIMITS.CALL_TIMEOUT_MS))
-    .catch(() => {});
-}
+/**
+ * @param {object} options
+ * @param {Function} [options.onStopped] 止めている実行を、終わりの知らせ（session.idle）で終えたときに呼ぶ
+ */
+export function createEventSink({ store, onStopped = () => {} }) {
+  const calls = new Map(); // ツールの呼び出しの番号 → くわしい記録の行（失敗の印を付けるため）
+  const edits = new Map(); // ファイルを直すツールの呼び出しの番号 → 変えるファイルのパス
 
-function addToTree(ctx, run, e, at) {
-  const parent = run.tree.get(e.parentAgentId);
-  const ownRole = roleOfAgentType(e.agentType, ctx.pluginName);
-  const slotName = slotNameForType(ctx, e.agentType);
-  const rec = {
-    agentId: e.agentId,
-    parentId: e.parentAgentId,
-    agentType: e.agentType ?? '',
-    slotName,
-    role: roleForType(ctx, e.agentType, parent),
-    status: 'running',
-    description: e.description ?? '',
-    model: e.model ?? '',
-    startedAt: at,
-    lastEventAt: at,
-    reply: null,
+  // s は、作業・検証エージェントの名前を持つもの（実行か設定）
+  function roleOf(agentType, s = store.activeRun() ?? store.settings) {
+    if (sameAgent(agentType, s.worker)) return 'worker';
+    if (sameAgent(agentType, s.verifier)) return 'verifier';
+    return 'other';
+  }
+  const roleOfEvent = (event) => (event.agentId ? store.live.agents.get(event.agentId)?.role ?? 'other' : 'orchestrator');
+  const targetName = (agentType) => {
+    const role = roleOf(agentType);
+    return ROLE_NAME[role] ?? `エージェント「${oneLine(agentType) || '名前なし'}」`;
   };
-  run.tree.set(e.agentId, rec);
-  if (slotName) {
-    const slot = slotByName(run, slotName);
-    slot.agentId = e.agentId;
-    syncSlot(run, rec);
-  }
-  const it = currentIteration(run);
-  if (it && (ownRole === 'worker' || ownRole === 'verifier')) {
-    it.agentIds.push(e.agentId);
-    if (ownRole === 'worker') it.workerIds.push(e.agentId);
-  }
-  if (run.status === 'stopping') ctx.deny.add(e.agentId);
-  logEntry(ctx, run, { t: 'tree', at, agentIds: [e.agentId] });
-}
 
-function onAgentStarted(ctx, e, at) {
-  const run = ctx.run;
-  const { agentId, parentAgentId } = e;
-  // どの実行の根でもない統括は、遅れて起動したもの。取り消して、拒む一覧に入れる（4.3）
-  if (e.agentType === `${ctx.pluginName}:orchestrator` && !ctx.knownRoots.has(agentId)) {
-    cancelStray(ctx, agentId);
-    return;
+  /**
+   * ツールの呼び出しを、ふつうの言葉の1行にする。出さないものは null。
+   * コマンドに説明（description）があれば、行には説明を出し、コマンドの全文は extra.command に残す（画面では title に出す）
+   */
+  function describeTool(name, rawArgs) {
+    if (name === 'bash' || name === 'powershell') {
+      const a = argsOf(rawArgs);
+      const command = commandLine(a.command);
+      const description = oneLine(a.description);
+      if (!description) return { text: `コマンドを実行：${command}` };
+      return { text: `コマンドを実行：${description}`, extra: command ? { command } : undefined };
+    }
+    const line = toolLine(name, rawArgs);
+    return line === null ? null : { text: line };
   }
-  if (!run || run.status === 'finished') {
-    if (parentAgentId && ctx.deny.has(parentAgentId)) ctx.deny.add(agentId);
-    return;
-  }
-  if (agentId === run.rootId) {
-    const rec = run.tree.get(agentId);
-    rec.status = rec.status === 'waiting' ? 'waiting' : 'running';
-    rec.model = e.model ?? rec.model;
-    rec.description = e.description || rec.description;
-    rec.lastEventAt = at;
-    syncSlot(run, rec);
-    logEvent(ctx, run, e, at);
-    return;
-  }
-  if (parentAgentId && run.tree.has(parentAgentId)) {
-    addToTree(ctx, run, e, at);
-    logEvent(ctx, run, e, at);
-    return;
-  }
-  if (parentAgentId && ctx.deny.has(parentAgentId)) ctx.deny.add(agentId);
-}
 
-function onAgentConfigured(ctx, e, at) {
-  const run = activeRun(ctx);
-  const rec = run?.tree.get(e.agentId);
-  if (!rec) return;
-  if (e.model) rec.model = e.model;
-  rec.lastEventAt = at;
-  syncSlot(run, rec);
-  logEvent(ctx, run, e, at);
-}
-
-function dropWaitsOf(run, agentId) {
-  run.waits = run.waits.filter((w) => w.agentId !== agentId);
-}
-
-function onAgentEnded(ctx, e, at, kind) {
-  const run = activeRun(ctx);
-  const rec = run?.tree.get(e.agentId);
-  if (!rec) return;
-  logEvent(ctx, run, e, at);
-  rec.lastEventAt = at;
-  const stopping = run.status === 'stopping';
-  if (kind === 'completed') {
-    if (e.response != null) rec.reply = String(e.response);
-    rec.status = e.cancelled || stopping ? 'stopped' : 'completed';
-  } else if (kind === 'failed') {
-    rec.error = e.error ?? '';
-    rec.status = stopping ? 'stopped' : 'failed';
-  } else if (isActiveAgent(rec)) {
-    rec.status = 'completed'; // 手番を終えて待ちに入った
-  }
-  dropWaitsOf(run, e.agentId);
-  syncSlot(run, rec);
-  if (e.agentId !== run.rootId) return;
-  const cause = kind === 'failed' ? 'failed' : kind === 'completed' && e.cancelled ? 'cancelled' : 'ended';
-  rootEnded(ctx, run, cause, kind === 'failed' ? String(e.error ?? '') : '');
-}
-
-// 統括が終わった（4.8、6.1）。終わった理由を決めて、実行を終える。
-function rootEnded(ctx, run, cause, message) {
-  if (run.closeRequested || run.closing || run.status === 'stopping' || run.status === 'finished') return;
-  if (run.status === 'summarizing') {
-    // まとめ中は、きっかけによらず、合否の記録で決める。まとめの記録がなければ、課題に入る（4.10）
-    run.pendingEnd = { kind: run.outcome, detail: null };
-    run.rootEndCause = { cause, message, creditLimit: Boolean(run.limit && (!run.limit.answered || run.limit.action === 'cancel')) };
-  } else {
-    let detail;
-    const creditLimit = run.limit && (!run.limit.answered || run.limit.action === 'cancel');
-    if (creditLimit) detail = 'credit_limit';
-    else if (cause === 'failed') detail = 'orchestrator_failed';
-    else if (cause === 'cancelled') detail = 'chat_interrupted';
-    else detail = 'orchestrator_ended';
-    run.pendingEnd = { kind: 'aborted', detail, ...(message ? { message } : {}) };
-  }
-  requestClose(ctx, run, { userStop: false });
-}
-
-function onToolEvent(ctx, e, at) {
-  const run = activeRun(ctx);
-  const rec = run?.tree.get(e.agentId);
-  if (!rec) return;
-  rec.lastEventAt = at;
-  syncSlot(run, rec);
-  logEvent(ctx, run, e, at);
-}
-
-function waitTarget(run, agentId) {
-  let cur = run.tree.get(agentId);
-  const seen = new Set();
-  while (cur && !seen.has(cur.agentId)) {
-    if (cur.slotName) return cur;
-    seen.add(cur.agentId);
-    cur = cur.parentId ? run.tree.get(cur.parentId) : null;
-  }
-  return run.tree.get(agentId) ?? null;
-}
-
-// 確認の待ち（4.14）。この実行の木のエージェントの待ちだけを「待ち」にする。
-function onWaitStarted(ctx, e, at) {
-  const run = ctx.run;
-  if (!run || (run.status !== 'running' && run.status !== 'summarizing')) return;
-  if (e.resolvedByHook) return; // ほかのフックが答えを決めた。チャットの確認が出ない
-  const detail = e.detail ?? {};
-  if (EXTENSION_PERMISSION_KINDS.has(detail.permissionKind) || EXTENSION_PERMISSION_KINDS.has(detail.toolKind)) return;
-  if (e.agentId != null && !run.tree.has(e.agentId)) return; // チャットでのほかの作業
-  if (e.agentId == null && e.kind !== 'limit') return; // メインのエージェント自身の確認
-  if (run.waits.some((w) => w.requestId === e.requestId)) return;
-  const slot = e.agentId != null ? slotNameOf(run, e.agentId) : null;
-  const safeDetail = clone(detail);
-  // サンドボックスの外に出さず、記録だけにして中で動かし直す求めは、「サンドボックスの外」と示さない（R2 #13）
-  if (safeDetail.sandboxPermissive) safeDetail.sandboxBypass = false;
-  run.waits.push({ requestId: e.requestId, agentId: e.agentId ?? null, slot, kind: e.kind, detail: safeDetail });
-  if (e.kind === 'limit') run.limit = { requestId: e.requestId, answered: false, action: null };
-  if (e.agentId != null) {
-    const target = waitTarget(run, e.agentId);
-    if (target && isActiveAgent(target)) target.status = 'waiting';
-    const rec = run.tree.get(e.agentId);
-    rec.lastEventAt = at;
-    if (target) syncSlot(run, target);
-  }
-  logEvent(ctx, run, e, at);
-}
-
-function onWaitEnded(ctx, e, at) {
-  const run = ctx.run;
-  if (!run || run.status === 'finished') return;
-  const index = run.waits.findIndex((w) => w.requestId === e.requestId);
-  if (index < 0) return;
-  const [wait] = run.waits.splice(index, 1);
-  if (wait.kind === 'limit' && run.limit && run.limit.requestId === wait.requestId) {
-    run.limit.answered = true;
-    run.limit.action = e.action ?? null;
-  }
-  if (wait.agentId != null) {
-    const target = waitTarget(run, wait.agentId);
-    if (target) {
-      const still = run.waits.some((w) => w.agentId != null && waitTarget(run, w.agentId) === target);
-      if (!still && target.status === 'waiting') target.status = 'running';
-      target.lastEventAt = at;
-      syncSlot(run, target);
+  /** コマンドのほかのツールの行 */
+  function toolLine(name, rawArgs) {
+    const a = argsOf(rawArgs);
+    switch (name) {
+      case 'write_bash':
+      case 'write_powershell':
+        return 'コマンドに入力';
+      case 'stop_bash':
+      case 'stop_powershell':
+        return 'コマンドを止める';
+      case 'view':
+        return `ファイルを読む：${oneLine(a.path)}`;
+      case 'edit':
+      case 'create':
+        return `ファイルを直す：${oneLine(a.path)}`;
+      case 'apply_patch': {
+        const paths = editedPaths(name, rawArgs);
+        return `ファイルを直す：${paths.length ? oneLine(paths.join('、')) : '（パッチ）'}`;
+      }
+      case 'grep':
+      case 'glob':
+      case 'rg':
+        return `探す：${oneLine(a.pattern ?? a.query)}`;
+      case 'skill':
+        return `スキルを使う：${oneLine(a.skill ?? a.name)}`;
+      case 'task':
+        return `${targetName(a.agent_type ?? a.agentType)}に頼む：${oneLine(a.description)}`;
+      case 'ask_user':
+        return '利用者に質問';
+      default:
+        if (name.startsWith(TOOL_PREFIX)) return `記録：${RECORD_NAME[name.slice(TOOL_PREFIX.length)] ?? name.slice(TOOL_PREFIX.length)}`;
+        return QUIET.has(name) || name === '' ? null : `ツールを使う：${oneLine(name)}`;
     }
   }
-  logEvent(ctx, run, e, at, { agentId: wait.agentId });
-}
 
-export function handleEvent(ctx, e) {
-  if (!e || typeof e.type !== 'string') return;
-  const at = Number.isFinite(e.at) ? e.at : ctx.clock.now();
-  switch (e.type) {
-    case 'agent.started':
-      return onAgentStarted(ctx, e, at);
-    case 'agent.configured':
-      return onAgentConfigured(ctx, e, at);
-    case 'agent.completed':
-      return onAgentEnded(ctx, e, at, 'completed');
-    case 'agent.failed':
-      return onAgentEnded(ctx, e, at, 'failed');
-    case 'agent.idle':
-      return onAgentEnded(ctx, e, at, 'idle');
-    case 'tool.started':
-    case 'tool.completed':
-      return onToolEvent(ctx, e, at);
-    case 'wait.started':
-      return onWaitStarted(ctx, e, at);
-    case 'wait.ended':
-      return onWaitEnded(ctx, e, at);
-    default:
-      return undefined;
+  /** 図で光らせるエージェント：最後に始まって終わっていない子、なければ動いている統括 */
+  function updateActive() {
+    const run = store.activeRun();
+    if (!run) return;
+    const agents = [...store.live.agents.values()];
+    const last = agents[agents.length - 1];
+    const next = last ? { role: last.role, since: last.since } : store.live.mainSince ? { role: 'orchestrator', since: store.live.mainSince } : null;
+    if (JSON.stringify(next) !== JSON.stringify(run.active)) {
+      run.active = next;
+      store.changed();
+    }
   }
+
+  // いまの試行で、検証エージェントを呼んだかの印。評価の記録の後に呼んだときは、評価の側に付ける
+  function markVerifierCalled() {
+    const it = store.current();
+    if (!it) return;
+    if (it.study) it.study.verifierCalled = true;
+    else it._verifierCalled = true;
+  }
+
+  function onEvent(event) {
+    try {
+      if (!event || typeof event.type !== 'string') return;
+      const data = argsOf(event.data);
+      const at = Number.isFinite(Date.parse(event.timestamp)) ? new Date(event.timestamp).toISOString() : store.iso();
+      const run = store.activeRun();
+      switch (event.type) {
+        case 'subagent.started': {
+          if (!event.agentId) break;
+          const role = roleOf(text(data.agentType) || data.agentName);
+          store.live.agents.set(event.agentId, { role, since: at });
+          if (role === 'verifier') markVerifierCalled();
+          break;
+        }
+        case 'subagent.completed':
+        case 'subagent.failed': {
+          const agent = store.live.agents.get(event.agentId);
+          store.live.agents.delete(event.agentId);
+          if (agent && run) store.activity(WHO[agent.role], endLine(agent.role, event.type, data, run));
+          break;
+        }
+        case 'assistant.turn_start':
+        case 'user.message':
+          if (!event.agentId) store.live.mainSince ??= at;
+          break;
+        case 'assistant.message':
+          if (!event.agentId) {
+            store.live.mainSince ??= at;
+            if (run && text(data.content)) store.activity(WHO.orchestrator, `チャットに書く：${oneLine(data.content)}`);
+          }
+          break;
+        case 'tool.execution_start': {
+          if (!event.agentId) store.live.mainSince ??= at;
+          const paths = run ? editedPaths(text(data.toolName), data.arguments) : [];
+          if (paths.length) {
+            store.noteFiles(paths, 'pending');
+            if (data.toolCallId) {
+              edits.set(data.toolCallId, paths);
+              if (edits.size > MAX_CALLS) edits.delete(edits.keys().next().value);
+            }
+          }
+          const line = run ? describeTool(text(data.toolName), data.arguments) : null;
+          if (line) {
+            const entry = store.activity(WHO[roleOfEvent(event)], line.text, line.extra);
+            if (entry && data.toolCallId) {
+              calls.set(data.toolCallId, entry);
+              if (calls.size > MAX_CALLS) calls.delete(calls.keys().next().value);
+            }
+          }
+          break;
+        }
+        case 'tool.execution_complete': {
+          const edited = edits.get(data.toolCallId);
+          edits.delete(data.toolCallId);
+          if (edited) store.noteFiles(edited, data.success === false ? 'failed' : 'ok');
+          const entry = calls.get(data.toolCallId);
+          calls.delete(data.toolCallId);
+          if (entry) {
+            const exitCode = data.shellExecution?.exitCode;
+            const denied = data.error?.code === 'denied' || /denied/i.test(String(data.error?.message ?? data.error ?? ''));
+            if (data.success === false && denied) {
+              entry.text += '（断りました）';
+              store.log('denied', { tool: entry.text, reason: String(data.error?.message ?? data.error ?? '').slice(0, 300) });
+              store.changed();
+            } else if (data.success === false) {
+              entry.text += '（失敗）';
+              store.changed();
+            } else if (typeof exitCode === 'number' && exitCode !== 0) {
+              entry.text += `（失敗：終了コード ${exitCode}）`;
+              store.changed();
+            }
+          }
+          break;
+        }
+        // ask_user の質問。Copilot CLI の版によって、user_input と elicitation のどちらかで届く
+        case 'user_input.requested':
+          store.setWaiting(data.requestId, { kind: 'question', text: question(data.question) });
+          break;
+        case 'elicitation.requested':
+          store.setWaiting(data.requestId, { kind: 'question', text: question(data.message) });
+          break;
+        case 'permission.requested': {
+          if (data.resolvedByHook) break;
+          const r = argsOf(data.permissionRequest);
+          const what = r.fullCommandText ?? r.fileName ?? r.path ?? r.url ?? r.toolName ?? r.intention ?? r.kind;
+          store.setWaiting(data.requestId, { kind: 'permission', text: oneLine(what) });
+          break;
+        }
+        case 'user_input.completed':
+        case 'elicitation.completed':
+        case 'permission.completed':
+          if (store.pending.size > 0) store.setWaiting(data.requestId, null);
+          break;
+        case 'session.error':
+          if (run) store.activity(WHO.other, `エラー：${oneLine(data.message)}`);
+          break;
+        case 'session.idle':
+          if (event.agentId) break; // セッション全体が止まったときだけを見る
+          store.live.mainSince = null;
+          store.live.agents.clear();
+          if (store.pending.size > 0) store.setWaiting(null, null);
+          if (run?.status === 'stopping' && store.finishStopped()) onStopped();
+          break;
+        default:
+          return;
+      }
+      updateActive();
+    } catch (error) {
+      console.error('[Web管理画面] イベントを記録できませんでした：', error);
+    }
+  }
+
+  /**
+   * 子のエージェントが手番を終えたときの返事。作業の報告と、検証の返事を記録する。
+   * 試行の記録に入れない返事も、捨てずに events.jsonl に ignored: true と理由を付けて残す
+   * （下書きのときの準備の確認は、統括エージェントが prepare で記録するので除く）
+   */
+  function onSubagentStop(input) {
+    try {
+      const response = typeof input?.response === 'string' ? input.response : '';
+      if (!response) return undefined;
+      const agentType = text(input.agentType) || input.agentName;
+      const run = store.activeRun();
+      if (!run) {
+        // 終わった実行の後に届いた返事。新しい下書き（open の後）があれば、その準備の確認なので残さない
+        const last = store.run?.status === 'finished' && !store.draft ? store.run : null;
+        const role = last ? roleOf(agentType, last) : 'other';
+        if (role === 'worker' || role === 'verifier') {
+          store.log(`${role}.reply`, { iteration: last.iteration, report: response, ignored: true, reason: IGNORED.finished }, { finished: true });
+        }
+        return undefined;
+      }
+      const role = roleOf(agentType);
+      if (role !== 'worker' && role !== 'verifier') return undefined;
+      const it = store.current();
+      const ignore = (reason, extra = {}) => store.log(`${role}.reply`, { iteration: it?.n ?? 0, report: response, ...extra, ignored: true, reason });
+      // 止めた後に届いた返事は、途中で切れたもの。試行の記録には入れず、振り返りの記録にだけ残す
+      if (run.status === 'stopping') {
+        ignore(IGNORED.afterStop, { afterStop: true });
+        return undefined;
+      }
+      if (!it) {
+        ignore(IGNORED.noPlan);
+        return undefined;
+      }
+      if (role === 'worker') {
+        if (it.do) {
+          ignore(IGNORED.reported(it.n));
+          return undefined;
+        }
+        it.do = { report: response, at: store.iso() };
+        store.log('worker.reply', { iteration: it.n, report: response });
+        store.changed();
+      } else {
+        markVerifierCalled();
+        if (it.study) it.study.verifierReport = response;
+        else it._verifierReport = response;
+        store.log('verifier.reply', { iteration: it.n, report: response });
+        store.changed();
+      }
+    } catch (error) {
+      console.error('[Web管理画面] 子のエージェントの返事を記録できませんでした：', error);
+    }
+    return undefined;
+  }
+
+  return { onEvent, onSubagentStop, describeTool };
 }

@@ -1,0 +1,47 @@
+# コーヒーメーカーの設定ファイルです（試験用の見本）。
+# いれ方と、お手入れの日を書きます。
+
+# 機械の名前。画面に出ます（必須）。
+# 例：給湯室の1号機
+machine_name: ""
+
+# 豆の種類。
+# 選べる値：arabica / robusta / blend（混ぜたもの）
+bean_type: "blend"
+
+# 1杯の量（mL）。
+# 例：180
+# 例：240
+cup_size_ml: 180
+
+# お湯の温度（℃）。
+# 例：92.5
+water_temp_c: 92.5
+
+# ミルクを足すか。
+# 選べる値：true / false
+use_milk: false
+
+# よく使うメニュー。上から順に画面に並びます。
+# 例：["espresso", "latte"]
+favorite_menu: ["espresso", "latte"]
+
+# お手入れをする曜日（必須）。
+# 選べる値：mon / tue / wed / thu / fri / sat / sun
+cleaning_days:
+  - mon
+  # 木曜は午後に洗う
+  - thu
+
+# お手入れ用の画面のパスワード。
+maintenance_password: ""
+
+# お手入れ用のパスワードを入れた環境変数の名前。こちらがあれば、上の値より先に使います。
+# 例：COFFEE_MAINT_PASSWORD
+maintenance_password_env: ""
+
+# 最後にお手入れした日。まだなら null。
+last_service: null
+
+# 画面のあいさつの言葉。
+greeting: 'いらっしゃいませ'

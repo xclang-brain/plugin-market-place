@@ -1,0 +1,40 @@
+# ネットワークカメラの設定ファイルです（試験用の見本）。
+# つなぎ先と、録画のしかたを書きます。
+# 各項目の意味は、項目のすぐ上のコメントにあります。
+
+# カメラの IP アドレス（必須）。
+# 例：192.168.0.20
+camera_ip: ""
+
+# 映像を受け取るポートの番号。
+# 例：554
+rtsp_port: 554
+
+# 映像の細かさ。
+# 選べる値：720p / 1080p / 4k
+resolution: "1080p"
+
+# 管理者のユーザー名。
+admin_user: 'admin'
+
+# 管理用の API トークン。
+api_token: "tk-0123456789abcdef"
+
+# API トークンを入れた環境変数の名前。空なら使いません。
+# 例：CAMERA_API_TOKEN
+api_token_env: ""
+
+# 夜に赤外線で撮るか。
+night_mode: true
+
+# 録画を置くフォルダ。複数書けます（必須）。
+# 例：["/mnt/rec1", "/mnt/rec2"]
+recording_dirs:
+- /mnt/rec1
+- "/mnt/録画 2"
+
+# 動きを見張る場所の名前。空なら画面全体。
+motion_zones: []
+
+# 静止画を撮る間隔（秒）。
+snapshot_interval_seconds: 0.5

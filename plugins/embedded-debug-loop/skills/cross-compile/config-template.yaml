@@ -1,0 +1,34 @@
+# cross-compile スキルの設定ファイルです。
+# 機器で動かすプログラムを、PC でビルドするやり方を書きます。
+# 作業フォルダとは、.embedded-debug-loop フォルダがあるフォルダです。
+
+# ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空や "." なら作業フォルダ。
+# 例：firmware/app
+source_dir: "."
+
+# ビルドの前に読み込む、SDK の環境設定ファイル。
+# 機器向けにビルドするなら、必ず書く。
+# 空なら SDK を読み込まず、PC のコンパイラーで PC 用のプログラムができる。
+# 例：/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
+sdk_env: ""
+
+# ビルドのコマンド。ビルドするフォルダの中で実行する。空なら make。
+# 例：make
+# 例：make -j4 all
+build_command: "make"
+
+# ビルドの前に実行する、片付けのコマンド。空なら片付けない。
+# 空のときは、ソースが変わっていないプログラムは作り直されず、
+# 前のビルドでできたファイルがそのまま残る。
+# 毎回作り直すなら、make clean などを書く。
+# 例：make clean
+clean_command: ""
+
+# ビルドでできるファイル。ビルドするフォルダからの相対パス（必須）。
+# 例：["my_app"]
+# 例：["build/my_app"]
+outputs: []
+
+# ビルドを待つ最長の秒数。過ぎたらビルドを止める。
+# 例：600
+timeout_seconds: 600
