@@ -9,6 +9,9 @@
   config_tool.py set ファイル 項目 値 [--json]
   config_tool.py set ファイル 項目 --stdin [--json]
 
+- set の値は、--stdin で標準入力から渡すのがよい（例：--stdin <<'VALUE_END' の次の行に値、
+  その次の行に VALUE_END）。値がコマンドの行に出ない。最後の改行1つは値に含めない。
+  --json を付けると、値を JSON として読む（数・true / false・リスト）。
 - 結果は、いつも JSON 1つを標準出力に書く（UTF-8）。
 - 終了コード: 0 成功 / 2 ファイルや引数の問題 / 1 思わぬエラー。
 - 読める YAML は、次の書き方だけ。
@@ -930,8 +933,23 @@ def cmd_get(opts, pos):
     }
 
 
+STDIN_HINT = ("値は、コマンドの後ろに <<'VALUE_END' を付け、次の行に値、"
+              "その次の行に VALUE_END と書いて渡してください。")
+
+
 def _read_stdin():
-    data = sys.stdin.buffer.read()
+    """--stdin の値を読む。最後の改行1つは値に含めない。何も届かなければ空の値。"""
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is None:
+        raise ToolError("--stdin を付けましたが、標準入力がありません。" + STDIN_HINT)
+    try:
+        interactive = stream.isatty()
+    except (OSError, ValueError):
+        interactive = False
+    if interactive:
+        # 値を渡し忘れると、入力を待ったまま止まってしまう。待たずに知らせる。
+        raise ToolError("--stdin を付けましたが、値が渡されていません。" + STDIN_HINT)
+    data = stream.read()
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:

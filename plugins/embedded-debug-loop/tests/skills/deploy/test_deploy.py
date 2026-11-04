@@ -525,15 +525,107 @@ class ValidateTest(unittest.TestCase):
         self.assertNotIn(PASSWORD, json.dumps(summary, ensure_ascii=False))
 
 
+def template_blocks():
+    with open(TEMPLATE, "r", encoding="utf-8") as fh:
+        return deploy.template_blocks(fh.read())
+
+
+def template_without(*keys):
+    """ひな形から、指定した項目（すぐ上のコメントと項目の行）を除いた文。"""
+    with open(TEMPLATE, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    for key, lines in template_blocks():
+        if key in keys:
+            text = text.replace("\n".join(lines) + "\n", "")
+    return text.rstrip("\n") + "\n"
+
+
+class AddMissingKeysTest(unittest.TestCase):
+    """スキルを新しくして、ひな形に項目が増えたとき、古い設定ファイルに足す。"""
+
+    def old_config(self, ws, text):
+        data = text.encode("utf-8")
+        ws.file(os.path.relpath(ws.config, ws.dir), data)
+        return data
+
+    def test_template_blocks(self):
+        blocks = template_blocks()
+        self.assertEqual([k for k, _ in blocks],
+                         ["host", "port", "user", "password", "password_env", "passive", "files",
+                          "remote_dir", "file_mode", "checksum", "checksum_suffix", "timeout_seconds"])
+        for key, lines in blocks:
+            self.assertTrue(lines[-1].startswith(key + ":"), key)
+            self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
+        self.assertNotIn("# deploy スキルの設定ファイルです。", blocks[0][1])
+
+    def test_missing_keys_are_appended_with_comments(self):
+        ws = Workspace(self)
+        text = template_without("checksum", "checksum_suffix").replace('host: ""', 'host: "10.0.0.5"')
+        before = self.old_config(ws, text)
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["added"], ["checksum", "checksum_suffix"])
+        self.assertEqual(data["message"],
+                         "設定ファイルに、新しい項目 checksum、checksum_suffix を足しました（今の値はひな形のまま）。")
+        after = read_file(ws.config)
+        self.assertEqual(after[:len(before)], before)
+        blocks = dict(template_blocks())
+        expected = "\n" + "\n".join(blocks["checksum"]) + "\n\n" + "\n".join(blocks["checksum_suffix"]) + "\n"
+        self.assertEqual(after[len(before):].decode("utf-8"), expected)
+        values, _raws = deploy.read_config_text(after.decode("utf-8"))
+        self.assertEqual(values["host"], "10.0.0.5")
+        self.assertEqual(values["checksum"], "none")
+        self.assertEqual(values["checksum_suffix"], ".sum")
+
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(data["added"], [])
+        self.assertNotIn("message", data)
+        self.assertEqual(read_file(ws.config), after)
+
+    def test_check_and_run_report_added(self):
+        ws = Workspace(self)
+        self.old_config(ws, template_without("timeout_seconds"))
+        code, data, _o, _e = ws.run("check")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["added"], ["timeout_seconds"])
+        self.assertTrue(data["message"].endswith(
+            "設定ファイルに、新しい項目 timeout_seconds を足しました（今の値はひな形のまま）。"), data["message"])
+        code, data, _o, _e = ws.run("run")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["added"], [])
+
+    def test_broken_file_is_not_touched(self):
+        ws = Workspace(self)
+        before = self.old_config(ws, 'host: "a\n')
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(data["added"], [])
+        self.assertIn("problems", data)
+        self.assertEqual(read_file(ws.config), before)
+
+    def test_crlf_file(self):
+        ws = Workspace(self)
+        text = template_without("passive").replace("\n", "\r\n")
+        before = self.old_config(ws, text)
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(data["added"], ["passive"])
+        after = read_file(ws.config)
+        self.assertEqual(after[:len(before)], before)
+        tail = after[len(before):]
+        self.assertTrue(tail.startswith(b"\r\n#"), tail)
+        self.assertTrue(tail.endswith(b"passive: true\r\n"), tail)
+        self.assertNotIn(b"\n", tail.replace(b"\r\n", b""))
+
+
 class CommandWithoutServerTest(unittest.TestCase):
 
     def test_config_path_creates_from_template(self):
         ws = Workspace(self)
         code, data, _out, _err = ws.run("config-path")
         self.assertEqual(code, 0)
-        self.assertEqual(set(data), {"config", "created", "missing"})
+        self.assertEqual(set(data), {"config", "created", "missing", "added"})
         self.assertEqual(data["config"], ws.config)
         self.assertTrue(data["created"])
+        self.assertEqual(data["added"], [])
         self.assertEqual(data["missing"], ["host", "files", "remote_dir"])
         self.assertEqual(read_file(ws.config), read_file(TEMPLATE))
         code, data, _out, _err = ws.run("config-path")
@@ -551,12 +643,28 @@ class CommandWithoutServerTest(unittest.TestCase):
         ws.run("config-path")
         self.assertEqual(read_file(gi), b"logs/\n")
 
-    def test_gitignore_only_when_the_folder_is_made(self):
+    def test_existing_folder_without_gitignore_gets_one(self):
+        """ほかのものが先にフォルダを作っても、.gitignore がなければ作る。"""
         ws = Workspace(self)
         os.makedirs(os.path.join(ws.dir, ".embedded-debug-loop"))
         ws.run("config-path")
         self.assertTrue(os.path.isfile(ws.config))
-        self.assertFalse(os.path.exists(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")))
+        self.assertEqual(read_file(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")), b"*\n")
+
+    def test_gitignore_is_made_again_when_removed(self):
+        ws = Workspace(self)
+        ws.run("config-path")
+        gi = os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")
+        for command in ("config-path", "check", "run"):
+            os.unlink(gi)
+            ws.run(command)
+            self.assertEqual(read_file(gi), b"*\n", command)
+
+    def test_gitignore_in_work_folder_with_config_elsewhere(self):
+        ws = Workspace(self)
+        os.makedirs(os.path.join(ws.dir, ".embedded-debug-loop"))
+        ws.run("config-path", "--config", os.path.join(ws.dir, "conf", "my-deploy.yaml"))
+        self.assertEqual(read_file(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")), b"*\n")
 
     def test_gitignore_when_only_the_log_folder_is_made(self):
         ws = Workspace(self)
@@ -1001,6 +1109,15 @@ class IndependenceTest(unittest.TestCase):
                 self.assertIn("伝えません", line, line)
         self.assertNotRegex(text, r"[0-2] ?[がは]成功")
         self.assertIn("`.gitignore`", text)
+
+    def test_skill_md_explains_gitignore_and_added_keys(self):
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("フォルダを新しく作るときは", text)
+        self.assertIn("`.gitignore` がなければ", text)
+        self.assertIn("足りない項目", text)
+        self.assertIn("ほかの所は変えません", text)
+        self.assertIn("`added`", text.split("## 結果の伝え方", 1)[1])
 
     def test_skill_md_hides_json_names(self):
         with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:

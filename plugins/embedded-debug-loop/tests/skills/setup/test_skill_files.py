@@ -205,6 +205,41 @@ class SkillMdTest(unittest.TestCase):
                      "`table` を、そのまま貼ります"):
             self.assertIn(word, section, word)
 
+    def test_values_are_always_passed_through_stdin(self):
+        """値を引数に書くと、値の中のパスに Copilot CLI が許可を求め、値もコマンドの行に出る。"""
+        tool = self.section("## 道具", "## 利用者に見せる言葉")
+        self.assertIn("値は、いつも標準入力で渡します。コマンドの引数には書きません。", tool)
+        self.assertIn("--stdin <<'VALUE_END'", tool)
+        self.assertIn("`set <ファイル> <項目> --stdin --json`", tool)
+        self.assertIn("空の値を書くときは、`<値>` の行を書きません。", tool)
+        # 値を引数に書く書き方は、どこにも示さない
+        self.assertNotRegex(self.body, r"set <ファイル> <項目> <値>")
+        self.assertNotRegex(self.body, r"set <ファイル> <項目> '")
+        for line in self.body.split("\n"):
+            if "config_tool.py set" in line:
+                self.assertIn("--stdin", line, line)
+        write = self.section("### 5. 答えを書き込む", "### 6. パスワードなど")
+        self.assertIn("値は、いつも `--stdin` で渡します", write)
+        self.assertNotIn("値を ' で囲みます", self.body)
+        rules = self.section("## 守ること", "質問のツール（ask_user）が使えないとき")
+        self.assertIn("`set` の値は、コマンドの引数に書きません。いつも `--stdin` で渡します。", rules)
+
+    def test_free_text_is_written_as_typed(self):
+        """利用者が正しく書いた答えに、例に合わせて直した案を出した（S5）。"""
+        write = self.section("### 5. 答えを書き込む", "### 6. パスワードなど")
+        for word in ("書かれたとおりに書きます。",
+                     "例や今の値と形が違っても、直した案を出しません。聞き返しもしません。",
+                     "確かめるのは、その項目の種類として書けないときだけです。",
+                     "「、」がなければ、答え全体を1つの値にします。空白では分けません。",
+                     "`number`：数でないときだけ確かめます",
+                     "`boolean`：true か false でないときだけ確かめます",
+                     "答えの中身は変えません"):
+            self.assertIn(word, write, word)
+        self.assertNotIn("気になることがあれば", self.body)
+        self.assertNotIn("分け方に迷ったら", self.body)
+        rules = self.section("## 守ること", "質問のツール（ask_user）が使えないとき")
+        self.assertIn("自由に書かれた答えを、例に合わせて直しません。直した案も出しません。", rules)
+
     def test_sentences_are_short(self):
         # 文は 60 文字ほどまで（表・コードは除く）。長すぎる文がないかを見る。
         long_ones = []

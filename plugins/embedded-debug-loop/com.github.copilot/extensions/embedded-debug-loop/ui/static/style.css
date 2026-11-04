@@ -766,7 +766,8 @@ select {
 }
 
 .badge-warn,
-.chip-warn {
+.chip-warn,
+.chip-wait {
   background: var(--warn-bg);
   color: var(--warn);
 }
@@ -1017,6 +1018,54 @@ select {
 
 .org-v .org-live {
   color: var(--v);
+}
+
+/* チャットで利用者の答えを待っている（動いているとは言わない） */
+.org-node.is-waiting {
+  border-width: 3px;
+  padding: 9px 11px;
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+
+.org-wait,
+.cycle-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  color: var(--warn);
+}
+
+.org-wait {
+  margin-top: 6px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.75rem;
+}
+
+.cycle-wait {
+  justify-self: start;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 2px solid var(--warn-line);
+  background: var(--warn-bg);
+  font-size: 0.9375rem;
+}
+
+.wait-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--warn-line);
+  color: #1b1f24;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .live-dot {
@@ -1719,7 +1768,8 @@ select {
     padding: 8px 6px;
   }
 
-  .org-node.is-active {
+  .org-node.is-active,
+  .org-node.is-waiting {
     padding: 7px 5px;
   }
 

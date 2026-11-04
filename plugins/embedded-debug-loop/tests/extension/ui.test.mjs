@@ -193,3 +193,142 @@ test('設定：名前の付け方（プラグインの名前の有無）が違�
   assert.deepEqual(choices($('f-worker')), [W, 'demo-plugin:helper-z', 'helper-a']);
   assert.deepEqual(choices($('f-verifier')), ['demo-plugin:helper-z', V, 'checker-b']);
 });
+
+// ---------- チャットで答えを待っているあいだ（質問・許可） ----------
+
+function runningRun(over = {}) {
+  return {
+    ...finishedRun([], 'success'),
+    status: 'running', finishedAt: null, finish: null, activity: [], iteration: 1,
+    ...over,
+  };
+}
+const question = { kind: 'question', text: '直したので続けますか？' };
+const permission = { kind: 'permission', text: 'rm -rf out' };
+const orgNode = ($, cls) => $('run-now').querySelector(`div.${cls}`);
+
+test('実行のようす：質問の答えを待っているあいだは、段も図も試行のカードも「動いている」と言わない', async () => {
+  // 試行 1 の作業の報告があり、評価はまだ。統括エージェントが ask_user で待っている
+  const run = runningRun({ iterations: [{ n: 1, plan, do: done, study: null }], active: { role: 'orchestrator', since: at }, waiting: question });
+  const { $ } = await screen(snap({ run, waiting: question }));
+  assert.deepEqual(steps($).map((s) => s.state), ['is-done', 'is-done', 'is-todo'], '評価の段を「いま」にしない');
+  assert.equal($('run-now').querySelectorAll('li[aria-current]').length, 0);
+  assert.equal(textOf($('run-now').querySelector('p.cycle-wait')), '！あなたの答えを待っています');
+  assert.equal(textOf($('now-text')), 'チャットで、あなたの答えを待っています。');
+
+  const o = orgNode($, 'org-o');
+  assert.ok(o.classList.contains('is-waiting') && !o.classList.contains('is-active'));
+  assert.match(textOf(o), /チャットで答えを待っています/);
+  assert.ok(!textOf($('run-now')).includes('動いています'), '図に「動いています」と出さない');
+
+  const chip = $('run-iters').querySelector('summary').querySelector('span.chip');
+  assert.equal(textOf(chip), '答えを待っています');
+  assert.ok(chip.classList.contains('chip-wait'));
+  assert.ok(!textOf($('run-iters')).includes('評価しています'));
+  assert.ok(!textOf($('run-iters')).includes('確かめています'));
+});
+
+test('実行のようす：作業エージェントの許可を待っているあいだも、作業の段を「いま」にせず、「作業をしています」と言わない', async () => {
+  const run = runningRun({ iterations: [{ n: 1, plan, do: null, study: null }], active: { role: 'worker', since: at }, waiting: permission });
+  const { $ } = await screen(snap({ run, waiting: permission }));
+  assert.deepEqual(steps($).map((s) => s.state), ['is-done', 'is-todo', 'is-todo']);
+  assert.equal(textOf($('run-now').querySelector('p.cycle-wait')), '！あなたの答えを待っています');
+  assert.ok(orgNode($, 'org-w').classList.contains('is-waiting'));
+  assert.ok(!orgNode($, 'org-o').classList.contains('is-waiting'));
+  assert.ok(!textOf($('run-now')).includes('動いています'));
+  const card = textOf($('run-iters'));
+  assert.match(card, /答えを待っています/);
+  assert.ok(!card.includes('作業しています') && !card.includes('作業をしています'), card);
+});
+
+test('実行のようす：答えが届いたら、いまの段と「動いています」にもどる', async () => {
+  const run = runningRun({ iterations: [{ n: 1, plan, do: done, study: null }], active: { role: 'orchestrator', since: at }, waiting: question });
+  const { $, box, poll } = await screen(snap({ run, waiting: question }));
+  box.state = snap({ run: { ...run, waiting: null }, waiting: null });
+  await poll();
+  assert.deepEqual(steps($).map((s) => s.state), ['is-done', 'is-done', 'is-now']);
+  assert.equal($('run-now').querySelector('p.cycle-wait'), null);
+  assert.ok(orgNode($, 'org-o').classList.contains('is-active'));
+  assert.match(textOf(orgNode($, 'org-o')), /動いています/);
+  assert.equal(textOf($('run-iters').querySelector('summary').querySelector('span.chip')), '評価しています');
+});
+
+test('実行のようす：評価せずに次の試行へ進んだ前の試行は「評価しています」と言わない', async () => {
+  const run = runningRun({ iteration: 2, iterations: [{ n: 1, plan, do: done, study: null }, { n: 2, plan, do: null, study: null }], active: { role: 'worker', since: at } });
+  const { $ } = await screen(snap({ run }));
+  const chips = $('run-iters').querySelectorAll('summary').map((s) => textOf(s.querySelector('span.chip')));
+  assert.deepEqual(chips, ['作業しています', '評価なし']);
+});
+
+// ---------- 画面の読み上げの欄（#live） ----------
+
+test('読み上げ：質問が終わったら、「チャットで質問に答えてください」を読み上げの欄に残さない', async () => {
+  // 実行の前（下書き）と、終わった後。画面を開いた後に、質問が始まる
+  for (const base of [{ draft: draftWith(null) }, { run: finishedRun([{ n: 1, plan, do: done, study }], 'success') }]) {
+    const { $, box, poll } = await screen(snap(base));
+    await poll();
+    box.state = snap({ ...base, waiting: question });
+    await poll();
+    await poll(); // 読み上げの欄に書く
+    assert.equal(textOf($('live')), 'チャットで質問に答えてください');
+    box.state = snap({ ...base, waiting: null });
+    await poll();
+    assert.equal(textOf($('live')), '');
+    await poll();
+    assert.equal(textOf($('live')), '', '後から書き戻さない');
+  }
+});
+
+test('読み上げ：答える前に質問が終わっても、後から質問の文を書かない。次の質問は、また読み上げる', async () => {
+  const base = { draft: draftWith(null) };
+  const { $, box, poll } = await screen(snap({ ...base, waiting: question }));
+  box.state = snap({ ...base, waiting: null });
+  await poll(); // 読み上げの予約と、次の読み直しが、同じときに動く
+  await poll();
+  assert.equal(textOf($('live')), '');
+  box.state = snap({ ...base, waiting: permission });
+  await poll();
+  await poll();
+  assert.equal(textOf($('live')), 'チャットで許可を求めています');
+});
+
+test('読み上げ：実行中に答えが届いたら、読み上げの欄は新しい「いま」の文になる', async () => {
+  const run = runningRun({ iterations: [{ n: 1, plan, do: done, study: null }], active: { role: 'orchestrator', since: at }, waiting: question });
+  const { $, box, poll } = await screen(snap({ run, waiting: question }));
+  await poll();
+  assert.equal(textOf($('live')), 'いま：チャットで、あなたの答えを待っています。');
+  box.state = snap({ run: { ...run, waiting: null }, waiting: null });
+  await poll();
+  await poll();
+  assert.equal(textOf($('live')), 'いま：統括エージェントが試行 1 の結果を評価しています');
+});
+
+// ---------- くわしい記録のコマンドの行 ----------
+
+test('くわしい記録：長いコマンドの行は、頭と終わりを残して真ん中を省き、全文を title に残す', async () => {
+  const head = `python3 /tmp/work/${'a'.repeat(80)}`;
+  const tail = `${'b'.repeat(40)}/scripts/run.py run --file out/app.bin --dest /opt/app`;
+  const command = `${head}/middle/${tail}`;
+  const long = `コマンドを実行：${command}（失敗）`;
+  const run = finishedRun([], 'success');
+  const t = (s) => new Date(Date.now() - s * 1000).toISOString();
+  run.activity = [
+    { at: t(1), who: '作業', text: long },
+    { at: t(2), who: '作業', text: 'コマンドを実行：python3 run.py run' },
+    { at: t(3), who: '作業', text: `ファイルを読む：${'/x'.repeat(100)}` },
+  ];
+  const { $, poll } = await screen(snap({ run }));
+  const details = $('run-log').querySelector('details');
+  details.open = true;
+  details.dispatch('toggle');
+  await poll();
+  const [first, second, third] = $('run-log').querySelectorAll('span.act-text');
+  assert.equal(textOf(first), `コマンドを実行：${command.slice(0, 70)}…${command.slice(-70)}（失敗）`);
+  assert.ok(textOf(first).endsWith('--file out/app.bin --dest /opt/app（失敗）'), '終わり（引数）が見える');
+  assert.equal(first.getAttribute('title'), long);
+  // 短いコマンドと、コマンドでない行は、そのまま（title も付けない）
+  assert.equal(textOf(second), 'コマンドを実行：python3 run.py run');
+  assert.equal(second.getAttribute('title'), null);
+  assert.equal(textOf(third), `ファイルを読む：${'/x'.repeat(100)}`);
+  assert.equal(third.getAttribute('title'), null);
+});

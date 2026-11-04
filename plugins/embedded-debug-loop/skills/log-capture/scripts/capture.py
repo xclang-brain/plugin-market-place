@@ -365,24 +365,109 @@ def _config_dir_of(path):
         p = parent
 
 
-def make_dirs(path):
-    """フォルダを作る。.embedded-debug-loop フォルダを新しく作ったときは、
-    中に .gitignore（中身は * の1行）も作る。すでにあれば、そのままにする。"""
+def ensure_gitignore(path):
+    """path か、その上にある .embedded-debug-loop フォルダに .gitignore がなければ作る
+    （中身は * の1行）。すでにあれば、そのままにする。作れなくても止めない。"""
     top = _config_dir_of(path)
-    fresh = top is not None and not os.path.exists(top)
+    if top is None or not os.path.isdir(top):
+        return
+    target = os.path.join(top, ".gitignore")
+    if os.path.lexists(target):
+        return
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except OSError:
+        return
+    try:
+        os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def make_dirs(path):
+    """フォルダを作る。.embedded-debug-loop フォルダに .gitignore がなければ、それも作る。"""
     os.makedirs(path, exist_ok=True)
-    if fresh:
-        try:
-            fd = os.open(os.path.join(top, ".gitignore"),
-                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except OSError:
-            return
-        try:
-            os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
+    ensure_gitignore(path)
+
+
+def template_blocks(text):
+    """ひな形の項目ごとに (名前, 行の並び) を返す。
+    行の並びは、項目のすぐ上のコメントと、項目の行（「- 値」の行が続けば、それも）。"""
+    lines = text.splitlines()
+    if lines and lines[0].startswith("\ufeff"):
+        lines[0] = lines[0][1:]
+    blocks = []
+    i = 0
+    while i < len(lines):
+        m = _KEY_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        start = i
+        while start > 0 and lines[start - 1].startswith("#"):
+            start -= 1
+        end = i + 1
+        while end < len(lines) and _ITEM_RE.match(lines[end]):
+            end += 1
+        blocks.append((m.group(1), lines[start:end]))
+        i = end
+    return blocks
+
+
+def add_missing_keys(path):
+    """設定ファイルに、ひな形にある項目がなければ、説明のコメントと一緒にファイルの最後に足す。
+    すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
+    ファイルが読めないときや、書き方の誤りがあるときは、何も足さない。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        have = read_yaml(path)
+        with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+            blocks = template_blocks(f.read())
+    except (OSError, UnicodeDecodeError, ConfigSyntaxError):
+        return []
+    missing = [(key, lines) for key, lines in blocks if key not in have]
+    if not missing:
+        return []
+    eol = "\r\n" if b"\r\n" in data else "\n"
+    parts = []
+    if data and not data.endswith(b"\n"):
+        parts.append(eol)
+    blank = bool(data.strip()) and not data.endswith(b"\n\n") and not data.endswith(b"\r\n\r\n")
+    for n, (key, lines) in enumerate(missing):
+        if n > 0 or blank:
+            parts.append(eol)
+        parts.append(eol.join(lines) + eol)
+    try:
+        with open(path, "ab") as f:
+            f.write("".join(parts).encode("utf-8"))
+    except OSError:
+        return []
+    return [key for key, _lines in missing]
+
+
+def added_sentence(added):
+    return "設定ファイルに、新しい項目 %s を足しました（今の値はひな形のまま）。" % "、".join(added)
+
+
+def with_added(out, added):
+    """結果に、足した項目（added）と、そのことを伝える文を入れる。"""
+    out["added"] = list(added)
+    if added:
+        out["message"] = (out.get("message") or "") + added_sentence(added)
+    return out
+
+
+def open_config(workdir, config):
+    """設定ファイルを用意する。なければひな形から作り、項目が足りなければ足す。
+    .embedded-debug-loop フォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
+    ensure_gitignore(os.path.join(workdir, CONFIG_DIR_NAME))
+    created = ensure_config(config)
+    ensure_gitignore(config)
+    added = [] if created else add_missing_keys(config)
+    return created, added
 
 
 def ensure_config(path):
@@ -1444,15 +1529,16 @@ def _load(config):
 def cmd_config_path(args):
     workdir, config = _paths(args)
     try:
-        created = ensure_config(config)
+        created, added = open_config(workdir, config)
     except Failure as f:
-        emit({"config": config, "created": False, "missing": list(REQUIRED_KEYS), "problems": [f.message]})
+        emit({"config": config, "created": False, "missing": list(REQUIRED_KEYS), "problems": [f.message],
+              "added": []})
         return 0
     cfg, problems = _load(config)
     out = {"config": config, "created": created, "missing": missing_keys(cfg) if not problems else list(REQUIRED_KEYS)}
     if problems:
         out["problems"] = problems
-    emit(out)
+    emit(with_added(out, added))
     return 0
 
 
@@ -1474,27 +1560,27 @@ def problems_message(problems, config, created):
             % (head, len(problems), config))
 
 
-def _settings_problem(config, created, problems):
-    emit({
+def _settings_problem(config, created, problems, added):
+    emit(with_added({
         "ok": False,
         "skill": SKILL,
         "message": problems_message(problems, config, created),
         "problems": problems,
         "config": config,
         "created": created,
-    })
+    }, added))
     return 2
 
 
 def cmd_run(args):
     workdir, config = _paths(args)
-    created = ensure_config(config)
+    created, added = open_config(workdir, config)
     cfg, problems = _load(config)
     if problems:
-        return _settings_problem(config, created, problems)
+        return _settings_problem(config, created, problems, added)
     s, problems = validate(cfg)
     if problems:
-        return _settings_problem(config, created, problems)
+        return _settings_problem(config, created, problems, added)
     s.config = config
 
     commands = list(s.commands)
@@ -1510,7 +1596,7 @@ def cmd_run(args):
         return _settings_problem(config, created, [
             "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"
             "どちらかを設定してください。"
-        ])
+        ], added)
     if not commands:
         listen_only = True
 
@@ -1658,13 +1744,13 @@ def cmd_run(args):
         except Exception:
             pass
     say("ログ：%s" % log_path)
-    emit(result)
+    emit(with_added(result, added))
     return code
 
 
 def cmd_check(args):
     workdir, config = _paths(args)
-    created = ensure_config(config)
+    created, added = open_config(workdir, config)
     cfg, problems = _load(config)
     out = {"ok": False, "skill": SKILL, "problems": [], "summary": summary_of(cfg),
            "config": config, "created": created}
@@ -1674,7 +1760,7 @@ def cmd_check(args):
     if problems:
         out["problems"] = problems
         out["message"] = problems_message(problems, config, created)
-        emit(out)
+        emit(with_added(out, added))
         return 2
 
     log_path, log = open_log(workdir, "check")
@@ -1723,7 +1809,7 @@ def cmd_check(args):
             pass
     out["message"] = message
     say("ログ：%s" % log_path)
-    emit(out)
+    emit(with_added(out, added))
     return 0 if out["ok"] else 2
 
 

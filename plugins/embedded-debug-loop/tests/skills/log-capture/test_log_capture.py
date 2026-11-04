@@ -712,11 +712,108 @@ class Settings(CaptureTestCase):
         with open(gi, encoding="utf-8") as f:
             self.assertEqual(f.read(), "logs/\n")  # あるときは、そのまま
 
-    def test_gitignore_only_when_the_folder_is_made(self):
+    def test_existing_folder_without_gitignore_gets_one(self):
+        """ほかのものが先にフォルダを作っても、.gitignore がなければ作る。"""
         os.makedirs(os.path.join(self.tmp, ".embedded-debug-loop"))
         self.capture("config-path")
         self.assertTrue(os.path.isfile(self.config_path))
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")))
+        with open(os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
+
+    def test_gitignore_is_made_again_when_removed(self):
+        self.capture("config-path")
+        gi = os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")
+        for command in ("config-path", "check", "run"):
+            os.unlink(gi)
+            self.capture(command)
+            with open(gi, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "*\n", command)
+
+    def test_gitignore_in_work_folder_with_config_elsewhere(self):
+        os.makedirs(os.path.join(self.tmp, ".embedded-debug-loop"))
+        self.capture("config-path", "--config", os.path.join(self.tmp, "sub", "my.yaml"))
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")))
+
+    # --- ひな形に増えた項目を、古い設定ファイルに足す ---
+
+    def template_blocks(self):
+        with open(TEMPLATE, encoding="utf-8") as f:
+            return load_module().template_blocks(f.read())
+
+    def old_config(self, *without, **values):
+        """ひな形から項目を除いた、古い設定ファイルを置く。中身（バイト）を返す。"""
+        self.write_config(**values)
+        with open(self.config_path, encoding="utf-8") as f:
+            text = f.read()
+        for key, lines in self.template_blocks():
+            if key in without:
+                text = text.replace("\n".join(lines) + "\n", "")
+        data = (text.rstrip("\n") + "\n").encode("utf-8")
+        with open(self.config_path, "wb") as f:
+            f.write(data)
+        return data
+
+    def read_config_bytes(self):
+        with open(self.config_path, "rb") as f:
+            return f.read()
+
+    def test_template_blocks(self):
+        blocks = self.template_blocks()
+        self.assertEqual([k for k, _ in blocks], TEMPLATE_KEYS)
+        for key, lines in blocks:
+            self.assertTrue(lines[-1].startswith(key + ":"), key)
+            self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
+        self.assertNotIn("# log-capture スキルの設定ファイルです。", blocks[0][1])
+
+    def test_missing_keys_are_appended_with_comments(self):
+        before = self.old_config("listen_seconds", "logout", port="/dev/ttyUSB9")
+        code, data = self.capture("config-path")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["added"], ["listen_seconds", "logout"])
+        self.assertEqual(data["message"],
+                         "設定ファイルに、新しい項目 listen_seconds、logout を足しました（今の値はひな形のまま）。")
+        after = self.read_config_bytes()
+        self.assertEqual(after[:len(before)], before)
+        blocks = dict(self.template_blocks())
+        expected = "\n" + "\n".join(blocks["listen_seconds"]) + "\n\n" + "\n".join(blocks["logout"]) + "\n"
+        self.assertEqual(after[len(before):].decode("utf-8"), expected)
+        values = load_module().read_yaml(self.config_path)
+        self.assertEqual(values["port"], "/dev/ttyUSB9")
+        self.assertEqual(values["listen_seconds"], 0)
+        self.assertIs(values["logout"], True)
+
+        code, data = self.capture("config-path")
+        self.assertEqual(data["added"], [])
+        self.assertNotIn("message", data)
+        self.assertEqual(self.read_config_bytes(), after)
+
+    def test_new_config_reports_nothing_added(self):
+        code, data = self.capture("config-path")
+        self.assertTrue(data["created"])
+        self.assertEqual(data["added"], [])
+
+    def test_run_and_check_report_added(self):
+        self.old_config("command_timeout_seconds")
+        code, data = self.capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["added"], ["command_timeout_seconds"])
+        self.assertTrue(data["message"].endswith(
+            "設定ファイルに、新しい項目 command_timeout_seconds を足しました（今の値はひな形のまま）。"),
+            data["message"])
+        self.old_config("prompt")
+        code, data = self.capture("run")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["added"], ["prompt"])
+        self.assertIn("新しい項目 prompt を足しました", data["message"])
+
+    def test_broken_file_is_not_touched(self):
+        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+        with open(self.config_path, "wb") as f:
+            f.write(b'port: "/dev/ttyUSB0\n')
+        code, data = self.capture("config-path")
+        self.assertEqual(data["added"], [])
+        self.assertIn("problems", data)
+        self.assertEqual(self.read_config_bytes(), b'port: "/dev/ttyUSB0\n')
 
     def test_config_option_points_to_another_file(self):
         other = os.path.join(self.tmp, "sub", "my.yaml")
@@ -1125,6 +1222,15 @@ class Independence(unittest.TestCase):
         self.assertIn("自身の終了コードは、利用者に伝えません", text)
         self.assertNotRegex(text, r"[0-2] ?[がは](成功|問題)")
         self.assertIn("`.gitignore`", text)
+
+    def test_skill_md_explains_gitignore_and_added_keys(self):
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("フォルダを新しく作るときは", text)
+        self.assertIn("`.gitignore` がなければ", text)
+        self.assertIn("足りない項目", text)
+        self.assertIn("ほかの所は変えません", text)
+        self.assertIn("`added`", text.split("## 結果の伝え方", 1)[1])
 
     def test_skill_md_hides_json_names(self):
         with open(SKILL_MD, encoding="utf-8") as f:

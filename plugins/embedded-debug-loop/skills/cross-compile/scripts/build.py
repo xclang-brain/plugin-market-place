@@ -314,24 +314,102 @@ def _config_dir_of(path):
         p = parent
 
 
-def make_dirs(path):
-    """フォルダを作る。.embedded-debug-loop フォルダを新しく作ったときは、
-    中に .gitignore（中身は * の1行）も作る。すでにあれば、そのままにする。"""
+def ensure_gitignore(path):
+    """path か、その上にある .embedded-debug-loop フォルダに .gitignore が無ければ作る
+    （中身は * の1行）。すでにあれば、そのままにする。作れなくても止めない。"""
     top = _config_dir_of(path)
-    fresh = top is not None and not os.path.exists(top)
+    if top is None or not os.path.isdir(top):
+        return
+    target = os.path.join(top, ".gitignore")
+    if os.path.lexists(target):
+        return
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except OSError:
+        return
+    try:
+        os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def make_dirs(path):
+    """フォルダを作る。.embedded-debug-loop フォルダに .gitignore が無ければ、それも作る。"""
     os.makedirs(path, exist_ok=True)
-    if fresh:
-        try:
-            fd = os.open(os.path.join(top, ".gitignore"),
-                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except OSError:
-            return
-        try:
-            os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
+    ensure_gitignore(path)
+
+
+def template_blocks(text):
+    """ひな形の項目ごとに (名前, 行の並び) を返す。
+    行の並びは、項目のすぐ上のコメントと、項目の行（「- 値」の行が続けば、それも）。"""
+    lines = text.splitlines()
+    if lines:
+        lines[0] = lines[0].lstrip("﻿")
+    blocks = []
+    i = 0
+    while i < len(lines):
+        m = KEY_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        start = i
+        while start > 0 and lines[start - 1].startswith("#"):
+            start -= 1
+        end = i + 1
+        while end < len(lines) and ITEM_RE.match(lines[end]):
+            end += 1
+        blocks.append((m.group(1), lines[start:end]))
+        i = end
+    return blocks
+
+
+def add_missing_keys(path):
+    """設定ファイルに、ひな形にある項目が無ければ、説明のコメントと一緒にファイルの最後に足す。
+    すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
+    ファイルが読めないときや、書き方の誤りがあるときは、何も足さない。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        have = parse_yaml(data.decode("utf-8"))
+        with open(TEMPLATE, encoding="utf-8") as f:
+            blocks = template_blocks(f.read())
+    except (OSError, UnicodeDecodeError, YamlError):
+        return []
+    missing = [(key, lines) for key, lines in blocks if key not in have]
+    if not missing:
+        return []
+    eol = "\r\n" if b"\r\n" in data else "\n"
+    parts = []
+    if data and not data.endswith(b"\n"):
+        parts.append(eol)
+    blank = bool(data.strip()) and not data.endswith(b"\n\n") and not data.endswith(b"\r\n\r\n")
+    for n, (key, lines) in enumerate(missing):
+        if n > 0 or blank:
+            parts.append(eol)
+        parts.append(eol.join(lines) + eol)
+    try:
+        with open(path, "ab") as f:
+            f.write("".join(parts).encode("utf-8"))
+    except OSError:
+        return []
+    return [key for key, _ in missing]
+
+
+def added_sentence(added):
+    return "設定ファイルに、新しい項目 {} を足しました（今の値はひな形のまま）。".format("、".join(added))
+
+
+def open_config(opts, workdir, config):
+    """設定ファイルを用意する。無ければひな形から作り、項目が足りなければ足す。
+    .embedded-debug-loop フォルダに .gitignore が無ければ作る。作ったら True。
+    足した項目の名前は opts["added"] に入れる。"""
+    ensure_gitignore(os.path.join(workdir, CONFIG_DIR_NAME))
+    created = ensure_config(config)
+    ensure_gitignore(config)
+    opts["added"] = [] if created else add_missing_keys(config)
+    return created
 
 
 def ensure_config(path):
@@ -503,7 +581,7 @@ def normalize(raw, workdir):
 def load(opts):
     """作業フォルダ、設定ファイル、作ったか、設定、問題のリスト を返す。"""
     workdir, config = resolve_paths(opts)
-    created = ensure_config(config)
+    created = open_config(opts, workdir, config)
     raw, problems = read_config(config)
     settings = None
     if not problems:
@@ -646,7 +724,7 @@ def short(text, limit=160):
 
 def cmd_config_path(opts):
     workdir, config = resolve_paths(opts)
-    created = ensure_config(config)
+    created = open_config(opts, workdir, config)
     raw, problems = read_config(config)
     missing = missing_required(raw) if not problems else []
     recommended = empty_recommended(raw) if not problems else []
@@ -1170,16 +1248,23 @@ def dispatch(argv):
         return 0, {"ok": True, "skill": SKILL, "message": USAGE}
     try:
         if opts["command"] == "config-path":
-            return cmd_config_path(opts)
-        if opts["command"] == "check":
-            return cmd_check(opts)
-        return cmd_run(opts)
+            code, result = cmd_config_path(opts)
+        elif opts["command"] == "check":
+            code, result = cmd_check(opts)
+        else:
+            code, result = cmd_run(opts)
     except SettingsProblem as e:
+        code = 2
         result = {"ok": False, "skill": SKILL, "message": problems_message(e.problems),
                   "problems": e.problems}
         if e.config:
             result["config"] = e.config
-        return 2, result
+    if "added" in opts:
+        # 設定ファイルを開いた後は、足した項目を必ず知らせる
+        result["added"] = opts["added"]
+        if opts["added"]:
+            result["message"] = (result.get("message") or "") + added_sentence(opts["added"])
+    return code, result
 
 
 def crash_log(argv, detail):

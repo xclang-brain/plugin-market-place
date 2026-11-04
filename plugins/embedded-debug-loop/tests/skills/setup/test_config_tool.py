@@ -458,6 +458,85 @@ class SetTest(ToolTestCase):
         self.ok("set", path, "favorite_menu", "--stdin", "--json", stdin='["a", "b"]\n')
         self.assertEqual(self.value(path, "favorite_menu"), ["a", "b"])
 
+    def test_set_with_stdin_every_type(self):
+        """値はいつも --stdin で渡す。どの種類の項目も書けること。"""
+        path = self.copy(COFFEE)
+        cases = [
+            # (項目, 標準入力, --json, 読み直した値)
+            ("machine_name", "/opt/x/env $HOME `x` \"q\" 'a' \\n\n", False,
+             "/opt/x/env $HOME `x` \"q\" 'a' \\n"),
+            ("machine_name", "  前後の空白  \n", False, "  前後の空白  "),
+            ("machine_name", "/dev/ttyUSB0\r\n", False, "/dev/ttyUSB0"),
+            ("machine_name", "1行目\n2行目\n", False, "1行目\n2行目"),
+            ("cup_size_ml", "200\n", True, 200),
+            ("cup_size_ml", "250\n", False, 250),
+            ("water_temp_c", "93.5\n", True, 93.5),
+            ("use_milk", "true\n", True, True),
+            ("use_milk", "false\n", False, False),
+            ("favorite_menu", '["run-app /opt/x/y", "dmesg | tail -n 20"]\n', True,
+             ["run-app /opt/x/y", "dmesg | tail -n 20"]),
+            ("favorite_menu", "[]\n", True, []),
+            ("cleaning_days", '["tue"]\n', True, ["tue"]),
+            ("last_service", "2026-11-04\n", False, "2026-11-04"),
+            ("greeting", "", False, ""),
+        ]
+        for key, stdin, use_json, expected in cases:
+            args = ["set", path, key, "--stdin"] + (["--json"] if use_json else [])
+            data = self.ok(*args, stdin=stdin)
+            self.assertEqual(data["key"], key)
+            got = self.value(path, key)
+            self.assertEqual(got, expected, key)
+            self.assertEqual(type(got), type(expected), key)
+        if HAVE_YAML:
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(yaml.safe_load(f)["machine_name"], "1行目\n2行目")
+
+    def test_set_with_stdin_heredoc(self):
+        """SKILL.md に書いた形（<<'VALUE_END'）のとおりに、bash で渡す。"""
+        path = self.copy(COFFEE)
+        script = ("{} {} set {} cup_size_ml --stdin --json <<'VALUE_END'\n300\nVALUE_END\n"
+                  "{} {} set {} machine_name --stdin <<'VALUE_END'\n/opt/a b/$PATH\nVALUE_END\n"
+                  "{} {} set {} greeting --stdin <<'VALUE_END'\nVALUE_END\n").format(
+                      sys.executable, TOOL, path, sys.executable, TOOL, path, sys.executable, TOOL, path)
+        proc = subprocess.run(["bash", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.value(path, "cup_size_ml"), 300)
+        self.assertEqual(self.value(path, "machine_name"), "/opt/a b/$PATH")
+        self.assertEqual(self.value(path, "greeting"), "")
+
+    def test_set_with_stdin_type_errors(self):
+        path = self.copy(COFFEE)
+        data, _ = self.fail_("set", path, "cup_size_ml", "--stdin", stdin="600秒\n")
+        self.assertIn("数", data["error"])
+        data, _ = self.fail_("set", path, "use_milk", "--stdin", stdin="はい\n")
+        self.assertIn("true か false", data["error"])
+        data, _ = self.fail_("set", path, "favorite_menu", "--stdin", stdin="a、b\n")
+        self.assertIn("リスト", data["error"])
+        data, _ = self.fail_("set", path, "machine_name", "--stdin", "--json", stdin="[1]\n")
+        self.assertIn("文字", data["error"])
+        # 値を引数にも書いたときは、引数の数が合わない
+        data, _ = self.fail_("set", path, "machine_name", "x", "--stdin", stdin="y\n")
+        self.assertIn("引数の数", data["error"])
+
+    def test_set_with_stdin_from_terminal_does_not_wait(self):
+        """値を渡し忘れても、入力を待ったまま止まらない。"""
+        import pty
+        path = self.copy(COFFEE)
+        before = self.read(path)
+        master, slave = pty.openpty()
+        try:
+            proc = subprocess.run([sys.executable, TOOL, "set", path, "greeting", "--stdin"],
+                                  stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertEqual(proc.returncode, 2)
+        data = json.loads(proc.stdout.decode("utf-8"))
+        self.assertFalse(data["ok"])
+        self.assertIn("VALUE_END", data["error"])
+        self.assertEqual(self.read(path), before)
+
     def test_set_value_after_double_dash(self):
         path = self.copy(COFFEE)
         self.ok("set", path, "machine_name", "--", "--json")

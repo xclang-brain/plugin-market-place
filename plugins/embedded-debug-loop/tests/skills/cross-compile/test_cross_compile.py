@@ -377,6 +377,161 @@ class LinePickTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 設定ファイルに足りない項目を足す
+# ---------------------------------------------------------------------------
+
+def template_without(*keys):
+    """ひな形から、指定した項目（すぐ上のコメントと項目の行）を除いた文。"""
+    with open(TEMPLATE, encoding="utf-8") as f:
+        text = f.read()
+    for key, lines in BUILD.template_blocks(text):
+        if key in keys:
+            text = text.replace("\n".join(lines) + "\n", "")
+    return text
+
+
+class AddMissingKeysTest(unittest.TestCase):
+
+    def old_config(self, p, text):
+        os.makedirs(os.path.dirname(p.config), exist_ok=True)
+        with open(p.config, "wb") as f:
+            f.write(text.encode("utf-8"))
+        return text.encode("utf-8")
+
+    def read(self, p):
+        with open(p.config, "rb") as f:
+            return f.read()
+
+    def template_blocks(self):
+        with open(TEMPLATE, encoding="utf-8") as f:
+            return BUILD.template_blocks(f.read())
+
+    def test_template_blocks(self):
+        blocks = self.template_blocks()
+        self.assertEqual([k for k, _ in blocks], TEMPLATE_KEYS)
+        for key, lines in blocks:
+            self.assertTrue(lines[-1].startswith(key + ":"), key)
+            self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
+            self.assertGreaterEqual(len(lines), 2, key)
+        # ファイルの先頭の説明は、どの項目にも入らない
+        self.assertNotIn("# cross-compile スキルの設定ファイルです。", blocks[0][1])
+
+    def test_missing_keys_are_appended_with_comments(self):
+        p = Project(self)
+        text = template_without("clean_command", "timeout_seconds").rstrip("\n") + "\n"
+        text = text.replace('outputs: []', 'outputs: ["app"]')
+        text = text.replace('build_command: "make"', 'build_command: "make -j2"  # 速くする')
+        before = self.old_config(p, text)
+        code, data, _ = p.run("config-path")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["added"], ["clean_command", "timeout_seconds"])
+        self.assertIn("設定ファイルに、新しい項目 clean_command、timeout_seconds を足しました"
+                      "（今の値はひな形のまま）。", data["message"])
+        after = self.read(p)
+        # もとの所は1バイトも変えず、最後に足す
+        self.assertEqual(after[:len(before)], before)
+        tail = after[len(before):].decode("utf-8")
+        blocks = dict(self.template_blocks())
+        self.assertEqual(tail, "\n" + "\n".join(blocks["clean_command"]) + "\n\n"
+                         + "\n".join(blocks["timeout_seconds"]) + "\n")
+        values = BUILD.parse_yaml(after.decode("utf-8"))
+        self.assertEqual(values["build_command"], "make -j2")
+        self.assertEqual(values["outputs"], ["app"])
+        self.assertEqual(values["clean_command"], "")
+        self.assertEqual(values["timeout_seconds"], 600)
+
+        # 2回目は、何も足さない
+        code, data, _ = p.run("config-path")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["added"], [])
+        self.assertNotIn("新しい項目", data["message"])
+        self.assertEqual(self.read(p), after)
+
+    def test_no_extra_blank_line_after_a_blank_line(self):
+        p = Project(self)
+        text = template_without("timeout_seconds").rstrip("\n") + "\n\n"
+        before = self.old_config(p, text)
+        p.run("config-path")
+        tail = self.read(p)[len(before):]
+        self.assertTrue(tail.startswith(b"# "), tail)
+
+    def test_nothing_added_when_complete(self):
+        p = Project(self)
+        p.configure(outputs=["app"])
+        before = self.read(p)
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["added"], [])
+        self.assertFalse(data["created"])
+        self.assertEqual(self.read(p), before)
+
+    def test_new_config_reports_nothing_added(self):
+        p = Project(self)
+        code, data, _ = p.run("config-path")
+        self.assertTrue(data["created"])
+        self.assertEqual(data["added"], [])
+
+    def test_no_final_newline_and_crlf(self):
+        p = Project(self)
+        text = template_without("timeout_seconds").replace('outputs: []', 'outputs: ["app"]')
+        text = text.rstrip("\n").replace("\n", "\r\n")
+        before = self.old_config(p, text)
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["added"], ["timeout_seconds"])
+        after = self.read(p)
+        self.assertEqual(after[:len(before)], before)
+        tail = after[len(before):]
+        self.assertTrue(tail.startswith(b"\r\n\r\n#"), tail)
+        self.assertTrue(tail.endswith(b"timeout_seconds: 600\r\n"), tail)
+        self.assertNotIn(b"\n", tail.replace(b"\r\n", b""))
+
+    def test_required_key_added_is_reported_missing(self):
+        p = Project(self)
+        before = self.old_config(p, template_without("outputs"))
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["added"], ["outputs"])
+        self.assertEqual(data["missing"], ["outputs"])
+        self.assertEqual(self.read(p)[:len(before)], before)
+
+    def test_check_and_run_also_add(self):
+        p = Project(self)
+        text = template_without("clean_command").replace('outputs: []', 'outputs: ["app"]')
+        self.old_config(p, text)
+        code, data, _ = p.run("check")
+        self.assertEqual(data["added"], ["clean_command"])
+        self.assertIn("新しい項目 clean_command を足しました", data["message"])
+
+        p2 = Project(self)
+        self.old_config(p2, text)
+        code, data, _ = p2.run("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["added"], ["clean_command"])
+        self.assertIn("新しい項目 clean_command を足しました", data["message"])
+        code, data, _ = p2.run("run")
+        self.assertEqual(data["added"], [])
+
+    def test_broken_file_is_not_touched(self):
+        p = Project(self)
+        before = self.old_config(p, "outputs: [\"app\"\n")
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["added"], [])
+        self.assertIn("problems", data)
+        self.assertEqual(self.read(p), before)
+
+    def test_unknown_keys_are_kept(self):
+        p = Project(self)
+        text = "# 自分で書いた設定\nmy_note: \"keep me\"\noutputs:\n  - app\n"
+        before = self.old_config(p, text)
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["added"], ["source_dir", "sdk_env", "build_command",
+                                         "clean_command", "timeout_seconds"])
+        after = self.read(p)
+        self.assertEqual(after[:len(before)], before)
+        values = BUILD.parse_yaml(after.decode("utf-8"))
+        self.assertEqual(values["my_note"], "keep me")
+        self.assertEqual(values["outputs"], ["app"])
+
+
+# ---------------------------------------------------------------------------
 # config-path
 # ---------------------------------------------------------------------------
 
@@ -425,12 +580,31 @@ class ConfigPathTest(unittest.TestCase):
         with open(p.path(".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "logs/\n")
 
-    def test_gitignore_only_when_the_folder_is_made(self):
+    def test_existing_folder_without_gitignore_gets_one(self):
+        """ほかのものが先にフォルダを作っても、.gitignore が無ければ作る。"""
         p = Project(self)
         os.makedirs(p.path(".embedded-debug-loop"))
         p.run("config-path")
         self.assertTrue(os.path.isfile(p.config))
-        self.assertFalse(os.path.exists(p.path(".embedded-debug-loop", ".gitignore")))
+        with open(p.path(".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
+
+    def test_gitignore_is_made_again_when_removed(self):
+        p = Project(self)
+        p.configure(outputs=["app"])
+        for command in ("config-path", "check", "run"):
+            gi = p.path(".embedded-debug-loop", ".gitignore")
+            if os.path.exists(gi):
+                os.unlink(gi)
+            p.run(command)
+            with open(gi, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "*\n", command)
+
+    def test_gitignore_in_work_folder_with_config_elsewhere(self):
+        p = Project(self)
+        os.makedirs(p.path(".embedded-debug-loop"))
+        p.run("config-path", "--config", p.path("conf", "my-build.yaml"))
+        self.assertTrue(os.path.isfile(p.path(".embedded-debug-loop", ".gitignore")))
 
     def test_default_workdir_is_current_folder(self):
         p = Project(self)
@@ -1019,8 +1193,14 @@ class SkillDocTest(unittest.TestCase):
 
     def test_mentions_notes_compiler_and_gitignore(self):
         for word in ("`notes`", "`empty_recommended`", "`compiler`", "`.gitignore`",
-                     "`stale_outputs`"):
+                     "`stale_outputs`", "`added`"):
             self.assertIn(word, self.text)
+
+    def test_gitignore_and_added_keys_are_explained(self):
+        self.assertNotIn("フォルダを新しく作るときは", self.text)
+        self.assertIn("`.gitignore` が無ければ", self.text)
+        self.assertIn("足りない項目", self.text)
+        self.assertIn("ほかの所は変えません", self.text)
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@
     drawn: Object.create(null), // 欄ごとに、最後に描いた内容
     rev: 0, // 開け閉めなどで増やし、描き直させる
     spoken: Object.create(null), // 読み上げた言葉（知らせの種類ごと）
+    liveText: '', // 読み上げの欄に、最後に書いた（書く）言葉
     timer: 0,
     polling: false,
     failures: 0,
@@ -147,6 +148,11 @@
     if (snap.waiting) return snap.waiting;
     return isActive(snap.run) ? snap.run.waiting || null : null;
   }
+  // 実行中に、チャットで利用者の答え（質問の答え・許可）を待っているか。このあいだは、どの段も「動いている」と言わない
+  function waitsOnUser(run) {
+    const latest = ui.snap && ui.snap.run;
+    return !!run && run.status === 'running' && !!latest && latest.id === run.id && !!waitingOf(ui.snap);
+  }
   // 「<プラグイン>:<名前>」と「<名前>」を同じエージェントとみなす
   function sameAgent(a, b) {
     const bare = (x) => str(x).trim().slice(str(x).trim().lastIndexOf(':') + 1);
@@ -191,12 +197,25 @@
   }
 
   // 画面の読み上げ（aria-live）。同じ種類の知らせは、言葉が変わったときだけ読む。
+  // 続けて読ませたときは、最後の言葉だけを欄に書く（ui.liveText）
   function say(text, channel = 'main') {
     if (!text || ui.spoken[channel] === text) return;
     ui.spoken[channel] = text;
+    ui.liveText = text;
     const live = $('live');
     live.textContent = '';
-    window.setTimeout(() => { live.textContent = text; }, 50);
+    window.setTimeout(() => {
+      if (ui.liveText === text) live.textContent = text;
+    }, 50);
+  }
+
+  // 終わった知らせの言葉を、読み上げの欄から消す（ほかの言葉に変わっていれば、そのままにする）
+  function unsay(channel) {
+    const text = ui.spoken[channel];
+    ui.spoken[channel] = ''; // 次に同じ知らせが出たときも、読み上げる
+    if (!text || ui.liveText !== text) return;
+    ui.liveText = '';
+    $('live').textContent = '';
   }
 
   // ---------- サーバーとのやり取り ----------
@@ -377,7 +396,7 @@
     if (!w) {
       box.hidden = true;
       box.replaceChildren();
-      ui.spoken.waiting = ''; // 次に待つときも、読み上げる
+      unsay('waiting'); // 「チャットで質問に答えてください」を、読み上げの欄に残さない
       return;
     }
     const permission = w.kind === 'permission';
@@ -811,12 +830,19 @@
     return { text: 'ほかのエージェントが動いています', time };
   }
 
-  function orgChart(workerName, verifierName, activeRole) {
-    const node = (role, head, name, job) => h('div', { class: `org-node org-${role}${activeRole === role ? ' is-active' : ''}` },
+  // waiting：チャットで利用者の答えを待っている。このときは、最後に動いていたエージェントに「動いています」と出さない
+  function orgChart(workerName, verifierName, activeRole, waiting) {
+    const mark = (role) => {
+      if (activeRole !== role) return null;
+      if (waiting) return h('p', { class: 'org-wait' }, h('span', { class: 'wait-mark', 'aria-hidden': 'true' }, '！'), 'チャットで答えを待っています');
+      return h('p', { class: 'org-live' }, h('span', { class: 'live-dot', 'aria-hidden': 'true' }), '動いています');
+    };
+    const state = (role) => (activeRole !== role ? '' : waiting ? ' is-waiting' : ' is-active');
+    const node = (role, head, name, job) => h('div', { class: `org-node org-${role}${state(role)}` },
       h('p', { class: 'org-title' }, roleWords(head)),
       name ? h('p', { class: 'org-name' }, name) : null,
       h('p', { class: 'org-job' }, job),
-      activeRole === role ? h('p', { class: 'org-live' }, h('span', { class: 'live-dot', 'aria-hidden': 'true' }), '動いています') : null);
+      mark(role));
     return h('div', { class: 'org', role: 'group', 'aria-label': 'エージェントの構成' },
       h('div', { class: 'org-top' }, node('o', '統括', '', '計画を立て、評価を記録する')),
       h('p', { class: 'org-link' }, h('span', null, '頼む・報告を受ける')),
@@ -829,10 +855,13 @@
     const c = run ? cycleOf(run) : { step: 'none', n: 0 };
     const order = ['plan', 'do', 'study'];
     const at = order.indexOf(c.step);
+    // 答えを待っているあいだは、どの段も「いま」にしない（済んだ段だけを済みにする）
+    const wait = waitsOnUser(run);
     const stateOf = (i) => {
       if (c.step === 'done') return c.has[i] ? 'done' : i === c.cut ? 'cut' : 'todo';
       if (c.step === 'wrap') return 'done';
       if (at < 0) return 'todo';
+      if (wait) return i < at ? 'done' : 'todo';
       return i < at ? 'done' : i === at ? 'now' : 'todo';
     };
     const steps = [
@@ -842,6 +871,8 @@
     ];
     const max = run ? run.maxIterations : (ui.snap.settings || {}).maxIterations;
     return h('div', { class: 'cycle-wrap' },
+      wait ? h('p', { class: 'cycle-wait' },
+        h('span', { class: 'wait-mark', 'aria-hidden': 'true' }, '！'), 'あなたの答えを待っています') : null,
       h('ol', { class: 'cycle', 'aria-label': '1 回の試行の流れ' },
         steps.map(([, name, who, cls], i) => {
           const st = stateOf(i);
@@ -876,13 +907,14 @@
     const sentence = nowSentence(run);
     const c = cycleOf(run);
     const role = run.status === 'finished' ? null : run.active ? { orchestrator: 'o', worker: 'w', verifier: 'v' }[run.active.role] || null : null;
+    const wait = waitsOnUser(run);
     const n = iterNo(run);
     const notice = ui.notice && ui.notice.runId === run.id ? ui.notice.text : '';
     let count = `試行 ${n} / ${run.maxIterations}`;
     if (run.status === 'finished') count = `試行 ${n} 回で終了`;
     else if (!n) count = `試行の前（上限 ${run.maxIterations} 回）`;
 
-    if (changed('run-now', [run.id, run.status, sentence.text, role, c, run.worker, run.verifier, run.request, count, notice])) {
+    if (changed('run-now', [run.id, run.status, sentence.text, role, wait, c, run.worker, run.verifier, run.request, count, notice])) {
       const stop = run.status === 'running'
         ? h('button', { type: 'button', class: 'btn btn-danger', dataset: { fk: 'stop' }, onclick: onStop }, '止める')
         : null;
@@ -899,7 +931,7 @@
           `実行の番号 ${str(run.id)}`, run.startedAt ? `　・　開始 ${hm(run.startedAt)}` : ''),
         run.request ? h('p', { class: 'now-request' }, h('span', { class: 'k' }, '頼んだ作業：'), firstLine(run.request, 140)) : null,
         h('div', { class: 'now-grid' },
-          orgChart(str(run.worker), str(run.verifier), role),
+          orgChart(str(run.worker), str(run.verifier), role, wait),
           cycleSteps(run)),
         stop ? h('div', { class: 'now-actions' }, stop,
           h('p', { class: 'help' }, '止めると、動いているエージェントがその場で止まり、この実行は終わります。')) : null)]);
@@ -968,6 +1000,9 @@
       return outcome === 'stopped' ? { label: '途中で止めた', cls: 'warn' } : { label: '途中で終了', cls: 'unk' };
     }
     if (run.status === 'stopping') return { label: '止めています', cls: 'warn' };
+    // 評価せずに次の試行へ進んだ、前の試行
+    if (arr(run.iterations).slice(-1)[0] !== it) return { label: '評価なし', cls: 'unk' };
+    if (waitsOnUser(run)) return { label: '答えを待っています', cls: 'wait' };
     if (it.do) return { label: '評価しています', cls: 'run' };
     return { label: '作業しています', cls: 'run' };
   }
@@ -976,7 +1011,8 @@
     const key = `${prefix}:${run.id}:${it.n}`;
     const st = iterState(run, it);
     const open = key in ui.open ? ui.open[key] : openByDefault;
-    const role = run.active && run.active.role;
+    // 答えを待っているあいだは、「…しています」と言わない
+    const role = waitsOnUser(run) ? null : run.active && run.active.role;
     const isLast = arr(run.iterations).slice(-1)[0] === it;
     const yet = run.status === 'finished' ? '' : 'まだ'; // 終わった後は「まだ」と言わない
 
@@ -1051,7 +1087,7 @@
       if (changed('run-iters', null)) fill(box, []);
       return;
     }
-    if (!changed('run-iters', [run.id, run.status, run.iterations, run.active && run.active.role])) return;
+    if (!changed('run-iters', [run.id, run.status, run.iterations, run.active && run.active.role, waitsOnUser(run)])) return;
     const its = arr(run.iterations).slice().reverse();
     fill(box, [h('section', { class: 'block', 'aria-labelledby': 'h-iters' },
       h('h2', { id: 'h-iters' }, '試行の記録'),
@@ -1061,6 +1097,19 @@
         : h('p', { class: 'muted card' }, '統括エージェントが、試行 1 の計画を立てるところです。'))]);
   }
 
+  // コマンドの行は、長いときに頭と終わり（動かしたものの名前と引数）を残し、真ん中を省く
+  const CMD_LABEL = 'コマンドを実行：';
+  const CMD_FAILED = '（失敗）';
+  const CMD_HEAD = 70;
+  const CMD_TAIL = 70;
+  function activityText(text) {
+    if (!text.startsWith(CMD_LABEL)) return text;
+    const failed = text.endsWith(CMD_FAILED);
+    const command = text.slice(CMD_LABEL.length, failed ? text.length - CMD_FAILED.length : text.length);
+    if (command.length <= CMD_HEAD + CMD_TAIL + 1) return text;
+    return `${CMD_LABEL}${command.slice(0, CMD_HEAD)}…${command.slice(-CMD_TAIL)}${failed ? CMD_FAILED : ''}`;
+  }
+
   function activityList(lines) {
     // 新しい順に並べる（時刻のないものは、届いた順の後ろから）
     const list = arr(lines).map((line, i) => ({ line, i, t: toDate(line.at) }))
@@ -1068,10 +1117,13 @@
       .map((x) => x.line);
     return h('ol', { class: 'activity' }, list.map((line) => {
       const who = str(line.who) || 'その他';
+      const full = str(line.text);
+      const shown = activityText(full);
       return h('li', null,
         h('time', { class: 'act-time' }, hms(line.at)),
         h('span', { class: `who who-${WHO_CLASS[who] || 'x'}` }, who),
-        h('span', { class: 'act-text' }, str(line.text)));
+        // 省いたときは、全文を title に残す
+        h('span', { class: 'act-text', title: shown !== full ? full : null }, shown));
     }));
   }
 

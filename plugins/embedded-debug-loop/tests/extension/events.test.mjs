@@ -80,7 +80,7 @@ test('ツールの呼び出しを、ふつうの言葉の行にする（新し�
     '統括|記録：計画',
     '統括|記録：評価',
     '統括|記録：終わり',
-    `作業|コマンドを実行：${long.slice(0, 160)}…（失敗）`,
+    `作業|コマンドを実行：${long}（失敗）`,
     '作業|ファイルを直す：/w/a.c',
     '作業|ファイルを直す：/w/b.c',
     '作業|ファイルを直す：（パッチ）',
@@ -90,6 +90,17 @@ test('ツールの呼び出しを、ふつうの言葉の行にする（新し�
     'その他|探す：main',
     'その他|コマンドを実行：dir',
   ]);
+});
+
+test('コマンドの行は、とても長くても頭と終わり（動かしたものの名前と引数）を残す', async (t) => {
+  const { fake, app } = await startRun(t);
+  const command = `python3 /tmp/${'d/'.repeat(800)}scripts/run.py run --file out/app.bin`;
+  fake.emit('tool.execution_start', { toolCallId: 'c1', toolName: 'bash', arguments: { command: `  ${command}\n` } }, undefined);
+  const text = app.store.snapshot().run.activity[0].text;
+  assert.ok(text.startsWith('コマンドを実行：python3 /tmp/d/d/'), text.slice(0, 40));
+  assert.ok(text.endsWith('/scripts/run.py run --file out/app.bin'), text.slice(-60));
+  assert.ok(text.includes('…'));
+  assert.ok(text.length <= 'コマンドを実行：'.length + 1000);
 });
 
 test('くわしい記録は 300 行までで、子のエージェントの終わりも1行で残す', async (t) => {

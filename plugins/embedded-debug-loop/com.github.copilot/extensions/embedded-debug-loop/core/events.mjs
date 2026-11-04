@@ -13,12 +13,20 @@ const RECORD_NAME = { open: 'Web管理画面を開く', prepare: '準備', plan:
 // くわしい記録に出さない、細かいツール
 const QUIET = new Set(['report_intent', 'read_bash', 'list_bash', 'read_powershell', 'list_powershell', 'read_agent', 'list_agents', 'think']);
 const MAX_LINE = 160;
+const MAX_COMMAND = 1000;
 const MAX_QUESTION = 400;
 const MAX_CALLS = 500;
 
 const oneLine = (value) => {
   const s = String(value ?? '').replace(/\s+/g, ' ').trim();
   return s.length > MAX_LINE ? `${s.slice(0, MAX_LINE)}…` : s;
+};
+// コマンドの文は、長くても頭と終わり（動かしたものの名前と引数）を残す。画面では、さらに真ん中を省いて見せる
+const commandLine = (value) => {
+  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (s.length <= MAX_COMMAND) return s;
+  const half = Math.floor((MAX_COMMAND - 1) / 2);
+  return `${s.slice(0, half)}…${s.slice(-half)}`;
 };
 // 質問の文は、行の区切りを残す（長いものは切る）
 const question = (value) => {
@@ -77,7 +85,7 @@ export function createEventSink({ store, onStopped = () => {} }) {
     switch (name) {
       case 'bash':
       case 'powershell':
-        return `コマンドを実行：${oneLine(a.command)}`;
+        return `コマンドを実行：${commandLine(a.command)}`;
       case 'write_bash':
       case 'write_powershell':
         return 'コマンドに入力';

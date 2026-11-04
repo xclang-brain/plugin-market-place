@@ -134,24 +134,31 @@ def _config_dir_of(path):
         p = parent
 
 
-def make_dirs(path):
-    """フォルダを作る。.embedded-debug-loop フォルダを新しく作ったときは、
-    中に .gitignore（中身は * の1行）も作る。すでにあれば、そのままにする。"""
+def ensure_gitignore(path):
+    """path か、その上にある .embedded-debug-loop フォルダに .gitignore がなければ作る
+    （中身は * の1行）。すでにあれば、そのままにする。作れなくても止めない。"""
     top = _config_dir_of(path)
-    fresh = top is not None and not os.path.exists(top)
+    if top is None or not os.path.isdir(top):
+        return
+    target = os.path.join(top, ".gitignore")
+    if os.path.lexists(target):
+        return
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except OSError:
+        return
+    try:
+        os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def make_dirs(path):
+    """フォルダを作る。.embedded-debug-loop フォルダに .gitignore がなければ、それも作る。"""
     os.makedirs(path, exist_ok=True)
-    if fresh:
-        try:
-            fd = os.open(os.path.join(top, ".gitignore"),
-                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except OSError:
-            return
-        try:
-            os.write(fd, GITIGNORE_TEXT.encode("utf-8"))
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
+    ensure_gitignore(path)
 
 
 def open_log(workdir):
@@ -403,6 +410,84 @@ def ensure_config(path):
     except OSError as e:
         raise ConfigError("設定ファイル %s を作れません（%s）。" % (path, _os_reason(e)))
     return True
+
+
+def template_blocks(text):
+    """ひな形の項目ごとに (名前, 行の並び) を返す。
+    行の並びは、項目のすぐ上のコメントと、項目の行（「- 値」の行が続けば、それも）。"""
+    lines = text.splitlines()
+    if lines and lines[0].startswith("\ufeff"):
+        lines[0] = lines[0][1:]
+    blocks = []
+    i = 0
+    while i < len(lines):
+        m = _KEY_LINE.match(lines[i].rstrip())
+        if not m:
+            i += 1
+            continue
+        start = i
+        while start > 0 and lines[start - 1].startswith("#"):
+            start -= 1
+        end = i + 1
+        while end < len(lines) and _ITEM_LINE.match(lines[end]):
+            end += 1
+        blocks.append((m.group(1), lines[start:end]))
+        i = end
+    return blocks
+
+
+def add_missing_keys(path):
+    """設定ファイルに、ひな形にある項目がなければ、説明のコメントと一緒にファイルの最後に足す。
+    すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
+    ファイルが読めないときや、書き方の誤りがあるときは、何も足さない。"""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+        have, _raws = read_config_text(data.decode("utf-8"))
+        with open(TEMPLATE_PATH, "r", encoding="utf-8") as fh:
+            blocks = template_blocks(fh.read())
+    except (OSError, UnicodeDecodeError, ConfigError):
+        return []
+    missing = [(key, lines) for key, lines in blocks if key not in have]
+    if not missing:
+        return []
+    eol = "\r\n" if b"\r\n" in data else "\n"
+    parts = []
+    if data and not data.endswith(b"\n"):
+        parts.append(eol)
+    blank = bool(data.strip()) and not data.endswith(b"\n\n") and not data.endswith(b"\r\n\r\n")
+    for n, (key, lines) in enumerate(missing):
+        if n > 0 or blank:
+            parts.append(eol)
+        parts.append(eol.join(lines) + eol)
+    try:
+        with open(path, "ab") as fh:
+            fh.write("".join(parts).encode("utf-8"))
+    except OSError:
+        return []
+    return [key for key, _lines in missing]
+
+
+def added_sentence(added):
+    return "設定ファイルに、新しい項目 %s を足しました（今の値はひな形のまま）。" % "、".join(added)
+
+
+def with_added(out, added):
+    """結果に、足した項目（added）と、そのことを伝える文を入れる。"""
+    out["added"] = list(added)
+    if added:
+        out["message"] = (out.get("message") or "") + added_sentence(added)
+    return out
+
+
+def open_config(workdir, config):
+    """設定ファイルを用意する。なければひな形から作り、項目が足りなければ足す。
+    .embedded-debug-loop フォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
+    ensure_gitignore(os.path.join(workdir, CONFIG_DIR_NAME))
+    created = ensure_config(config)
+    ensure_gitignore(config)
+    added = [] if created else add_missing_keys(config)
+    return created, added
 
 
 # ---------------------------------------------------------------------------
@@ -1120,13 +1205,15 @@ def resolve_paths(args):
 
 
 def cmd_config_path(workdir, config):
+    created, added = False, []
     try:
-        created = ensure_config(config)
+        created, added = open_config(workdir, config)
         values, _raws = read_config_file(config)
     except ConfigError as e:
-        emit({"config": config, "created": False, "missing": [], "problems": [str(e)]})
+        emit(with_added({"config": config, "created": created, "missing": [], "problems": [str(e)]},
+                        added))
         return 0
-    emit({"config": config, "created": created, "missing": missing_keys(values)})
+    emit(with_added({"config": config, "created": created, "missing": missing_keys(values)}, added))
     return 0
 
 
@@ -1150,21 +1237,21 @@ def problems_message(problems, config, created):
             % (head, len(problems), config))
 
 
-def _load(config):
-    """(created, values, raws, problems) を返す。"""
-    created = False
+def _load(workdir, config):
+    """(created, added, values, raws, problems) を返す。"""
+    created, added = False, []
     try:
-        created = ensure_config(config)
+        created, added = open_config(workdir, config)
         values, raws = read_config_file(config)
     except ConfigError as e:
-        return created, None, None, [str(e)]
-    return created, values, raws, []
+        return created, added, None, None, [str(e)]
+    return created, added, values, raws, []
 
 
 def cmd_check(workdir, config):
     log = open_log(workdir)
     log.write("deploy check を始めます。設定ファイル：%s" % config)
-    created, values, raws, problems = _load(config)
+    created, added, values, raws, problems = _load(workdir, config)
     summary = {}
     login_error = None
     if values is not None:
@@ -1208,7 +1295,7 @@ def cmd_check(workdir, config):
     ok = not problems
     log.say(message)
     log.close()
-    emit({
+    emit(with_added({
         "ok": ok,
         "skill": SKILL,
         "problems": problems,
@@ -1217,14 +1304,14 @@ def cmd_check(workdir, config):
         "config": config,
         "created": created,
         "log": log.path,
-    })
+    }, added))
     return 0 if ok else 2
 
 
 def cmd_run(workdir, config):
     log = open_log(workdir)
     log.write("deploy run を始めます。設定ファイル：%s" % config)
-    created, values, raws, problems = _load(config)
+    created, added, values, raws, problems = _load(workdir, config)
     settings = None
     if values is not None:
         settings, problems, notes, _ready = validate(values, raws, workdir)
@@ -1237,7 +1324,7 @@ def cmd_run(workdir, config):
         message = problems_message(problems, config, created)
         log.say(message)
         log.close()
-        emit({
+        emit(with_added({
             "ok": False,
             "skill": SKILL,
             "message": message,
@@ -1245,7 +1332,7 @@ def cmd_run(workdir, config):
             "config": config,
             "created": created,
             "log": log.path,
-        })
+        }, added))
         return 2
 
     base = {
@@ -1274,7 +1361,7 @@ def cmd_run(workdir, config):
             "files": state["results"],
             "notes": state["notes"],
         })
-        emit(out)
+        emit(with_added(out, added))
         return 1
     message = success_message(settings, state)
     log.say(message)
@@ -1288,7 +1375,7 @@ def cmd_run(workdir, config):
         "files": state["results"],
         "notes": state["notes"],
     })
-    emit(out)
+    emit(with_added(out, added))
     return 0
 
 
