@@ -208,9 +208,20 @@ export function createEventSink({ store, onStopped = () => {} }) {
           if (edited) store.noteFiles(edited, data.success === false ? 'failed' : 'ok');
           const entry = calls.get(data.toolCallId);
           calls.delete(data.toolCallId);
-          if (entry && data.success === false) {
-            entry.text += '（失敗）';
-            store.changed();
+          if (entry) {
+            const exitCode = data.shellExecution?.exitCode;
+            const denied = data.error?.code === 'denied' || /denied/i.test(String(data.error?.message ?? data.error ?? ''));
+            if (data.success === false && denied) {
+              entry.text += '（断りました）';
+              store.log('denied', { tool: entry.text, reason: String(data.error?.message ?? data.error ?? '').slice(0, 300) });
+              store.changed();
+            } else if (data.success === false) {
+              entry.text += '（失敗）';
+              store.changed();
+            } else if (typeof exitCode === 'number' && exitCode !== 0) {
+              entry.text += `（失敗：終了コード ${exitCode}）`;
+              store.changed();
+            }
           }
           break;
         }

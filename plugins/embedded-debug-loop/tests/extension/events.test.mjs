@@ -349,3 +349,23 @@ test('コマンドに説明（description）があれば、行は説明にし、
     ['コマンドを実行：make', undefined],
   ]);
 });
+
+// ---------- コマンドの終了コードと、断ったツール ----------
+
+test('コマンドが 0 以外の終了コードで終わったら、行に終了コードを付ける。断ったツールは「断りました」と付けて記録する', async (t) => {
+  const { fake, app, dataDir } = await startRun(t);
+  fake.emit('subagent.started', { agentType: WORKER, toolCallId: 't0' }, 'w1');
+  fake.emit('tool.execution_start', { toolCallId: 'e1', toolName: 'bash', arguments: { command: 'false', description: '失敗するコマンド' } }, 'w1');
+  fake.emit('tool.execution_complete', { toolCallId: 'e1', success: true, shellExecution: { exitCode: 1 } }, 'w1');
+  fake.emit('tool.execution_start', { toolCallId: 'e2', toolName: 'bash', arguments: { command: 'true', description: '成功するコマンド' } }, 'w1');
+  fake.emit('tool.execution_complete', { toolCallId: 'e2', success: true, shellExecution: { exitCode: 0 } }, 'w1');
+  fake.emit('tool.execution_start', { toolCallId: 'e3', toolName: 'task', arguments: { agent_type: WORKER, description: '試行 1 の作業' } });
+  fake.emit('tool.execution_complete', { toolCallId: 'e3', success: false, error: { code: 'denied', message: 'Denied by preToolUse hook: この試行の作業は、もう報告されています。' } });
+  const texts = app.store.snapshot().run.activity.map((a) => a.text);
+  assert.ok(texts.includes('コマンドを実行：失敗するコマンド（失敗：終了コード 1）'));
+  assert.ok(texts.includes('コマンドを実行：成功するコマンド'));
+  assert.ok(texts.some((x) => x.endsWith('（断りました）')));
+  app.store.flush();
+  const id = app.store.snapshot().run.id;
+  assert.ok(eventsOf(dataDir, id).some((e) => e.type === 'denied' && /もう報告されています/.test(e.reason)), '断ったことを events.jsonl に残す');
+});

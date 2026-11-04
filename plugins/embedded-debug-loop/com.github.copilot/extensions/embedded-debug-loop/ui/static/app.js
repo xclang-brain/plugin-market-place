@@ -130,8 +130,11 @@
   // 報告の要点：頭の「試行 N の報告」のような見出しの行は飛ばし、2 行までをつなげる
   function gist(text, max = 120) {
     const lines = normalize(text).split('\n').map((x) => x.trim()).filter(Boolean);
-    const body = lines.length > 1 && /^試行\s*\d+/.test(lines[0]) && lines[0].length <= 24 ? lines.slice(1) : lines;
-    const joined = body.slice(0, 2).join(' ／ ');
+    const body = lines.length > 1 && /^試行\s*[：:]?\s*\d+/.test(lines[0]) && lines[0].length <= 24 ? lines.slice(1) : lines;
+    // 「できなかった」「失敗」の行があれば、それを先に見せる（何ができなかったかが分かるように）
+    const bad = body.filter((x) => /できなかった|失敗/.test(x));
+    const picked = bad.length ? [...bad, ...body.filter((x) => !bad.includes(x))] : body;
+    const joined = picked.slice(0, 2).join(' ／ ');
     return joined.length > max ? `${joined.slice(0, max)}…` : joined;
   }
 
