@@ -1,106 +1,37 @@
 # embedded-debug-loop
 
 組み込み機器の C/C++ の不具合を、AI が調べて直す GitHub Copilot CLI のプラグインです。
-AI は、ソースの修正 → ビルド → 機器への転送 → 機器のログ取得 を繰り返します。
+部品は3段に分かれていて、下の段の部品を置き換えても、上の段はそのまま使えます。
 
 ## 3つの段階
 
-使い方は3段階あり、AI に任せる範囲が違います。目的に合う1つを選んで使います。
-どの段階でも、最初に設定が必要です（下の「最初に設定する」）。
+AI に任せる範囲で、使う部品が変わります。使い方と設定は、表の README にあります。
 
-| 段階 | 使うもの | 向いている場面 |
+| 段階 | 使う部品 | 見る README |
 | --- | --- | --- |
-| 1 | スキル（ビルド・転送・ログ取得・設定） | 1つの作業だけを AI に頼みたい |
-| 2 | 作業エージェント（`device-worker`） | 不具合の調査と修正を、チャットで任せたい |
-| 3 | 統括エージェント（`orchestrator`）と Web管理画面 | 直ったかを、検証エージェント（`verifier`）という別の AI に確認させたい。進み具合をブラウザーで見たい |
+| 1 | スキル。1つの作業だけを頼む | 各スキルの README（[skills/](skills/) の下のフォルダ） |
+| 2 | 作業エージェント（`device-worker`）。不具合の調査と修正を、チャットで任せる | [作業エージェントの README](com.github.copilot/agents/README.markdown) |
+| 3 | 統括エージェント（`orchestrator`）・検証エージェント（`verifier`）・Web管理画面。直ったかを別の AI に確認させ、進み具合をブラウザーで見る | [3段階目のガイド](docs/guide/3-orchestrator.md) |
 
 ## 必要なもの
 
-- Linux の PC
-- GitHub Copilot CLI（動作を確認したバージョン：1.0.105）
-- Python 3.8 以上（追加のパッケージは不要）
-- 機器向けのビルド環境（例：Yocto の SDK）
-- 転送スキル（`deploy`）を使うなら：機器で FTP サーバーが動き、PC から LAN で接続できること。実行権限を付けるなら、FTP サーバーが SITE CHMOD に対応していること
-- ログ取得スキル（`log-capture`）を使うなら：PC と機器がシリアルケーブルで接続されていること（例：`/dev/ttyUSB0`）
+- Windows の PC（Linux でも動きます）
+- GitHub Copilot CLI（動作を確認したバージョン：1.0.105。Copilot CLI と組み合わせた確認は Linux の PC で行い、Windows ではまだ行っていません）
+
+部品ごとに要るものは、上の表の README にあります。
 
 ## インストール
 
-```sh
-copilot plugin marketplace add xclang-brain/plugin-market-place
-copilot plugin install embedded-debug-loop@plugin-market-place
+Copilot CLI を起動し、次の2つを入力します。
+
+```text
+/plugin marketplace add xclang-brain/plugin-market-place
+/plugin install embedded-debug-loop@plugin-market-place
 ```
 
-インストール後に Copilot CLI を起動すると、`Extension "plugin:embedded-debug-loop:embedded-debug-loop" wants elevated permissions` と確認が出ます。
-3段階目の Web管理画面を使うなら「Yes」を選びます。
-「No」を選んだ後で使うときは、Copilot CLI を起動し直し、「Yes」を選びます。
+## 部品を置き換える
 
-## 最初に設定する
-
-最初に一度、ビルド・転送・ログ取得を設定します（SDK の場所、機器の IP アドレス、シリアルポートなど）。
-
-1. プロジェクトのフォルダで、Copilot CLI を起動します。
-2. `/agent` で `device-worker · plugin` を選びます。
-3. 「セットアップしたい」と頼みます。
-4. 値のない必須の項目を1つずつ聞かれるので、答えます。
-5. ほかの項目の一覧が出たら、「直す項目を選ぶ」で下の表の項目に値を入れ、「これで終わる」を選びます。設定ファイルごとに、手順4〜5を繰り返します。
-6. 作業エージェントが設定と機器への接続を確認し、結果を伝えます。問題がなければ完了です。
-
-機器でプログラムを動かすなら、次の3つも入れます（必須ではないので、手順4では聞かれません）。
-
-| 項目（設定ファイル） | 入れる値 | 空のとき |
-| --- | --- | --- |
-| `sdk_env`（ビルド） | SDK の環境設定ファイルのパス | PC 用のプログラムができる |
-| `file_mode`（転送） | 送った後に付ける権限（例：755） | ふつうは機器で実行できない |
-| `commands`（ログ取得） | 機器で実行するコマンド（例：`["/opt/myapp/my_app"]`） | ログ取得がエラーで止まる（`listen_seconds` が既定の 0 のとき） |
-
-- 設定ファイルは、作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）の `.<スキル名>/config.yaml` です（例：`.deploy/config.yaml`）。直接書き換えてもかまいません。
-- ログは `.<スキル名>/logs/` に入ります。設定とログ（パスワードを含むことがある）は、Git にコミットされません（スキルが `.gitignore` を作ります）。
-- 作業エージェントを使わずに設定する方法は、[スキルを単体で使う](docs/guide/1-skills.md) にあります。
-
-## 1段階目：スキルを1つずつ使う
-
-`/embedded-debug-loop:<スキル名>` のコマンドで、1つの作業だけを頼みます（例：`/embedded-debug-loop:deploy 設定を確認して`）。
-
-| スキル | すること |
-| --- | --- |
-| `cross-compile` | 機器向けにビルドする |
-| `deploy` | ビルドしたファイルを FTP で機器へ送る。権限（`file_mode`）の変更と、サム値（チェックサム）のファイルの転送もできる |
-| `log-capture` | シリアルコンソールで機器のコマンドを実行し、出力を記録する |
-| `setup` | 質問しながら、設定ファイルの値を埋める（先に設定ファイルが要る） |
-
-スキルのフォルダを `.github/skills/` などにコピーすれば、プラグインなしで使えます（`/deploy` のように呼ぶ）。
-くわしくは [スキルを単体で使う](docs/guide/1-skills.md) と、各スキルの README（例：[skills/deploy/README.md](skills/deploy/README.md)）を見てください。
-
-## 2段階目：作業エージェントに任せる
-
-1. `/agent` で `device-worker · plugin` を選びます。
-2. 直してほしいことを、チャットで頼みます。
-
-   ```text
-   sensor_app を機器で動かすと、平均値が AVG=3 と出ます。正しくは AVG=25 です。原因を調べて直してください。
-   ```
-
-作業エージェントが直して、結果を報告します。
-くわしくは [作業エージェントを使う](docs/guide/2-device-worker.md) を見てください。
-
-## 3段階目：統括エージェントに任せる
-
-統括エージェントが計画を立て、作業エージェントに作業を依頼し、検証エージェントに合否を確認させます。
-
-1. 機器の電源を入れ、LAN とシリアルのケーブルを接続します。
-2. `/agent` で `orchestrator · plugin` を選びます。
-3. 直してほしいことを、2段階目の例のように頼みます。
-4. チャットに出る URL を、同じ PC のブラウザーで開きます。
-5. Web管理画面で、「設定」と「作業エージェントの準備」を確認します。
-6. 「開始」を押します。
-
-終わると、チャットと Web管理画面の「結果」に、結論が出ます。
-URL が出ないときや、Copilot CLI が 1.0.105 より古いときは、[統括エージェントと Web管理画面](docs/guide/3-orchestrator.md) の「準備」を見てください。
-
-## ほかの環境で使う
-
-ビルド・転送・ログ取得の方法が違うときはスキルを、機器の種類が違うときは作業エージェントを置き換えます（[手順](docs/guide/replace.md)）。
-統括エージェント・検証エージェント・Web管理画面は、そのまま使えます。
+作業の方法や機器が違うときは、スキルか作業エージェントを置き換えます（[置き換えのガイド](docs/guide/replace.md)）。
 
 ## 開発者向けの文書
 

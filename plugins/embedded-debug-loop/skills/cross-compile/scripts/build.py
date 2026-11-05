@@ -3,29 +3,39 @@
 """機器で動かすプログラムを、PC でビルドする（クロスコンパイル）。
 
 使い方：
-  python3 build.py [run | config-path | check] [--workdir フォルダ] [--config ファイル]
+  <python> build.py [run | config-path | check] [--workdir フォルダ] [--config ファイル]
+  （<python> は、Windows では py -3 か python、それ以外では python3）
 
   run          ビルドする（何も書かないときも run）
   config-path  設定ファイルの場所を出す。無ければひな形から作る
   check        設定を確かめる（ビルドはしない）
 
 結果は、標準出力に JSON を1つだけ出す。途中の様子は標準エラー出力に出す。
+どちらも Python の既定の文字コードで書く。その文字コードにない文字は、JSON では \\uXXXX にする。
 終了コード：run は 0＝成功、1＝ビルドの失敗、2＝設定の問題。
             check は 0＝問題なし、2＝問題あり。config-path は 0。
 
+コマンドは、設定の shell で選んだシェル（cmd・powershell・bash）で動かす。
+  1. sdk_env があれば、そのシェルで読み込む（cmd は call、powershell は .、bash は source）。
+     読み込んだ後の環境変数は、Python に JSON で書き出させて受け取る。
+  2. clean_command、build_command の順に、その環境変数で、ビルドするフォルダの中で動かす。
+時間切れのときは、子のプロセスまで止める（Windows は taskkill /T /F、それ以外はプロセスグループ）。
+
 設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
   config.yaml  設定ファイル（無ければ config-template.yaml から作る）
-  logs/        ログ
+  logs/        ログ（いつも UTF-8。ビルドの出力が UTF-8 でなければ、OS の既定の文字コードとして読む）
   .gitignore   中身は *（設定やログを git に入れないため）
 作業フォルダは、今のフォルダ（--workdir で変えられる）。
 設定ファイルの場所は、--config で変えられる。
 
-Python 3.8 以降の標準ライブラリだけで動く。
+Python 3.8 以降の標準ライブラリだけで動く。Windows でも Linux でも動く。
 """
 
 import datetime
 import json
+import locale
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -38,13 +48,14 @@ import traceback
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
-# スキルの名前は、このスキルのフォルダの名前（名前を変えて写したら、その名前）
+# スキルの名前は、このスキルのフォルダの名前（名前を変えてコピーしたら、その名前）
 SKILL = os.path.basename(SKILL_DIR)
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 DATA_DIR_NAME = "." + SKILL  # 作業フォルダの中の、設定とログのフォルダ
 CONFIG_FILE_NAME = "config.yaml"
 LOGS_DIR_NAME = "logs"
 COMMANDS = ("run", "config-path", "check")
+IS_WINDOWS = os.name == "nt"
 
 REQUIRED_KEYS = ("outputs",)
 # 必須ではないが、機器向けにビルドするなら書く項目
@@ -52,6 +63,7 @@ RECOMMENDED_KEYS = ("sdk_env",)
 GITIGNORE_TEXT = "*\n"  # 設定やログが、誤って git に入らないようにする
 LABELS = {
     "source_dir": "ビルドするフォルダ",
+    "shell": "コマンドを動かすシェル",
     "sdk_env": "SDK の環境設定ファイル",
     "build_command": "ビルドのコマンド",
     "clean_command": "片付けのコマンド",
@@ -65,8 +77,20 @@ MAX_TAIL_LINES = 30
 PROBE_TIMEOUT = 60
 MARK = "==> "  # ビルドの出力に、区切りとして書く行の頭
 
+SHELLS = ("auto", "cmd", "powershell", "bash")
+# sdk_env のファイルの拡張子（cmd と powershell は、これ以外を読み込めない）
+SDK_SUFFIXES = {"cmd": (".bat", ".cmd"), "powershell": (".ps1",)}
+# 「コマンドが見つからない」ときの終了コード（powershell は、下の PS_RUN が 127 にする）
+NOT_FOUND_CODES = {"bash": (127,), "powershell": (127,), "cmd": (9009,)}
+DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+STEP_MARKS = {
+    "sdk_env": "SDK の環境設定ファイルを読み込みます",
+    "clean": "片付けのコマンドを実行します",
+    "build": "ビルドのコマンドを実行します",
+}
+
 USAGE = (
-    "使い方：python3 build.py [run | config-path | check] "
+    "使い方：<python> build.py [run | config-path | check] "
     "[--workdir 作業フォルダ] [--config 設定ファイル]"
 )
 
@@ -109,7 +133,9 @@ def _read_quoted(s, i, line_no):
                 try:
                     return json.loads(s[i:j + 1]), j + 1
                 except ValueError:
-                    raise YamlError(line_no, "「\"」で囲んだ文字の書き方が正しくありません。")
+                    raise YamlError(
+                        line_no, "「\"」で囲んだ文字の書き方が正しくありません。"
+                        "「\\」は「\\\\」と書くか、全体を「'」で囲んでください。")
             j += 1
         raise YamlError(line_no, "「\"」が閉じていません。")
     parts = []
@@ -214,7 +240,7 @@ def parse_yaml(text):
     list_key = None
     for line_no, line in enumerate(text.splitlines(), 1):
         if line_no == 1:
-            line = line.lstrip("﻿")
+            line = line.lstrip("\ufeff")
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -356,7 +382,7 @@ def template_blocks(text):
     行の並びは、項目のすぐ上のコメントと、項目の行（「- 値」の行が続けば、それも）。"""
     lines = text.splitlines()
     if lines:
-        lines[0] = lines[0].lstrip("﻿")
+        lines[0] = lines[0].lstrip("\ufeff")
     blocks = []
     i = 0
     while i < len(lines):
@@ -423,14 +449,15 @@ def open_config(opts, workdir, config):
 
 
 def ensure_config(path):
-    """設定ファイルが無ければ、ひな形を写して作る。作ったら True。"""
+    """設定ファイルが無ければ、ひな形をコピーして作る。作ったら True。"""
     if os.path.exists(path):
         if os.path.isdir(path):
             raise SettingsProblem(["設定ファイルの場所 {} は、フォルダです。".format(path)], path)
         return False
     if not os.path.isfile(TEMPLATE):
         raise SettingsProblem([
-            "設定のひな形 {} がありません。スキルのフォルダを写し直してください。".format(TEMPLATE)], path)
+            "設定のひな形 {} がありません。スキルのフォルダをコピーし直してください。".format(TEMPLATE)],
+            path)
     try:
         make_dirs(os.path.dirname(path))
         shutil.copyfile(TEMPLATE, path)
@@ -510,33 +537,113 @@ def _text(raw, key, problems):
     return value.strip()
 
 
+def _has_control(text):
+    return any(ord(c) < 0x20 or c == "\x7f" for c in text)
+
+
+def _control_problem(key, value):
+    # "C:\new\app" のように「"」で囲むと、\n が改行として読まれる
+    return ("{}に、タブや改行が入っています（今の値：{}）。Windows のパスは、"
+            "「/」で区切るか、全体を「'」で囲んでください。".format(label(key), show_value(value)))
+
+
 def _abs(workdir, path):
     return os.path.normpath(os.path.join(workdir, os.path.expanduser(path)))
 
 
+def resolve_shell(setting, windows=IS_WINDOWS):
+    """設定の shell の値から、使うシェルの名前（cmd・powershell・bash）を決める。"""
+    if setting == "auto":
+        return "cmd" if windows else "bash"
+    return setting
+
+
+def find_shell(name):
+    """シェルの実行ファイルの場所。見つからなければ None。"""
+    if name == "cmd":
+        if not IS_WINDOWS:
+            return None
+        comspec = os.environ.get("ComSpec") or ""
+        if comspec and os.path.isfile(comspec):
+            return comspec
+        return shutil.which("cmd.exe") or shutil.which("cmd")
+    if name == "powershell":
+        return shutil.which("pwsh") or shutil.which("powershell")
+    return shutil.which("bash")
+
+
+def shell_missing_message(name):
+    if name == "cmd":
+        return ("PC に cmd が見つかりません。cmd は Windows のシェルです。"
+                "{}を auto か bash にしてください。".format(label("shell")))
+    if name == "powershell":
+        return ("PC に PowerShell（pwsh か powershell）が見つかりません。"
+                "PowerShell をインストールするか、{}を別のシェルにしてください。".format(label("shell")))
+    return ("PC に bash が見つかりません。bash をインストールするか、"
+            "{}を別のシェルにしてください。".format(label("shell")))
+
+
 def normalize(raw, workdir):
-    """設定の値をそろえ、(設定, 問題のリスト) を返す。ファイルの有無も見る。"""
+    """設定の値をそろえ、(設定, 問題のリスト) を返す。ファイルの有無も見る。
+
+    設定の runnable は、シェルを動かしてよいか（フォルダ・SDK のファイル・シェルがそろっている）。
+    """
     problems = []
     s = {}
+    runnable = True
 
     src = _text(raw, "source_dir", problems) or "."
     s["source_dir"] = _abs(workdir, src)
-    if not os.path.exists(s["source_dir"]):
+    if _has_control(src):
+        problems.append(_control_problem("source_dir", src))
+        runnable = False
+    elif not os.path.exists(s["source_dir"]):
         problems.append("{}の {} がありません。".format(label("source_dir"), s["source_dir"]))
+        runnable = False
     elif not os.path.isdir(s["source_dir"]):
         problems.append("{}の {} は、フォルダではありません。".format(
             label("source_dir"), s["source_dir"]))
+        runnable = False
+
+    setting = (_text(raw, "shell", problems) or "auto").lower()
+    if setting not in SHELLS:
+        problems.append("{}は auto・cmd・powershell・bash のどれかで書いてください。今の値：{}".format(
+            label("shell"), show_value(raw.get("shell"))))
+        setting = "auto"
+        runnable = False
+    s["shell_setting"] = setting
+    s["shell"] = resolve_shell(setting)
+    s["shell_program"] = find_shell(s["shell"])
+    if not s["shell_program"]:
+        problems.append(shell_missing_message(s["shell"]))
+        runnable = False
 
     sdk = _text(raw, "sdk_env", problems)
     s["sdk_env"] = _abs(workdir, sdk) if sdk else ""
     if sdk:
-        if not os.path.exists(s["sdk_env"]):
+        suffixes = SDK_SUFFIXES.get(s["shell"])
+        if _has_control(sdk):
+            problems.append(_control_problem("sdk_env", sdk))
+            runnable = False
+        elif not os.path.exists(s["sdk_env"]):
             problems.append(
                 "{}の {} がありません。SDK を入れた場所と、ファイルの名前を確かめてください。".format(
                     label("sdk_env"), s["sdk_env"]))
+            runnable = False
         elif not os.path.isfile(s["sdk_env"]):
             problems.append("{}の {} は、ファイルではありません。".format(
                 label("sdk_env"), s["sdk_env"]))
+            runnable = False
+        elif suffixes and not s["sdk_env"].lower().endswith(suffixes):
+            # cmd や PowerShell に、ほかの種類のファイル（Linux のシェルスクリプトなど）を
+            # 読み込ませると、関連付けのアプリが開くことがある。動かす前に止める。
+            problems.append(
+                "{}が {} のときは、{}を {} のファイルにしてください。今の値：{}。"
+                "Linux の SDK を WSL で使うときは、sdk_env を空にして、"
+                "build_command に wsl で始まるコマンドを書きます。".format(
+                    label("shell"), s["shell"], label("sdk_env"), "・".join(suffixes),
+                    s["sdk_env"]))
+            runnable = False
 
     s["build_command"] = _text(raw, "build_command", problems) or DEFAULT_BUILD_COMMAND
     s["clean_command"] = _text(raw, "clean_command", problems)
@@ -548,6 +655,7 @@ def normalize(raw, workdir):
     if value is None:
         value = []
     if isinstance(value, list):
+        control = False
         for item in value:
             if item is None or (isinstance(item, str) and not item.strip()):
                 continue
@@ -555,8 +663,13 @@ def normalize(raw, workdir):
                 problems.append("{}の中は、ファイルの名前（文字）で書いてください。今の値：{}".format(
                     label("outputs"), show_value(item)))
                 continue
-            outputs.append(str(item).strip())
-        if not outputs:
+            item = str(item).strip()
+            if _has_control(item):
+                problems.append(_control_problem("outputs", item))
+                control = True
+                continue
+            outputs.append(item)
+        if not outputs and not control:
             problems.append(
                 "{}が空です（必須）。ビルドでできるファイルの名前を書いてください"
                 "（例：[\"my_app\"]）。".format(label("outputs")))
@@ -585,6 +698,7 @@ def normalize(raw, workdir):
     if isinstance(timeout, float) and timeout.is_integer():
         timeout = int(timeout)
     s["timeout_seconds"] = timeout
+    s["runnable"] = runnable
     return s, problems
 
 
@@ -602,17 +716,50 @@ def load(opts):
 def summary_of(settings):
     return {
         "source_dir": settings["source_dir"],
+        "shell": settings["shell_setting"],
         "sdk_env": settings["sdk_env"],
         "build_command": settings["build_command"],
         "clean_command": settings["clean_command"],
         "outputs": settings["outputs"],
         "timeout_seconds": settings["timeout_seconds"],
+        "shell_program": settings["shell_program"],
     }
 
 
 # ---------------------------------------------------------------------------
 # 出力と記録
 # ---------------------------------------------------------------------------
+
+def setup_streams():
+    """標準出力と標準エラー出力は、Python の既定の文字コードのまま、書けない文字で止まらないようにする。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def json_text_for(text, encoding):
+    """JSON の文字のうち、encoding で書けない文字を \\uXXXX にする（JSON として正しいまま）。"""
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+        return text
+    except UnicodeEncodeError:
+        pass
+    except LookupError:
+        return text
+    out = []
+    for ch in text:
+        try:
+            ch.encode(encoding)
+            out.append(ch)
+        except UnicodeEncodeError:
+            # JSON の中で ASCII でない文字は、文字列の中にしか出ない
+            out.append(json.dumps(ch)[1:-1])
+    return "".join(out)
+
 
 def progress(text):
     try:
@@ -647,6 +794,45 @@ def append_log(path, text):
         f.write(text)
 
 
+def fallback_encoding():
+    """ビルドの出力が UTF-8 でないときに使う、OS の既定の文字コード。"""
+    try:
+        enc = locale.getpreferredencoding(False) or "utf-8"
+        "".encode(enc)
+        return enc
+    except (LookupError, ValueError):
+        return "utf-8"
+
+
+def decode_output(data, fallback=None):
+    """ビルドの出力（バイト列）を、行ごとに UTF-8 で読む。読めない行は、OS の既定の文字コードで読む。"""
+    fallback = fallback or fallback_encoding()
+    parts = []
+    for chunk in data.splitlines(True):
+        try:
+            parts.append(chunk.decode("utf-8"))
+        except UnicodeDecodeError:
+            parts.append(chunk.decode(fallback, "replace"))
+    return "".join(parts)
+
+
+def recode_log(log_path, start):
+    """ログの start から後ろ（子のプロセスが書いた所）を UTF-8 にそろえ、その文字列を返す。"""
+    try:
+        with open(log_path, "r+b") as f:
+            f.seek(start)
+            data = f.read()
+            text = decode_output(data)
+            new = text.encode("utf-8")
+            if new != data:
+                f.seek(start)
+                f.truncate()
+                f.write(new)
+        return text
+    except OSError:
+        return ""
+
+
 ERROR_FLAG_RE = re.compile(r"(?<!\S)-[A-Za-z][\w,=+.-]*error[\w,=+.-]*", re.IGNORECASE)
 # リンクのエラー（undefined reference など）は、行に error が無いので足す
 ERROR_RE = re.compile(r"error|エラー|undefined reference|multiple definition", re.IGNORECASE)
@@ -679,7 +865,7 @@ def describe_file(path):
     if not exe:
         return None
     try:
-        r = subprocess.run([exe, "-b", path], stdout=subprocess.PIPE,
+        r = subprocess.run([exe, "-b", path], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.DEVNULL, timeout=10)
         text = r.stdout.decode("utf-8", "replace").strip()
         return text or None
@@ -692,6 +878,12 @@ ELF_MACHINES = {
     2: "SPARC", 3: "Intel 80386", 8: "MIPS", 20: "PowerPC", 21: "64-bit PowerPC",
     22: "IBM S/390", 40: "ARM", 42: "Renesas SH", 43: "SPARC V9", 62: "x86-64",
     183: "ARM aarch64", 243: "UCB RISC-V", 258: "LoongArch",
+}
+# platform.machine() の値と、ELF の呼び名（Python の実行ファイルが ELF でない PC のため）
+MACHINE_NAMES = {
+    "amd64": "x86-64", "x86_64": "x86-64", "x64": "x86-64",
+    "arm64": "ARM aarch64", "aarch64": "ARM aarch64",
+    "x86": "Intel 80386", "i386": "Intel 80386", "i686": "Intel 80386",
 }
 
 
@@ -718,14 +910,425 @@ def kind_of(arch, file_type):
     return "不明"
 
 
-def pc_arch():
-    """この PC の CPU の呼び名（Python の実行ファイルから調べる）。"""
-    return elf_arch(os.path.realpath(sys.executable))
+def pc_arch(machine=None):
+    """この PC の CPU の呼び名。Python の実行ファイルが ELF ならそこから、
+    そうでなければ（Windows など）platform.machine() から調べる。"""
+    if machine is None:
+        arch = elf_arch(os.path.realpath(sys.executable))
+        if arch:
+            return arch
+        machine = platform.machine()
+    return MACHINE_NAMES.get((machine or "").lower())
 
 
 def short(text, limit=160):
     text = text.strip()
     return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+# ---------------------------------------------------------------------------
+# シェルでコマンドを動かす
+# ---------------------------------------------------------------------------
+
+ENV_PREFIX = "BUILD_SKILL_"  # シェルに値を渡す環境変数の頭（受け取った環境変数からは外す）
+
+# 環境変数を JSON のファイルに書く Python のコード。cmd の「"…"」の中に置くので、
+# 「"」「%」「^」「&」「|」「<」「>」「!」を使わない。
+DUMP_ENV = ("import json,os,sys;f=open(sys.argv[1],'w',encoding='utf-8');"
+            "json.dump(dict(os.environ),f);f.close()")
+
+# SDK を読み込み、環境変数を書き出す。読み込みが失敗したら、その終了コードで終わる。
+BASH_LOAD = (
+    'if [ -n "${BUILD_SKILL_SDK_ENV-}" ]; then\n'
+    '  source "$BUILD_SKILL_SDK_ENV" || exit $?\n'
+    'fi\n'
+    'exec "$BUILD_SKILL_PYTHON" -I -c "$BUILD_SKILL_DUMP" "$BUILD_SKILL_ENV_OUT"\n'
+)
+
+# cmd のバッチファイルは、コードページの違いで文字化けしないよう、ASCII だけで書く。
+# 値はすべて環境変数で渡す。
+CMD_LOAD = "\r\n".join([
+    "@echo off",
+    "if not defined BUILD_SKILL_SDK_ENV goto dump",
+    'call "%BUILD_SKILL_SDK_ENV%"',
+    'if not "%ERRORLEVEL%"=="0" exit /b %ERRORLEVEL%',
+    ":dump",
+    '"%BUILD_SKILL_PYTHON%" -I -c "%BUILD_SKILL_DUMP%" "%BUILD_SKILL_ENV_OUT%"',
+    "exit /b %ERRORLEVEL%",
+    "",
+])
+
+# PowerShell：SDK を「.」で読み込む。例外か、0 でない $LASTEXITCODE は失敗。
+# BUILD_SKILL_WORDS（1行に1つ）のコマンドの有無を Get-Command で調べ、BUILD_SKILL_FOUND に書く。
+PS_LOAD = "\r\n".join([
+    "$ErrorActionPreference = 'Continue'",
+    "if ($env:BUILD_SKILL_SDK_ENV) {",
+    "    $global:LASTEXITCODE = 0",
+    "    try {",
+    "        . $env:BUILD_SKILL_SDK_ENV",
+    "    } catch {",
+    "        Write-Output $_.Exception.Message",
+    "        exit 1",
+    "    }",
+    "    if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE }",
+    "}",
+    "$found = @()",
+    "foreach ($w in (\"$env:BUILD_SKILL_WORDS\" -split \"`n\")) {",
+    "    if (-not $w) { continue }",
+    "    if (Get-Command -Name $w -ErrorAction SilentlyContinue) {",
+    "        $found += \"1 $w\"",
+    "    } else {",
+    "        $found += \"0 $w\"",
+    "    }",
+    "}",
+    "$env:BUILD_SKILL_FOUND = ($found -join \"`n\")",
+    "& $env:BUILD_SKILL_PYTHON -I -c $env:BUILD_SKILL_DUMP $env:BUILD_SKILL_ENV_OUT",
+    "exit $LASTEXITCODE",
+    "",
+])
+
+# PowerShell：BUILD_SKILL_COMMAND を、打ち込んだときと同じように動かす。
+# 0 でない $LASTEXITCODE はその値で、コマンドが見つからないときは 127 で、ほかの失敗は 1 で終わる。
+# Windows PowerShell 5.1 は、ネイティブのコマンドの標準エラー出力を NativeCommandError として
+# 記録し、$? を偽にすることがある。それだけなら失敗にしない。
+PS_RUN = "\r\n".join([
+    "$ErrorActionPreference = 'Continue'",
+    "$global:LASTEXITCODE = 0",
+    "$Error.Clear()",
+    "$ok = $true",
+    "try {",
+    "    Invoke-Expression $env:BUILD_SKILL_COMMAND",
+    "    $ok = $?",
+    "} catch {",
+    "    Write-Output $_.Exception.Message",
+    "    $ok = $false",
+    "}",
+    "if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE }",
+    "if ($ok) { exit 0 }",
+    "$errors = @($Error | Where-Object { (\"\" + $_.FullyQualifiedErrorId) -notlike "
+    "'NativeCommandError*' })",
+    "if ($errors.Count -eq 0) { exit 0 }",
+    "if ((\"\" + $errors[0].FullyQualifiedErrorId) -like 'CommandNotFoundException*') { exit 127 }",
+    "exit 1",
+    "",
+])
+
+PS_OPTIONS = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]
+
+CMD_BUILTINS = {
+    "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir",
+    "dpath", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "keys", "md",
+    "mkdir", "mklink", "move", "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren",
+    "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title", "type", "ver",
+    "verify", "vol",
+}
+BASH_BUILTINS = {
+    ".", ":", "[", "[[", "!", "{", "alias", "bg", "bind", "break", "builtin", "caller", "case",
+    "cd", "command", "compgen", "complete", "compopt", "continue", "coproc", "declare", "dirs",
+    "disown", "do", "echo", "enable", "eval", "exec", "exit", "export", "false", "fc", "fg",
+    "for", "function", "getopts", "hash", "help", "history", "if", "jobs", "kill", "let",
+    "local", "logout", "mapfile", "popd", "printf", "pushd", "pwd", "read", "readarray",
+    "readonly", "return", "select", "set", "shift", "shopt", "source", "suspend", "test",
+    "time", "times", "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset",
+    "until", "wait", "while",
+}
+
+
+def shell_path(settings, path):
+    """シェルに渡すパス。Windows の bash には「/」区切りで渡す。"""
+    if IS_WINDOWS and settings["shell"] == "bash":
+        return path.replace("\\", "/")
+    return path
+
+
+def write_script(tmp, name, text):
+    path = os.path.join(tmp, name)
+    encoding = "utf-8-sig" if name.endswith(".ps1") else "ascii"
+    with open(path, "w", encoding=encoding, newline="") as f:
+        f.write(text)
+    return path
+
+
+def shell_argv(settings, script_path=None, bash_script=None, command=None):
+    """シェルを起動する引数。cmd は1つの文字列（Windows のコマンドライン）で返す。"""
+    program = settings["shell_program"]
+    shell = settings["shell"]
+    if shell == "bash":
+        return [program, "-c", bash_script]
+    if shell == "powershell":
+        return [program] + PS_OPTIONS + [script_path]
+    # cmd：/s で、/c の後ろの最初と最後の「"」だけを外し、残りを打ち込んだとおりに動かす
+    body = '"{}"'.format(script_path) if command is None else command
+    return '"{}" /d /s /c "{}"'.format(program, body)
+
+
+def start_step(settings, out, env, tmp, command=None, env_out=None, words=()):
+    """command があれば、それをシェルで動かす。なければ、SDK を読み込んで（sdk_env があれば）
+    環境変数を env_out に書き出す。出力（標準出力と標準エラー出力）は out に書く。
+    ビルドするフォルダの中で動かす。Popen を返す。"""
+    shell = settings["shell"]
+    env = dict(env)
+    for key in [k for k in env if k.upper().startswith(ENV_PREFIX)]:
+        del env[key]
+    if command is None:
+        env[ENV_PREFIX + "PYTHON"] = shell_path(settings, sys.executable)
+        env[ENV_PREFIX + "DUMP"] = DUMP_ENV
+        env[ENV_PREFIX + "ENV_OUT"] = shell_path(settings, env_out)
+        if settings["sdk_env"]:
+            env[ENV_PREFIX + "SDK_ENV"] = shell_path(settings, settings["sdk_env"])
+        if words:
+            env[ENV_PREFIX + "WORDS"] = "\n".join(words)
+        if shell == "cmd":
+            argv = shell_argv(settings, write_script(tmp, "load.cmd", CMD_LOAD))
+        elif shell == "powershell":
+            argv = shell_argv(settings, write_script(tmp, "load.ps1", PS_LOAD))
+        else:
+            argv = shell_argv(settings, bash_script=BASH_LOAD)
+    else:
+        if shell == "cmd":
+            argv = shell_argv(settings, command=command)
+        elif shell == "powershell":
+            env[ENV_PREFIX + "COMMAND"] = command
+            argv = shell_argv(settings, write_script(tmp, "run.ps1", PS_RUN))
+        else:
+            # 「cd sub && make | tee x」の途中の失敗も、失敗として返す
+            argv = shell_argv(settings, bash_script="set -e\nset -o pipefail\n" + command + "\n")
+    kwargs = {}
+    if not IS_WINDOWS:
+        kwargs["start_new_session"] = True  # 時間切れのとき、子のプロセスごと止めるため
+    return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                            cwd=settings["source_dir"], env=env, **kwargs)
+
+
+def taskkill_program():
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    path = os.path.join(root, "System32", "taskkill.exe")
+    return path if os.path.isfile(path) else "taskkill"
+
+
+def kill_tree(proc):
+    """プロセスと、その子のプロセスをすべて止める。"""
+    if IS_WINDOWS:
+        try:
+            subprocess.run([taskkill_program(), "/T", "/F", "/PID", str(proc.pid)],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    # シェルが先に終わっても、TERM を無視した子が残ることがある
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    proc.wait()
+
+
+def wait_step(proc, timeout):
+    """(終了コード, 時間切れか) を返す。時間切れなら、子のプロセスまで止める。"""
+    try:
+        return proc.wait(timeout=max(timeout, 0.01)), False
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        return proc.returncode, True
+    except KeyboardInterrupt:
+        kill_tree(proc)
+        raise
+
+
+def read_env_file(path):
+    """書き出された環境変数を読む。(環境変数, PowerShell が調べたコマンドの有無) を返す。
+    読めなければ None。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    env = {}
+    found = {}
+    for key, value in data.items():
+        key, value = str(key), str(value)
+        if key.upper() == ENV_PREFIX + "FOUND":
+            for line in value.splitlines():
+                flag, _, word = line.partition(" ")
+                if word:
+                    found[word] = flag == "1"
+        elif not key.upper().startswith(ENV_PREFIX):
+            env[key] = value
+    return env, found
+
+
+def env_get(env, name):
+    if name in env:
+        return env[name]
+    if IS_WINDOWS:
+        for key, value in env.items():
+            if key.upper() == name.upper():
+                return value
+    return None
+
+
+def lookup_program(word, dirs, cwd, exts=None, search_cwd=False):
+    """コマンドの実行ファイルを探す。exts（PATHEXT の拡張子）があれば Windows の決まりで探す。
+    search_cwd なら、cwd を PATH より先に探す（cmd の決まり）。見つからなければ None。"""
+    if not word:
+        return None
+    seps = "/\\" if exts is not None else "/"
+    if any(c in word for c in seps) or (exts is not None and ":" in word):
+        candidates = [os.path.join(cwd, word)]
+    else:
+        places = [cwd] if search_cwd else []
+        for d in dirs:
+            d = d.strip().strip('"')
+            if d:
+                places.append(os.path.join(cwd, d))
+        candidates = [os.path.join(p, word) for p in places]
+    for c in candidates:
+        if exts is None:
+            if os.path.isfile(c) and os.access(c, os.X_OK):
+                return c
+            continue
+        tries = [c] if os.path.splitext(c)[1] else []
+        tries += [c + e for e in exts]
+        for t in tries:
+            if os.path.isfile(t):
+                return t
+    return None
+
+
+def find_program(word, env, settings):
+    path = env_get(env, "PATH") or ""
+    exts = None
+    if IS_WINDOWS:
+        exts = [e.strip() for e in (env_get(env, "PATHEXT") or DEFAULT_PATHEXT).split(";")
+                if e.strip()]
+    return lookup_program(word, path.split(os.pathsep), settings["source_dir"], exts,
+                          settings["shell"] == "cmd")
+
+
+def command_exists(word, env, settings, ps_found):
+    shell = settings["shell"]
+    if shell == "powershell":
+        return bool(ps_found.get(word))
+    if shell == "cmd":
+        if word.lower() in CMD_BUILTINS:
+            return True
+    elif word in BASH_BUILTINS:
+        return True
+    return find_program(word, env, settings) is not None
+
+
+def compiler_of(env, settings):
+    """make が使うコンパイラー（環境変数 CC、無ければ cc）と、その場所。"""
+    cc = (env_get(env, "CC") or "").strip()
+    command = cc or "cc"
+    words = command.split()
+    path = find_program(words[0], env, settings) if words else None
+    return {"command": command, "path": path, "from_env": bool(cc)}
+
+
+# ---------------------------------------------------------------------------
+# コマンドの最初の語
+# ---------------------------------------------------------------------------
+
+def _first_word_posix(command):
+    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    tokens = list(lex)  # 全部を読み、引用符の閉じ忘れを見つける
+    for token in tokens:
+        if not token or all(c in "();<>|&" for c in token):
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+            continue
+        return token
+    return None
+
+
+def _check_quotes(command, shell):
+    """引用符が閉じていなければ ValueError。"""
+    if shell == "cmd":
+        if command.count('"') % 2:
+            raise ValueError("unclosed quote")
+        return
+    state = None
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+        if state is None:
+            if c == "`":
+                i += 2
+                continue
+            if c in "'\"":
+                state = c
+        elif state == "'":
+            if c == "'":
+                if command[i + 1:i + 2] == "'":
+                    i += 2
+                    continue
+                state = None
+        else:
+            if c == "`":
+                i += 2
+                continue
+            if c == '"':
+                if command[i + 1:i + 2] == '"':
+                    i += 2
+                    continue
+                state = None
+        i += 1
+    if state is not None:
+        raise ValueError("unclosed quote")
+
+
+def _first_word_windows(command, shell):
+    _check_quotes(command, shell)
+    quotes = '"' if shell == "cmd" else "\"'"
+    ops = "&|<>()" if shell == "cmd" else "&|<>(){};,"
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+        if c.isspace() or c in ops or (shell == "cmd" and c == "@"):
+            i += 1
+            continue
+        if shell == "powershell" and c == "." and (i + 1 >= n or command[i + 1].isspace()):
+            i += 1  # 「. ファイル」の「.」
+            continue
+        if c in quotes:
+            j = command.find(c, i + 1)
+            return command[i + 1:j] or None
+        j = i
+        while j < n and not command[j].isspace() and command[j] not in ops \
+                and command[j] not in quotes:
+            j += 1
+        word = command[i:j]
+        if shell == "powershell" and word.startswith("$"):
+            return None  # 変数や式で始まるコマンドは、調べられない
+        return word
+    return None
+
+
+def first_word(command, shell="bash"):
+    """コマンドの最初の語（bash では VAR=値 と記号を飛ばす）。読めないときは ValueError。"""
+    if shell == "bash":
+        return _first_word_posix(command)
+    return _first_word_windows(command, shell)
 
 
 # ---------------------------------------------------------------------------
@@ -766,44 +1369,6 @@ def cmd_config_path(opts):
 # check
 # ---------------------------------------------------------------------------
 
-PROBE_SCRIPT = r'''
-sdk_env=$1
-source_dir=$2
-shift 2
-words=("$@")
-set --
-if [ -n "$sdk_env" ]; then
-  . "$sdk_env" 1>&2
-  rc=$?
-  if [ "$rc" -ne 0 ]; then printf 'sdk_failed\t%s\n' "$rc"; exit 0; fi
-fi
-if ! cd "$source_dir" 1>&2; then printf 'cd_failed\n'; exit 0; fi
-for w in "${words[@]}"; do
-  if command -v "$w" >/dev/null 2>&1; then printf 'found\t%s\n' "$w"; else printf 'missing\t%s\n' "$w"; fi
-done
-if [ -n "${CC-}" ]; then printf 'cc_set\n'; fi
-cc_cmd=${CC:-cc}
-read -r ccw _rest <<< "$cc_cmd"
-if ccp=$(command -v "$ccw" 2>/dev/null); then printf 'cc_path\t%s\n' "$ccp"; else printf 'cc_missing\t%s\n' "$ccw"; fi
-printf 'cc\t%s\n' "$cc_cmd"
-printf 'end\n'
-'''
-
-
-def first_word(command):
-    """コマンドの最初の語（VAR=値 と記号は飛ばす）。読めないときは ValueError。"""
-    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
-    tokens = list(lex)  # 全部を読み、引用符の閉じ忘れを見つける
-    for token in tokens:
-        if not token or all(c in "();<>|&" for c in token):
-            continue
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
-            continue
-        return token
-    return None
-
-
 def cmd_check(opts):
     workdir, config, created, raw, settings, problems = load(opts)
     result = {"ok": False, "skill": SKILL, "config": config, "created": created,
@@ -818,7 +1383,7 @@ def cmd_check(opts):
             if not cmd:
                 continue
             try:
-                w = first_word(cmd)
+                w = first_word(cmd, settings["shell"])
             except ValueError:
                 problems.append("{}の書き方が正しくありません（引用符が閉じていません）。".format(
                     label(key)))
@@ -826,11 +1391,8 @@ def cmd_check(opts):
             if w:
                 words.append((key, w))
 
-    src_ok = settings is not None and os.path.isdir(settings["source_dir"])
-    sdk_ok = settings is not None and (
-        not settings["sdk_env"] or os.path.isfile(settings["sdk_env"]))
     cc = None
-    if src_ok and sdk_ok:
+    if settings is not None and settings["runnable"]:
         progress("設定を確かめています（SDK の読み込みと、コマンドの有無）…")
         probe_problems, cc = probe(settings, words)
         problems.extend(probe_problems)
@@ -857,136 +1419,85 @@ def cmd_check(opts):
     return 0, result
 
 
-def sdk_said(err):
+def sdk_said(text):
     """SDK が出したメッセージの最初の行（多くは、いちばん大事な行）。"""
-    said = [l.strip() for l in err.splitlines() if l.strip()]
+    said = [l.strip() for l in text.splitlines() if l.strip()]
     return "SDK のメッセージ：「{}」。".format(short(said[0])) if said else ""
 
 
-def probe(settings, words):
-    problems = []
-    compiler = None
-    argv = ["bash", "-c", PROBE_SCRIPT, "probe", settings["sdk_env"], settings["source_dir"]]
-    argv += [w for _, w in words]
-    try:
-        r = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, timeout=PROBE_TIMEOUT,
-                           cwd=settings["source_dir"], start_new_session=True)
-    except FileNotFoundError:
-        return ["PC に bash が見つかりません。ビルドには bash が要ります。"], None
-    except subprocess.TimeoutExpired:
-        return ["{}の読み込みが、{} 秒たっても終わりません。"
-                "ファイルの中で、入力を待っていないかを確かめてください。".format(
-                    label("sdk_env"), PROBE_TIMEOUT)], None
-    out = r.stdout.decode("utf-8", "replace").splitlines()
-    err = r.stderr.decode("utf-8", "replace").strip()
-    found = {}
-    ended = False
-    cc = {"command": None, "path": None, "from_env": False}
-    cc_missing = None
-    for line in out:
-        parts = line.split("\t", 1)
-        tag = parts[0]
-        val = parts[1] if len(parts) > 1 else ""
-        if tag == "sdk_failed":
+def cd_message(settings, error=None):
+    return "{}の {} に移れません{}。".format(
+        label("source_dir"), settings["source_dir"],
+        "（{}）".format(error.strerror or error) if error is not None else "")
+
+
+def start_message(settings, error):
+    return "シェル {} を起動できません（{}）。".format(
+        settings["shell_program"], getattr(error, "strerror", None) or error)
+
+
+def load_failure(settings, rc, said, timeout, timed_out):
+    """SDK の読み込み（sdk_env が空なら、シェルの起動）が失敗したときの文。"""
+    if settings["sdk_env"]:
+        if timed_out:
+            return ("{}の読み込みが、{} 秒たっても終わりません。"
+                    "ファイルの中で、入力を待っていないかを確かめてください。".format(
+                        label("sdk_env"), timeout))
+        if rc:
             msg = "{}の {} の読み込みが失敗しました（終了コード {}）。".format(
-                label("sdk_env"), settings["sdk_env"], val)
-            return [msg + sdk_said(err) + "SDK が正しく入っているかを確かめてください。"], None
-        if tag == "cd_failed":
-            return ["{}の {} に移れません。".format(label("source_dir"), settings["source_dir"])], None
-        if tag in ("found", "missing"):
-            found[val] = tag == "found"
-        elif tag == "cc_set":
-            cc["from_env"] = True
-        elif tag == "cc_path":
-            cc["path"] = val
-        elif tag == "cc_missing":
-            cc_missing = val
-        elif tag == "cc":
-            cc["command"] = val
-        elif tag == "end":
-            ended = True
-    if not ended:
-        msg = "{}の {} を読み込むと、途中で終わってしまいます。".format(
-            label("sdk_env"), settings["sdk_env"])
-        return [msg + sdk_said(err) + "SDK が正しく入っているかを確かめてください。"], None
-    if cc_missing and settings["sdk_env"] and cc["from_env"]:
+                label("sdk_env"), settings["sdk_env"], rc)
+        else:
+            msg = "{}の {} を読み込むと、途中で終わってしまいます。".format(
+                label("sdk_env"), settings["sdk_env"])
+        return msg + sdk_said(said) + "SDK が正しく入っているかを確かめてください。"
+    if timed_out:
+        return "シェル {} が、{} 秒たっても終わりません。".format(settings["shell_program"], timeout)
+    lines = [l.strip() for l in said.splitlines() if l.strip()]
+    return "シェル {} で、環境変数を調べられませんでした（終了コード {}）。{}".format(
+        settings["shell_program"], rc, "メッセージ：「{}」。".format(short(lines[0])) if lines else "")
+
+
+def probe(settings, words):
+    """SDK を読み込んで、コマンドとコンパイラーがあるかを調べる。(問題のリスト, コンパイラー) を返す。"""
+    tmp = tempfile.mkdtemp(prefix="build-check-")
+    try:
+        out_path = os.path.join(tmp, "output.log")
+        env_out = os.path.join(tmp, "env.json")
+        with open(out_path, "wb") as out:
+            try:
+                proc = start_step(settings, out, os.environ, tmp, env_out=env_out,
+                                  words=[w for _, w in words])
+            except OSError as e:
+                if not os.path.isdir(settings["source_dir"]):
+                    return [cd_message(settings, e)], None
+                return [start_message(settings, e)], None
+            rc, timed_out = wait_step(proc, PROBE_TIMEOUT)
+        with open(out_path, "rb") as f:
+            said = decode_output(f.read())
+        loaded = None if timed_out else read_env_file(env_out)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if timed_out or rc != 0 or loaded is None:
+        return [load_failure(settings, rc, said, PROBE_TIMEOUT, timed_out)], None
+    env, ps_found = loaded
+
+    problems = []
+    cc = compiler_of(env, settings)
+    if settings["sdk_env"] and cc["from_env"] and not cc["path"]:
         problems.append(
             "SDK を読み込んだ後のコンパイラー {} が見つかりません。"
-            "SDK が正しく入っているかを確かめてください。".format(cc_missing))
-    if cc["command"]:
-        compiler = cc
+            "SDK が正しく入っているかを確かめてください。".format(cc["command"].split()[0]))
     after = "（SDK を読み込んだ後で探しました）" if settings["sdk_env"] else ""
     for key, w in words:
-        if not found.get(w, False):
+        if not command_exists(w, env, settings, ps_found):
             problems.append("{}の {} が見つかりません{}。PC に入っているかを確かめてください。".format(
                 label(key), w, after))
-    return problems, compiler
+    return problems, cc
 
 
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
-
-# set -e は「cd sub && make」の cd の失敗では止まらない。各コマンドの後で終了コードも見る。
-STOP_ON_FAILURE = 'st=$?; if [ "$st" -ne 0 ]; then exit "$st"; fi'
-
-
-def build_script(clean_command, build_command):
-    lines = [
-        'phase_file=$1',
-        'sdk_env=$2',
-        'source_dir=$3',
-        'cc_file=$4',
-        'set --',
-        "printf 'sdk_env' > \"$phase_file\"",
-        'if [ -n "$sdk_env" ]; then',
-        '  echo "' + MARK + 'SDK の環境設定ファイルを読み込みます"',
-        '  . "$sdk_env" || exit $?',
-        'fi',
-        "printf 'cd' > \"$phase_file\"",
-        'cd "$source_dir" || exit $?',
-        # make が使うコンパイラー（CC が無ければ cc）と、その場所を書き残す
-        '{ [ -n "${CC-}" ] && echo env || echo default; echo "${CC:-cc}"; '
-        'read -r _cc_word _cc_rest <<< "${CC:-cc}"; '
-        'command -v "$_cc_word" 2>/dev/null; } > "$cc_file"',
-        'set -e',
-        'set -o pipefail',
-    ]
-    if clean_command:
-        lines += [
-            "printf 'clean' > \"$phase_file\"",
-            'echo "' + MARK + '片付けのコマンドを実行します"',
-            clean_command,
-            STOP_ON_FAILURE,
-        ]
-    lines += [
-        "printf 'build' > \"$phase_file\"",
-        'echo "' + MARK + 'ビルドのコマンドを実行します"',
-        build_command,
-        STOP_ON_FAILURE,
-        "printf 'done' > \"$phase_file\"",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def kill_group(proc):
-    """ビルドと、その子のプロセスをすべて止める。"""
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
-    # bash が先に終わっても、TERM を無視した子が残ることがある
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
-        pass
-    proc.wait()
-
 
 def snapshot(path):
     try:
@@ -998,6 +1509,70 @@ def snapshot(path):
 
 def iso_time(ts):
     return datetime.datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+
+
+def write_mark(logf, step):
+    """ログに、段階の区切りの行を書く。その行（改行つき）を返す。"""
+    line = MARK + STEP_MARKS[step]
+    logf.write((line + os.linesep).encode("utf-8"))
+    logf.flush()
+    return line + "\n"
+
+
+def run_steps(s, log_path, deadline):
+    """SDK の読み込み、片付け、ビルドを順に動かし、出力をログに書く。
+    {failed_step, rc, timed_out, text, env, message} を返す。"""
+    state = {"failed_step": None, "rc": 0, "timed_out": False, "env": None, "message": None}
+    texts = []
+    steps = []
+    if s["sdk_env"]:
+        steps.append(("sdk_env", None))
+    if s["clean_command"]:
+        steps.append(("clean", s["clean_command"]))
+    steps.append(("build", s["build_command"]))
+    env = dict(os.environ)
+    tmp = tempfile.mkdtemp(prefix="build-")
+    try:
+        with open(log_path, "ab") as logf:
+            for step, command in steps:
+                texts.append(write_mark(logf, step))
+                start = logf.tell()
+                env_out = os.path.join(tmp, "env.json")
+                try:
+                    proc = start_step(s, logf, env, tmp, command=command, env_out=env_out)
+                except OSError as e:
+                    if not os.path.isdir(s["source_dir"]):
+                        state["failed_step"] = "cd"
+                        state["message"] = cd_message(s, e)
+                    else:
+                        state["failed_step"] = step
+                        state["message"] = start_message(s, e)
+                    state["rc"] = 1
+                    texts.append(state["message"] + "\n")
+                    logf.write((state["message"] + os.linesep).encode("utf-8"))
+                    break
+                rc, timed_out = wait_step(proc, deadline - time.time())
+                texts.append(recode_log(log_path, start))
+                state["rc"] = rc
+                if timed_out:
+                    state["failed_step"] = step
+                    state["timed_out"] = True
+                    break
+                if step == "sdk_env":
+                    loaded = read_env_file(env_out)
+                    if rc != 0 or loaded is None:
+                        state["failed_step"] = "sdk_env"
+                        break
+                    env = loaded[0]
+                elif rc != 0:
+                    state["failed_step"] = step
+                    break
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    state["text"] = "".join(texts)
+    if state["failed_step"] != "sdk_env":
+        state["env"] = env
+    return state
 
 
 def cmd_run(opts):
@@ -1024,6 +1599,7 @@ def cmd_run(opts):
         "作業フォルダ：{}".format(workdir),
         "設定ファイル：{}".format(config),
         "ビルドするフォルダ：{}".format(s["source_dir"]),
+        "シェル：{}（{}）".format(s["shell"], s["shell_program"]),
         "SDK の環境設定ファイル：{}".format(s["sdk_env"] or "（読み込まない）"),
         "片付けのコマンド：{}".format(s["clean_command"] or "（しない）"),
         "ビルドのコマンド：{}".format(s["build_command"]),
@@ -1035,62 +1611,18 @@ def cmd_run(opts):
     ]
     append_log(log_path, "\n".join(header))
 
-    fd, phase_file = tempfile.mkstemp(prefix="build-phase-")
-    os.close(fd)
-    fd, cc_file = tempfile.mkstemp(prefix="build-cc-")
-    os.close(fd)
-    script = build_script(s["clean_command"], s["build_command"])
     progress("ビルドを始めます：{}（フォルダ：{}）".format(s["build_command"], s["source_dir"]))
     start = time.time()
-    timed_out = False
-    try:
-        with open(log_path, "ab") as logf:
-            offset = logf.tell()
-            try:
-                proc = subprocess.Popen(
-                    ["bash", "-c", script, "build", phase_file, s["sdk_env"], s["source_dir"],
-                     cc_file],
-                    stdin=subprocess.DEVNULL, stdout=logf, stderr=subprocess.STDOUT,
-                    cwd=workdir, start_new_session=True)
-            except FileNotFoundError:
-                append_log(log_path, "bash が見つかりません。\n")
-                return 1, {"ok": False, "skill": SKILL, "log": log_path, "config": config,
-                           "message": "PC に bash が見つかりません。ビルドには bash が要ります。"}
-            try:
-                rc = proc.wait(timeout=s["timeout_seconds"])
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                progress("{} 秒たっても終わらないので、ビルドを止めます…".format(s["timeout_seconds"]))
-                kill_group(proc)
-                rc = proc.returncode
-            except KeyboardInterrupt:
-                kill_group(proc)
-                raise
-        duration = round(time.time() - start, 1)
-        try:
-            with open(phase_file, encoding="utf-8") as f:
-                phase = f.read().strip()
-        except OSError:
-            phase = ""
-        try:
-            with open(cc_file, encoding="utf-8", errors="replace") as f:
-                cc_lines = f.read().splitlines()
-        except OSError:
-            cc_lines = []
-    finally:
-        for path in (phase_file, cc_file):
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-    cc_from_env = bool(cc_lines) and cc_lines[0] == "env"
-    compiler = cc_lines[1].strip() if len(cc_lines) > 1 and cc_lines[1].strip() else None
-    compiler_path = cc_lines[2].strip() if len(cc_lines) > 2 and cc_lines[2].strip() else None
+    state = run_steps(s, log_path, start + s["timeout_seconds"])
+    duration = round(time.time() - start, 1)
+    rc = state["rc"]
+    timed_out = state["timed_out"]
+    cc = compiler_of(state["env"], s) if state["env"] is not None else None
+    compiler = cc["command"] if cc else None
+    compiler_path = cc["path"] if cc else None
+    cc_from_env = bool(cc and cc["from_env"])
 
-    with open(log_path, "rb") as f:
-        f.seek(offset)
-        out_text = f.read().decode("utf-8", "replace")
-    lines = out_text.splitlines()
+    lines = state["text"].splitlines()
     errors = error_lines_of(lines)
     warnings = warning_lines_of(lines)
     tail = lines[-MAX_TAIL_LINES:]
@@ -1102,6 +1634,7 @@ def cmd_run(opts):
         "log": log_path,
         "config": config,
         "source_dir": s["source_dir"],
+        "shell_program": s["shell_program"],
         "exit_code": rc,
         "timed_out": timed_out,
         "duration_seconds": duration,
@@ -1113,14 +1646,14 @@ def cmd_run(opts):
         "notes": [],
     }
 
-    failed_step = None
+    failed_step = state["failed_step"]
     if timed_out:
-        failed_step = phase or "build"
         msg = ("ビルドが {} 秒たっても終わらないため、止めました。"
                "ビルドが入力を待っていないか、{}が短すぎないかを確かめてください。").format(
                    s["timeout_seconds"], label("timeout_seconds"))
-    elif rc != 0:
-        failed_step = phase or "build"
+    elif state["message"]:
+        msg = state["message"]
+    elif failed_step:
         msg = failure_message(failed_step, rc, s, errors, lines)
     else:
         msg = None
@@ -1210,25 +1743,22 @@ def last_line_with(lines, words):
     return None
 
 
+NOT_FOUND_WORDS = ("not found", "見つかりません", "No such file", "is not recognized",
+                   "認識されていません", "認識されません")
+
+
 def failure_message(step, rc, s, errors, lines):
     said = [l.strip() for l in lines if l.strip() and not l.startswith(MARK)]
     if step == "sdk_env":
-        msg = "{}の {} の読み込みが失敗しました（終了コード {}）。".format(
-            label("sdk_env"), s["sdk_env"], rc)
-        if said:
-            msg += "SDK のメッセージ：「{}」。".format(short(said[0]))
-        return msg + "SDK が正しく入っているかを確かめてください。"
-    if step == "cd":
-        return "{}の {} に移れませんでした。フォルダがあるかを確かめてください。".format(
-            label("source_dir"), s["source_dir"])
+        return load_failure(s, rc, "\n".join(said), s["timeout_seconds"], False)
     what = "片付けのコマンド" if step == "clean" else "ビルドのコマンド"
     command = short(s["clean_command" if step == "clean" else "build_command"], 80)
-    if rc == 127:
-        line = last_line_with(lines, ("not found", "見つかりません", "No such file"))
+    if rc in NOT_FOUND_CODES.get(s["shell"], ()):
+        line = last_line_with(lines, NOT_FOUND_WORDS)
         return ("{}（{}）の中で、コマンドが見つかりません。「{}」。"
                 "PC に入っているか、SDK を読み込めているかを確かめてください。").format(
-                    what, command, short(line or "終了コード 127"))
-    if rc == 126:
+                    what, command, short(line or "終了コード {}".format(rc)))
+    if rc == 126 and s["shell"] == "bash":
         line = last_line_with(lines, ("Permission denied", "許可がありません"))
         return ("{}（{}）の中で、実行できないファイルがあります。「{}」。"
                 "ファイルに実行の権限があるかを確かめてください。").format(
@@ -1293,6 +1823,7 @@ def crash_log(argv, detail):
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    setup_streams()
     try:
         code, result = dispatch(argv)
     except KeyboardInterrupt:
@@ -1306,7 +1837,8 @@ def main(argv=None):
         msg = "スクリプトの中で思わぬエラーが起きました（{}）。".format(short(last, 120))
         msg += "くわしくはログを見てください。" if log else ""
         code, result = 1, {"ok": False, "skill": SKILL, "log": log, "message": msg}
-    sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    text = json.dumps(result, ensure_ascii=False, indent=2)
+    sys.stdout.write(json_text_for(text, getattr(sys.stdout, "encoding", None)) + "\n")
     sys.stdout.flush()
     return code
 

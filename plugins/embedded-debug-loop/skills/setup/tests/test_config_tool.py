@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-"""このスキルの道具（scripts/config_tool.py）の試験。
+"""このスキルの道具（scripts/config_tool.py）の show / get / set のテスト。
 
 道具は、どんな設定ファイルでも扱えなければならない。
-そのため、この試験のための見本（コーヒーメーカーとネットワークカメラ）で試す。
+そのため、このテストのための見本（コーヒーメーカーとネットワークカメラ）で試す。
 標準ライブラリだけで動く。PyYAML があれば、書き込んだファイルが
-ふつうの YAML として読めるかも確かめる。
+ふつうの YAML として読めるかも確かめる。Windows でも Linux でも動く。
 
 このスキルのフォルダで、次のように動かす。
   python3 -m unittest discover -s tests -v
 """
 
+import importlib.util
 import json
+import locale
 import os
 import re
 import shutil
@@ -35,6 +37,28 @@ except ImportError:
     HAVE_YAML = False
 
 
+_STDOUT_ENCODING = {}
+
+
+def child_stdout_encoding(env):
+    """道具の標準出力をパイプで受けるときの、道具の側の文字コード（Python の既定のもの）。"""
+    key = (env.get("PYTHONIOENCODING", ""), env.get("PYTHONUTF8", ""))
+    if key not in _STDOUT_ENCODING:
+        out = subprocess.run([sys.executable, "-c", "import sys; print(sys.stdout.encoding)"],
+                             stdout=subprocess.PIPE, env=env, timeout=60).stdout
+        _STDOUT_ENCODING[key] = out.decode("ascii").strip()
+    return _STDOUT_ENCODING[key]
+
+
+def load_tool_module():
+    """道具を、モジュールとして読み込む（__pycache__ を作らない）。"""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("config_tool_under_test", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_tool(args, cwd, stdin=None, env=None, tool=TOOL):
     full_env = dict(os.environ)
     if env:
@@ -48,7 +72,7 @@ def run_tool(args, cwd, stdin=None, env=None, tool=TOOL):
         env=full_env,
         timeout=60,
     )
-    out = proc.stdout.decode("utf-8")
+    out = proc.stdout.decode(child_stdout_encoding(full_env))
     try:
         data = json.loads(out)
     except ValueError:
@@ -63,10 +87,14 @@ class ToolTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
     def copy(self, name, dest_dir=None, dest_name=None):
+        """見本を写す。改行は LF にそろえる（Windows で CRLF で取り出されても、同じ中身で試すため）。"""
         folder = dest_dir or self.tmp
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, dest_name or name)
-        shutil.copyfile(os.path.join(FIXTURES, name), path)
+        with open(os.path.join(FIXTURES, name), "rb") as f:
+            data = f.read().replace(b"\r\n", b"\n")
+        with open(path, "wb") as f:
+            f.write(data)
         return path
 
     def read(self, path):
@@ -114,20 +142,6 @@ class ToolTestCase(unittest.TestCase):
                 self.assertEqual(x, y, "{} 行目が変わりました".format(i))
 
 
-# ---------------------------------------------------------------------------
-# list
-# ---------------------------------------------------------------------------
-
-# 項目のすぐ上に # の説明がある形（候補になる）
-DESCRIBED = "# 見本\n\n# 名前（必須）。\nname: \"\"\n"
-# 説明のない形（候補にならない）
-PLAIN = "name: \"\"\ncount: 1\n"
-HEADER_ONLY = "# 見本のファイル。\n\nname: \"\"\n"
-BARE_HASH = "#\nname: \"\"\n"
-# 中を見ないフォルダ
-SKIPPED = (".git", "node_modules", "__pycache__", ".venv", "venv", os.path.join("a", "node_modules"))
-
-
 def tree(folder):
     """フォルダの中のすべてのもの（作業フォルダからの場所。区切りは /）。"""
     out = []
@@ -148,175 +162,6 @@ def snapshot(folder):
     return out
 
 
-class ListTest(ToolTestCase):
-    """list：作業フォルダの中から、項目のすぐ上に # の説明があるファイルを探す。"""
-
-    EXPECTED = [COFFEE, ".myapp/extra.yml", ".myapp/" + CAMERA, "a/b/c/deep.yaml"]
-
-    def setUp(self):
-        ToolTestCase.setUp(self)
-        self.copy(COFFEE)
-        self.copy(CAMERA, os.path.join(self.tmp, ".myapp"))     # 点で始まるフォルダも見る
-        self.put(".myapp/extra.yml", DESCRIBED)                   # .yml も探す
-        self.put("a/b/c/deep.yaml", DESCRIBED)                    # 3 段下までは探す
-        self.put("a/b/c/d/too-deep.yaml", DESCRIBED)              # 4 段下は探さない
-        for folder in SKIPPED:
-            self.put(os.path.join(folder, "x.yaml"), DESCRIBED)
-        self.put("plain.yaml", PLAIN)
-        self.put("header-only.yaml", HEADER_ONLY)
-        self.put("bare-hash.yaml", BARE_HASH)
-        self.put("notes.txt", DESCRIBED)
-        os.makedirs(os.path.join(self.tmp, "folder.yaml"))        # フォルダは数えない
-
-    def put(self, rel, text):
-        path = os.path.join(self.tmp, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(text if isinstance(text, bytes) else text.encode("utf-8"))
-        return path
-
-    def names(self, data):
-        return [d["name"] for d in data["details"]]
-
-    def test_search_shape(self):
-        data = self.ok("list")
-        self.assertEqual(set(data), {"ok", "dir", "exists", "max_depth", "files", "details", "unreadable"})
-        self.assertEqual(os.path.realpath(data["dir"]), os.path.realpath(self.tmp))
-        self.assertTrue(data["exists"])
-        self.assertEqual(data["max_depth"], 3)
-        self.assertEqual(self.names(data), self.EXPECTED)
-        self.assertEqual(data["files"], [os.path.join(data["dir"], *n.split("/")) for n in self.EXPECTED])
-        for p in data["files"]:
-            self.assertTrue(os.path.isabs(p))
-        self.assertEqual(data["unreadable"], [])
-        details = {d["name"]: d for d in data["details"]}
-        self.assertEqual(set(details[COFFEE]), {"file", "name", "header", "items", "missing"})
-        self.assertEqual(details[COFFEE]["header"], "コーヒーメーカーの設定ファイルです（試験用の見本）。")
-        self.assertEqual(details[COFFEE]["items"], 11)
-        self.assertEqual(details[COFFEE]["missing"], ["machine_name"])
-        self.assertEqual(details[".myapp/" + CAMERA]["missing"], ["camera_ip"])
-        self.assertEqual(details["a/b/c/deep.yaml"]["header"], "見本")
-
-    def test_depth_limit(self):
-        names = self.names(self.ok("list"))
-        self.assertIn("a/b/c/deep.yaml", names)
-        self.assertNotIn("a/b/c/d/too-deep.yaml", names)
-
-    def test_skipped_folders(self):
-        names = self.names(self.ok("list"))
-        for folder in SKIPPED:
-            self.assertNotIn(folder.replace(os.sep, "/") + "/x.yaml", names)
-
-    def test_dot_folders_are_searched(self):
-        names = self.names(self.ok("list"))
-        self.assertIn(".myapp/extra.yml", names)
-        self.assertIn(".myapp/" + CAMERA, names)
-
-    def test_only_files_with_described_keys(self):
-        self.put("one-described.yaml", "count: 1\n# 色。\ncolor: \"red\"\n")
-        names = self.names(self.ok("list"))
-        self.assertIn("one-described.yaml", names)      # 説明のある項目が1つでもあれば候補
-        for name in ("plain.yaml", "header-only.yaml", "bare-hash.yaml", "notes.txt", "folder.yaml"):
-            self.assertNotIn(name, names)
-
-    def test_broken_file_reported_without_failing(self):
-        self.put("conf/broken.yaml", "# 名前\nname: \"x\"\n# 組\nnested:\n  a: 1\n")
-        self.put("conf/broken-plain.yaml", "a:\n  b: 1\n")                       # 説明がない
-        self.put("conf/sjis.yaml", "# 説明\nname: 名前\n".encode("cp932"))
-        data = self.ok("list")
-        self.assertEqual(self.names(data), self.EXPECTED)                       # 候補にはしない
-        unreadable = {d["name"]: d for d in data["unreadable"]}
-        self.assertEqual(sorted(unreadable), ["conf/broken.yaml", "conf/sjis.yaml"])
-        self.assertEqual(set(unreadable["conf/broken.yaml"]), {"file", "name", "error"})
-        self.assertIn("入れ子", unreadable["conf/broken.yaml"]["error"])
-        self.assertIn("UTF-8", unreadable["conf/sjis.yaml"]["error"])
-        self.assertEqual(unreadable["conf/broken.yaml"]["file"], os.path.join(data["dir"], "conf", "broken.yaml"))
-
-    def test_workdir_option(self):
-        other = tempfile.mkdtemp(prefix="setup-test-cwd-")
-        self.addCleanup(shutil.rmtree, other, True)
-        for args in (("list", "--workdir", self.tmp), ("list", "--workdir=" + self.tmp)):
-            data = self.ok(*args, cwd=other)
-            self.assertEqual(data["dir"], os.path.abspath(self.tmp))
-            self.assertEqual(self.names(data), self.EXPECTED)
-        self.assertEqual(self.ok("list", cwd=other)["files"], [])
-
-    def test_dir_option_is_unchanged(self):
-        """--dir は、そのフォルダの中（下のフォルダは見ない）の YAML を、説明がなくても全部返す。"""
-        self.put(".myapp/plain.yaml", PLAIN)
-        self.put(".myapp/broken.yaml", "a:\n  b: 1\n")
-        self.put(".myapp/sub/x.yaml", DESCRIBED)
-        self.put(".myapp/notes.txt", DESCRIBED)
-        other = tempfile.mkdtemp(prefix="setup-test-cwd-")
-        self.addCleanup(shutil.rmtree, other, True)
-        folder = os.path.join(self.tmp, ".myapp")
-        for args, cwd in ((("list", "--dir", ".myapp"), self.tmp),
-                          (("list", "--dir", folder), other),
-                          (("list", "--dir=" + folder), other),
-                          (("list", "--dir", ".myapp", "--workdir", self.tmp), other)):
-            data = self.ok(*args, cwd=cwd)
-            self.assertEqual(set(data), {"ok", "dir", "exists", "files", "details"})
-            self.assertEqual(os.path.realpath(data["dir"]), os.path.realpath(folder))
-            self.assertTrue(data["exists"])
-            names = ["broken.yaml", "extra.yml", CAMERA, "plain.yaml"]
-            self.assertEqual([os.path.basename(p) for p in data["files"]], names)
-            self.assertEqual(self.names(data), names)
-            broken = [d for d in data["details"] if d["name"] == "broken.yaml"][0]
-            self.assertIn("入れ子", broken["error"])
-
-    def test_dir_option_missing_folder(self):
-        data = self.ok("list", "--dir", "none")
-        self.assertFalse(data["exists"])
-        self.assertEqual(data["files"], [])
-        self.assertEqual(data["dir"], os.path.join(os.path.realpath(self.tmp), "none"))
-
-    def test_empty_workdir_creates_nothing(self):
-        empty = tempfile.mkdtemp(prefix="setup-test-empty-")
-        self.addCleanup(shutil.rmtree, empty, True)
-        data = self.ok("list", cwd=empty)
-        self.assertTrue(data["exists"])
-        self.assertEqual((data["files"], data["details"], data["unreadable"]), ([], [], []))
-        self.assertEqual(os.listdir(empty), [])
-
-    def test_missing_workdir(self):
-        missing = os.path.join(self.tmp, "none")
-        data = self.ok("list", "--workdir", missing)
-        self.assertFalse(data["exists"])
-        self.assertEqual(data["files"], [])
-        self.assertFalse(os.path.exists(missing))
-
-    def test_own_folder_is_not_searched(self):
-        """このスキルのフォルダが作業フォルダの中にあっても、中の試験の見本は候補に出さない。"""
-        work = tempfile.mkdtemp(prefix="setup-test-work-")
-        self.addCleanup(shutil.rmtree, work, True)
-        kit = os.path.join(work, "kit")
-        shutil.copytree(SKILL_DIR, kit, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        with open(os.path.join(work, "app.yaml"), "w", encoding="utf-8") as f:
-            f.write(DESCRIBED)
-        code, data, _ = run_tool(["list"], work, tool=os.path.join(kit, "scripts", "config_tool.py"))
-        self.assertEqual(code, 0, data)
-        self.assertEqual(self.names(data), ["app.yaml"])
-        # ほかの場所の道具から見ても、SKILL.md がある kit/ はスキルのフォルダなので見ない
-        self.assertEqual(self.names(self.ok("list", cwd=work)), ["app.yaml"])
-
-    def test_skill_folders_are_not_searched(self):
-        """作業フォルダに写したスキルのフォルダ（SKILL.md がある）の中のひな形は、候補に出さない。"""
-        work = tempfile.mkdtemp(prefix="setup-test-work-")
-        self.addCleanup(shutil.rmtree, work, True)
-        other = os.path.join(work, ".github", "skills", "kettle")
-        os.makedirs(other)
-        with open(os.path.join(other, "SKILL.md"), "w", encoding="utf-8") as f:
-            f.write("---\nname: kettle\ndescription: x\n---\n")
-        with open(os.path.join(other, "config-template.yaml"), "w", encoding="utf-8") as f:
-            f.write(DESCRIBED)
-        # SKILL.md のないフォルダは、これまでどおり見る
-        plain = os.path.join(work, ".github", "conf")
-        os.makedirs(plain)
-        with open(os.path.join(plain, "app.yaml"), "w", encoding="utf-8") as f:
-            f.write(DESCRIBED)
-        self.assertEqual(self.names(self.ok("list", cwd=work)), [".github/conf/app.yaml"])
-
-
 class StandaloneTest(unittest.TestCase):
     """このフォルダだけを空の場所に写しても動くこと（名前を変えた写しも）。
     作業フォルダには、点で始まるフォルダもファイルも作らないこと。"""
@@ -335,15 +180,17 @@ class StandaloneTest(unittest.TestCase):
                 coffee = os.path.join(work, "coffee.yaml")
                 shutil.copyfile(os.path.join(FIXTURES, COFFEE), coffee)
                 shutil.copyfile(os.path.join(FIXTURES, CAMERA), os.path.join(work, "conf", "camera.yaml"))
+                home = os.path.join(base, "copilot-home")
+                os.makedirs(home)
 
                 def call(*args, **kw):
-                    code, data, _ = run_tool(args, work, tool=tool, **kw)
+                    code, data, _ = run_tool(args, work, tool=tool, env={"COPILOT_HOME": home}, **kw)
                     self.assertEqual(code, 0, data)
                     self.assertTrue(data["ok"], data)
                     return data
 
-                data = call("list")
-                self.assertEqual([d["name"] for d in data["details"]], ["coffee.yaml", "conf/camera.yaml"])
+                # 隣にスキルがない場所に写したので、見つかるスキルはない（自分は数えない）
+                self.assertEqual(call("skills")["skills"], [])
                 self.assertEqual(call("show", "coffee.yaml")["missing"], ["machine_name"])
                 self.assertTrue(call("set", "coffee.yaml", "machine_name", "--stdin", stdin="1号機\n")["changed"])
                 self.assertTrue(call("set", "conf/camera.yaml", "rtsp_port", "--stdin", "--json",
@@ -585,7 +432,7 @@ class ShowTest(ToolTestCase):
 
     def test_secret_never_printed(self):
         path = self.copy(CAMERA)
-        for args in (("show", path), ("get", path, "api_token"), ("list", "--dir", self.tmp), ("list",)):
+        for args in (("show", path), ("get", path, "api_token")):
             code, data, out = self.tool(*args)
             self.assertEqual(code, 0)
             self.assertNotIn("tk-0123456789abcdef", out)
@@ -795,6 +642,7 @@ class SetTest(ToolTestCase):
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(yaml.safe_load(f)["machine_name"], "1行目\n2行目")
 
+    @unittest.skipIf(os.name == "nt" or not shutil.which("bash"), "Windows 以外で、bash があるときだけ")
     def test_set_with_stdin_heredoc(self):
         """SKILL.md に書いた形（<<'VALUE_END'）のとおりに、bash で渡す。"""
         path = self.copy(COFFEE)
@@ -823,6 +671,7 @@ class SetTest(ToolTestCase):
         data, _ = self.fail_("set", path, "machine_name", "x", "--stdin", stdin="y\n")
         self.assertIn("引数の数", data["error"])
 
+    @unittest.skipIf(os.name == "nt", "疑似端末（pty）は Windows にない")
     def test_set_with_stdin_from_terminal_does_not_wait(self):
         """値を渡し忘れても、入力を待ったまま止まらない。"""
         import pty
@@ -836,10 +685,119 @@ class SetTest(ToolTestCase):
             os.close(slave)
             os.close(master)
         self.assertEqual(proc.returncode, 2)
-        data = json.loads(proc.stdout.decode("utf-8"))
+        data = json.loads(proc.stdout.decode(child_stdout_encoding(dict(os.environ))))
         self.assertFalse(data["ok"])
         self.assertIn("VALUE_END", data["error"])
         self.assertEqual(self.read(path), before)
+
+    def test_stdin_bom_crlf_and_last_newline(self):
+        """標準入力の BOM は外す。最後の改行1つ（\\r\\n か \\n）だけを外す。"""
+        path = self.copy(COFFEE)
+        cases = [
+            (b"\xef\xbb\xbf" + "給湯室".encode("utf-8") + b"\r\n", "給湯室"),
+            (b"\xef\xbb\xbf" + "給湯室".encode("utf-8"), "給湯室"),
+            ("C:\\work\\build\\app.bin\r\n".encode("utf-8"), "C:\\work\\build\\app.bin"),
+            (b"a\r\n\r\n", "a\r\n"),
+            (b"a\n\n", "a\n"),
+            (b"\r\n", ""),
+            (b"", ""),
+        ]
+        for data, expected in cases:
+            self.ok("set", path, "greeting", "--stdin", stdin=data)
+            self.assertEqual(self.value(path, "greeting"), expected, data)
+        self.ok("set", path, "cup_size_ml", "--stdin", "--json", stdin=b"\xef\xbb\xbf250\r\n")
+        self.assertEqual(self.value(path, "cup_size_ml"), 250)
+
+    def test_stdin_not_utf8_is_read_with_os_encoding(self):
+        """UTF-8 で読めない標準入力は、OS の既定の文字コードで読む（日本語の Windows の cp932 など）。"""
+        tool = load_tool_module()
+        sjis = "給湯室の１号機\r\n".encode("cp932")
+        self.assertEqual(tool.decode_input(sjis, ["cp932"]), "給湯室の１号機")
+        self.assertEqual(tool.decode_input("給湯室\n".encode("utf-8"), ["cp932"]), "給湯室")  # UTF-8 が先
+        with self.assertRaises(tool.ToolError):
+            tool.decode_input(b"\xff\xfe\x81", ["utf-8"])
+        for name in tool.fallback_encodings():
+            self.assertNotEqual(name, "utf-8")
+
+    def test_stdin_not_utf8_through_the_command(self):
+        """コマンドとして動かしても、OS の既定の文字コードの値を書ける。ファイルは UTF-8 のまま。"""
+        tool = load_tool_module()
+        encodings = tool.fallback_encodings()
+        sample = None
+        for name in encodings:
+            for text in ("給湯室の１号機", "café crème"):
+                try:
+                    data = text.encode(name)
+                    data.decode("utf-8")
+                except UnicodeEncodeError:
+                    continue
+                except UnicodeDecodeError:
+                    sample = (text, data)
+                    break
+            if sample:
+                break
+        if sample is None:
+            self.skipTest("この PC の既定の文字コードは UTF-8 なので、UTF-8 でない入力を作れない（{}）".format(encodings))
+        path = self.copy(COFFEE)
+        self.ok("set", path, "greeting", "--stdin", stdin=sample[1] + b"\r\n")
+        self.assertEqual(self.value(path, "greeting"), sample[0])
+        self.assertIn(sample[0].encode("utf-8"), self.read(path))
+
+    def test_stdout_uses_python_default_encoding(self):
+        """結果は Python の既定の文字コードで書く。書けない文字は \\uXXXX にして、JSON として読めるままにする。"""
+        path = self.copy(COFFEE)
+        value = "給湯室の１号機 😀 é"
+        self.ok("set", path, "greeting", "--stdin", stdin=value + "\n")
+        for encoding in ("cp932", "cp1252", "ascii", "utf-8"):
+            env = {"PYTHONIOENCODING": encoding}
+            code, data, out = self.tool("get", path, "greeting", env=env)
+            self.assertEqual(code, 0, out)
+            self.assertEqual(data["value"], value, encoding)
+            out.encode(encoding)  # その文字コードだけで書かれている
+            if encoding == "cp932":
+                self.assertIn("給湯室の１号機", out)  # 書ける文字は、そのまま
+            if encoding != "utf-8":
+                self.assertIn("\\ud83d\\ude00", out)  # 書けない文字は \\uXXXX
+        # ファイルは、いつも UTF-8
+        self.assertIn(value.encode("utf-8"), self.read(path))
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell 7（pwsh）があるときだけ")
+    def test_set_with_stdin_powershell_here_string(self):
+        """SKILL.md に書いた形（@' と '@ の here-string をパイプで渡す）のとおりに、PowerShell で渡す。"""
+        path = self.copy(COFFEE)
+        result = os.path.join(self.tmp, "result.txt")
+
+        def ps(text):
+            return "'" + text.replace("'", "''") + "'"
+
+        value = "給湯室の「1号機」 $HOME `x` 'a' \"q\" C:\\work\\app"
+        script = "\n".join([
+            "$ErrorActionPreference = 'Stop'",
+            "$py = " + ps(sys.executable),
+            "$tool = " + ps(TOOL),
+            "$file = " + ps(path),
+            "$r = @'",
+            value,
+            "'@ | & $py $tool set $file machine_name --stdin",
+            "$j = ($r -join \"`n\") | ConvertFrom-Json",
+            "[IO.File]::WriteAllText(" + ps(result) + ", $j.value, [Text.UTF8Encoding]::new($false))",
+            "@'",
+            "300",
+            "'@ | & $py $tool set $file cup_size_ml --stdin --json | Out-Null",
+            "@'",
+            "'@ | & $py $tool set $file greeting --stdin | Out-Null",
+        ]) + "\n"
+        script_path = os.path.join(self.tmp, "set.ps1")
+        with open(script_path, "w", encoding="utf-8-sig") as f:
+            f.write(script)
+        proc = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-File", script_path],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertEqual(self.value(path, "machine_name"), value)
+        self.assertEqual(self.value(path, "cup_size_ml"), 300)
+        self.assertEqual(self.value(path, "greeting"), "")
+        with open(result, encoding="utf-8") as f:
+            self.assertEqual(f.read(), value)  # PowerShell が、結果の JSON を文字化けせずに読めた
 
     def test_set_value_after_double_dash(self):
         path = self.copy(COFFEE)
@@ -865,16 +823,21 @@ class SetTest(ToolTestCase):
 
     def test_file_mode_kept(self):
         path = self.copy(COFFEE)
-        os.chmod(path, 0o600)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
         self.ok("set", path, "machine_name", "x")
-        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         leftovers = [n for n in os.listdir(self.tmp) if n.endswith(".tmp")]
         self.assertEqual(leftovers, [])
 
     def test_symlink_target_is_updated(self):
         real = self.copy(COFFEE)
         link = os.path.join(self.tmp, "link.yaml")
-        os.symlink(real, link)
+        try:
+            os.symlink(real, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("この PC では、シンボリックリンクを作れない")
         self.ok("set", link, "machine_name", "via link")
         self.assertTrue(os.path.islink(link))
         self.assertEqual(self.value(real, "machine_name"), "via link")
@@ -1024,21 +987,19 @@ class RefuseTest(ToolTestCase):
             data, out = self.fail_("show", path)
             self.assertNotIn("hunter2", out, text)
             self.assertIn("行目", data["error"], text)
-            folder = os.path.join(self.tmp, "listed")
-            os.makedirs(folder, exist_ok=True)
-            shutil.copyfile(path, os.path.join(folder, "bad.yaml"))
-            code, data, out = self.tool("list", "--dir", folder)
-            self.assertEqual(code, 0)
-            self.assertNotIn("hunter2", out, text)
-            code, data, out = self.tool("list")  # 作業フォルダを探すときも
-            self.assertEqual(code, 0)
+            data, out = self.fail_("set", path, "password", "x")
             self.assertNotIn("hunter2", out, text)
 
     def test_missing_file_and_folder(self):
         data, _ = self.fail_("show", os.path.join(self.tmp, "none.yaml"))
         self.assertIn("ファイルがありません", data["error"])
+        self.assertIs(data["exists"], False)  # ないことを、名前で見分けられる
         data, _ = self.fail_("show", self.tmp)
         self.assertIn("フォルダ", data["error"])
+        self.assertNotIn("exists", data)
+        path = self.write("bad.yaml", "a:\n  b: 1\n")
+        data, _ = self.fail_("show", path)
+        self.assertNotIn("exists", data)  # 読めないだけのファイルは、ないとは言わない
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "none.yaml")))
 
     def test_unreadable_yaml_reports_line(self):
@@ -1073,7 +1034,7 @@ class RefuseTest(ToolTestCase):
     def test_bad_arguments_still_json(self):
         path = self.copy(COFFEE)
         for args in (("frobnicate",), ("show",), ("get", path), ("set", path, "machine_name"),
-                     ("list", "extra"), ("list", "--dir")):
+                     ("skills", "extra"), ("skills", "--workdir"), ("list",)):
             data, out = self.fail_(*args)
             json.loads(out)
         data = self.ok()

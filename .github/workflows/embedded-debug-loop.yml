@@ -1,0 +1,154 @@
+# embedded-debug-loop のテストを、Windows と Linux のマシンで動かす。
+# 利用者の PC は Windows なので、スキルのテストは windows-latest でも動かす。
+name: embedded-debug-loop
+
+on:
+  push:
+    paths:
+      - 'plugins/embedded-debug-loop/**'
+      - '.github/workflows/embedded-debug-loop.yml'
+  pull_request:
+    paths:
+      - 'plugins/embedded-debug-loop/**'
+      - '.github/workflows/embedded-debug-loop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  skills:
+    name: スキル（${{ matrix.os }}、Python ${{ matrix.python }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ['3.8', '3.12']
+    defaults:
+      run:
+        working-directory: plugins/embedded-debug-loop/skills
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: deploy の FTP のテストに使う pyftpdlib を入れる
+        run: |
+          python -m pip install --disable-pip-version-check pyftpdlib
+          python -c "import pyftpdlib; print('pyftpdlib', pyftpdlib.__ver__)"
+      - name: setup のテスト
+        if: ${{ !cancelled() }}
+        working-directory: plugins/embedded-debug-loop/skills/setup
+        run: python -m unittest discover -s tests -v
+      - name: cross-compile のテスト
+        if: ${{ !cancelled() }}
+        working-directory: plugins/embedded-debug-loop/skills/cross-compile
+        run: python -m unittest discover -s tests -v
+      - name: deploy のテスト
+        if: ${{ !cancelled() }}
+        working-directory: plugins/embedded-debug-loop/skills/deploy
+        run: python -m unittest discover -s tests -v
+      - name: log-capture のテスト
+        if: ${{ !cancelled() }}
+        working-directory: plugins/embedded-debug-loop/skills/log-capture
+        run: python -m unittest discover -s tests -v
+
+  independence:
+    name: 部品の独立性（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    defaults:
+      run:
+        working-directory: plugins/embedded-debug-loop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: deploy の FTP のテストに使う pyftpdlib を入れる
+        run: python -m pip install --disable-pip-version-check pyftpdlib
+      - name: 独立性のテスト
+        run: python -m unittest discover -s tests/independence -v
+
+  extension:
+    name: Web管理画面（${{ matrix.os }}、Node 20）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    defaults:
+      run:
+        working-directory: plugins/embedded-debug-loop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - name: Web管理画面のテスト
+        shell: bash
+        run: node --test tests/extension/*.test.mjs
+
+  setup-stdin-windows:
+    name: setup の標準入力と文字コード（Windows の PowerShell、Python ${{ matrix.python }}）
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.8', '3.12']
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: plugins/embedded-debug-loop/skills/setup
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: here-string をパイプで渡し、ファイルと標準出力を確かめる
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tool = Join-Path $PWD 'scripts/config_tool.py'
+          $work = Join-Path $env:RUNNER_TEMP 'setup-stdin'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $cfg = Join-Path $work 'kettle.yaml'
+          # 期待する値は、文字の番号から作る（このファイルの文字コードに頼らない）
+          $place = -join ([char[]](0x4E8C, 0x968E, 0x306E, 0x53F0, 0x6240))
+          $yaml = "# " + (-join ([char[]](0x7F6E, 0x304D, 0x5834, 0x6240))) + "`n# e.g. kitchen`nplace: `n"
+          [IO.File]::WriteAllText($cfg, $yaml, [Text.UTF8Encoding]::new($false))
+
+          Write-Host "PowerShell $($PSVersionTable.PSVersion) / OutputEncoding $($OutputEncoding.WebName) / Console $([Console]::OutputEncoding.WebName)"
+
+          # 1. SKILL.md と同じ書き方（@' と '@ の here-string をパイプで渡す）
+          $out = @'
+          二階の台所
+          '@ | python $tool set $cfg place --stdin
+          if ($LASTEXITCODE -ne 0) { throw "set が失敗しました: $out" }
+          $text = [IO.File]::ReadAllText($cfg, [Text.UTF8Encoding]::new($false))
+          Write-Host $text
+          if ($text -notmatch ('(?m)^place: "' + [regex]::Escape($place) + '"$')) { throw "設定ファイルの値が違います: $text" }
+          if ($text.Contains("`r")) { throw "設定ファイルに CR が入りました" }
+          if (($out | Out-String | ConvertFrom-Json).value -ne $place) { throw "set の標準出力の値が違います: $out" }
+
+          # 2. 標準出力（この PC の既定の文字コード）
+          $got = python $tool get $cfg place
+          if ($LASTEXITCODE -ne 0) { throw "get が失敗しました: $got" }
+          if (($got | Out-String | ConvertFrom-Json).value -ne $place) { throw "get の標準出力の値が違います: $got" }
+
+          # 3. 日本語の Windows と同じ組み合わせ（Python も PowerShell も cp932）
+          [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance)
+          $env:PYTHONIOENCODING = 'cp932'
+          [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(932)
+          $got = python $tool get $cfg place
+          if ($LASTEXITCODE -ne 0) { throw "get（cp932）が失敗しました: $got" }
+          $joined = $got | Out-String
+          if (-not $joined.Contains($place)) { throw "cp932 の標準出力に、日本語の値がそのまま出ていません: $joined" }
+          if (($joined | ConvertFrom-Json).value -ne $place) { throw "cp932 の標準出力の値が違います: $joined" }
+          Write-Host "ok"

@@ -1,18 +1,28 @@
 # クロスコンパイルのスキルの設定ファイルです。
-# 機器で動かすプログラムを、PC でビルドするやり方を書きます。
+# 機器で動かすプログラムを、PC でビルドする方法を書きます。
 # 作業フォルダは、ビルドしたいプロジェクトのフォルダです。ふつうは、このファイルが入ったフォルダの1つ外側です。
 
 # ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空や "." なら作業フォルダ。
+# Windows のパスは「/」で区切るか、全体を「'」で囲む。
 # 例：firmware/app
 source_dir: "."
+
+# コマンドと sdk_env を動かすシェル。auto・cmd・powershell・bash のどれか。
+# auto は、Windows では cmd、それ以外では bash。
+# 例：powershell
+shell: "auto"
 
 # ビルドの前に読み込む、SDK の環境設定ファイル。
 # 機器向けにビルドするなら、必ず書く。
 # 空なら SDK を読み込まず、PC のコンパイラーで PC 用のプログラムができる。
+# cmd では call、powershell では「.」、bash では source で読み込む。
+# cmd では .bat か .cmd、powershell では .ps1 のファイルにする。
+# 例：'C:\sdk\setenv.bat'
 # 例：/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
 sdk_env: ""
 
-# ビルドのコマンド。ビルドするフォルダの中で実行する。空なら make。
+# ビルドのコマンド。ビルドするフォルダの中で、shell のシェルで実行する。
+# 空なら make。
 # 例：make
 # 例：make -j4 all
 build_command: "make"

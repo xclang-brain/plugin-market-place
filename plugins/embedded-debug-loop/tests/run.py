@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""このプラグインの試験を、すべて動かす。
+"""このプラグインのテストを、すべて動かす。
 
   python3 tests/run.py        結果のまとめだけを出す（不合格のときは、その記録も出す）
   python3 tests/run.py -v     すべての記録を出す
+  （Windows では python3 の代わりに py -3 か python）
 
 動かすもの：
-- 各スキルのフォルダの中の試験（skills/<スキル>/tests/。スキルのフォルダで動かす。そのフォルダだけで動く形）
-- tests/independence/ の独立性の試験（unittest）
+- 各スキルのフォルダの中のテスト（skills/<スキル>/tests/。スキルのフォルダで動かす。そのフォルダだけで動く形）
+- tests/independence/ の独立性のテスト（unittest）
 - tests/extension/*.test.mjs（node --test）
 
-すべて合格なら終了コード 0、1つでも不合格や動かせない試験があれば 1 を返す。
+すべて合格なら終了コード 0、1つでも不合格や動かせないテストがあれば 1 を返す。
 Python 3.8 以上の標準の部品だけを使う。
+結果は、Python の既定の文字コードで書く（書けない文字は \\uXXXX の形にする）。
 """
 
 import os
@@ -27,17 +29,17 @@ TAIL_LINES = 80
 
 
 def python_groups():
-    """（名前, 動かすフォルダ, 試験のフォルダ）の並び。スキルごとと、独立性"""
+    """（名前, 動かすフォルダ, テストのフォルダ）の並び。スキルごとと、独立性"""
     groups = []
     skills = ROOT / "skills"
     if skills.is_dir():
         for skill in sorted(p for p in skills.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))):
             if any((skill / "tests").glob("test_*.py")):
                 # スキルの README に書いた動かし方と同じ（スキルのフォルダで discover -s tests）
-                groups.append(("スキル {} の試験".format(skill.name), skill, "tests"))
+                groups.append(("スキル {} のテスト".format(skill.name), skill, "tests"))
     independence = TESTS / "independence"
     if independence.is_dir() and any(independence.rglob("test_*.py")):
-        groups.append(("独立性の試験", ROOT, str(independence)))
+        groups.append(("独立性のテスト", ROOT, str(independence)))
     return groups
 
 
@@ -69,14 +71,14 @@ def run_python(name, cwd, start):
 
 
 def run_node():
-    name = "Web管理画面の試験"
+    name = "Web管理画面のテスト"
     files = sorted((TESTS / "extension").glob("*.test.mjs")) if (TESTS / "extension").is_dir() else []
     if not files:
         return None
     node = shutil.which("node")
     if node is None:
         return {"name": name, "total": 0, "bad": 1,
-                "output": "node（Node.js 20 以上）が見つからないため、Web管理画面の試験を動かせませんでした。"}
+                "output": "node（Node.js 20 以上）が見つからないため、Web管理画面のテストを動かせませんでした。"}
     code, out = run([node, "--test", "--test-reporter=tap"] + [str(f) for f in files], ROOT)
 
     def count(label):
@@ -91,6 +93,9 @@ def run_node():
 
 
 def main(argv):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     verbose = "-v" in argv or "--verbose" in argv
     results = [run_python(name, cwd, start) for name, cwd, start in python_groups()]
     node = run_node()
@@ -98,7 +103,7 @@ def main(argv):
         results.append(node)
 
     if not results:
-        print("試験が見つかりません。skills/<スキル>/tests/ と tests/ の下を確かめてください。")
+        print("テストが見つかりません。skills/<スキル>/tests/ と tests/ の下を確かめてください。")
         return 1
 
     for r in results:
@@ -111,7 +116,7 @@ def main(argv):
             print("\n".join(lines))
             print()
 
-    print("試験の結果")
+    print("テストの結果")
     for r in results:
         skipped = r.get("skipped", 0)
         note = "（うち {} 件は、要る道具がないため飛ばしました。記録は -v で見られます）".format(skipped) if skipped else ""
