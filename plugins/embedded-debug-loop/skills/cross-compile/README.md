@@ -70,6 +70,10 @@ python3 .github/skills/cross-compile/scripts/build.py check        # 設定の�
 
 `<作業フォルダ>/.cross-compile/config.yaml`
 
+- 作業フォルダは、コマンドを動かした今のフォルダです（ふつうは Copilot CLI を動かしているフォルダ）。
+  上のフォルダは探しません。別のフォルダ（サブフォルダも）で動かすと、そこに新しい設定ファイルができます。
+  作業フォルダは `--workdir` で変えられます。
+
 次のことは、スクリプトが自動でします。
 
 - 初めて使うとき、スキルのフォルダ（この README があるフォルダ）の `config-template.yaml` を写して、設定ファイルを作ります。
