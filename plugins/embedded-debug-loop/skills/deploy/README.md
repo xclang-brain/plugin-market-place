@@ -14,9 +14,9 @@ PC にあるファイルを、FTP で組み込み機器に送る GitHub Copilot 
 
 - Linux の PC と、Python 3.8 以上（標準ライブラリだけで動きます）
 - GitHub Copilot CLI
-- 機器の FTP サーバーと、送り先のフォルダに書き込めるユーザー名・パスワード
+- 機器の FTP サーバーと、送り先のフォルダに書き込めるユーザー（ユーザー名・パスワード）
 - PC から、機器の IP アドレスかホスト名に接続できること
-- FTP サーバーが、権限の変更には `SITE CHMOD` に、サイズの確認には `SIZE` に対応していること（`SIZE` がなければ、確認せずに送ります）
+- FTP サーバーが `SITE CHMOD`（権限の変更）と `SIZE`（サイズの確認）に対応していること。`SIZE` がなければ、確認せずに送ります
 
 ## インストールする
 
@@ -50,7 +50,7 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 
 - `config-path`：設定ファイルの場所を表示する（なければ作る）
 - `check`：設定を確認する
-- `run`：機器に送る（省略できる）
+- `run`：機器に送る（コマンドを省略したときも `run`）
 
 `--workdir <フォルダ>` で作業フォルダを、`--config <ファイル>` で設定ファイルを指定できます。
 
@@ -65,7 +65,7 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 - `.deploy/` に `.gitignore`（中身は `*`）を作る。パスワードやログを Git にコミットしないため。
 - スキルの更新でひな形に項目が増えたら、その項目を設定ファイルの最後に追加する（値はひな形のまま）。
 
-設定ファイルは直接編集します。項目の意味は、各項目の上のコメントにもあります。
+設定ファイルは、自分で直接編集します。項目の意味は、各項目の上のコメントにもあります。
 1行に「名前: 値」を1つ書きます。入れ子は使えません。リストは `["a", "b"]` と書きます。
 
 ### 項目
@@ -80,7 +80,7 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 | `passive` | パッシブモードを使うか | `true` |
 | `files` | 送るファイル（必須）。作業フォルダからの相対パスか絶対パス。例：`["build/my_app", "conf/my_app.conf"]` | `[]` |
 | `remote_dir` | 機器の送り先のフォルダ（必須）。なければ作る。例：`"/opt/myapp"` | 空 |
-| `file_mode` | 送った後に設定する権限（8進数）。空なら設定しない。プログラムには `"755"` などを書く | 空 |
+| `file_mode` | 送った後に設定する権限（8進数）。空なら設定しない。機器で実行するなら `"755"` などにする | 空 |
 | `checksum` | サム値の種類。`none`（作らない）・`crc32`（CRC-32）・`sum32`（全バイトを足した値の下位32ビット） | `"none"` |
 | `checksum_suffix` | サム値のファイルの名前の末尾に付ける文字（`.sum` なら `my_app.sum`） | `".sum"` |
 | `timeout_seconds` | 機器の応答を待つ最長の秒数 | `30` |
@@ -101,7 +101,7 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 どちらもなければ、設定の問題として知らせます。
 
 パスワードは、画面にもログにも出しません。
-ただし、設定ファイルの書き方の誤り（閉じていない `"` など）は、その行がエラーメッセージに出ます。`password` の行なら、パスワードも出ます。
+ただし、設定ファイルの書き方に誤り（閉じていない `"` など）があると、その行がエラーメッセージに出ます。`password` の行なら、パスワードも出ます。
 
 ## 直接実行したときの結果
 
@@ -120,12 +120,17 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 | `added` | 設定ファイルに追加した項目 |
 | `remote_dir`・`created_dirs` | 送り先・機器に新しく作ったフォルダ |
 | `config`・`log`・`skill` | 設定ファイル・ログの場所、このフォルダの名前 |
-| `files` | ファイルごとの結果。`local`・`remote`（PC・機器のファイル）、`size`・`remote_size`（そのサイズ。バイト）、`mode`（設定した権限。なければ null）、`checksum`（サム値）、`checksum_file`・`checksum_local_file`（機器・PC のサム値のファイル） |
+| `files` | ファイルごとの結果。`local`・`remote`（PC・機器のファイル）、`size`・`remote_size`（そのバイト数）、`mode`（設定した権限。なければ null）、`checksum`（サム値）、`checksum_file`・`checksum_local_file`（機器・PC のサム値のファイル） |
 
 `config-path` の JSON は、`config`（場所）、`created`（今回作ったら `true`）、`missing`（必須なのに空の項目）、`added` です。
-項目を追加したら `message`、読めなければ `problems` も出ます。
+項目を追加したら `message`、設定ファイルを読めなければ `problems` も出ます。
 
-終了コードは、0 が成功、1 が送れなかった（予期しないエラーを含む）、2 が設定かコマンドの書き方の問題（`check` でログインできないときを含む）です。
+終了コードは次のとおりです。
+
+- 0：成功
+- 1：送れなかった（予期しないエラーを含む）
+- 2：設定かコマンドの書き方の問題（`check` でログインできないときを含む）
+
 `config-path` は、設定ファイルを読めないときも 0 です。
 
 ## ログ
@@ -172,11 +177,11 @@ python3 -m unittest discover -s tests
 ```
 
 FTP サーバーを起動するテストには、`pyftpdlib` が要ります。読み込めなければ、そのテストはスキップされます（`skipped` と出ます）。
-すべて実行するときは、このフォルダの外に `pyftpdlib` をインストールし、その場所を環境変数 `DEPLOY_TEST_PYLIB` で指定します（`:` 区切りで複数可）。
+すべて実行するときは、このフォルダの外に `pyftpdlib` をインストールし、その場所を環境変数 `DEPLOY_TEST_PYLIB` で指定できます（`:` 区切りで複数可）。
 
 ```sh
 python3 -m pip install --target /tmp/pylib pyftpdlib
 DEPLOY_TEST_PYLIB=/tmp/pylib python3 -m unittest discover -s tests
 ```
 
-テストは `tests/__pycache__` を残します。残さないときは、`python3 -B -m unittest discover -s tests` で実行します。
+テストは `tests/__pycache__` を残します。残したくないときは、`python3 -B -m unittest discover -s tests` で実行します。
