@@ -370,16 +370,17 @@ class ReadmeTest(unittest.TestCase):
         self.text = read(README)
 
     def test_sections(self):
-        for heading in ("## 何をするスキルか", "## 必要なもの", "## 置き方", "## 呼び方",
+        for heading in ("## 何をするスキルか", "## 必要なもの", "## インストールする", "## 使い方",
                         "## 埋められるファイル", "## 候補のファイルの探し方", "## 結果の見方",
-                        "## うまくいかないとき", "## 試験の動かし方"):
+                        "## うまくいかないとき", "## テストを実行する"):
             self.assertIn(heading, self.text, heading)
         self.assertIn("Python 3.8 以上", self.text)
         # スキルの名前は書き換えられることがあるので、名前を除いた形で確かめる
         self.assertIn("`.github/skills/", self.text)
         self.assertIn("`~/.copilot/skills/", self.text)
         self.assertIn("`/skills reload`", self.text)
-        self.assertIn("フォルダの名前と、`SKILL.md` の `name:` を同じ名前にします。", self.text)
+        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。",
+                      self.text)
 
     def test_test_command_runs_from_this_folder(self):
         self.assertIn("このフォルダで、次を実行します。\n\n```bash\npython3 -m unittest discover -s tests -v\n```",
@@ -391,8 +392,8 @@ class ReadmeTest(unittest.TestCase):
         section = self.text[self.text.index("## 候補のファイルの探し方"):self.text.index("## 結果の見方")]
         for name in tool_constant("SKIP_DIRS"):
             self.assertIn("`{}`".format(name), section, name)
-        self.assertIn("その下 {} 段までのフォルダを探します。".format(tool_constant("SEARCH_DEPTH")), section)
-        self.assertIn("点で始まるフォルダ", section)
+        self.assertIn("その下 {} 階層までのフォルダを探します。".format(tool_constant("SEARCH_DEPTH")), section)
+        self.assertIn("名前がドットで始まるフォルダ", section)
         self.assertIn("このスキルのフォルダ", section)
 
     def test_example_yaml_can_be_filled(self):
