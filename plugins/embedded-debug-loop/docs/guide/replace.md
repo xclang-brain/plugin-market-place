@@ -36,9 +36,14 @@
 - 例は `# 例：…`、選べる値は `# 選べる値：a / b / c` と書く。
 - パスワードなど見せたくない値の項目は、名前に `password` などを含める（設定のスキルが、値を伏せる）。
 - 環境変数で渡す項目は、`<項目>_env` という名前にする（例：`password` と `password_env`）。
-- 置き場所は、プロジェクトのフォルダの `.embedded-debug-loop/<スキルの名前>.yaml` をおすすめします。そのフォルダに `.gitignore`（中身は `*`）がなければ作ります（パスワードやログを Git に入れないため）。
+- 置き場所は、作業フォルダの `.<スキルの名前>/config.yaml` にします。ログは `.<スキルの名前>/logs/` に置きます。
+- スキルは、そのフォルダに `.gitignore`（中身は `*`）がなければ作ります。パスワードやログを Git に入れないためです。
+- 置き場所の名前に、プラグインの名前を使いません。プラグインを入れずに、スキルのフォルダだけを写して使う人もいるためです。
 
-スキルの説明（SKILL.md）には、ほかのスキルやエージェントのことを書きません。
+スキルは、そのフォルダだけで完結させます。
+
+- スキルのフォルダの中（SKILL.md、README.md、スクリプト、ひな形、試験）に、プラグインの名前・ほかのスキル・エージェントのことを書きません。フォルダの外を指しません。
+- 人向けの使い方は、スキルのフォルダの `README.md` に書きます。試験も、スキルのフォルダの `tests/` に置きます。
 
 ### 置き換え方は2つあります
 
@@ -53,7 +58,7 @@ Copilot CLI は、同じ名前のスキルがプロジェクト（`.github/skill
 
 1. プロジェクトの `.github/skills/<同じ名前>/` に、新しいスキルを作ります（作り方は、下の B の手順1と同じです）。
 2. `/skills list` で、そのスキルが「project」として出て、プラグインのほうが消えたことを確かめます。
-3. 前のスキルの設定ファイル（`.embedded-debug-loop/<同じ名前>.yaml`）が残っていれば、消すか名前を変えます。項目が違うので、そのままでは使えません。
+3. 前のスキルの設定ファイル（`.<同じ名前>/config.yaml`）が残っていれば、消すか名前を変えます。項目が違うので、そのままでは使えません。
 4. 作業エージェントに「セットアップしたい」と頼み、新しいスキルの設定を埋めます。
 
 注意：個人のフォルダに、たまたま同じ名前（`deploy`、`setup` など）の別のスキルがあると、プラグインのスキルの代わりにそちらが使われます。作業エージェントの動きがおかしいときは、`/skills list` で確かめてください。
@@ -62,7 +67,7 @@ Copilot CLI は、同じ名前のスキルがプロジェクト（`.github/skill
 
 1. 新しいスキルを作ります。
    - 置き場所：プロジェクトの `.github/skills/deploy-scp/`（自分だけで使うなら `~/.copilot/skills/deploy-scp/`）。
-   - `SKILL.md` に、上の3つの依頼への応え方を書きます。今の `deploy` スキルの SKILL.md が手本になります（[GitHub の plugins/embedded-debug-loop/skills/deploy/](https://github.com/xclang-brain/plugin-market-place/tree/main/plugins/embedded-debug-loop/skills/deploy)）。
+   - `SKILL.md` に、上の3つの依頼への応え方を書きます。今の `deploy` スキルの SKILL.md と README.md が手本になります（[GitHub の plugins/embedded-debug-loop/skills/deploy/](https://github.com/xclang-brain/plugin-market-place/tree/main/plugins/embedded-debug-loop/skills/deploy)）。
    - `SKILL.md` の先頭には、`name`（フォルダの名前と同じ）と `description`（何をするか・いつ使うか）を書きます。
    - 設定のひな形（例：`config-template.yaml`）と、作業をするスクリプトを置きます。
 2. 作業エージェントを写します。

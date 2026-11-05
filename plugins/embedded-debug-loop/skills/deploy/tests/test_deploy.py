@@ -4,10 +4,11 @@
 - サーバーなし：サム値の計算、設定ファイルの読み方と確かめ、サブコマンドの JSON。
 - サーバーあり：試験の中で FTP サーバー（pyftpdlib）を立てて、実際に送る。
   pyftpdlib が読み込めないときは、その試験だけ飛ばす。
-  pyftpdlib の場所は、環境変数 EDL_TEST_PYLIB（: 区切り）で足せる。
+  pyftpdlib の場所は、環境変数 DEPLOY_TEST_PYLIB（: 区切り）で足せる。
+- フォルダだけで動くこと：このスキルのフォルダだけを別の場所に写して動かす。
 
-実行：python3 -m unittest discover -s tests/skills/deploy -t . -v
-     （プラグインのフォルダで）
+実行：python3 -m unittest discover -s tests
+     （このスキルのフォルダで）
 """
 
 import contextlib
@@ -26,11 +27,14 @@ import time
 import unittest
 import zlib
 
+# パスは、この試験のファイルの場所から求める（tests/ の親が、このスキルのフォルダ）。
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-SKILL_DIR = os.path.join(PLUGIN_ROOT, "skills", "deploy")
+SKILL_DIR = os.path.dirname(HERE)
+SKILL_NAME = os.path.basename(SKILL_DIR)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "deploy.py")
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
+# 設定と記録を置くフォルダ：作業フォルダの「.<このスキルのフォルダの名前>」
+DATA_DIR = "." + SKILL_NAME
 
 
 def _load_module():
@@ -51,7 +55,7 @@ deploy = _load_module()
 
 # --- pyftpdlib（試験のときだけ使う。利用者の PC には要らない） ---------------
 
-_PYLIB_CANDIDATES = [p for p in os.environ.get("EDL_TEST_PYLIB", "").split(os.pathsep) if p]
+_PYLIB_CANDIDATES = [p for p in os.environ.get("DEPLOY_TEST_PYLIB", "").split(os.pathsep) if p]
 
 
 def _import_pyftpdlib():
@@ -77,7 +81,7 @@ def _import_pyftpdlib():
 HAVE_PYFTPDLIB = _import_pyftpdlib()
 needs_server = unittest.skipUnless(
     HAVE_PYFTPDLIB,
-    "pyftpdlib が読み込めないので飛ばす（環境変数 EDL_TEST_PYLIB でその場所を指定できる）")
+    "pyftpdlib が読み込めないので飛ばす（環境変数 DEPLOY_TEST_PYLIB でその場所を指定できる）")
 
 PASSWORD = "s3cret-Pw"
 
@@ -163,7 +167,8 @@ class Workspace(object):
     def __init__(self, test):
         self.dir = tempfile.mkdtemp(prefix="deploy-test-")
         test.addCleanup(shutil.rmtree, self.dir, True)
-        self.config = os.path.join(self.dir, ".embedded-debug-loop", "deploy.yaml")
+        self.data_dir = os.path.join(self.dir, DATA_DIR)
+        self.config = os.path.join(self.data_dir, "config.yaml")
 
     def file(self, rel, data):
         path = os.path.join(self.dir, rel)
@@ -282,7 +287,9 @@ class YamlReaderTest(unittest.TestCase):
     def test_template_keys_have_comments(self):
         with open(TEMPLATE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
-        self.assertTrue(lines[0].startswith("# ") and "deploy" in lines[0])
+        self.assertTrue(lines[0].startswith("# ") and "スキルの設定ファイルです" in lines[0], lines[0])
+        # 名前を変えて写すと食い違うので、ひな形にはスキルの名前を書かない
+        self.assertNotIn("deploy", "\n".join(lines))
         for i, line in enumerate(lines):
             if line and not line.startswith("#"):
                 key = line.split(":", 1)[0]
@@ -300,7 +307,7 @@ class YamlReaderTest(unittest.TestCase):
         self.assertIn("# 選べる値：none / crc32 / sum32", text)
 
     def test_template_examples_are_generic(self):
-        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        """例が試験で使う名前（sensor_app など）と同じだと、試験が例に頼って通ってしまう。"""
         with open(TEMPLATE, encoding="utf-8") as fh:
             text = fh.read()
         self.assertNotIn("sensor", text)
@@ -308,7 +315,7 @@ class YamlReaderTest(unittest.TestCase):
         self.assertIn("# 例：/opt/myapp", text)
 
     def test_template_comments_do_not_point_by_position(self):
-        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        """コメントは、項目から離れて（チャットなどで）読まれることがある。「下の」などは、離れて読むと通じない。"""
         with open(TEMPLATE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
         for i, line in enumerate(lines):
@@ -501,7 +508,7 @@ class ValidateTest(unittest.TestCase):
         self.assertTrue(any("同じ名前" in p for p in problems))
 
     def test_login_hint_names_empty_password_and_where_to_write(self):
-        conf = "/w/.embedded-debug-loop/deploy.yaml"
+        conf = "/w/%s/config.yaml" % DATA_DIR
         hint = deploy.login_hint({"user": "root", "password": "", "password_env": "",
                                   "config_path": conf})
         self.assertIn("password も password_env も空", hint)
@@ -556,7 +563,9 @@ class AddMissingKeysTest(unittest.TestCase):
         for key, lines in blocks:
             self.assertTrue(lines[-1].startswith(key + ":"), key)
             self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
-        self.assertNotIn("# deploy スキルの設定ファイルです。", blocks[0][1])
+        with open(TEMPLATE, "r", encoding="utf-8") as fh:
+            head = fh.readline().rstrip("\n")
+        self.assertNotIn(head, blocks[0][1])
 
     def test_missing_keys_are_appended_with_comments(self):
         ws = Workspace(self)
@@ -635,7 +644,7 @@ class CommandWithoutServerTest(unittest.TestCase):
     def test_new_folder_gets_gitignore(self):
         ws = Workspace(self)
         ws.run("config-path")
-        gi = os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")
+        gi = os.path.join(ws.data_dir, ".gitignore")
         self.assertEqual(read_file(gi), b"*\n")
         # 2回目は、そのまま（書き直さない）
         with open(gi, "wb") as fh:
@@ -646,15 +655,15 @@ class CommandWithoutServerTest(unittest.TestCase):
     def test_existing_folder_without_gitignore_gets_one(self):
         """ほかのものが先にフォルダを作っても、.gitignore がなければ作る。"""
         ws = Workspace(self)
-        os.makedirs(os.path.join(ws.dir, ".embedded-debug-loop"))
+        os.makedirs(ws.data_dir)
         ws.run("config-path")
         self.assertTrue(os.path.isfile(ws.config))
-        self.assertEqual(read_file(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")), b"*\n")
+        self.assertEqual(read_file(os.path.join(ws.data_dir, ".gitignore")), b"*\n")
 
     def test_gitignore_is_made_again_when_removed(self):
         ws = Workspace(self)
         ws.run("config-path")
-        gi = os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")
+        gi = os.path.join(ws.data_dir, ".gitignore")
         for command in ("config-path", "check", "run"):
             os.unlink(gi)
             ws.run(command)
@@ -662,16 +671,15 @@ class CommandWithoutServerTest(unittest.TestCase):
 
     def test_gitignore_in_work_folder_with_config_elsewhere(self):
         ws = Workspace(self)
-        os.makedirs(os.path.join(ws.dir, ".embedded-debug-loop"))
+        os.makedirs(ws.data_dir)
         ws.run("config-path", "--config", os.path.join(ws.dir, "conf", "my-deploy.yaml"))
-        self.assertEqual(read_file(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")), b"*\n")
+        self.assertEqual(read_file(os.path.join(ws.data_dir, ".gitignore")), b"*\n")
 
     def test_gitignore_when_only_the_log_folder_is_made(self):
         ws = Workspace(self)
         other = os.path.join(ws.dir, "conf", "my-deploy.yaml")
         ws.run("check", "--config", other)
-        self.assertEqual(read_file(os.path.join(ws.dir, ".embedded-debug-loop", ".gitignore")),
-                         b"*\n")
+        self.assertEqual(read_file(os.path.join(ws.data_dir, ".gitignore")), b"*\n")
 
     def test_config_option(self):
         ws = Workspace(self)
@@ -693,7 +701,8 @@ class CommandWithoutServerTest(unittest.TestCase):
         self.assertIn(ws.config, data["message"])
         self.assertIn("コメント", data["message"])
         self.assertTrue(os.path.isfile(data["log"]))
-        self.assertIn("/.embedded-debug-loop/logs/deploy-", data["log"])
+        self.assertTrue(data["log"].startswith(os.path.join(ws.data_dir, "logs", SKILL_NAME + "-")),
+                        data["log"])
         self.assertNotIn("Traceback", err)
 
     def test_check_with_missing_local_file(self):
@@ -814,7 +823,7 @@ class FtpServerTest(unittest.TestCase):
             code, data, out, err = ws.run()
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["skill"], "deploy")
+        self.assertEqual(data["skill"], SKILL_NAME)
         self.assertEqual(data["remote_dir"], "/opt/sensor")
         self.assertEqual(data["created_dirs"], ["/opt", "/opt/sensor"])
         on_server = os.path.join(root, "opt", "sensor", "sensor_app")
@@ -833,7 +842,8 @@ class FtpServerTest(unittest.TestCase):
         self.assertEqual(entry["checksum_file"], "/opt/sensor/sensor_app.sum")
         # PC 側にも同じサム値のファイルが残る（記録のフォルダの中）
         self.assertEqual(read_file(entry["checksum_local_file"]).decode(), expected)
-        self.assertIn("/.embedded-debug-loop/logs/", entry["checksum_local_file"])
+        self.assertTrue(entry["checksum_local_file"].startswith(
+            os.path.join(ws.data_dir, "logs") + os.sep), entry["checksum_local_file"])
         self.assertIn("127.0.0.1", data["message"])
         self.assertIn("755", data["message"])
         self.assertNotIn("権限は付けていません", data["message"])
@@ -1057,29 +1067,102 @@ class FtpServerTest(unittest.TestCase):
         self.assertNotIn("直すところ", data["message"])
 
 
-class IndependenceTest(unittest.TestCase):
-    """このスキルのフォルダが、ほかの部品に触れていないこと。"""
+class SelfContainedTest(unittest.TestCase):
+    """このスキルのフォルダだけで動き、フォルダの外を指さないこと。"""
 
-    FORBIDDEN = [
-        "setup", "セットアップ", "cross-compile", "log-capture",
-        "device-worker", "orchestrator", "verifier",
-        "作業エージェント", "統括", "検証エージェント", "Web管理画面",
-        "extension", "エクステンション",
-    ]
-
-    def files(self):
-        for base, _dirs, names in os.walk(SKILL_DIR):
-            if "__pycache__" in base:
-                continue
+    def files(self, top=SKILL_DIR):
+        for base, dirs, names in os.walk(top):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
             for name in names:
                 yield os.path.join(base, name)
 
-    def test_no_forbidden_words(self):
+    def test_no_reference_outside_the_folder(self):
+        """どのテキストにも、親のフォルダへ出る書き方（.. と区切り）がないこと。"""
+        patterns = [".." + "/", ".." + "\\"]
+        checked = 0
         for path in self.files():
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read().lower()
-            for word in self.FORBIDDEN:
-                self.assertNotIn(word.lower(), text, "%s に「%s」があります" % (path, word))
+            with open(path, "rb") as fh:
+                data = fh.read()
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                continue  # テキストでないファイルは見ない
+            checked += 1
+            for pattern in patterns:
+                self.assertNotIn(pattern, text, "%s に「%s」があります" % (path, pattern))
+        self.assertGreaterEqual(checked, 5)
+
+    def copy_skill(self, name):
+        """このスキルのフォルダだけを、空の場所に name という名前で写す。"""
+        place = tempfile.mkdtemp(prefix="deploy-copy-")
+        self.addCleanup(shutil.rmtree, place, True)
+        dest = os.path.join(place, name)
+        shutil.copytree(SKILL_DIR, dest,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        return place, dest
+
+    def run_copy(self, dest, command, workdir):
+        """写したスクリプトを、作業フォルダで（--workdir なしで）動かす。(終了コード, JSON, 標準エラー) を返す。"""
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        proc = subprocess.run(
+            [sys.executable, os.path.join(dest, "scripts", "deploy.py"), command],
+            cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env, timeout=60)
+        out = proc.stdout.decode("utf-8")
+        err = proc.stderr.decode("utf-8")
+        try:
+            data = json.loads(out)
+        except ValueError:
+            raise AssertionError("標準出力が JSON 1つではありません：%r\n標準エラー：%s"
+                                 % (out, err))
+        return proc.returncode, data, err
+
+    def test_copied_folder_keeps_data_in_its_own_dot_folder(self):
+        """写したフォルダの名前のとおりに、作業フォルダの「.<名前>」にだけデータができること。"""
+        for name in (SKILL_NAME, "ftp-send-copy"):
+            with self.subTest(name=name):
+                place, dest = self.copy_skill(name)
+                before = sorted(os.path.relpath(p, place) for p in self.files(place))
+                workdir = os.path.realpath(tempfile.mkdtemp(prefix="deploy-work-"))
+                self.addCleanup(shutil.rmtree, workdir, True)
+                data_dir = os.path.join(workdir, "." + name)
+                config = os.path.join(data_dir, "config.yaml")
+
+                code, data, _err = self.run_copy(dest, "config-path", workdir)
+                self.assertEqual(code, 0, data)
+                self.assertEqual(data["config"], config)
+                self.assertTrue(data["created"])
+                self.assertEqual(data["missing"], ["host", "files", "remote_dir"])
+
+                code, data, err = self.run_copy(dest, "check", workdir)
+                self.assertEqual(code, 2, data)
+                self.assertFalse(data["ok"])
+                self.assertEqual(data["config"], config)
+                self.assertFalse(data["created"])
+                self.assertTrue(data["log"].startswith(os.path.join(data_dir, "logs") + os.sep),
+                                data["log"])
+                self.assertTrue(os.path.isfile(data["log"]))
+                # 結果の skill、記録のファイルの名前の頭、途中のようすの頭は、写したフォルダの名前
+                self.assertEqual(data["skill"], name)
+                self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
+                lines = [l for l in err.splitlines() if l]
+                self.assertTrue(lines)
+                for line in lines:
+                    self.assertTrue(line.startswith("[%s] " % name), line)
+                with open(data["log"], encoding="utf-8") as fh:
+                    self.assertIn("%s check を始めます" % name, fh.readline())
+
+                # 作業フォルダには「.<写したフォルダの名前>」だけができる
+                self.assertEqual(os.listdir(workdir), ["." + name])
+                self.assertEqual(sorted(os.listdir(data_dir)),
+                                 [".gitignore", "config.yaml", "logs"])
+                self.assertEqual(read_file(os.path.join(data_dir, ".gitignore")), b"*\n")
+                self.assertEqual(read_file(config), read_file(os.path.join(dest, "config-template.yaml")))
+                # 写したスキルのフォルダと、写した場所は変わらない
+                after = sorted(os.path.relpath(p, place) for p in self.files(place))
+                self.assertEqual(after, before)
+                self.assertEqual(os.listdir(place), [name])
 
     def test_script_imports_only_stdlib(self):
         with open(SCRIPT, encoding="utf-8") as fh:
@@ -1090,13 +1173,24 @@ class IndependenceTest(unittest.TestCase):
         self.assertEqual(set(i.split(".")[0] for i in imports) - allowed, set())
         self.assertNotIn("sys.path", text)
 
+
+class SkillFilesTest(unittest.TestCase):
+    """SKILL.md と、スクリプトの文の書き方。"""
+
     def test_skill_md_frontmatter(self):
         with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
             text = fh.read()
         m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
         self.assertIsNotNone(m)
-        self.assertIn("name: deploy\n", m.group(1) + "\n")
+        # 名前を変えて写すときは、フォルダの名前と name: を同じにする
+        self.assertIn("name: %s\n" % SKILL_NAME, m.group(1) + "\n")
         self.assertRegex(m.group(1), r"(?m)^description: .+")
+        # 名前を変えて写すと食い違うので、description と見出しにはスキルの名前を書かない
+        desc = re.search(r"(?m)^description: (.+)$", m.group(1)).group(1)
+        self.assertNotRegex(desc, r"/[A-Za-z]")
+        self.assertIn("スラッシュコマンドで", desc)
+        heading = re.search(r"(?m)^# (.+)$", text[m.end():]).group(1)
+        self.assertNotIn("deploy", heading)
         for sub in ("run", "config-path", "check"):
             self.assertIn("scripts/deploy.py " + sub, text)
 

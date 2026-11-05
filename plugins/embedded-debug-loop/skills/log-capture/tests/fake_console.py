@@ -19,24 +19,24 @@ import threading
 import time
 import tty
 
-HOST = "sensor-board"
-PLAIN_PROMPT = "root@sensor-board:~# "
-ANSI_PROMPT = "\x1b[?2004h\x1b[01;32mroot@sensor-board\x1b[00m:\x1b[01;34m~\x1b[00m# "
+HOST = "myboard"
+PLAIN_PROMPT = "root@myboard:~# "
+ANSI_PROMPT = "\x1b[?2004h\x1b[01;32mroot@myboard\x1b[00m:\x1b[01;34m~\x1b[00m# "
 KERNEL_LINE = "[  123.456789] usb 1-1: new high-speed USB device number 3 using ehci-platform"
 
 # コマンドへの返事。値は出力の文字か、(出力の文字, 終了コード)。文字だけなら終了コードは 0。
 DEFAULT_RESPONSES = {
-    "run-app /opt/x": "[DBG] AVG=3",
-    "run-app /opt/nosum/sensor_app": ("run-app: /opt/nosum/sensor_app: checksum file not found", 1),
-    "run-app /opt/denied/sensor_app": ("[DBG] start\nrun-app: /opt/denied/sensor_app: Permission denied", 126),
+    "start-app /opt/x": "[DBG] VALUE=3",
+    "start-app /opt/noconf/my_app": ("start-app: /opt/noconf/my_app: config file not found", 1),
+    "start-app /opt/denied/my_app": ("[DBG] start\nstart-app: /opt/denied/my_app: Permission denied", 126),
     "false": ("", 1),
-    "run-app /opt/sensor/sensor_app": "[DBG] start\n[DBG] AVG=3\nsensor_app: done",
-    "uname -a": "Linux sensor-board 5.15.71-yocto-standard #1 SMP PREEMPT armv7l GNU/Linux",
+    "start-app /opt/myapp/my_app": "[DBG] start\n[DBG] VALUE=3\nmy_app: done",
+    "uname -a": "Linux myboard 5.15.71-yocto-standard #1 SMP PREEMPT armv7l GNU/Linux",
     "echo hi": "hi",
     "true": "",
     "cat /var/log/messages": "line one\nline two\nline three",
     "seq 100": "\n".join(str(i) for i in range(1, 101)),
-    "color": "\x1b[1;31m[DBG]\x1b[0m AVG=\x1b[33m3\x1b[0m\n\x1b[32mOK\x1b[0m",
+    "color": "\x1b[1;31m[DBG]\x1b[0m VALUE=\x1b[33m3\x1b[0m\n\x1b[32mOK\x1b[0m",
 }
 
 
@@ -282,7 +282,7 @@ class FakeDevice(object):
         if self.running is not None:
             if ch == "\x03":
                 self.interrupts += 1
-                if self.running in self.ignore_interrupt or self.running.startswith("run-app /opt/stuck"):
+                if self.running in self.ignore_interrupt or self.running.startswith("start-app /opt/stuck"):
                     self.out("^C")
                     return
                 self.running = None
@@ -336,7 +336,7 @@ class FakeDevice(object):
             else:
                 self.prompt()
             return
-        if cmd.startswith("run-app /opt/hang") or cmd.startswith("run-app /opt/stuck"):
+        if cmd.startswith("start-app /opt/hang") or cmd.startswith("start-app /opt/stuck"):
             self.out("[DBG] start\n")
             self.running = cmd
             return
@@ -353,7 +353,7 @@ class FakeDevice(object):
         if cmd == "noisy":
             # プロンプトのすぐ後ろに、カーネルのメッセージが出る
             self.status = 0
-            self.out("[DBG] AVG=3\n")
+            self.out("[DBG] VALUE=3\n")
             self.prompt()
             self.scheduled.append((time.monotonic() + 0.05, KERNEL_LINE + "\n", False))
             return

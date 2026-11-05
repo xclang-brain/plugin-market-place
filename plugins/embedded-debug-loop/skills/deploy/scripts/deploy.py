@@ -9,6 +9,11 @@
   config-path  設定ファイルの場所を出す。なければ、ひな形から作る
   check        設定を確かめ、機器に FTP でログインできるかを試す
 
+設定と記録は、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
+  config.yaml  設定ファイル（なければ、ひな形 config-template.yaml から作る）
+  logs/        記録のファイル
+  .gitignore   中身は * の1行（設定や記録を git に入れないため）
+
 標準出力には、結果の JSON を1つだけ出す。途中のようすは標準エラーに出す。
 Python 3.8 以上の標準ライブラリだけで動く。
 """
@@ -28,9 +33,16 @@ import time
 import traceback
 import zlib
 
-SKILL = "deploy"
-CONFIG_DIR_NAME = ".embedded-debug-loop"
+# このスキルのフォルダ（scripts/ の親）と、その名前。
+# フォルダの名前を変えて写したときは、変えた後の名前になる。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SKILL_NAME = os.path.basename(SKILL_DIR)
+# 結果の JSON の skill、記録のファイルの名前の頭、途中のようすの頭に使う名前。
+SKILL = SKILL_NAME
+# 設定と記録を置くフォルダの名前（作業フォルダの中に作る）。
+DATA_DIR_NAME = "." + SKILL_NAME
+CONFIG_FILE_NAME = "config.yaml"
+LOGS_DIR_NAME = "logs"
 TEMPLATE_PATH = os.path.join(SKILL_DIR, "config-template.yaml")
 
 REQUIRED_KEYS = ("host", "files", "remote_dir")
@@ -86,7 +98,7 @@ def emit(obj):
 def progress(text):
     """途中のようすを標準エラーに出す。"""
     try:
-        _write_text(sys.stderr, "[deploy] " + text + "\n")
+        _write_text(sys.stderr, "[%s] %s\n" % (SKILL, text))
     except Exception:
         pass
 
@@ -123,10 +135,10 @@ class Log(object):
 
 
 def _config_dir_of(path):
-    """path か、その上にある .embedded-debug-loop フォルダの場所。なければ None。"""
+    """path か、その上にあるデータのフォルダ（DATA_DIR_NAME）の場所。なければ None。"""
     p = os.path.abspath(path)
     while True:
-        if os.path.basename(p) == CONFIG_DIR_NAME:
+        if os.path.basename(p) == DATA_DIR_NAME:
             return p
         parent = os.path.dirname(p)
         if parent == p:
@@ -135,7 +147,7 @@ def _config_dir_of(path):
 
 
 def ensure_gitignore(path):
-    """path か、その上にある .embedded-debug-loop フォルダに .gitignore がなければ作る
+    """path か、その上にあるデータのフォルダに .gitignore がなければ作る
     （中身は * の1行）。すでにあれば、そのままにする。作れなくても止めない。"""
     top = _config_dir_of(path)
     if top is None or not os.path.isdir(top):
@@ -156,14 +168,14 @@ def ensure_gitignore(path):
 
 
 def make_dirs(path):
-    """フォルダを作る。.embedded-debug-loop フォルダに .gitignore がなければ、それも作る。"""
+    """フォルダを作る。データのフォルダに .gitignore がなければ、それも作る。"""
     os.makedirs(path, exist_ok=True)
     ensure_gitignore(path)
 
 
 def open_log(workdir):
-    """<作業フォルダ>/.embedded-debug-loop/logs/deploy-YYYYmmdd-HHMMSS.log を作る。"""
-    logs_dir = os.path.join(workdir, CONFIG_DIR_NAME, "logs")
+    """<作業フォルダ>/<データのフォルダ>/logs/<スキルの名前>-YYYYmmdd-HHMMSS.log を作る。"""
+    logs_dir = os.path.join(workdir, DATA_DIR_NAME, LOGS_DIR_NAME)
     try:
         make_dirs(logs_dir)
     except OSError:
@@ -482,8 +494,8 @@ def with_added(out, added):
 
 def open_config(workdir, config):
     """設定ファイルを用意する。なければひな形から作り、項目が足りなければ足す。
-    .embedded-debug-loop フォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
-    ensure_gitignore(os.path.join(workdir, CONFIG_DIR_NAME))
+    データのフォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
+    ensure_gitignore(os.path.join(workdir, DATA_DIR_NAME))
     created = ensure_config(config)
     ensure_gitignore(config)
     added = [] if created else add_missing_keys(config)
@@ -1200,7 +1212,7 @@ def resolve_paths(args):
     if args.config:
         config = os.path.abspath(args.config)
     else:
-        config = os.path.join(workdir, CONFIG_DIR_NAME, SKILL + ".yaml")
+        config = os.path.join(workdir, DATA_DIR_NAME, CONFIG_FILE_NAME)
     return workdir, config
 
 
@@ -1250,7 +1262,7 @@ def _load(workdir, config):
 
 def cmd_check(workdir, config):
     log = open_log(workdir)
-    log.write("deploy check を始めます。設定ファイル：%s" % config)
+    log.write("%s check を始めます。設定ファイル：%s" % (SKILL, config))
     created, added, values, raws, problems = _load(workdir, config)
     summary = {}
     login_error = None
@@ -1310,7 +1322,7 @@ def cmd_check(workdir, config):
 
 def cmd_run(workdir, config):
     log = open_log(workdir)
-    log.write("deploy run を始めます。設定ファイル：%s" % config)
+    log.write("%s run を始めます。設定ファイル：%s" % (SKILL, config))
     created, added, values, raws, problems = _load(workdir, config)
     settings = None
     if values is not None:
@@ -1398,7 +1410,9 @@ def main(argv=None):
     parser.add_argument("command", nargs="?", default="run",
                         choices=["run", "config-path", "check"])
     parser.add_argument("--workdir", help="作業フォルダ（省略すると今のフォルダ）")
-    parser.add_argument("--config", help="設定ファイル（省略すると作業フォルダの .embedded-debug-loop/deploy.yaml）")
+    parser.add_argument(
+        "--config",
+        help="設定ファイル（省略すると作業フォルダの %s/%s）" % (DATA_DIR_NAME, CONFIG_FILE_NAME))
     args = parser.parse_args(argv)
     workdir, config = resolve_paths(args)
     if not os.path.isdir(workdir):

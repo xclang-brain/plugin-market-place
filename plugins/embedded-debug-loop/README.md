@@ -51,9 +51,11 @@ copilot plugin install embedded-debug-loop@plugin-market-place
    - `commands`（ログ取得）：機器で動かすコマンド（例：`["/opt/myapp/my_app"]`）。
 5. 最後に、作業エージェントが、機器につながるかを確かめて伝えます。
 
-- 設定ファイルは、プロジェクトのフォルダの `.embedded-debug-loop/` にできます。直接書き換えてもかまいません。項目の意味は、ファイルの中の説明に書いてあります。
-- このフォルダには、スキルが `.gitignore`（中身は `*`）を自動で作ります。設定やログ（パスワードを含むことがあります）は Git に入りません。
-- スキルだけで設定するときは、`/embedded-debug-loop:cross-compile 設定ファイルの場所を教えて` のように3つのスキルで設定ファイルを作り、`/embedded-debug-loop:setup` で埋めます（くわしくは [スキルを単体で使う](docs/guide/1-skills.md)）。
+- 設定ファイルは、プロジェクトのフォルダの、スキルごとのフォルダにできます（`.cross-compile/config.yaml`、`.deploy/config.yaml`、`.log-capture/config.yaml`）。直接書き換えてもかまいません。項目の意味は、ファイルの中の説明に書いてあります。
+- これらのフォルダには、スキルが `.gitignore`（中身は `*`）を自動で作ります。設定やログ（パスワードを含むことがあります）は Git に入りません。
+- 作業エージェントを使わず、スキルのコマンドで設定するときは、次のようにします（くわしくは [スキルを単体で使う](docs/guide/1-skills.md)）。
+  1. ビルド・転送・ログ取得のスキルに、「設定ファイルの場所を教えて」と頼みます（例：`/embedded-debug-loop:cross-compile 設定ファイルの場所を教えて`）。設定ファイルができます。
+  2. `/embedded-debug-loop:setup` で、できた設定ファイルを埋めます。
 
 ## 1段階目：スキルを1つずつ使う
 
@@ -65,6 +67,9 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 | `/embedded-debug-loop:deploy` | ビルドしたファイルを FTP で機器へ送る。`file_mode` を書けば、送った後にその権限（例：755）を付ける。設定すれば、サム値（チェックサム）のファイルも一緒に送る |
 | `/embedded-debug-loop:log-capture` | シリアルコンソールで機器のコマンドを動かし、出力を記録する |
 | `/embedded-debug-loop:setup` | 設定ファイルの項目を、質問に答えながら埋める（先に設定ファイルが要ります） |
+
+- 各スキルの使い方は、スキルのフォルダの中の README に書いてあります（例：[skills/deploy/README.md](skills/deploy/README.md)）。
+- スキルのフォルダだけを、プロジェクトの `.github/skills/` などに写せば、プラグインを入れずにそのスキルだけを使えます（そのときは `/deploy` のように、プラグインの名前を付けずに呼びます）。
 
 くわしくは [スキルを単体で使う](docs/guide/1-skills.md) を見てください。
 

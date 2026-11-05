@@ -1,6 +1,6 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "embedded-debug-loop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "組み込み機器の C/C++ の不具合を、ビルド・機器への転送・機器のログ取得を繰り返して調べ、直すプラグイン。スキルだけ、作業エージェントだけ、統括エージェントと Web管理画面つき、の3つの段階で使える"
 }

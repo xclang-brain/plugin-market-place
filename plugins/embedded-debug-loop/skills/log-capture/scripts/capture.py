@@ -10,6 +10,10 @@
 結果は、標準出力に JSON を1つだけ出す。進み具合は、標準エラーに出す。
 終わりのコード：0 は成功、1 は作業の失敗、2 は設定の問題。
 Python 3.8 以降の標準ライブラリだけで動く。
+
+設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く
+（例：.log-capture/config.yaml と .log-capture/logs/）。
+フォルダの名前は、このスクリプトの場所（scripts/ の親のフォルダ）から求める。
 """
 
 import argparse
@@ -29,11 +33,15 @@ import termios
 import time
 import traceback
 
-SKILL = "log-capture"
-CONFIG_DIR_NAME = ".embedded-debug-loop"
-TEMPLATE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config-template.yaml"
-)
+# このスキルのフォルダと、その名前。フォルダの名前を変えて写したら、その名前になる
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SKILL_DIR = os.path.dirname(SCRIPT_DIR)
+SKILL_NAME = os.path.basename(SKILL_DIR)
+SKILL = SKILL_NAME
+DATA_DIR_NAME = "." + SKILL_NAME   # 作業フォルダの中の、設定とログのフォルダ
+CONFIG_FILE_NAME = "config.yaml"
+LOGS_DIR_NAME = "logs"
+TEMPLATE_PATH = os.path.join(SKILL_DIR, "config-template.yaml")
 
 REQUIRED_KEYS = ("port",)
 DEFAULT_PROMPT = r"[#$] $"
@@ -55,11 +63,11 @@ LAST_LINE_MAX = 200    # 結果の文に引く「最後の行」の長さの上�
 MASK = "＊＊＊"
 
 # 各コマンドの後に送る、終了コードを調べるコマンド。
-# 返事は「__EDL_RC=数」の1行になる。エコーされた行は「__EDL_RC=$?」のままなので、
+# 返事は「__LOGCAP_RC=数」の1行になる。エコーされた行は「__LOGCAP_RC=$?」のままなので、
 # 数が付いているかで、返事とエコーを見分けられる。
 # 先頭の空白は、bash の履歴に残さないため（HISTCONTROL が ignorespace のとき）。
 # この印は、ログのファイルにも書かない。代わりに EXIT_LINE の行を書く。
-RC_TAG = "__EDL_RC="
+RC_TAG = "__LOGCAP_RC="
 RC_COMMAND = " echo " + RC_TAG + "$?"
 RC_OUT_RE = re.compile(re.escape(RC_TAG) + r"([0-9]+)")
 RC_ECHO_DONE_RE = re.compile(re.escape(RC_TAG) + r"\$\?[^\n]*\n")
@@ -97,9 +105,9 @@ for _n in _BAUD_CANDIDATES:
 # ---------------------------------------------------------------------------
 
 def say(msg):
-    """進み具合を標準エラーに出す。"""
+    """進み具合を標準エラーに出す。頭に、このスキルのフォルダの名前を付ける。"""
     try:
-        sys.stderr.buffer.write((msg + "\n").encode("utf-8", "replace"))
+        sys.stderr.buffer.write(("[%s] %s\n" % (SKILL, msg)).encode("utf-8", "replace"))
         sys.stderr.buffer.flush()
     except Exception:
         pass
@@ -354,14 +362,14 @@ class Settings(object):
 
 
 def default_config_path(workdir):
-    return os.path.join(workdir, CONFIG_DIR_NAME, SKILL + ".yaml")
+    return os.path.join(workdir, DATA_DIR_NAME, CONFIG_FILE_NAME)
 
 
 def _config_dir_of(path):
-    """path か、その上にある .embedded-debug-loop フォルダの場所。なければ None。"""
+    """path か、その上にある、設定とログのフォルダ（DATA_DIR_NAME）の場所。なければ None。"""
     p = os.path.abspath(path)
     while True:
-        if os.path.basename(p) == CONFIG_DIR_NAME:
+        if os.path.basename(p) == DATA_DIR_NAME:
             return p
         parent = os.path.dirname(p)
         if parent == p:
@@ -370,7 +378,7 @@ def _config_dir_of(path):
 
 
 def ensure_gitignore(path):
-    """path か、その上にある .embedded-debug-loop フォルダに .gitignore がなければ作る
+    """path か、その上にある、設定とログのフォルダに .gitignore がなければ作る
     （中身は * の1行）。すでにあれば、そのままにする。作れなくても止めない。"""
     top = _config_dir_of(path)
     if top is None or not os.path.isdir(top):
@@ -391,7 +399,7 @@ def ensure_gitignore(path):
 
 
 def make_dirs(path):
-    """フォルダを作る。.embedded-debug-loop フォルダに .gitignore がなければ、それも作る。"""
+    """フォルダを作る。設定とログのフォルダに .gitignore がなければ、それも作る。"""
     os.makedirs(path, exist_ok=True)
     ensure_gitignore(path)
 
@@ -466,8 +474,8 @@ def with_added(out, added):
 
 def open_config(workdir, config):
     """設定ファイルを用意する。なければひな形から作り、項目が足りなければ足す。
-    .embedded-debug-loop フォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
-    ensure_gitignore(os.path.join(workdir, CONFIG_DIR_NAME))
+    設定とログのフォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
+    ensure_gitignore(os.path.join(workdir, DATA_DIR_NAME))
     created = ensure_config(config)
     ensure_gitignore(config)
     added = [] if created else add_missing_keys(config)
@@ -480,7 +488,7 @@ def ensure_config(path):
         return False
     if not os.path.isfile(TEMPLATE_PATH):
         raise Failure(
-            "設定ファイルのひな形（%s）が見つかりません。スキルを入れ直してください。" % TEMPLATE_PATH,
+            "設定ファイルのひな形（%s）が見つかりません。このスキルのフォルダを、もう一度まるごと写し直してください。" % TEMPLATE_PATH,
             kind="settings", extra={"config": path},
         )
     folder = os.path.dirname(path)
@@ -1316,7 +1324,7 @@ def set_output(result, lines):
 def read_exit_code(con, s):
     """終了コードを調べるコマンドを送り、直前のコマンドの終了コードを返す。
 
-    読めなければ None。プロンプトの形に頼らず、返事の行「__EDL_RC=数」を探す。
+    読めなければ None。プロンプトの形に頼らず、返事の行「__LOGCAP_RC=数」を探す。
     この間に届いた行は、ログにはまだ書かない（終わった後に write_exit_line で書く）。
     """
     con.mark()
@@ -1428,7 +1436,7 @@ def _num(x):
 # ---------------------------------------------------------------------------
 
 def open_log(workdir, label):
-    folder = os.path.join(workdir, CONFIG_DIR_NAME, "logs")
+    folder = os.path.join(workdir, DATA_DIR_NAME, LOGS_DIR_NAME)
     try:
         return _open_log(folder, label)
     except OSError as e:
@@ -1447,7 +1455,7 @@ def _open_log(folder, label):
         path = os.path.join(folder, "%s-%s-%d.log" % (SKILL, stamp, n))
         n += 1
     f = open(path, "w", encoding="utf-8", errors="replace", newline="")
-    f.write("# log-capture の記録（%s）\n" % label)
+    f.write("# %s の記録（%s）\n" % (SKILL, label))
     f.write("# 開始：%s\n" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     return path, LogFile(f)
 
