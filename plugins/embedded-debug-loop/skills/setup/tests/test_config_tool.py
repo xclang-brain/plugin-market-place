@@ -12,6 +12,7 @@
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -295,9 +296,25 @@ class ListTest(ToolTestCase):
         code, data, _ = run_tool(["list"], work, tool=os.path.join(kit, "scripts", "config_tool.py"))
         self.assertEqual(code, 0, data)
         self.assertEqual(self.names(data), ["app.yaml"])
-        # ほかの場所の道具から見れば、kit/ はふつうのフォルダ（3 段下の見本も見つかる）
-        names = self.names(self.ok("list", cwd=work))
-        self.assertIn("kit/tests/fixtures/" + COFFEE, names)
+        # ほかの場所の道具から見ても、SKILL.md がある kit/ はスキルのフォルダなので見ない
+        self.assertEqual(self.names(self.ok("list", cwd=work)), ["app.yaml"])
+
+    def test_skill_folders_are_not_searched(self):
+        """作業フォルダに写したスキルのフォルダ（SKILL.md がある）の中のひな形は、候補に出さない。"""
+        work = tempfile.mkdtemp(prefix="setup-test-work-")
+        self.addCleanup(shutil.rmtree, work, True)
+        other = os.path.join(work, ".github", "skills", "kettle")
+        os.makedirs(other)
+        with open(os.path.join(other, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("---\nname: kettle\ndescription: x\n---\n")
+        with open(os.path.join(other, "config-template.yaml"), "w", encoding="utf-8") as f:
+            f.write(DESCRIBED)
+        # SKILL.md のないフォルダは、これまでどおり見る
+        plain = os.path.join(work, ".github", "conf")
+        os.makedirs(plain)
+        with open(os.path.join(plain, "app.yaml"), "w", encoding="utf-8") as f:
+            f.write(DESCRIBED)
+        self.assertEqual(self.names(self.ok("list", cwd=work)), [".github/conf/app.yaml"])
 
 
 class StandaloneTest(unittest.TestCase):
@@ -337,6 +354,28 @@ class StandaloneTest(unittest.TestCase):
                 self.assertEqual(tree(work), ["coffee.yaml", "conf", "conf/camera.yaml"])
                 # 写したスキルのフォルダも、書き換えない
                 self.assertEqual(snapshot(copy), skill_before)
+
+    def test_renamed_copy_passes_its_own_file_tests(self):
+        """README のとおり、フォルダの名前と SKILL.md の name: を変えて写しても、
+        写した先のフォルダの試験（SKILL.md・README.md の試験）が通ること。"""
+        base = tempfile.mkdtemp(prefix="setup-test-rename-")
+        self.addCleanup(shutil.rmtree, base, True)
+        # 今の名前とは違う名前にする（この試験を、名前を変えた写しで動かしたときも）
+        new_name = "yaml-filler" if os.path.basename(SKILL_DIR) != "yaml-filler" else "yaml-filler-2"
+        copy = os.path.join(base, new_name)
+        shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        skill_md = os.path.join(copy, "SKILL.md")
+        with open(skill_md, encoding="utf-8") as f:
+            text = f.read()
+        renamed = re.sub(r"(?m)^name: .*$", "name: " + new_name, text, count=1)
+        self.assertNotEqual(renamed, text)
+        with open(skill_md, "w", encoding="utf-8") as f:
+            f.write(renamed)
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        proc = subprocess.run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests",
+                               "-p", "test_skill_files.py"],
+                              cwd=copy, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace"))
 
 
 # ---------------------------------------------------------------------------
@@ -430,12 +469,12 @@ class ShowTest(ToolTestCase):
         self.assertNotIn("tk-0123456789abcdef", data["table"])
 
     def test_show_table_keeps_long_paths_readable(self):
-        """60 文字までは切らない。長いパスは真ん中を省き、頭と終わり（ファイルの名前）を残す（S2-r3）。"""
+        """60 文字までは切らない。長いパスは真ん中を省き、頭と終わり（ファイルの名前）を残す。"""
         path = self.copy(CAMERA)
         sixty = "/opt/" + "a" * 55
         self.ok("set", path, "camera_ip", "--stdin", stdin=sixty + "\n")
         self.assertIn("| camera_ip | `" + sixty + "` |", self.ok("show", path)["table"])
-        long_path = "/opt/poky/4.0/sysroots/x86_64-pokysdk-linux/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"
+        long_path = "/srv/archive/2026/very/long/folder/names/for/this/test/report-final-version.txt"
         self.ok("set", path, "camera_ip", "--stdin", stdin=long_path + "\n")
         table = self.ok("show", path)["table"]
         row = [line for line in table.split("\n") if line.startswith("| camera_ip |")][0]
@@ -445,7 +484,7 @@ class ShowTest(ToolTestCase):
         head, tail = cell.split("…")
         self.assertTrue(long_path.startswith(head), cell)
         self.assertTrue(long_path.endswith(tail), cell)
-        self.assertTrue(cell.endswith("poky-linux-gnueabi"), cell)
+        self.assertTrue(cell.endswith("report-final-version.txt"), cell)
 
     def test_show_table_empty_secret(self):
         path = self.copy(COFFEE)
@@ -471,7 +510,7 @@ class ShowTest(ToolTestCase):
         self.assertFalse(any(v["fill_recommended"] for v in coffee.values()))
 
     def test_can_be_empty(self):
-        """空にしてよいか。必須の項目と、空を選べない「選べる値」の項目は空にできない（S1-r3）。"""
+        """空にしてよいか。必須の項目と、空を選べない「選べる値」の項目は空にできない。"""
         coffee = self.items(self.copy(COFFEE))
         self.assertFalse(coffee["machine_name"]["can_be_empty"])    # 必須
         self.assertFalse(coffee["bean_type"]["can_be_empty"])       # 選べる値に空がない
@@ -484,8 +523,22 @@ class ShowTest(ToolTestCase):
         self.assertEqual(it["color"]["choices"], ["", "red", "blue"])
         self.assertTrue(it["color"]["can_be_empty"])
 
+    def test_choices_note_right_before_slash(self):
+        """「（…）」の注のすぐ後ろに「/」があっても、その後ろの値を落とさない。"""
+        path = self.write("n.yaml", "# 見本\n\n# 色。\n# 選べる値：red / blue（ふつう）/ green\ncolor: \"red\"\n\n"
+                                    "# 形。\n# 選べる値：red / blue（ふつう）/ \"\"\nshape: \"red\"\n\n"
+                                    "# 場所。\n# 選べる値：/dev/a / /srv/b（ふつう）/ /mnt/c\nplace: \"/dev/a\"\n")
+        it = self.items(path)
+        self.assertEqual(it["color"]["choices"], ["red", "blue", "green"])
+        self.assertEqual(it["shape"]["choices"], ["red", "blue", ""])
+        self.assertTrue(it["shape"]["can_be_empty"])
+        self.assertEqual(it["place"]["choices"], ["/dev/a", "/srv/b", "/mnt/c"])
+        self.assertTrue(self.ok("set", path, "color", "green")["changed"])
+        self.assertTrue(self.ok("set", path, "shape", "")["changed"])
+        self.assertTrue(self.ok("set", path, "place", "/mnt/c")["changed"])
+
     def test_ask_alone(self):
-        """パスワードを環境変数で渡すための項目は、単独では聞かない（S2-r3）。"""
+        """パスワードを環境変数で渡すための項目は、単独では聞かない。"""
         coffee = self.items(self.copy(COFFEE))
         self.assertFalse(coffee["maintenance_password_env"]["ask_alone"])
         self.assertTrue(coffee["maintenance_password"]["ask_alone"])
@@ -499,7 +552,7 @@ class ShowTest(ToolTestCase):
         self.assertTrue(it["lang_env"]["ask_alone"])
 
     def test_value_digest(self):
-        """パスワードなどは、値を見せずに、書き換わったかが分かる指紋を返す（S2-r3）。"""
+        """パスワードなどは、値を見せずに、書き換わったかが分かる指紋を返す。"""
         path = self.copy(CAMERA)
         first = self.items(path)
         digest = first["api_token"]["value_digest"]
@@ -557,11 +610,11 @@ class ShowTest(ToolTestCase):
         self.assertIn("no_such_key", data["error"])
 
     def test_list_example_written_as_scalar(self):
-        path = self.write("e.yaml", "# 見本\n\n# 送るもの（必須）\n# 例：app.bin\nfiles: []\n")
+        path = self.write("e.yaml", "# 見本\n\n# 送るもの（必須）\n# 例：photo.jpg\nfiles: []\n")
         it = self.items(path)
-        self.assertEqual(it["files"]["examples"], [["app.bin"]])
+        self.assertEqual(it["files"]["examples"], [["photo.jpg"]])
         self.ok("set", path, "files", json.dumps(it["files"]["examples"][0]), "--json")
-        self.assertEqual(self.value(path, "files"), ["app.bin"])
+        self.assertEqual(self.value(path, "files"), ["photo.jpg"])
 
     def test_relative_path_and_workdir(self):
         self.copy(COFFEE)
@@ -714,18 +767,18 @@ class SetTest(ToolTestCase):
         path = self.copy(COFFEE)
         cases = [
             # (項目, 標準入力, --json, 読み直した値)
-            ("machine_name", "/opt/x/env $HOME `x` \"q\" 'a' \\n\n", False,
-             "/opt/x/env $HOME `x` \"q\" 'a' \\n"),
+            ("machine_name", "/srv/x/data $HOME `x` \"q\" 'a' \\n\n", False,
+             "/srv/x/data $HOME `x` \"q\" 'a' \\n"),
             ("machine_name", "  前後の空白  \n", False, "  前後の空白  "),
-            ("machine_name", "/dev/ttyUSB0\r\n", False, "/dev/ttyUSB0"),
+            ("machine_name", "/mnt/usb0\r\n", False, "/mnt/usb0"),
             ("machine_name", "1行目\n2行目\n", False, "1行目\n2行目"),
             ("cup_size_ml", "200\n", True, 200),
             ("cup_size_ml", "250\n", False, 250),
             ("water_temp_c", "93.5\n", True, 93.5),
             ("use_milk", "true\n", True, True),
             ("use_milk", "false\n", False, False),
-            ("favorite_menu", '["run-app /opt/x/y", "dmesg | tail -n 20"]\n', True,
-             ["run-app /opt/x/y", "dmesg | tail -n 20"]),
+            ("favorite_menu", '["echo a b", "sort | uniq -c"]\n', True,
+             ["echo a b", "sort | uniq -c"]),
             ("favorite_menu", "[]\n", True, []),
             ("cleaning_days", '["tue"]\n', True, ["tue"]),
             ("last_service", "2026-11-04\n", False, "2026-11-04"),
@@ -901,7 +954,7 @@ class RefuseTest(ToolTestCase):
         self.ok("set", coffee, "bean_type", "arabica")  # 「（…）」の注は値に含めない
 
     def test_choices_refuse_empty(self):
-        """選べる値に空がない項目は、空にできない。選べる値を示して断る（S1-r3）。"""
+        """選べる値に空がない項目は、空にできない。選べる値を示して断る。"""
         path = self.copy(CAMERA)
         before = self.read(path)
         data, _ = self.fail_("set", path, "resolution", "")

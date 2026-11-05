@@ -2,7 +2,8 @@
 """cross-compile スキル（scripts/build.py）の試験。
 
 PC の gcc と make で、小さなプロジェクトを実際にビルドして確かめる。
-SDK の環境設定ファイル（Yocto を模したもの）があれば、ARM 向けのビルドも試す。
+ARM 向けの SDK の環境設定ファイルがあれば、ARM 向けのビルドも試す。
+make・gcc・bash が無いと、それを使う試験は飛ばす。
 
 実行（このスキルのフォルダで）：
   python3 -m unittest discover -s tests -v
@@ -66,14 +67,24 @@ def have(cmd):
     return shutil.which(cmd) is not None
 
 
-def sdk_compiler_ready():
+def sdk_compiler():
+    """SDK を読み込んだ後の CC の最初の語（コンパイラーの名前）。使えなければ None。"""
     if not os.path.isfile(SDK_ENV) or not have("bash"):
-        return False
+        return None
     r = subprocess.run(
-        ["bash", "-c", '. "$1" >/dev/null 2>&1 || exit 1; set -- $CC; command -v "$1"',
+        ["bash", "-c", '. "$1" >/dev/null 2>&1 || exit 1; set -- $CC; '
+         '[ -n "$1" ] && command -v "$1" >/dev/null && printf "%s" "$1"',
          "x", SDK_ENV],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    return r.returncode == 0 and r.stdout.strip() != b""
+    word = r.stdout.decode("utf-8", "replace").strip()
+    return word if r.returncode == 0 and word else None
+
+
+SDK_CC = sdk_compiler()
+
+# make・gcc・bash を使う試験（ビルドや、check でのコマンドの有無の確かめ）
+needs_build_tools = unittest.skipUnless(
+    have("make") and have("gcc") and have("bash"), "make・gcc・bash が要ります")
 
 
 def render(value):
@@ -184,7 +195,9 @@ class TemplateTest(unittest.TestCase):
                 break
             header.append(line)
         self.assertTrue(1 <= len(header) <= 3, header)
-        self.assertIn("cross-compile", header[0])
+        self.assertIn("設定ファイルです", header[0])
+        # フォルダの名前を変えて写しても食い違わないよう、スキルの名前（英字）は書かない
+        self.assertNotRegex(header[0], r"[A-Za-z]", header[0])
 
     def test_only_outputs_is_required(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -211,14 +224,14 @@ class TemplateTest(unittest.TestCase):
         self.assertIn("make clean", block)
 
     def test_template_examples_are_generic(self):
-        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        """例は、どのプロジェクトにも当てはまらない名前にする。そのまま写されても困らないように。"""
         with open(TEMPLATE, encoding="utf-8") as f:
             text = f.read()
-        self.assertNotIn("sensor", text)
         self.assertIn('# 例：["my_app"]', text)
 
     def test_template_comments_do_not_point_by_position(self):
-        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        """項目の説明のコメントは、項目と一緒に、設定ファイルの最後へ足されることがある。
+        「下の」など位置を指す言葉は、そこでは通じない。"""
         with open(TEMPLATE, encoding="utf-8") as f:
             lines = f.read().splitlines()
         for i, line in enumerate(lines):
@@ -414,7 +427,10 @@ class AddMissingKeysTest(unittest.TestCase):
             self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
             self.assertGreaterEqual(len(lines), 2, key)
         # ファイルの先頭の説明は、どの項目にも入らない
-        self.assertNotIn("# cross-compile スキルの設定ファイルです。", blocks[0][1])
+        with open(TEMPLATE, encoding="utf-8") as f:
+            first = f.read().splitlines()[0]
+        self.assertTrue(first.startswith("# "), first)
+        self.assertNotIn(first, blocks[0][1])
 
     def test_missing_keys_are_appended_with_comments(self):
         p = Project(self)
@@ -492,6 +508,7 @@ class AddMissingKeysTest(unittest.TestCase):
         self.assertEqual(data["missing"], ["outputs"])
         self.assertEqual(self.read(p)[:len(before)], before)
 
+    @needs_build_tools
     def test_check_and_run_also_add(self):
         p = Project(self)
         text = template_without("clean_command").replace('outputs: []', 'outputs: ["app"]')
@@ -581,7 +598,7 @@ class ConfigPathTest(unittest.TestCase):
             self.assertEqual(f.read(), "logs/\n")
 
     def test_existing_folder_without_gitignore_gets_one(self):
-        """ほかのものが先にフォルダを作っても、.gitignore が無ければ作る。"""
+        """利用者が先にフォルダを作っていても、.gitignore が無ければ作る。"""
         p = Project(self)
         os.makedirs(p.path(DATA_DIR))
         p.run("config-path")
@@ -649,6 +666,7 @@ class ConfigPathTest(unittest.TestCase):
 
 class CheckTest(unittest.TestCase):
 
+    @needs_build_tools
     def test_ok(self):
         p = Project(self)
         p.configure(outputs=["app"])
@@ -662,6 +680,7 @@ class CheckTest(unittest.TestCase):
                          os.path.realpath(p.dir))
         self.assertFalse(os.path.exists(p.path("app")), "check でビルドしてはいけない")
 
+    @needs_build_tools
     def test_empty_sdk_env_is_noted_not_failed(self):
         """sdk_env が空でも失敗にはしないが、PC 用のプログラムになると、はっきり言う。"""
         p = Project(self)
@@ -679,6 +698,7 @@ class CheckTest(unittest.TestCase):
             self.assertEqual(data["summary"]["compiler_path"], shutil.which("cc"))
             self.assertIn(shutil.which("cc"), note)
 
+    @needs_build_tools
     def test_compiler_from_environment_is_named(self):
         p = Project(self)
         p.configure(outputs=["app"])
@@ -690,6 +710,7 @@ class CheckTest(unittest.TestCase):
         self.assertIn("環境変数 CC", note)
         self.assertNotIn("PC 用", note, "CC が決まっているときは、PC 用とは言い切らない")
 
+    @needs_build_tools
     def test_sdk_env_set_means_no_note(self):
         p = Project(self)
         sdk = p.write("sdk/env", "export CC=gcc\n")
@@ -728,6 +749,7 @@ class CheckTest(unittest.TestCase):
         self.assertTrue(any(p.path("no-such-dir") in x and "source_dir" in x
                             for x in data["problems"]), data["problems"])
 
+    @needs_build_tools
     def test_build_command_not_found(self):
         p = Project(self)
         p.configure(outputs=["app"], build_command="no-such-build-tool-xyz all")
@@ -738,6 +760,7 @@ class CheckTest(unittest.TestCase):
         # PC の準備の問題なので、メッセージはその中身を言う
         self.assertIn("no-such-build-tool-xyz", data["message"])
 
+    @needs_build_tools
     def test_sdk_that_fails_to_load(self):
         p = Project(self)
         sdk = p.write("sdk/env-broken", BROKEN_SDK)
@@ -749,6 +772,7 @@ class CheckTest(unittest.TestCase):
                             for x in data["problems"]), data["problems"])
         self.assertIn("misconfigured", data["message"])
 
+    @needs_build_tools
     def test_sdk_compiler_missing(self):
         p = Project(self)
         sdk = p.write("sdk/env-nocc", 'export CC="no-such-cross-gcc-xyz -O2"\n')
@@ -766,8 +790,8 @@ class CheckTest(unittest.TestCase):
         problem = [x for x in data["problems"] if "outputs" in x][0]
         self.assertTrue(problem.endswith("。"), problem)
         self.assertIn("my_app", problem)
-        self.assertNotIn("sensor", problem)
 
+    @needs_build_tools
     def test_bad_values(self):
         p = Project(self)
         p.configure(outputs="app", timeout_seconds="abc", build_command=["make"])
@@ -798,7 +822,7 @@ class CheckTest(unittest.TestCase):
 # run
 # ---------------------------------------------------------------------------
 
-@unittest.skipUnless(have("make") and have("gcc") and have("bash"), "make・gcc・bash が要ります")
+@needs_build_tools
 class RunTest(unittest.TestCase):
 
     def test_success_reports_outputs_and_log(self):
@@ -1017,6 +1041,9 @@ class RunTest(unittest.TestCase):
         self.assertEqual(code, 0, data)
         self.assertEqual(data["outputs"][0]["path"], p.path(sub, "app"))
         self.assertFalse(os.path.exists(p.config))
+        # --config で設定ファイルを別の場所にしても、ログは作業フォルダの方に残る
+        self.assertEqual(os.path.dirname(data["log"]), p.path(DATA_DIR, "logs"))
+        self.assertFalse(os.path.exists(p.path("logs")), "設定ファイルの横には、ログを作らない")
         # ログのために、設定とログのフォルダを作ったときも、.gitignore を作る
         with open(p.path(DATA_DIR, ".gitignore"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "*\n")
@@ -1050,17 +1077,18 @@ class RunTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(a["log"]) and os.path.isfile(b["log"]))
 
 
-@unittest.skipUnless(sdk_compiler_ready() and have("make"),
+@unittest.skipUnless(SDK_CC and have("make"),
                      "ARM 向けの SDK（{}）がありません".format(SDK_ENV))
 class ArmSdkTest(unittest.TestCase):
-    """Yocto を模した SDK で、ARM 向けの実行ファイルを作る。"""
+    """ARM 向けの SDK で、ARM 向けの実行ファイルを作る。
+    コンパイラーの名前は SDK によって違うので、SDK が決める CC と比べる。"""
 
     def test_check_shows_cross_compiler(self):
         p = Project(self)
         p.configure(outputs=["app"], sdk_env=SDK_ENV)
         code, data, _ = p.run("check")
         self.assertEqual(code, 0, data)
-        self.assertIn("arm-linux-gnueabihf-gcc", data["summary"].get("compiler", ""))
+        self.assertEqual((data["summary"].get("compiler") or "").split()[:1], [SDK_CC])
         self.assertTrue(data["summary"]["compiler_path"])
         self.assertEqual(data["notes"], [])
 
@@ -1081,9 +1109,9 @@ class ArmSdkTest(unittest.TestCase):
         self.assertEqual(out["arch"], "ARM")
         self.assertIn("種類：ARM", data["message"])
         self.assertEqual(data["notes"], [])
-        self.assertIn("arm-linux-gnueabihf-gcc", data["compiler"])
+        self.assertEqual((data["compiler"] or "").split()[:1], [SDK_CC])
         with open(data["log"], encoding="utf-8") as f:
-            self.assertIn("arm-linux-gnueabihf-gcc", f.read())
+            self.assertIn(SDK_CC, f.read())
 
 
 # ---------------------------------------------------------------------------
@@ -1200,8 +1228,11 @@ class CopiedAloneTest(unittest.TestCase):
             f.write(text.replace("outputs: []", 'outputs: ["app"]'))
         code, data, _ = run_script(["run"], cwd=p.dir, script=script)
         self.assertEqual(code, 0, data)
+        self.assertEqual(data["skill"], "my-build")
         self.assertEqual(os.path.dirname(data["log"]), p.path(".my-build", "logs"))
         self.assertRegex(os.path.basename(data["log"]), r"^my-build-\d{8}-\d{6}(-\d+)?\.log$")
+        with open(data["log"], encoding="utf-8") as f:
+            self.assertEqual(f.readline(), "my-build のログ\n")
         self.assertEqual(sorted(n for n in os.listdir(p.dir) if n.startswith(".")), [".my-build"])
 
 

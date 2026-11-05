@@ -14,7 +14,8 @@
   --json を付けると、値を JSON として読む（数・true / false・リスト）。
 - list は、作業フォルダ（今のフォルダか --workdir）と、その下 3 段までのフォルダから、
   *.yaml・*.yml のうち、項目のすぐ上に # の説明があるファイルを、候補として探す。
-  .git・node_modules などのフォルダ（SKIP_DIRS）と、このスキルのフォルダの中は見ない。
+  .git・node_modules などのフォルダ（SKIP_DIRS）と、スキルのフォルダ（SKILL.md があるフォルダ。
+  このスキルのフォルダも）の中は見ない。スキルの中のひな形や試験の見本を、候補に出さないため。
   点で始まるほかのフォルダの中は見る。何も作らない。
   --dir を付けると、そのフォルダの中（下のフォルダは見ない）の *.yaml・*.yml を全部返す。
 - 結果は、いつも JSON 1つを標準出力に書く（UTF-8）。
@@ -52,6 +53,8 @@ SEARCH_DEPTH = 3
 SKIP_DIRS = (".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
              ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache")
 # このスキルのフォルダ（scripts/ の親）。中の試験の見本を、候補に出さないため。
+# ほかのスキルのフォルダ（SKILL.md があるフォルダ）も、同じ理由で見ない。
+SKILL_FILE = "SKILL.md"
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 USAGE = [
@@ -461,7 +464,8 @@ class Item(object):
 def parse_choices(text):
     text = text.strip().rstrip("。")
     if " / " in text:
-        parts = text.split(" / ")
+        # 「（…）」の注のすぐ後ろの「/」も区切りにする（例：blue（ふつう）/ green）。
+        parts = re.split(r" / |(?<=[）)])[ \t]*[/／][ \t]*", text)
     else:
         parts = re.split(r"\s*[/／、,|｜]\s*", text)
     out = []
@@ -1017,7 +1021,8 @@ def _walk_yaml(workdir):
             dirs[:] = []
         else:
             dirs[:] = sorted(d for d in dirs
-                             if d not in SKIP_DIRS and os.path.realpath(os.path.join(root, d)) != own)
+                             if d not in SKIP_DIRS and os.path.realpath(os.path.join(root, d)) != own
+                             and not os.path.isfile(os.path.join(root, d, SKILL_FILE)))
         for name in sorted(files):
             path = os.path.join(root, name)
             if _is_yaml_file(name, path):
