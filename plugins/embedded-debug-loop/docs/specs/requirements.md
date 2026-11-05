@@ -1,6 +1,6 @@
 # embedded-debug-loop 仕様書
 
-- 版：0.2.0
+- 版：0.3.0
 - この文書は、利用者から見た embedded-debug-loop の振る舞いを決める。中のしくみは [設計書](../design/design.md) に書く。
 - 決まりの大もとは [憲章](../constitution.md) にある。
 

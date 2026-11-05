@@ -1,6 +1,6 @@
 # embedded-debug-loop 設計書
 
-- 版：0.2.0
+- 版：0.3.0
 - この文書は、embedded-debug-loop の中のしくみを書く。利用者から見た振る舞いは [仕様書](../specs/requirements.md) にある。
 
 ## 1. 本質的なコンセプト
