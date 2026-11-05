@@ -30,4 +30,4 @@ Copilot CLI を起動し、次の2つを入力します。
 
 ## 開発者向けの文書
 
-[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[部品の置き換え](docs/replace.md)・[憲章](docs/constitution.md)
+[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[部品の変え方](docs/replace.md)・[憲章](docs/constitution.md)

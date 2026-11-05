@@ -18,13 +18,13 @@
   定義の例に、具体の値（答えになりうる数字）を書いていない。利用者への質問の例や選択肢にも、
   頼みに書かれていない値を作って入れない。
 - 文書：上の段の文書（プラグインの README、作業エージェントの README の統括・検証の部分、
-  3段階目のガイド、部品の置き換えの手順書）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
+  3段階目のガイド、部品を変える手順書）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
   3段階目のガイドは、作業エージェントが機器のものだと前提にしない。作業エージェントは、
-  最初の依頼に名前を書いて選ぶ。部品の置き換えの手順書は開発者向けで、利用者向けのガイドの中にない。
+  最初の依頼に名前を書いて選ぶ。部品を変える手順書は開発者向けで、利用者向けのガイドの中にない。
 - 置き換え：スキルを、別の中身・別の設定の形のスキルに置き換えても（作業エージェントごと置き換えても）、
   setup の skills がそれを見つけ、作業エージェント・統括エージェントの定義を変えずに済む。
   setup を単体で作業フォルダに置いたときは、プラグインの中のスキルは見つからず、同じ場所に置いたスキルが見つかる。
-  置き換えの手順書の約束は、設定の書き方を設定のスキルの README に任せる。その README の言葉で書けば、setup が読み分ける。
+  部品を変える手順書の約束は、設定の書き方を設定のスキルの README に任せる。その README の言葉で書けば、setup が読み分ける。
 - スキルのスクリプトの出力は、設計書 3.8 の文字コード（Windows ではコンソールの文字コード）で読む。
 
   python3 -m unittest discover -s tests/independence -v
@@ -47,7 +47,7 @@ SKILLS_DIR = ROOT / "skills"
 AGENTS_DIR = ROOT / "com.github.copilot" / "agents"
 EXT_DIR = ROOT / "com.github.copilot" / "extensions" / "embedded-debug-loop"
 GUIDE_DIR = ROOT / "docs" / "guide"
-REPLACE_DOC = ROOT / "docs" / "replace.md"  # 部品の置き換えの手順書（開発者向け）
+REPLACE_DOC = ROOT / "docs" / "replace.md"  # 部品を変える手順書（開発者向け）
 WORKER_README = AGENTS_DIR / "README.markdown"
 SKILL_NAMES = ["setup", "cross-compile", "deploy", "log-capture"]
 WORK_SKILLS = {"cross-compile": "build.py", "deploy": "deploy.py", "log-capture": "capture.py"}
@@ -594,8 +594,8 @@ class DocumentIndependence(unittest.TestCase):
         for name in ["1-skills.md", "2-device-worker.md"]:
             self.assertFalse((GUIDE_DIR / name).exists(), f"docs/guide/{name} は消しました（中身は各部品の README にある）")
         # 部品の置き換えはプラグインの設計変更。利用者向けのガイドに置かない
-        self.assertFalse((GUIDE_DIR / "replace.md").exists(), "部品の置き換えの手順書が、利用者向けのガイドの中にあります")
-        self.assertTrue(REPLACE_DOC.is_file(), "部品の置き換えの手順書（docs/replace.md）がありません")
+        self.assertFalse((GUIDE_DIR / "replace.md").exists(), "部品を変える手順書が、利用者向けのガイドの中にあります")
+        self.assertTrue(REPLACE_DOC.is_file(), "部品を変える手順書（docs/replace.md）がありません")
 
     def test_links_resolve(self):
         """プラグインの文書の相対リンクが、あるファイルと見出しを指す"""
@@ -723,16 +723,16 @@ class SkillReplacement(unittest.TestCase):
             self.assertTrue(same_path(entry["readme"], project_skills / skill / "README.md"))
 
     def test_guide_leaves_comment_words_to_setup_readme(self):
-        """置き換えの手順書の約束は、設定の書き方を設定のスキルの README に任せる（特定の設定のスキルの言葉に頼らない）。
+        """部品を変える手順書の約束は、設定の書き方を設定のスキルの README に任せる（特定の設定のスキルの言葉に頼らない）。
         その README の言葉で書いた、知らないスキルの設定ファイルを、setup が読み分ける"""
         guide = REPLACE_DOC.read_text(encoding="utf-8")
         row = next((cells for cells in table_rows(guide) if cells and cells[0] == "設定の書き方"), None)
-        self.assertIsNotNone(row, "置き換えの手順書の約束に「設定の書き方」の行がありません")
-        self.assertIn("設定のスキル", row[1], "置き換えの手順書の約束が、設定のスキルが読める形で書くことを求めていません")
-        self.assertIn("README", row[1], "置き換えの手順書の約束が、書き方を設定のスキルの README に任せていません")
+        self.assertIsNotNone(row, "部品を変える手順書の約束に「設定の書き方」の行がありません")
+        self.assertIn("設定のスキル", row[1], "部品を変える手順書の約束が、設定のスキルが読める形で書くことを求めていません")
+        self.assertIn("README", row[1], "部品を変える手順書の約束が、書き方を設定のスキルの README に任せていません")
         words = ["必須", "必ず", "例：", "選べる値："]
         for word in words:
-            self.assertNotIn(f"「{word}」", guide, f"置き換えの手順書に、設定のスキルのコメントの言葉 {word} があります")
+            self.assertNotIn(f"「{word}」", guide, f"部品を変える手順書に、設定のスキルのコメントの言葉 {word} があります")
         readme = (self.setup_dir / "README.md").read_text(encoding="utf-8")
         for word in words:
             self.assertIn(word, readme, f"設定のスキルの README に、コメントの言葉 {word} の説明がありません")
