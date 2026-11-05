@@ -194,6 +194,20 @@ class Log(object):
             self._fh = None
 
 
+class StderrLog(Log):
+    """check 用。記録のファイルは作らず、記録の文（機器の答え、失敗の詳しいこと）も標準エラーに出す。"""
+
+    def __init__(self):
+        Log.__init__(self, None)
+
+    def write(self, text):
+        for line in str(text).splitlines() or [""]:
+            progress(line)
+
+    def say(self, text):
+        self.write(text)
+
+
 def _config_dir_of(path):
     """path か、その上にあるデータのフォルダ（DATA_DIR_NAME）の場所。なければ None。"""
     p = os.path.abspath(path)
@@ -1374,7 +1388,7 @@ NO_MODE_NOTE = ("file_mode が空なので、送った後に権限を付けま�
 
 def cmd_check(workdir, config):
     """設定を確かめる。作業フォルダには、ファイルを作らない（設定ファイル・.gitignore・記録のファイル）。"""
-    log = Log(None)  # 記録のファイルは作らない。途中のようすは標準エラーにだけ出す
+    log = StderrLog()
     if not os.path.exists(config):
         message = "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config
         progress(message)

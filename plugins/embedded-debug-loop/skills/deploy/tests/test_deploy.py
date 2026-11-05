@@ -907,6 +907,20 @@ class CommandWithoutServerTest(unittest.TestCase):
         self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
         self.assertEqual(read_file(ws.config), before)
 
+    def test_check_when_config_is_a_folder(self):
+        """設定ファイルの場所がフォルダなら、設定の問題として答える（終了コード 2）。何も作らない。"""
+        ws = Workspace(self)
+        os.makedirs(ws.config)
+        code, data, _o, err = ws.run("check")
+        self.assertEqual(code, 2, data)
+        self.assertFalse(data["ok"])
+        self.assertIn("設定ファイルの場所 %s は、ファイルではありません。" % ws.config, data["problems"])
+        self.assertNotIn("log", data)
+        self.assertEqual(os.listdir(ws.dir), [DATA_DIR])
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
+        self.assertEqual(os.listdir(ws.config), [])
+        self.assertNotIn("Traceback", err)
+
     def test_check_notes_empty_file_mode(self):
         """file_mode が空なら、check は notes で知らせる（設定の問題にはしない）。"""
         ws = Workspace(self)
@@ -1378,10 +1392,15 @@ class FtpServerTest(unittest.TestCase):
         root = self.root()
         with ftp_server(root) as port:
             ws.write_config(**base_config(port))
-            code, data, out, _e = ws.run("check")
+            code, data, out, err = ws.run("check")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
         self.assertEqual(data["problems"], [])
+        # ログインできても、作業フォルダにファイルを作らない。機器の答えは標準エラーに出す
+        self.assertNotIn("log", data)
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
+        self.assertIn("機器の答え：", err)
+        self.assertNotIn(PASSWORD, err)
         summary = data["summary"]
         self.assertEqual(summary["host"], "127.0.0.1")
         self.assertEqual(summary["port"], port)
@@ -1405,6 +1424,8 @@ class FtpServerTest(unittest.TestCase):
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
         self.assertEqual(data["problems"], [])
+        self.assertNotIn("log", data)
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
         self.assertEqual(data["notes"], [deploy.NO_MODE_NOTE])
         self.assertEqual(data["message"],
                          "設定に問題はありません。機器 127.0.0.1 に FTP でログインできました。"
@@ -1416,11 +1437,15 @@ class FtpServerTest(unittest.TestCase):
         root = self.root()
         with ftp_server(root) as port:
             ws.write_config(**base_config(port, password="nope"))
-            code, data, _o, _e = ws.run("check")
+            code, data, _o, err = ws.run("check")
         self.assertEqual(code, 2)
         self.assertFalse(data["ok"])
         self.assertTrue(any("ログインできません" in p for p in data["problems"]))
         self.assertEqual(data["summary"]["login"], "できない")
+        # 失敗の詳しいことは、記録のファイルを作らずに、標準エラーに出す
+        self.assertIn("詳しく：", err)
+        self.assertNotIn("log", data)
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
 
     def test_check_refused(self):
         ws = Workspace(self)
@@ -1591,6 +1616,18 @@ class SkillFilesTest(unittest.TestCase):
         self.assertIn("足りない項目", text)
         self.assertIn("ほかの所は変えません", text)
         self.assertIn("`added`", text.split("## 結果の伝え方", 1)[1])
+
+    def test_skill_md_does_not_make_config_unasked(self):
+        """check で設定ファイルがないとき、config-path の名前を見せず、頼まれるまで作らない。"""
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("### 設定に問題があるとき", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("「設定ファイルを作って」と頼めば作れると伝えます", section)
+        self.assertIn("「config-path で…」の文は言いません", section)
+        self.assertIn("頼まれるまで、config-path は動かしません", section)
+        # 送れなかったとき：記録のファイルは、あるときだけ案内する（check は作らない）
+        failed = text.split("### 送れなかったとき", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("記録のファイル（`log`）があれば", failed)
 
     def test_skill_md_hides_json_names(self):
         with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
