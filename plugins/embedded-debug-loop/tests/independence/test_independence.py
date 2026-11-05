@@ -545,7 +545,17 @@ class DocumentIndependence(unittest.TestCase):
         """置き換えた作業エージェントは、最初の依頼に名前を書いて選ぶ（画面で選ぶ前に、既定の作業エージェントが動かないように）"""
         for name in ["3-orchestrator.md", "replace.md"]:
             text = (GUIDE_DIR / name).read_text(encoding="utf-8")
-            self.assertRegex(text, r"「作業エージェントは <[^>]+> で」", f"{name} に、依頼で作業エージェントを選ぶ書き方がありません")
+            request = re.search(r"「作業エージェントは <[^>]+> で」", text)
+            self.assertIsNotNone(request, f"{name} に、依頼で作業エージェントを選ぶ書き方がありません")
+            # 画面で選ぶのは、2回目からの切り替え。依頼の書き方より後に書く
+            screen = re.search(r"でも替えられ", text)
+            self.assertIsNotNone(screen, f"{name} に、Web管理画面で替えられることが書かれていません")
+            self.assertLess(request.start(), screen.start(), f"{name} で、Web管理画面で選ぶ方法が、依頼の書き方より先にあります")
+        replace = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
+        self.assertRegex(replace, r"最初の依頼に「作業エージェントは <[^>]+> で」",
+                         "置き換えのガイドに、最初の依頼で作業エージェントを選ぶ手順がありません")
+        self.assertNotIn("Web管理画面の「設定」で、作業エージェントに新しい名前を選びます", replace,
+                         "置き換えのガイドが、Web管理画面で選ぶ方法を主にしています")
 
     def test_worker_readme_knows_only_names_and_roles(self):
         """作業エージェントの README は、作業エージェントの定義と同じく、スキルの名前と役割だけを書く"""
