@@ -8,10 +8,10 @@
 
   run          ビルドする（何も書かないときも run）
   config-path  設定ファイルの場所を出す。無ければひな形から作る
-  check        設定を確かめる（ビルドはしない）
+  check        設定を確かめる（ビルドはしない。ファイルを作らない。設定ファイルが無ければ、そう返す）
 
 結果は、標準出力に JSON を1つだけ出す。途中の様子は標準エラー出力に出す。
-どちらも Python の既定の文字コードで書く。その文字コードにない文字は、JSON では \\uXXXX にする。
+Windows では、コンソールの文字コードで書く（ほかは Python の既定）。その文字コードにない文字は、JSON では \\uXXXX にする。
 終了コード：run は 0＝成功、1＝ビルドの失敗、2＝設定の問題。
             check は 0＝問題なし、2＝問題あり。config-path は 0。
 
@@ -25,9 +25,9 @@
 Windows の bash は、Git for Windows などの bash を使う（WSL を起動する bash.exe は使わない）。
 
 設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
-  config.yaml  設定ファイル（無ければ config-template.yaml から作る）
+  config.yaml  設定ファイル（無ければ、run と config-path が config-template.yaml から作る）
   logs/        ログ（いつも UTF-8。ビルドの出力が UTF-8 でなければ、OS の既定の文字コードとして読む）
-  .gitignore   中身は *（設定やログを git に入れないため）
+  .gitignore   中身は *（設定やログを git に入れないため。run と config-path が作る）
 作業フォルダは、今のフォルダ（--workdir で変えられる）。
 設定ファイルの場所は、--config で変えられる。
 
@@ -450,6 +450,17 @@ def open_config(opts, workdir, config):
     ensure_gitignore(config)
     opts["added"] = [] if created else add_missing_keys(config)
     return created
+
+
+def open_existing_config(opts, config):
+    """check 用。設定ファイルも .gitignore も作らない。設定ファイルがあれば、足りない項目を足して True。
+    無ければ False。"""
+    if os.path.isdir(config):
+        raise SettingsProblem(["設定ファイルの場所 {} は、フォルダです。".format(config)], config)
+    if not os.path.exists(config):
+        return False
+    opts["added"] = add_missing_keys(config)
+    return True
 
 
 def ensure_config(path):
@@ -1513,8 +1524,18 @@ def cmd_config_path(opts):
 # ---------------------------------------------------------------------------
 
 def cmd_check(opts):
-    workdir, config, created, raw, settings, problems = load(opts)
-    result = {"ok": False, "skill": SKILL, "config": config, "created": created,
+    """設定を確かめる。作業フォルダには、ファイルを作らない（設定ファイル・.gitignore・ログ）。"""
+    workdir, config = resolve_paths(opts)
+    if not open_existing_config(opts, config):
+        problem = "設定ファイル {} がありません。".format(config)
+        return 2, {"ok": False, "skill": SKILL, "config": config, "created": False,
+                   "problems": [problem], "summary": {}, "notes": [],
+                   "message": problem + "config-path でひな形から作れます。"}
+    raw, problems = read_config(config)
+    settings = None
+    if not problems:
+        settings, problems = normalize(raw, workdir)
+    result = {"ok": False, "skill": SKILL, "config": config, "created": False,
               "problems": problems, "summary": {}}
     if settings is not None:
         result["summary"] = summary_of(settings)
@@ -1550,10 +1571,7 @@ def cmd_check(opts):
 
     result["ok"] = not problems
     if problems:
-        if created:
-            result["message"] = "設定ファイルを新しく作りました。空の必須の項目を書いてください。"
-        else:
-            result["message"] = problems_message(problems)
+        result["message"] = problems_message(problems)
         return 2, result
     result["message"] = "設定に問題はありません。ビルドの準備ができています。" + "".join(notes)
     return 0, result
@@ -1987,9 +2005,13 @@ def dispatch(argv):
 
 
 def crash_log(argv, detail):
-    """思わぬエラーの詳しい中身を、作業フォルダのログに残す。残せなければ None。"""
+    """思わぬエラーの詳しい中身を、作業フォルダのログに残す。残せなければ None。
+    check のときは、作業フォルダにファイルを作らないので、残さない（None）。"""
     try:
-        workdir = os.path.abspath(os.path.expanduser(parse_args(argv)["workdir"] or os.getcwd()))
+        opts = parse_args(argv)
+        if opts["command"] == "check":
+            return None
+        workdir = os.path.abspath(os.path.expanduser(opts["workdir"] or os.getcwd()))
         if not os.path.isdir(workdir):
             return None
         path = new_log_path(workdir)
@@ -2012,7 +2034,8 @@ def main(argv=None):
         detail = traceback.format_exc()
         log = crash_log(argv, detail)
         last = detail.strip().splitlines()[-1]
-        progress(last)
+        # ログに残せないときは、詳しい中身を標準エラー出力に出す
+        progress(last if log else detail.rstrip())
         msg = "スクリプトの中で思わぬエラーが起きました（{}）。".format(short(last, 120))
         msg += "くわしくはログを見てください。" if log else ""
         code, result = 1, {"ok": False, "skill": SKILL, "log": log, "message": msg}

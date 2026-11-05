@@ -9,12 +9,16 @@
   - 人向けの使い方（README.md）とテスト（tests/）が、フォルダの中にある。
   - フォルダだけを別の場所にコピーしても（名前を変えても）、設定ファイルの用意・設定の確認・
     そのスキルのテストが動き、データは作業フォルダの .<フォルダの名前>/ にだけできる。
+    設定の確認（check）は、設定ファイルがなくても、作業フォルダに何も作らない。
 - 2段階目：作業エージェントは、スキルの名前を「使うスキル」の表にだけ書く。スキルの中身
   （スクリプトの名前、設定の項目、設定ファイルの置き場所、転送やログ取得の方法）を書いていない。
 - 3段階目：統括エージェント・検証エージェント・エクステンションは、機器・ビルド・転送・ログ取得の
   方法やスキルの名前を書いていない。作業エージェントの名前は、設定のデータ（defaults.json）にだけある。
+  定義の例に、具体の値（答えになりうる数字）を書いていない。
 - 文書：上の段の文書（プラグインの README、作業エージェントの README の統括・検証の部分、
   3段階目のガイド、置き換えのガイド）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
+  3段階目のガイドは、作業エージェントが機器のものだと前提にしない。置き換えた作業エージェントは、
+  最初の依頼に名前を書いて選ぶ。
 - 置き換え：スキルを、別の中身・別の設定の形のスキルに置き換えても（作業エージェントごと置き換えても）、
   setup の skills がそれを見つけ、作業エージェント・統括エージェントの定義を変えずに済む。
   setup を作業フォルダに置き換えたときは、設定するスキルも同じ場所に置けば見つかる（置き換えのガイドの決まり）。
@@ -330,6 +334,12 @@ class SkillIndependence(unittest.TestCase):
                         done.stderr = done.stderr.decode(encoding, errors="replace")
                         return done
 
+                    # 設定の確認は、設定ファイルがなくても何も作らない（準備の確認で、作業フォルダを変えない）
+                    bare = run("check")
+                    self.assertEqual(bare.returncode, 2, f"{skill}: 設定ファイルがないときの check の終了コードが 2 ではありません")
+                    self.assertFalse(json.loads(bare.stdout)["ok"])
+                    self.assertIn("config-path", bare.stdout, f"{skill}: 設定ファイルの作り方（config-path）を伝えていません")
+                    self.assertEqual(list(work.iterdir()), [], f"{skill}: check が、作業フォルダに何かを作りました")
                     made = run("config-path")
                     self.assertEqual(made.returncode, 0, f"{skill} の config-path が失敗：{made.stderr[-500:]}")
                     result = json.loads(made.stdout)
@@ -463,6 +473,17 @@ class OrchestrationIndependence(unittest.TestCase):
             problems += hits(path, patterns)
         self.assertEqual(problems, [], "3段階目に、機器やスキルのことが書かれています：\n" + "\n".join(problems))
 
+    def test_examples_hold_no_answer_values(self):
+        """定義の例（「例：「…」」）に具体の値（数字）を書かない。統括エージェントが、例の値を利用者への質問に持ち込むため"""
+        problems = []
+        for path in [AGENTS_DIR / "orchestrator.agent.md", AGENTS_DIR / "verifier.agent.md"]:
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for example in re.findall(r"例：([^）\n]*)", line):
+                    for quoted in re.findall(r"「([^」]*)」", example):
+                        if re.search(r"[0-9０-９]", quoted):
+                            problems.append(f"{path.relative_to(ROOT)}:{lineno}: 「{quoted}」")
+        self.assertEqual(problems, [], "定義の例に、具体の値があります：\n" + "\n".join(problems))
+
     def test_worker_name_only_in_defaults(self):
         defaults = EXT_DIR / "defaults.json"
         self.assertTrue(defaults.is_file(), "defaults.json がありません")
@@ -511,6 +532,20 @@ class DocumentIndependence(unittest.TestCase):
         for label, text in self.upper_documents():
             problems += hits_in_text(label, text, patterns)
         self.assertEqual(problems, [], "上の段の文書に、転送・ログ取得などの具体があります：\n" + "\n".join(problems))
+
+    def test_stage3_guide_is_worker_agnostic(self):
+        """3段階目のガイドは、作業エージェントが機器のものだと前提にしない。既定の名前は1回だけ（設定の表）"""
+        text = (GUIDE_DIR / "3-orchestrator.md").read_text(encoding="utf-8")
+        default = json.loads((EXT_DIR / "defaults.json").read_text(encoding="utf-8"))["worker"].split(":")[-1]
+        self.assertLessEqual(len(token(default).findall(text)), 1, f"3段階目のガイドに、{default} が2回以上あります")
+        self.assertNotIn("機器", text, "3段階目のガイドが、機器を前提にしています")
+        self.assertNotIn(WORKER_README.name, text, "3段階目のガイドが、特定の作業エージェントの README を案内しています")
+
+    def test_guides_choose_worker_in_first_request(self):
+        """置き換えた作業エージェントは、最初の依頼に名前を書いて選ぶ（画面で選ぶ前に、既定の作業エージェントが動かないように）"""
+        for name in ["3-orchestrator.md", "replace.md"]:
+            text = (GUIDE_DIR / name).read_text(encoding="utf-8")
+            self.assertRegex(text, r"「作業エージェントは <[^>]+> で」", f"{name} に、依頼で作業エージェントを選ぶ書き方がありません")
 
     def test_worker_readme_knows_only_names_and_roles(self):
         """作業エージェントの README は、作業エージェントの定義と同じく、スキルの名前と役割だけを書く"""

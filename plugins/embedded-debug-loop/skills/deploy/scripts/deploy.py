@@ -8,12 +8,13 @@
 
   run          設定ファイルのとおりに、ファイルを機器に送る（省略したときもこれ）
   config-path  設定ファイルの場所を出す。なければ、ひな形から作る
-  check        設定を確かめ、機器に FTP でログインできるかを試す
+  check        設定を確かめ、機器に FTP でログインできるかを試す。ファイルは作らない
+               （設定ファイルがなければ、作らずに、ないと答える。記録のファイルも作らない）
 
 設定と記録は、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
-  config.yaml  設定ファイル（なければ、ひな形 config-template.yaml から作る）
-  logs/        記録のファイル
-  .gitignore   中身は * の1行（設定や記録を git に入れないため）
+  config.yaml  設定ファイル（config-path と run は、なければ、ひな形 config-template.yaml から作る）
+  logs/        記録のファイル（run のとき）
+  .gitignore   中身は * の1行（設定や記録を git に入れないため。config-path と run が作る）
 
 標準出力には、結果の JSON を1つだけ出す。途中のようすは標準エラーに出す。
 どちらも Python の既定の文字コードで書く（書けない文字は \\ の形にする）。
@@ -1352,16 +1353,44 @@ def _load(workdir, config):
     return created, added, values, raws, []
 
 
+def _load_existing(config):
+    """check 用。ファイルを作らずに、今ある設定ファイルを読む。(added, values, raws, problems) を返す。
+    足りない項目は、ほかのコマンドと同じく、設定ファイルに足す。"""
+    if not os.path.isfile(config):
+        return [], None, None, ["設定ファイルの場所 %s は、ファイルではありません。" % config]
+    added = add_missing_keys(config)
+    try:
+        values, raws = read_config_file(config)
+    except ConfigError as e:
+        return added, None, None, [str(e)]
+    return added, values, raws, []
+
+
+# file_mode が空のとき、check で伝える注意（問題ではない）。
+NO_MODE_NOTE = ("file_mode が空なので、送った後に権限を付けません。"
+                "FTP で送ったファイルは、ふつうは実行できない権限になります。"
+                "機器でプログラムを実行するなら、file_mode に 755 などを書いてください。")
+
+
 def cmd_check(workdir, config):
-    log = open_log(workdir)
-    log.write("%s check を始めます。設定ファイル：%s" % (SKILL, config))
-    created, added, values, raws, problems = _load(workdir, config)
+    """設定を確かめる。作業フォルダには、ファイルを作らない（設定ファイル・.gitignore・記録のファイル）。"""
+    log = Log(None)  # 記録のファイルは作らない。途中のようすは標準エラーにだけ出す
+    if not os.path.exists(config):
+        message = "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config
+        progress(message)
+        emit({"ok": False, "skill": SKILL, "problems": [message], "notes": [], "summary": {},
+              "message": message, "config": config, "created": False, "added": []})
+        return 2
+    added, values, raws, problems = _load_existing(config)
     summary = {}
+    notes = []
     login_error = None
     if values is not None:
         settings, problems, notes, connect_ready = validate(values, raws, workdir)
         settings["config_path"] = config
         summary = summary_of(settings)
+        if _is_empty(_as_text("file_mode", values, raws)):
+            notes.append(NO_MODE_NOTE)
         for n in notes:
             log.say(n)
         if connect_ready:
@@ -1385,29 +1414,27 @@ def cmd_check(workdir, config):
         else:
             summary["login"] = "試していない（設定の問題を先に直してください）"
     if problems:
-        message = problems_message(problems, config, created)
+        message = problems_message(problems, config, False)
         if login_error:
             message = login_error + "ほかに、" + message
     elif login_error:
         message = login_error
     else:
-        message = "設定に問題はありません。機器 %s に FTP でログインできました。" % summary.get("host")
+        message = ("設定に問題はありません。機器 %s に FTP でログインできました。" % summary.get("host")
+                   + "".join(notes))
     if login_error:
         problems.append(login_error)
-    for p in problems:
-        log.write("問題：%s" % p)
     ok = not problems
     log.say(message)
-    log.close()
     emit(with_added({
         "ok": ok,
         "skill": SKILL,
         "problems": problems,
+        "notes": notes,
         "summary": summary,
         "message": message,
         "config": config,
-        "created": created,
-        "log": log.path,
+        "created": False,
     }, added))
     return 0 if ok else 2
 
@@ -1521,6 +1548,12 @@ def main(argv=None):
         return cmd_run(workdir, config)
     except Exception:
         detail = traceback.format_exc()
+        if args.command == "check":
+            # check は、記録のファイルも作らない。くわしいことは標準エラーに出す
+            progress(detail.rstrip())
+            message = "思わぬエラーで止まりました（%s）。" % detail.strip().splitlines()[-1]
+            emit({"ok": False, "skill": SKILL, "message": message, "config": config})
+            return 1
         log = open_log(workdir)
         log.write("思わぬエラー：\n" + detail)
         log.close()

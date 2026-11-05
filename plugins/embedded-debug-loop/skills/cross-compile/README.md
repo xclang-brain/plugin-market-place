@@ -10,10 +10,10 @@
 
 Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動します。このフォルダを作業フォルダと呼びます。
 
-1. このフォルダをまるごと、`<作業フォルダ>/.github/skills/cross-compile/` にコピーします。すべての作業フォルダで使うときは、`~/.copilot/skills/cross-compile/` にコピーします。
+1. このフォルダをまるごと、`<作業フォルダ>/.github/skills/cross-compile/` にコピーします。すべての作業フォルダで使うときは、`%USERPROFILE%\.copilot\skills\cross-compile\`（Linux では `~/.copilot/skills/cross-compile/`）にコピーします。
 2. 作業フォルダで Copilot CLI を起動します。起動済みなら `/skills reload` を実行します。
-3. `/cross-compile 設定ファイルはどこ？` と入力します。設定ファイルができ、場所が表示されます。
-4. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けなら `sdk_env` も書きます（[項目](#項目)）。WSL の中の SDK を使うときは、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
+3. `/cross-compile 設定ファイルを作って` と入力します。設定ファイルができ、場所が表示されます。
+4. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けにビルドするなら、`sdk_env` も必ず書きます（[項目](#項目)）。WSL の中の SDK を使うときは、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
 5. `/cross-compile ビルドして` と入力します。できたファイルのサイズと種類が表示されれば成功です。
 
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も同じ名前にします。
@@ -28,15 +28,16 @@ Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動�
 - 機器の SDK（機器向けにビルドするとき）
 - `file` コマンド（任意）。あると、ファイルの種類をくわしく報告します。
 
+Windows では、GitHub Actions でテストを確認しています。Windows の Copilot CLI との組み合わせは、まだ確認していません。
+
 ## 使い方
 
 | 依頼 | 例 | スクリプトのコマンド |
 | --- | --- | --- |
 | ビルド | `/cross-compile ビルドして` | `run`（省略できる） |
-| 設定ファイルの場所（なければ作る） | `/cross-compile 設定ファイルはどこ？` | `config-path` |
+| 設定ファイルを作る（あれば場所を出す） | `/cross-compile 設定ファイルを作って` | `config-path` |
 | 設定の確認（ビルドはしない） | `/cross-compile 設定を確認して` | `check` |
 
-- `/cross-compile` を付けずに「ビルドして」と入力しても、このスキルが使われることがあります。
 - プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
 
 スクリプトを直接実行するときは、作業フォルダで次のように実行します（パスはインストール先に合わせます）。
@@ -54,13 +55,15 @@ py -3 .github\skills\cross-compile\scripts\build.py <コマンド>
 
 設定ファイルは `<作業フォルダ>/.cross-compile/config.yaml` です。直接編集でき、各項目の説明はその項目のすぐ上のコメントにあります。
 
-親フォルダの設定ファイルは探しません。サブフォルダで実行すると、そこに新しい設定ファイルができます。
+親フォルダの設定ファイルは探しません。サブフォルダで実行すると、そのサブフォルダの `.cross-compile/` を使います。
 
 スクリプトは、次のことを自動で行います。
 
-- 初めて使うとき、このフォルダの `config-template.yaml`（ひな形）をコピーして作ります。
+- 設定ファイルがなければ、このフォルダの `config-template.yaml`（ひな形）をコピーして作ります。
 - `.cross-compile/` に `.gitignore`（中身は `*`）を作り、設定とログを Git から外します。すでにあれば変更しません。
 - スキルの更新でひな形に項目が増えたら、足りない項目をコメントと一緒にファイルの最後に追加します。ほかの部分は変更しません。
+
+`check` は、どのファイルも作りません。
 
 ### 項目
 
@@ -68,7 +71,7 @@ py -3 .github\skills\cross-compile\scripts\build.py <コマンド>
 | --- | --- | --- | --- |
 | `source_dir` | ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空か `"."` なら作業フォルダ | `"firmware/app"` | `"."` |
 | `shell` | コマンドを実行し、`sdk_env` を読み込むシェル。`auto`（Windows は `cmd`、ほかは `bash`）・`cmd`・`powershell`（`pwsh` を使う。なければ `powershell`）・`bash`（Windows では Git for Windows などの bash。WSL の bash は使えない） | `"powershell"` | `"auto"` |
-| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けなら書く（WSL の中の SDK を使うときは空）。`shell` が `cmd` なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"` | `""` |
+| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けにビルドするなら、必ず書く（WSL の中の SDK を使うときは空）。`shell` が `cmd` なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`（Windows で使う SDK）、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"`（Linux で使う Yocto の SDK） | `""` |
 | `build_command` | ビルドコマンド。ビルドするフォルダで、`shell` のシェルで実行する。空なら `make` | `"make -j4 all"` | `"make"` |
 | `clean_command` | ビルドの前のクリーンコマンド。空ならクリーンしない | `"make clean"` | `""` |
 | `outputs` | ビルドでできるファイル（必須）。ビルドするフォルダからの相対パス | `["my_app"]`、`["build/my_app.exe"]` | `[]` |
@@ -83,7 +86,6 @@ SDK の環境設定ファイルは、ふつう環境変数 `CC` を設定しま�
 - 1行に1項目を、`名前: 値` の形で書きます。文字列は `"` で囲みます（例：`build_command: "make -j4"`）。
 - Windows のパスは、`/` で区切るか（例：`"C:/sdk/setenv.bat"`）、`'` で囲みます（例：`'C:\sdk\setenv.bat'`）。`"` で囲むと、`\n` や `\t` が改行やタブとして読まれます。
 - リストは `["a", "b"]` か、次の行から `  - a` の形で書きます。
-- `#` で始まる行はコメントです。
 - ネストと、`|` で始まる複数行の文字列は使えません。
 - 文字コードは UTF-8 です。
 
@@ -96,12 +98,12 @@ sdk_env: ""
 build_command: 'wsl bash -c "source /opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi && make"'
 ```
 
-`wsl` の後ろのコマンドは、ビルドするフォルダで動きます。`sdk_env` が空なので「SDK を読み込みません」と出ます。機器向けにできたかは、できたファイルの種類（例：ARM）で確認します。
+`wsl` の後ろのコマンドは、ビルドするフォルダで動きます。機器向けにできたかは、できたファイルの種類（例：ARM）で確認します。
 
 ## 結果とログ
 
 スクリプトは、結果を1つの JSON で標準出力に、途中経過を標準エラー出力に出します。
-文字コードは Python の既定のもの（日本語の Windows では cp932）です。その文字コードにない文字は、`\uXXXX` の形で出ます。
+Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。
 
 | コマンド | 主な項目 | 終了コード |
 | --- | --- | --- |
@@ -138,7 +140,7 @@ build_command: 'wsl bash -c "source /opt/poky/4.0/environment-setup-cortexa7t2hf
 2. ビルドの出力のすべて（「==== ビルドの出力（ここから） ====」と「（ここまで）」の行で囲む）。`==> ` で始まる行は、段階（SDK の読み込み、クリーン、ビルド）の区切りです。
 3. 終了コード、使ったコンパイラー、できたファイル、結果の説明
 
-スクリプトで予期しないエラーが起きたときも、その詳細を残します。
+スクリプトで予期しないエラーが起きたときも、その詳細を残します（`check` は標準エラー出力に出します）。
 
 ## うまくいかないとき
 
@@ -167,12 +169,13 @@ build_command: 'wsl bash -c "source /opt/poky/4.0/environment-setup-cortexa7t2hf
 | 設定ファイル … が UTF-8 で書かれていません | UTF-8 で保存し直します |
 | … で書いてください（文字、リスト、1 以上の数など） | 値を指定の形で書き直します |
 | … の書き方が正しくありません（引用符が閉じていません） | コマンドの中の `"` や `'` を閉じます |
+| 設定ファイル … がありません（`check`） | `/cross-compile 設定ファイルを作って` と入力します |
 | 設定ファイル … を作れません／… が読めません／ログのフォルダ … に書き込めません | 作業フォルダと設定ファイルの読み書き権限を確認します |
 | 設定ファイルの場所 … は、フォルダです | そのフォルダの名前を変えるか、`--config` を使います |
 | 設定のひな形 … がありません | このフォルダをまるごとコピーし直します |
 | 作業フォルダ … がありません | `--workdir` のフォルダを確認します |
 | 「…」は使えません／… の後ろに、パスを書いてください | スクリプトの引数を「使い方」のとおりに直します |
-| スクリプトの中で思わぬエラーが起きました | ログを確認します |
+| スクリプトの中で思わぬエラーが起きました | ログ（`check` では標準エラー出力）を確認します |
 | `/cross-compile` が候補に出てこない | インストール先と、`SKILL.md` の `name:` がフォルダ名と同じかを確認し、`/skills reload` を実行します |
 
 ## テストを実行する
@@ -185,7 +188,6 @@ py -3 -m unittest discover -s tests -v
 
 Linux では `python3 -m unittest discover -s tests -v` です。
 
-- テストは、PC で使えるシェル（cmd・PowerShell・bash）ごとに動かします。
 - C のプロジェクトを実際にビルドするテストは、Windows 以外で `make`・`gcc`・`bash` があるときだけ実行します。
 - ARM 向けのテストは、`sdk_env` の例に書いたファイルが PC にあり、SDK のコンパイラー（`CC`）が使えるときだけ実行します。
 - `scripts/` と `tests/` にできる `__pycache__` は削除してかまいません。作らせないなら `-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。

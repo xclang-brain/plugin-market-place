@@ -852,13 +852,17 @@ class CommandWithoutServerTest(unittest.TestCase):
         self.assertEqual(read_file(os.path.join(ws.data_dir, ".gitignore")), b"*\n")
 
     def test_gitignore_is_made_again_when_removed(self):
+        """config-path と run は作り直す。check は作らない（作業フォルダにファイルを作らない）。"""
         ws = Workspace(self)
         ws.run("config-path")
         gi = os.path.join(ws.data_dir, ".gitignore")
-        for command in ("config-path", "check", "run"):
+        for command in ("config-path", "run"):
             os.unlink(gi)
             ws.run(command)
             self.assertEqual(read_file(gi), b"*\n", command)
+        os.unlink(gi)
+        ws.run("check")
+        self.assertFalse(os.path.lexists(gi))
 
     def test_gitignore_in_work_folder_with_config_elsewhere(self):
         ws = Workspace(self)
@@ -869,8 +873,74 @@ class CommandWithoutServerTest(unittest.TestCase):
     def test_gitignore_when_only_the_log_folder_is_made(self):
         ws = Workspace(self)
         other = os.path.join(ws.dir, "conf", "my-deploy.yaml")
-        ws.run("check", "--config", other)
+        ws.run("run", "--config", other)
         self.assertEqual(read_file(os.path.join(ws.data_dir, ".gitignore")), b"*\n")
+
+    def test_check_without_config_makes_no_files(self):
+        """check は、設定ファイルがなければ作らずに、ないと答える（終了コード 2）。記録のファイルも作らない。"""
+        ws = Workspace(self)
+        other = os.path.join(ws.dir, "conf", "my-deploy.yaml")
+        for args, config in (((), ws.config), (("--config", other), other)):
+            with self.subTest(args=args):
+                code, data, _o, err = ws.run("check", *args)
+                self.assertEqual(code, 2, data)
+                self.assertFalse(data["ok"])
+                self.assertFalse(data["created"])
+                self.assertEqual(data["config"], config)
+                self.assertEqual(data["message"],
+                                 "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config)
+                self.assertEqual(data["problems"], [data["message"]])
+                self.assertNotIn("log", data)
+                self.assertEqual(os.listdir(ws.dir), [])
+                self.assertNotIn("Traceback", err)
+
+    def test_check_with_config_makes_no_files(self):
+        """設定ファイルがあっても、.gitignore や記録のファイルを作らない。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        ws.write_config(**base_config(free_port()))
+        before = read_file(ws.config)
+        code, data, _o, _e = ws.run("check")
+        self.assertEqual(code, 2, data)
+        self.assertNotIn("log", data)
+        self.assertEqual(sorted(os.listdir(ws.dir)), [DATA_DIR, "sensor_app"])
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
+        self.assertEqual(read_file(ws.config), before)
+
+    def test_check_notes_empty_file_mode(self):
+        """file_mode が空なら、check は notes で知らせる（設定の問題にはしない）。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        for mode, expected in (("", [deploy.NO_MODE_NOTE]), ("755", [])):
+            with self.subTest(file_mode=mode):
+                ws.write_config(**base_config(free_port(), file_mode=mode))
+                code, data, _o, _e = ws.run("check")
+                self.assertEqual(code, 2, data)  # 接続が拒否される
+                self.assertEqual(data["notes"], expected)
+                self.assertEqual(len(data["problems"]), 1, data)
+                self.assertNotIn("file_mode", data["problems"][0])
+        # 項目そのものがないとき（古い設定ファイル）も、空と同じ
+        cfg = base_config(free_port())
+        del cfg["file_mode"]
+        ws.file(os.path.relpath(ws.config, ws.dir), render_yaml(cfg).encode("utf-8"))
+        code, data, _o, _e = ws.run("check")
+        self.assertEqual(data["added"], ["file_mode"])
+        self.assertEqual(data["notes"], [deploy.NO_MODE_NOTE])
+
+    def test_check_unexpected_error_makes_no_files(self):
+        ws = Workspace(self)
+        ws.write_config(**base_config(free_port()))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(deploy, "validate", side_effect=RuntimeError("boom")), \
+                mock.patch.object(deploy.sys, "stdout", out), mock.patch.object(deploy.sys, "stderr", err):
+            code = deploy.main(["check", "--workdir", ws.dir])
+        self.assertEqual(code, 1)
+        data = json.loads(out.getvalue())
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["message"], "思わぬエラーで止まりました（RuntimeError: boom）。")
+        self.assertNotIn("log", data)
+        self.assertIn("Traceback", err.getvalue())
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
 
     def test_config_option(self):
         ws = Workspace(self)
@@ -1319,8 +1389,26 @@ class FtpServerTest(unittest.TestCase):
         self.assertEqual(summary["login"], "できた")
         self.assertEqual(summary["remote_home"], "/")
         self.assertNotIn(PASSWORD, out)
+        self.assertEqual(data["notes"], [])
+        self.assertEqual(data["message"], "設定に問題はありません。機器 127.0.0.1 に FTP でログインできました。")
         # check は何も送らない
         self.assertEqual(os.listdir(root), [])
+
+    def test_check_ok_with_empty_file_mode(self):
+        """file_mode が空でも問題にはしない。notes と message で知らせる。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        root = self.root()
+        with ftp_server(root) as port:
+            ws.write_config(**base_config(port, file_mode=""))
+            code, data, _o, _e = ws.run("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["problems"], [])
+        self.assertEqual(data["notes"], [deploy.NO_MODE_NOTE])
+        self.assertEqual(data["message"],
+                         "設定に問題はありません。機器 127.0.0.1 に FTP でログインできました。"
+                         + deploy.NO_MODE_NOTE)
 
     def test_check_wrong_password(self):
         ws = Workspace(self)
@@ -1421,18 +1509,28 @@ class SelfContainedTest(unittest.TestCase):
                 self.assertFalse(data["ok"])
                 self.assertEqual(data["config"], config)
                 self.assertFalse(data["created"])
-                self.assertTrue(data["log"].startswith(os.path.join(data_dir, "logs") + os.sep),
-                                data["log"])
-                self.assertTrue(os.path.isfile(data["log"]))
-                # 結果の skill、記録のファイルの名前の頭、途中のようすの頭は、写したフォルダの名前
+                self.assertNotIn("log", data)
+                # check は、作業フォルダにファイルを作らない
+                self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml"])
+                # 結果の skill、途中のようすの頭は、写したフォルダの名前
                 self.assertEqual(data["skill"], name)
-                self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
                 lines = [l for l in err.splitlines() if l]
                 self.assertTrue(lines)
                 for line in lines:
                     self.assertTrue(line.startswith("[%s] " % name), line)
+
+                code, data, err = self.run_copy(dest, "run", workdir)
+                self.assertEqual(code, 2, data)
+                self.assertEqual(data["skill"], name)
+                self.assertTrue(data["log"].startswith(os.path.join(data_dir, "logs") + os.sep),
+                                data["log"])
+                self.assertTrue(os.path.isfile(data["log"]))
+                # 記録のファイルの名前の頭も、写したフォルダの名前
+                self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
+                for line in [l for l in err.splitlines() if l]:
+                    self.assertTrue(line.startswith("[%s] " % name), line)
                 with open(data["log"], encoding="utf-8") as fh:
-                    self.assertIn("%s check を始めます" % name, fh.readline())
+                    self.assertIn("%s run を始めます" % name, fh.readline())
 
                 # 作業フォルダには「.<写したフォルダの名前>」だけができる
                 self.assertEqual(os.listdir(workdir), ["." + name])
@@ -1531,6 +1629,26 @@ class SkillFilesTest(unittest.TestCase):
         self.assertNotIn("Linux の PC", text)
         self.assertLess(text.index("py -3 -m unittest discover -s tests"),
                         text.index("python3 -m unittest discover -s tests"))
+        # 個人のフォルダも Windows を先に書く
+        self.assertLess(text.index("`%USERPROFILE%\\.copilot\\skills\\deploy\\`"),
+                        text.index("`~/.copilot/skills/deploy/`"))
+
+    def test_readme_shares_wording_with_other_skills(self):
+        """スキルの README でそろえる文（Windows での確認、出力の文字コード、頼み方の例）。"""
+        with open(os.path.join(SKILL_DIR, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertTrue(needs.rstrip().endswith(
+            "\n\nWindows では、GitHub Actions でテストを確認しています。"
+            "Windows の Copilot CLI との組み合わせは、まだ確認していません。"), needs)
+        self.assertEqual(text.count("Windows の Copilot CLI との組み合わせ"), 1)
+        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n",
+                      text)
+        self.assertNotIn("Python 3.14", text)
+        self.assertIn("`/deploy 設定ファイルを作って`", text)
+        self.assertNotIn("用意して", text)
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            self.assertIn("「設定ファイルを作って」と頼まれたとき", fh.read())
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""

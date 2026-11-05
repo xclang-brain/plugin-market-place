@@ -505,6 +505,35 @@ class ShowTest(ToolTestCase):
         data = self.ok("show", COFFEE, "--workdir", self.tmp, cwd=other)
         self.assertEqual(data["file"], os.path.join(self.tmp, COFFEE))
 
+    def test_workdir_before_or_after_the_subcommand(self):
+        """--workdir をサブコマンドの前に書くと「知らないサブコマンド」で失敗した。どちらでも受け付ける。"""
+        path = self.copy(COFFEE)
+        other = tempfile.mkdtemp(prefix="setup-test-cwd-")
+        self.addCleanup(shutil.rmtree, other, True)
+        for args in (("--workdir", self.tmp, "show", COFFEE), ("--workdir=" + self.tmp, "show", COFFEE),
+                     ("show", "--workdir", self.tmp, COFFEE), ("show", COFFEE, "--workdir", self.tmp)):
+            data = self.ok(*args, cwd=other)
+            self.assertEqual(data["file"], path, args)
+        self.assertEqual(self.ok("--workdir", self.tmp, "get", COFFEE, "machine_name", cwd=other)["file"], path)
+        data = self.ok("--workdir", self.tmp, "--stdin", "set", COFFEE, "machine_name", cwd=other, stdin="前でも\n")
+        self.assertTrue(data["changed"])
+        self.assertEqual(self.value(path, "machine_name"), "前でも")
+        # サブコマンドがなければ、使い方を添えて断る
+        data, _ = self.fail_("--workdir", self.tmp, cwd=other)
+        self.assertIn("サブコマンド", data["error"])
+        self.assertTrue(data["usage"])
+
+    def test_usage_shows_values_through_stdin(self):
+        """使い方の set は、SKILL.md と同じく、値を標準入力で渡す形だけを示す。"""
+        usage = self.ok("help")["usage"]
+        sets = [line for line in usage if " set " in line]
+        self.assertEqual(sets, ["config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]"])
+        for name in ("skills", "show", "get", "set"):
+            line = [x for x in usage if x.startswith("config_tool.py " + name + " ")][0]
+            self.assertIn("[--workdir フォルダ]", line)
+        data, _ = self.fail_("set", COFFEE, "machine_name")
+        self.assertIn("--stdin", data["error"])
+
 
 # ---------------------------------------------------------------------------
 # set

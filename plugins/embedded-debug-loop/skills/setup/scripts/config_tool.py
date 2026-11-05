@@ -4,11 +4,11 @@
 
 使い方:
   config_tool.py skills [--workdir フォルダ]
-  config_tool.py show ファイル
-  config_tool.py get ファイル 項目
-  config_tool.py set ファイル 項目 値 [--json]
-  config_tool.py set ファイル 項目 --stdin [--json]
+  config_tool.py show ファイル [--workdir フォルダ]
+  config_tool.py get ファイル 項目 [--workdir フォルダ]
+  config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]
 
+- --workdir・--json・--stdin は、サブコマンドの前に書いても後に書いてもよい。
 - skills は、スキルのフォルダ（SKILL.md があるフォルダ）を、次の順に探して返す。何も作らない。
   1. .github/skills/、.agents/skills/、.claude/skills/（project）。この順に、それぞれ作業フォルダ
      （今のフォルダか --workdir）から上へ探す。上は Git のリポジトリの一番上まで。リポジトリの外なら、
@@ -20,7 +20,8 @@
   （--plugin-dir で読み込んだプラグインのスキルは、2 と 3 より先に選ばれる）。
   名前（SKILL.md の name:。なければフォルダの名前）が同じスキルは、先に見つかったものだけが使われる。
   後のものは hidden を true にする。このスキル自身は返さない。点で始まるフォルダは見ない。
-- set の値は、--stdin で標準入力から渡すのがよい。値がコマンドの行に出ない。
+- set の値は、--stdin で標準入力から渡す。値がコマンドの行に出ない。
+  （テストのために、値を「set ファイル 項目 値」と引数で渡すこともできる。）
   標準入力はバイト列で読み、UTF-8（BOM があれば外す）で読めなければ、OS の既定の文字コードで読む。
   最後の改行1つ（\\r\\n か \\n）は値に含めない。
   --json を付けると、値を JSON として読む（数・true / false・リスト）。
@@ -64,10 +65,9 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 USAGE = [
     "config_tool.py skills [--workdir フォルダ]",
-    "config_tool.py show ファイル",
-    "config_tool.py get ファイル 項目",
-    "config_tool.py set ファイル 項目 値 [--json]",
-    "config_tool.py set ファイル 項目 --stdin [--json]",
+    "config_tool.py show ファイル [--workdir フォルダ]",
+    "config_tool.py get ファイル 項目 [--workdir フォルダ]",
+    "config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]",
 ]
 
 TYPE_WORDS = {
@@ -1303,9 +1303,10 @@ def _read_stdin():
 
 def cmd_set(opts, pos):
     if opts["stdin"]:
-        _need(pos, 2, USAGE[4])
+        _need(pos, 2, USAGE[3])
         raw = _read_stdin()
     else:
+        # 値を引数で渡す形（テスト用）。使い方には --stdin の形だけを示す。
         _need(pos, 3, USAGE[3])
         raw = pos[2]
     path = resolve_path(pos[0], opts["workdir"])
@@ -1403,10 +1404,15 @@ def parse_args(argv):
 def run(argv):
     if not argv or argv[0] in ("-h", "--help"):
         return cmd_help(None, None)
-    cmd = argv[0]
+    # --workdir などは、サブコマンドの前でも後でもよい。最初の引数（オプションでないもの）がサブコマンド。
+    opts, pos = parse_args(argv)
+    if not pos:
+        raise ToolError("サブコマンドがありません。使えるのは skills / show / get / set です。", usage=USAGE)
+    cmd = pos.pop(0)
+    if cmd in ("-h", "--help"):
+        return cmd_help(None, None)
     if cmd not in COMMANDS:
         raise ToolError("知らないサブコマンドです：{}。使えるのは skills / show / get / set です。".format(cmd), usage=USAGE)
-    opts, pos = parse_args(argv[1:])
     return COMMANDS[cmd](opts, pos)
 
 

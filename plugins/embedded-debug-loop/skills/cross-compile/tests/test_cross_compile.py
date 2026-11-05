@@ -327,14 +327,21 @@ class TemplateTest(unittest.TestCase):
         with open(TEMPLATE, encoding="utf-8") as f:
             text = f.read()
         block = re.search(r"((?:^#.*\n)+)sdk_env:", text, re.M).group(1)
-        self.assertIn("機器向けにビルドするなら書く", block)
+        # 設定を案内する側が「必ず書く」の言い方で、ふだん埋める項目だと分かるように
+        self.assertIn("機器向けにビルドするなら、必ず書く。", block)
         self.assertNotIn("必須", block, "必須の印を付けると、空のときにビルドできなくなる")
-        # WSL の中の SDK を使うときは空にする（「必ず書く」と食い違わない）
-        self.assertNotIn("必ず", block)
-        self.assertIn("WSL の中の SDK を使うときは空にして", block)
+        # WSL の中の SDK を使うときは空にする（「必ず書く」の例外として書く）
+        self.assertIn("ただし、WSL の中の SDK を使うときは空にして", block)
         # シェルごとのファイルの種類
         for word in (".bat", ".cmd", ".ps1"):
             self.assertIn(word, block)
+        # 例が何の例か（Windows で使う SDK と、Linux で使う Yocto の SDK）が分かる
+        self.assertIn("例の1つ目は Windows で使う SDK（cmd 用）、2つ目は Linux で使う Yocto の SDK（bash 用）。",
+                      block)
+        examples = re.findall(r"^# 例：(.*)$", block, re.M)
+        self.assertEqual(len(examples), 2, examples)
+        self.assertRegex(examples[0], r"^'[A-Za-z]:\\.*\.bat'$")
+        self.assertIn("environment-setup-", examples[1])
 
     def test_shell_comment_lists_the_values_and_auto(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -839,6 +846,8 @@ class AddMissingKeysTest(unittest.TestCase):
         code, data, _ = p.run("check")
         self.assertEqual(data["added"], ["clean_command"])
         self.assertIn("新しい項目 clean_command を足しました", data["message"])
+        # 項目を足しても、check は .gitignore を作らない
+        self.assertFalse(os.path.exists(p.path(DATA_DIR, ".gitignore")))
 
         p2 = Project(self)
         self.old_config(p2, text)
@@ -932,13 +941,18 @@ class ConfigPathTest(unittest.TestCase):
     def test_gitignore_is_made_again_when_removed(self):
         p = Project(self)
         p.fake()
-        for command in ("config-path", "check", "run"):
-            gi = p.path(DATA_DIR, ".gitignore")
+        gi = p.path(DATA_DIR, ".gitignore")
+        for command in ("config-path", "run"):
             if os.path.exists(gi):
                 os.unlink(gi)
             p.run(command)
             with open(gi, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "*\n", command)
+        # check は、ファイルを作らない
+        os.unlink(gi)
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 0, data)
+        self.assertFalse(os.path.exists(gi))
 
     def test_gitignore_in_work_folder_with_config_elsewhere(self):
         p = Project(self)
@@ -1084,16 +1098,105 @@ class CheckTest(unittest.TestCase):
         self.assertIn("環境変数 CC", note)
         self.assertNotIn("PC 用", note, "CC が決まっているときは、PC 用とは言い切らない")
 
-    def test_new_config_reports_required_item(self):
+    def test_missing_config_is_not_created(self):
+        """設定ファイルが無ければ、作らずに「ありません」と返す。作業フォルダには何も増えない。"""
         p = Project(self)
+        before = sorted(os.listdir(p.dir))
         code, data, _ = p.run("check")
         self.assertEqual(code, 2)
         self.assertFalse(data["ok"])
-        self.assertTrue(data["created"])
+        self.assertFalse(data["created"])
         self.assertEqual(data["config"], p.config)
+        self.assertEqual(data["problems"], ["設定ファイル {} がありません。".format(p.config)])
+        self.assertIn("設定ファイル {} がありません。".format(p.config), data["message"])
+        self.assertIn("config-path でひな形から作れます。", data["message"])
+        self.assertEqual(data["notes"], [])
+        self.assertNotIn("added", data)
+        self.assertEqual(sorted(os.listdir(p.dir)), before)
+
+    def test_missing_config_in_an_existing_folder(self):
+        """設定とログのフォルダがあっても、設定ファイルも .gitignore も作らない。"""
+        p = Project(self)
+        os.makedirs(p.path(DATA_DIR))
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 2)
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), [])
+
+    def test_missing_config_option_file_is_not_created(self):
+        p = Project(self)
+        target = p.path("conf", "my-build.yaml")
+        code, data, _ = p.run("check", "--config", target)
+        self.assertEqual(code, 2)
+        self.assertEqual(data["config"], target)
+        self.assertIn(target, data["problems"][0])
+        self.assertFalse(os.path.exists(p.path("conf")))
+        self.assertFalse(os.path.exists(p.path(DATA_DIR)))
+
+    def test_config_path_is_a_folder(self):
+        p = Project(self)
+        os.makedirs(p.config)
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 2)
+        self.assertEqual(data["config"], p.config)
+        self.assertIn("フォルダ", data["message"])
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), ["config.yaml"])
+
+    def test_existing_config_gets_no_new_files(self):
+        """設定ファイルがあるときも、.gitignore やログを作らない。"""
+        p = Project(self)
+        p.fake()
+        top = sorted(os.listdir(p.dir))
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(sorted(os.listdir(p.dir)), top)
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), ["config.yaml"])
+
+    def test_config_elsewhere_makes_no_gitignore(self):
+        """--config で別の場所の設定ファイルを使うとき、作業フォルダの設定とログのフォルダに
+        .gitignore を作らない。"""
+        p = Project(self)
+        p.fake()
+        target = p.path("conf", "my.yaml")
+        os.makedirs(p.path("conf"))
+        os.rename(p.config, target)
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), [])
+        code, data, _ = p.run("check", "--config", target)
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["config"], target)
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), [])
+        self.assertEqual(os.listdir(p.path("conf")), ["my.yaml"])
+
+    def test_empty_required_item_is_a_problem(self):
+        p = Project(self)
+        p.configure()
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 2)
+        self.assertFalse(data["created"])
         self.assertTrue(any("outputs" in x and "必須" in x for x in data["problems"]),
                         data["problems"])
         self.assertTrue(any("sdk_env" in x for x in data["notes"]), data["notes"])
+
+    def test_unexpected_error_leaves_no_log(self):
+        """check で思わぬエラーが起きても、ログを作らない。詳しい中身は標準エラー出力に出す。"""
+        p = Project(self)
+        p.fake()
+        before = sorted(os.listdir(p.path(DATA_DIR)))
+        original = BUILD.dispatch
+        self.addCleanup(setattr, BUILD, "dispatch", original)
+
+        def boom(argv):
+            raise RuntimeError("boom-check")
+
+        BUILD.dispatch = boom
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = BUILD.main(["check", "--workdir", p.dir])
+        data = json.loads(out.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIsNone(data["log"])
+        self.assertIn("boom-check", data["message"])
+        self.assertIn("Traceback", err.getvalue())
+        self.assertEqual(sorted(os.listdir(p.path(DATA_DIR))), before)
 
     def test_missing_sdk_env(self):
         p = Project(self)
@@ -1958,10 +2061,15 @@ class CopiedAloneTest(unittest.TestCase):
             code, data, _ = run_script([command], cwd=work, script=script)
             self.assertEqual(code, 0 if command == "config-path" else 2, data)
             self.assertEqual(data["skill"], name)
-            self.assertTrue(data["created"], data)
             data_dir = os.path.join(work, "." + name)
             self.assertEqual(os.path.realpath(data["config"]),
                              os.path.join(data_dir, "config.yaml"))
+            if command == "check":
+                # check は、設定ファイルが無くても作らない。作業フォルダは空のまま
+                self.assertFalse(data["created"], data)
+                self.assertEqual(os.listdir(work), [], command)
+                continue
+            self.assertTrue(data["created"], data)
             # 作業フォルダにできるのは「.<コピーしたフォルダの名前>」だけ。ほかの点のフォルダはできない
             self.assertEqual(os.listdir(work), ["." + name], command)
             self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml"], command)
@@ -2073,6 +2181,20 @@ class SkillDocTest(unittest.TestCase):
         self.assertIn("足りない項目", self.text)
         self.assertIn("ほかの所は変えません", self.text)
 
+    def test_check_creates_no_files(self):
+        section = self.text.split("### 設定を確かめるよう頼まれたとき", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("作業フォルダにファイル（設定ファイル・`.gitignore`・ログ）を作りません。", section)
+        self.assertIn("設定ファイルが無いときは「設定ファイル … がありません」と返します。", section)
+        self.assertIn("check は作りません。", self.text)
+        # message の config-path の文は利用者に言わず、頼み方を伝える
+        problems = self.text.split("### 設定や PC の準備に問題があるとき", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("message の「config-path で…」の文は言わずに", problems)
+        self.assertIn("「設定ファイルを作って」と頼めば作れると伝えます。", problems)
+
+    def test_request_to_make_the_config_file(self):
+        self.assertIn("### 「設定ファイルを作って」と頼まれたとき", self.text)
+        self.assertNotIn("どこ？", self.text)
+
 
 class ReadmeTest(unittest.TestCase):
 
@@ -2089,6 +2211,39 @@ class ReadmeTest(unittest.TestCase):
         needs = self.text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
         self.assertLess(needs.index("Windows"), needs.index("Linux"))
         self.assertIn("wsl", self.text)
+        # 個人のフォルダの場所も、Windows を先に書く
+        self.assertLess(self.text.index("`%USERPROFILE%\\.copilot\\skills\\cross-compile\\`"),
+                        self.text.index("`~/.copilot/skills/cross-compile/`"))
+
+    def test_windows_status_is_at_the_end_of_needs(self):
+        needs = self.text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertTrue(needs.rstrip().endswith(
+            "Windows では、GitHub Actions でテストを確認しています。"
+            "Windows の Copilot CLI との組み合わせは、まだ確認していません。"), needs)
+
+    def test_output_encoding_is_one_sentence(self):
+        self.assertIn("Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。",
+                      self.text)
+        self.assertNotIn("Python の既定", self.text)
+
+    def test_request_to_make_the_config_file(self):
+        self.assertIn("`/cross-compile 設定ファイルを作って`", self.text)
+        self.assertNotIn("どこ？", self.text)
+
+    def test_check_creates_no_files(self):
+        config = self.text.split("## 設定ファイル", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("`check` は、どのファイルも作りません。", config)
+        self.assertNotIn("を除く", config)
+        self.assertIn("| 設定ファイル … がありません（`check`） |", self.text)
+        # check は、思わぬエラーでもログを作らない
+        self.assertIn("| スクリプトの中で思わぬエラーが起きました | ログ（`check` では標準エラー出力）を確認します |",
+                      self.text)
+        self.assertNotIn("そこに新しい設定ファイルができます", self.text)
+
+    def test_no_test_duration(self):
+        """テストの時間は OS で違うので書かない。"""
+        tests = self.text.split("## テストを実行する", 1)[1]
+        self.assertNotRegex(tests, r"\d+ ?(分|秒)")
 
 
 class ConsoleCodePageTest(unittest.TestCase):

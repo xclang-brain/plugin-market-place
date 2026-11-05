@@ -173,17 +173,21 @@ class SkillMdTest(unittest.TestCase):
                      "そのスキルの `path` に置き換えます。",
                      "Python の呼び方（`python3` など）は、`<python>` に合わせます。",
                      "作り方が書いてなければ、作りません。",
-                     "作ったら、もう一度 `show` を実行します。"):
+                     "YAML のファイルを作ったら、もう一度 `show` を実行します。"):
             self.assertIn(word, part, word)
         tool = self.section("## 道具", "### `skills` の結果")
         self.assertIn("ファイルがないとき、`show` の結果には `\"exists\": false` が入ります。", tool)
+        # --workdir は、サブコマンドの前でも後でもよい（道具がどちらも受け付ける）
+        self.assertIn("サブコマンドの前でも後でもかまいません。", tool)
 
     def test_other_formats_are_filled_from_the_readme(self):
         """「項目: 値」だけの .conf も show で読めてしまう。YAML かは README と名前で決める。
         ファイルを読めないときは、手で書き換えずに飛ばす（文字コードを壊さない）。"""
+        prepare = self.section("### 3. 設定ファイルを用意する", "### 4. 項目を埋める")
+        self.assertIn("YAML のファイルとは、README に YAML と書いてあるか、名前が `.yaml`・`.yml` で終わるファイルです。",
+                      prepare)
         part = self.section("### 4. 項目を埋める", "#### 4-1. 聞く順番")
-        for word in ("YAML のファイルとは、README に YAML と書いてあるか、名前が `.yaml`・`.yml` で終わるファイルです。",
-                     "`\"ok\": false` で `\"unsupported\": true` がなければ、ファイルの問題です",
+        for word in ("`\"ok\": false` で `\"unsupported\": true` がなければ、ファイルの問題です",
                      "`error` を利用者に伝えて、次のスキルに進みます。",
                      "YAML のファイルで `\"ok\": true` なら、4-1〜4-5 のとおりに、`show` と `set` で埋めます。",
                      "`comment` が空の項目の意味は、README から読み取ります。",
@@ -193,11 +197,28 @@ class SkillMdTest(unittest.TestCase):
         tool = self.section("## 道具", "### `skills` の結果")
         self.assertIn("`\"unsupported\": true`", tool)
         other = self.section("#### 4-6. `show` と `set` を使わないファイル", "### 5. 終わりの報告")
-        for word in ("README の説明をもとに埋めます。",
+        for word in ("項目のすぐ上のコメントと README の説明をもとに埋めます。",
+                     "YAML のときと同じく、「必須」「必ず」「例：」「選べる値：」の言葉で決めます。",
+                     "聞く順番・表・質問の決まりは、YAML のときと同じです（4-1〜4-4）。",
                      "ファイルの編集のツールで、その項目の値の部分だけを書き換えます。",
                      "コメント・空行・項目の並びは変えません。",
                      "ファイルを書き換えられないときは、エラーを伝えて、次のスキルに進みます。"):
             self.assertIn(word, other, word)
+
+    def test_show_is_used_only_for_yaml(self):
+        """INI に show を使うと、失敗と「「項目: 値」の形で書いて」が画面に出る。形式を先に決める。"""
+        prepare = self.section("### 3. 設定ファイルを用意する", "### 4. 項目を埋める")
+        for word in ("まず、README と拡張子で、ファイルの形式を決めます。",
+                     "YAML なら、`show <設定ファイル>` を実行して、ファイルがあるかを確かめます。",
+                     "YAML でなければ、`show` を使いません。"):
+            self.assertIn(word, prepare, word)
+        self.assertLess(prepare.index("ファイルの形式を"), prepare.index("`show <設定ファイル>`"))
+        self.assertIn("設定ファイルの形式", self.section("### 2. README を読む", "### 3. 設定ファイルを用意する"))
+        self.assertIn("YAML の設定ファイルを読み書きするとき（`show`・`get`・`set`）は、このスキルの道具を使います。",
+                      self.section("## 道具", "### `skills` の結果"))
+        # 道具の事情（読めない書き方など）は、利用者に話さない
+        self.assertIn("道具の事情（読めない書き方、形式による扱いの違いなど）は話しません。",
+                      self.section("## 利用者に見せる言葉", "## 質問のしかた"))
 
     def test_secrets_in_other_formats_are_not_read_back(self):
         """show のない形式では、書き換わったかを確かめるには、ファイルの値を読むしかない。読まずに伝える。"""
@@ -300,25 +321,69 @@ class SkillMdTest(unittest.TestCase):
     def test_choices_show_the_value_that_is_written(self):
         """「例：<値>」の選択肢では、「例：」まで書かれるのかが分からない。"""
         section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
-        self.assertIn("「my_app と書く」", section)
+        self.assertIn("どれも「<値> と書く」の形にします。", section)
         self.assertIn("「例：」は付けません。", section)
         self.assertNotIn("「例：<値>」", self.body)
         write = self.section("#### 4-3. 答えを書き込む", "#### 4-4. パスワードなど")
         self.assertIn("「<値> と書く」を選んだら", write)
 
-    def test_fill_recommended_asks_for_the_users_own_value(self):
-        """ある環境だけの例の値を（おすすめ）にすると、その値を書けばよいと読める。"""
-        section = self.section("今の値が空で、`fill_recommended` が true の項目は", "#### 4-3. 答えを書き込む")
-        for word in ("質問の文には、コメントの「必ず書く」の文を、省かずに入れます。",
-                     "1番目の選択肢は「自分の値を書く（おすすめ）」にします。",
-                     "「<値> と書く（例）」",
-                     "例の値に「（おすすめ）」は付けません。",
-                     "「<key> に書く値を書いてください。」",
-                     "「自由に書かれた答え」のとおりに書き込みます"):
+    def test_values_are_typed_in_the_input_field(self):
+        """「自分の値を書く（おすすめ）」を選ぶと、もう1回質問が出た（Other と同じことが2通り）。
+        値は Copilot CLI の入力欄（Other）に書いてもらう。例の値には、いつも「（例）」を付ける。"""
+        # 「自分の値を書く」は、足さない選択肢として名前を挙げるだけ
+        lines = [x for x in self.body.split("\n") if "自分の値を書く" in x]
+        self.assertEqual([x.strip() for x in lines], ["「その他」「自分の値を書く」のような選択肢は足しません。"])
+        self.assertNotIn("に書く値を書いてください。", self.body)
+        ask = self.section("## 質問のしかた", "### 質問が取り消されたとき")
+        self.assertIn("下の入力欄（Other）に自由に書けます。", ask)
+        self.assertIn("「その他」「自分の値を書く」のような選択肢は足しません。", ask)
+        section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
+        for word in ("「値は、下の入力欄（Other）にも書けます。」と足します。",
+                     "`examples` の値。「<値> と書く（例）」の形にします。",
+                     "例の値に「（おすすめ）」は付けません。"):
             self.assertIn(word, section, word)
-        self.assertNotIn("`examples` の1つ目を1番目に置きます", self.body)
         self.assertNotIn("と書く（おすすめ）」", self.body)
+        self.assertNotIn("`examples` の1つ目を1番目に置きます", self.body)
+
+    def test_fill_recommended_sentence_is_kept(self):
+        """「必ず書く」の文を省くと、空のままでよい項目に見える。"""
+        section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
+        self.assertIn("今の値が空で、`fill_recommended` が true なら、コメントの「必ず書く」の文を、省かずに入れます。",
+                      section)
         self.assertIn("`fill_recommended`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
+
+    def test_recommended_items_are_asked_one_by_one(self):
+        """「必ず書く」項目を「今の値のままでよいですか」にまとめると、機器で動かない設定のまま終わった。"""
+        order = self.section("#### 4-1. 聞く順番", "#### 4-2. 1つの項目の聞き方")
+        required = order.index("2. 必須で空の項目（`required` と `empty` がどちらも true）を、ファイルの順に聞きます。")
+        recommended = order.index("3. 次に、推奨で空の項目（`fill_recommended` と `empty` がどちらも true）を、"
+                                  "ファイルの順に1つずつ聞きます。")
+        rest = order.index("4. ほかの項目をどうするかを、ask_user で1回だけ聞きます。")
+        self.assertLess(required, recommended)
+        self.assertLess(recommended, rest)
+        # 表の説明には、1行目のほかに「必ず」の文も入れる
+        self.assertIn("「必ず」を含む文が1行目になければ、その文も足します。", order)
+        # 空の推奨の項目は 3 で全部聞くので、表（「今の値のままにする」の質問）には残らない。
+        # 当てはまる場面のない決まりは置かない（「ファイルに空で残っている」と読まれる）
+        self.assertNotIn("推奨で空の項目が残っているときは", order)
+
+    def test_previous_answers_are_offered(self):
+        """前のスキルで答えた機器の IP アドレスを、次のスキルでもう一度書かされた。"""
+        section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
+        first = section.index("1. 「<値> と書く（前に答えた値）」")
+        self.assertLess(first, section.index("2. 「今の値のまま：<value>」"))
+        for word in ("前に答えた値：",
+                     "この項目と同じ意味のものがあれば、選択肢の1番目に出します。",
+                     "両方の項目のコメントと README で決めます。",
+                     "`secret` が true の項目の値は、出しません。",
+                     # choices のない項目（IP アドレスなど）でも出す
+                     "`choices` がある項目では、`choices` にない値も出しません。",
+                     # examples や true/false と同じ値を、2つ並べない
+                     "今の値・前に答えた値と同じものは入れません。",
+                     "書くのは、利用者がこの選択肢を選んだときだけです。"):
+            self.assertIn(word, section, word)
+        write = self.section("#### 4-3. 答えを書き込む", "#### 4-4. パスワードなど")
+        self.assertIn("「（例）」「（前に答えた値）」は書きません。", write)
 
     def test_option_values_are_the_shown_text(self):
         """選択肢の値が英語の短い名前だと、それが会話の記録に出る。"""
@@ -340,7 +405,7 @@ class SkillMdTest(unittest.TestCase):
     def test_env_partner_items_are_not_asked_alone(self):
         """環境変数の名前の項目を、表に出したり単独で聞いたりした。"""
         order = self.section("#### 4-1. 聞く順番", "#### 4-2. 1つの項目の聞き方")
-        for word in ("`ask_alone` が false の項目は、1〜5 のどれでも扱いません。",
+        for word in ("`ask_alone` が false の項目は、1〜6 のどれでも扱いません。",
                      "表にも、「直す項目を選ぶ」の選択肢にも入れません。N にも数えません。",
                      "もとの項目で「環境変数で渡す」を選んだときだけ聞きます。"):
             self.assertIn(word, order, word)
@@ -368,10 +433,13 @@ class SkillMdTest(unittest.TestCase):
         self.assertIn("1つのスキルについて、2〜4 を全部終えてから、次のスキルに進みます。", section)
         self.assertIn("ほかのスキルの項目を、先にまとめて聞くことはしません。", section)
 
-    def test_named_items_come_first(self):
+    def test_named_items_only(self):
+        """1つの項目を直したいと頼んだのに、ほかの項目もまとめて聞かれた。"""
         order = self.section("#### 4-1. 聞く順番", "#### 4-2. 1つの項目の聞き方")
-        named = order.index("直したい項目の名前を示したときは、その項目から聞きます。")
+        named = order.index("直したい項目の名前を示したときは、その項目だけを聞きます。")
         self.assertLess(named, order.index("必須で空の項目"))
+        self.assertIn("2〜6 はしません。ほかの項目は、必須で空でも聞きません。", order)
+        self.assertIn("「<ファイル> に <名前> という項目はありません。」", order)
 
     def test_wording_of_the_rest_question(self):
         self.assertNotIn("説明の1行目", self.body)
@@ -511,8 +579,12 @@ class ReadmeTest(unittest.TestCase):
         need = self.section("## 必要なもの", "## インストールする")
         self.assertIn("Windows の PC", need)
         self.assertIn("Python 3.8 以上", need)
-        # 確かめていないことは、そう書く
-        self.assertIn("Windows の PC での動作は、まだ確認していません。", need)
+        # 確かめたことと、確かめていないことを書く（ほかのスキルの README と同じ文）
+        self.assertIn("Windows では、GitHub Actions でテストを確認しています。"
+                      "Windows の Copilot CLI との組み合わせは、まだ確認していません。", need)
+        # 個人のフォルダは、Windows の場所を先に書く
+        install = self.section("## インストールする", "## 使い方")
+        self.assertLess(install.index("`%USERPROFILE%\\.copilot\\skills\\"), install.index("`~/.copilot/skills/"))
         # スキルの名前は書き換えられることがあるので、名前を除いた形で確かめる
         self.assertIn("`.github/skills/", self.text)
         self.assertIn("`~/.copilot/skills/", self.text)
@@ -522,6 +594,7 @@ class ReadmeTest(unittest.TestCase):
         usage = self.section("## 使い方", "## スキルの探し方")
         self.assertIn("「セットアップしたい」", usage)
         self.assertIn("`/setup`", usage)
+        self.assertIn("を直したい` | その項目だけを質問します |", usage)
 
     def test_test_command_runs_from_this_folder(self):
         part = self.section("## テストを実行する", "最後に `OK` と出れば成功です。")
@@ -533,8 +606,11 @@ class ReadmeTest(unittest.TestCase):
 
     def test_search_rules_match_the_tool(self):
         part = self.section("## スキルの探し方", "## 設定されるスキルの書き方")
+        # 個人のフォルダは、Windows の場所を先に書く
         places = ["1. `.github/skills/`", "2. `.agents/skills/`", "3. `.claude/skills/`",
-                  "4. `~/.copilot/skills/`", "5. `~/.agents/skills/`", "6. このフォルダの隣のフォルダ"]
+                  "4. `%USERPROFILE%\\.copilot\\skills\\`（Linux では `~/.copilot/skills/`",
+                  "5. `%USERPROFILE%\\.agents\\skills\\`（Linux では `~/.agents/skills/`）",
+                  "6. このフォルダの隣のフォルダ"]
         for line in places:
             self.assertIn(line, part, line)
         for a, b in zip(places, places[1:]):
@@ -546,7 +622,6 @@ class ReadmeTest(unittest.TestCase):
         self.assertIn("先に見つかったほうを設定します。", part)
         # Copilot CLI と順が違う場合も書く（確かめた版とともに）
         self.assertIn("Copilot CLI 1.0.105 がスキルを選ぶ順と同じです。", part)
-        self.assertIn("`--plugin-dir`", part)
 
     def test_secret_words_match_the_tool(self):
         """README に書いた「パスワードなどの項目」の言葉を、道具がそのとおりに見分けること。"""
@@ -567,8 +642,9 @@ class ReadmeTest(unittest.TestCase):
         for word in ("「必須」", "「必ず」", "`# 例：…`", "`# 選べる値：a / b / c`"):
             self.assertIn(word, part, word)
         # 道具で読めない形でも、README をもとに埋める（「対応していません」とは書かない）
-        self.assertIn("この形でない YAML（入れ子など）や、ほかの形式（JSON など）は、README の説明をもとに直接書き換えます。",
-                      part)
+        self.assertIn("この形でない YAML（入れ子など）や、ほかの形式（INI・JSON など）も、README を読んで質問します。", part)
+        # JSON にはコメントを書けない。書ける形式のときだけ、と書く
+        self.assertIn("コメントを書ける形式なら、項目のすぐ上のコメントも読みます。", part)
         self.assertNotIn("対応していません", self.text)
         doc = tool.Document("x.yaml", (
             "# 見本\n\n"

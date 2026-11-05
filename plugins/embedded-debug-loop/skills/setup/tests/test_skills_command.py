@@ -131,7 +131,8 @@ class SkillsTestCase(unittest.TestCase):
             else:
                 env[name] = value
         console = kw.pop("console", True)
-        proc = subprocess.run([sys.executable, kw.pop("tool", self.tool), "skills"] + list(args),
+        before = list(kw.pop("before", ()))  # サブコマンドの前に置く引数
+        proc = subprocess.run([sys.executable, kw.pop("tool", self.tool)] + before + ["skills"] + list(args),
                               cwd=kw.pop("cwd", self.work), stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=60,
                               **({} if console else NO_CONSOLE))
@@ -244,6 +245,10 @@ class PlacesTest(SkillsTestCase):
         make_git_root(other)
         for args in (("--workdir", self.work), ("--workdir=" + self.work,)):
             data = self.skills(*args, cwd=other)
+            self.assertTrue(same(data["workdir"], self.work))
+            self.assertEqual([s["name"] for s in data["skills"]], ["here"])
+            # サブコマンドの前に書いても同じ
+            data = self.skills(cwd=other, before=args)
             self.assertTrue(same(data["workdir"], self.work))
             self.assertEqual([s["name"] for s in data["skills"]], ["here"])
         self.assertEqual(self.skills(cwd=other)["skills"], [])
