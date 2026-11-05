@@ -5,9 +5,9 @@
 
 ## 3つの段階
 
-AI に任せる範囲で、使う部品が変わります。使い方と設定は、表の README にあります。
+AI に任せる範囲で、使う部品が変わります。
 
-| 段階 | 使う部品 | 見る README |
+| 段階 | 使う部品 | 見る文書 |
 | --- | --- | --- |
 | 1 | スキル。1つの作業だけを頼む | 各スキルの README（[skills/](skills/) の下のフォルダ） |
 | 2 | 作業エージェント（`device-worker`）。不具合の調査と修正を、チャットで任せる | [作業エージェントの README](com.github.copilot/agents/README.markdown) |
@@ -16,9 +16,9 @@ AI に任せる範囲で、使う部品が変わります。使い方と設定�
 ## 必要なもの
 
 - Windows の PC（Linux でも動きます）
-- GitHub Copilot CLI（動作を確認したバージョン：1.0.105。Copilot CLI と組み合わせた確認は Linux の PC で行い、Windows ではまだ行っていません）
+- GitHub Copilot CLI（1.0.105 で確認。Windows の PC との組み合わせは未確認）
 
-部品ごとに要るものは、上の表の README にあります。
+部品ごとに要るものは、上の表の「見る文書」にあります。
 
 ## インストール
 

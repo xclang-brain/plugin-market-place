@@ -21,7 +21,9 @@
   python3 -m unittest discover -s tests/independence -v
 """
 
+import codecs
 import json
+import locale
 import os
 import re
 import shutil
@@ -49,11 +51,16 @@ PLUGIN_WORDS = [
 ]
 # 上の段の文書に書いてはいけない、転送・ログ取得・ビルドの具体の言葉（ラベル, 正規表現）
 SPECIFIC_WORDS = [
-    ("FTP", re.compile(r"(?<![A-Za-z0-9_\-])S?FTP(?![A-Za-z0-9_\-])", re.IGNORECASE)),
+    ("FTP", re.compile(r"(?<![A-Za-z0-9_\-])[ST]?FTP(?![A-Za-z0-9_\-])", re.IGNORECASE)),
     ("シリアル", re.compile(r"シリアル")),
     ("serial", re.compile(r"serial", re.IGNORECASE)),
+    ("UART", re.compile(r"(?<![A-Za-z0-9_\-])UART(?![A-Za-z0-9_\-])", re.IGNORECASE)),
     ("COM ポート", re.compile(r"(?<![A-Za-z0-9_\-.])COM\d*(?![A-Za-z0-9_\-])")),
+    ("ポート", re.compile(r"(?<![サレンス])ポート")),  # サポート・レポート・インポート・エクスポートは数えない
+    ("IP アドレス", re.compile(r"IP\s?アドレス", re.IGNORECASE)),
     ("scp", re.compile(r"(?<![A-Za-z0-9_\-])scp(?![A-Za-z0-9_\-])", re.IGNORECASE)),
+    ("ssh", re.compile(r"(?<![A-Za-z0-9_\-])ssh(?![A-Za-z0-9_\-])", re.IGNORECASE)),
+    ("telnet", re.compile(r"telnet", re.IGNORECASE)),
     ("ttyUSB など", re.compile(r"tty(USB|S|ACM)", re.IGNORECASE)),
     ("SITE CHMOD", re.compile(r"SITE\s+CHMOD", re.IGNORECASE)),
     ("chmod", re.compile(r"(?<![A-Za-z0-9_\-])chmod(?![A-Za-z0-9_\-])", re.IGNORECASE)),
@@ -178,6 +185,40 @@ def same_path(a, b):
     return a is not None and b is not None and Path(a).resolve() == Path(b).resolve()
 
 
+def default_output_encoding():
+    """子の Python が、パイプに書くときの既定の文字コード（PYTHONIOENCODING があればそれ）"""
+    for name in (os.environ.get("PYTHONIOENCODING", "").split(":")[0].strip(), locale.getpreferredencoding(False)):
+        try:
+            if name:
+                return codecs.lookup(name).name
+        except LookupError:
+            pass
+    return "utf-8"
+
+
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（子のプロセスも同じコンソールを使う）。なければ None"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+        return codecs.lookup("cp%d" % cp).name if cp else None
+    except Exception:
+        return None
+
+
+# Windows でパイプに書くとき、コンソールの文字コードを使うスキル（設計書 3.8）。ほかは Python の既定
+CONSOLE_ENCODING_SKILLS = {"log-capture"}
+
+
+def output_encoding(skill):
+    """スキルのスクリプトが、標準出力と標準エラーに使う文字コード"""
+    if skill in CONSOLE_ENCODING_SKILLS:
+        return console_code_page() or default_output_encoding()
+    return default_output_encoding()
+
+
 class SkillIndependence(unittest.TestCase):
     """1段階目：スキルどうしが互いを知らない"""
 
@@ -261,7 +302,7 @@ class SkillIndependence(unittest.TestCase):
                     if re.search(r"skills[/\\]" + re.escape(o), text):
                         problems.append(f"{path.relative_to(ROOT)}: スキル {o} のファイルを参照しています")
                 if re.search(r"sys\.path\.(insert|append)\([^)]*\.\.", text):
-                    problems.append(f"{path.relative_to(ROOT)}: 自分のフォルダの外を読み込みの道に足しています")
+                    problems.append(f"{path.relative_to(ROOT)}: 自分のフォルダの外を sys.path に足しています")
         self.assertEqual(problems, [], "\n".join(problems))
 
     def test_each_work_skill_runs_alone(self):
@@ -274,10 +315,19 @@ class SkillIndependence(unittest.TestCase):
                     before = sorted(str(p.relative_to(lone)) for p in lone.rglob("*"))
                     work = Path(tmp) / "project"
                     work.mkdir()
-                    run = lambda *args: subprocess.run(
-                        [sys.executable, str(lone / "scripts" / script), *args],
-                        capture_output=True, text=True, timeout=60, cwd=work,
-                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+                    encoding = output_encoding(skill)
+
+                    def run(*args):
+                        done = subprocess.run([sys.executable, str(lone / "scripts" / script), *args],
+                                              capture_output=True, timeout=60, cwd=work,
+                                              env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+                        try:
+                            done.stdout = done.stdout.decode(encoding)
+                        except UnicodeDecodeError as error:
+                            self.fail(f"{skill} の標準出力が、{encoding} で読めません（設計書 3.8）：{error}")
+                        done.stderr = done.stderr.decode(encoding, errors="replace")
+                        return done
+
                     made = run("config-path")
                     self.assertEqual(made.returncode, 0, f"{skill} の config-path が失敗：{made.stderr[-500:]}")
                     result = json.loads(made.stdout)
@@ -452,9 +502,11 @@ class DocumentIndependence(unittest.TestCase):
         self.assertEqual(problems, [], "上の段の文書に、スキルの名前があります：\n" + "\n".join(problems))
 
     def test_upper_documents_have_no_specifics(self):
+        keys = sorted({k for skill in WORK_SKILLS for k in template_keys(skill) if len(k) > 3})
+        patterns = SPECIFIC_WORDS + [(k, token(k)) for k in keys]
         problems = []
         for label, text in self.upper_documents():
-            problems += hits_in_text(label, text, SPECIFIC_WORDS)
+            problems += hits_in_text(label, text, patterns)
         self.assertEqual(problems, [], "上の段の文書に、転送・ログ取得などの具体があります：\n" + "\n".join(problems))
 
     def test_worker_readme_knows_only_names_and_roles(self):
@@ -576,18 +628,41 @@ class SkillReplacement(unittest.TestCase):
         self.assertEqual(sorted(hidden), ["personal", "sibling"], "隠れたスキルの扱いが違います")
         self.assertTrue(same_path(hidden["personal"]["path"], personal))
 
-        # 作業エージェントと統括エージェントは、置き換えたスキルの中身を知らない（定義を変えずに済む）
+        # 作業エージェント（定義と README）と統括エージェントは、元のスキルを名前でだけ知る。
+        # 元のスキルの中身（スクリプトの名前、設定の項目、データのフォルダ）を書いていなければ、置き換えても直さずに済む
         worker = (AGENTS_DIR / "device-worker.agent.md").read_text(encoding="utf-8")
-        orchestrator = (AGENTS_DIR / "orchestrator.agent.md").read_text(encoding="utf-8")
         table = skill_table(worker)
         self.assertIn("deploy", table.values(), "作業エージェントは、名前でスキルを呼びます")
-        for word in ["push.py", "target.ini", "address", "deploy.py", "config.yaml"]:
-            self.assertNotIn(word, worker, f"作業エージェントが、スキルの中身（{word}）を書いています")
-            self.assertNotIn(word, orchestrator, f"統括エージェントが、スキルの中身（{word}）を書いています")
+        original = SKILLS_DIR / "deploy"
+        internals = [p.name for p in (original / "scripts").glob("*.py")] + [".deploy"]
+        internals += [k for k in template_keys("deploy") if len(k) > 3]
+        for path in [AGENTS_DIR / "device-worker.agent.md", WORKER_README, AGENTS_DIR / "orchestrator.agent.md"]:
+            text = path.read_text(encoding="utf-8")
+            found = [w for w in internals if (w in text if w.startswith(".") or w.endswith(".py") else token(w).search(text))]
+            self.assertEqual(found, [], f"{path.relative_to(ROOT)} が、元のスキルの中身を書いています")
         # 表のどの名前も、1つのスキルに決まる（Copilot CLI と同じ順で）
         for name in table.values():
             if name != "setup":
                 self.visible(entries, name)
+
+    def test_replaced_setup_needs_the_skills_beside_it(self):
+        """設定のスキルを作業フォルダに置き換えたら、設定するスキルも同じ場所に置く（置き換えのガイドの決まり）"""
+        project_skills = self.project / ".github" / "skills"
+        project_setup = project_skills / "setup"
+        shutil.copytree(SKILLS_DIR / "setup", project_setup, ignore=shutil.ignore_patterns("__pycache__"))
+        found = lambda: list_skills(project_setup, self.project, self.copilot_home, self.home)
+        names = sorted(e["name"] for e in found())
+        for skill in WORK_SKILLS:
+            self.assertNotIn(skill, names, "プラグインの中のスキルが、プラグインの外の設定のスキルから見つかりました。"
+                                           "置き換えのガイドの決まりを見直してください")
+        for skill in WORK_SKILLS:
+            shutil.copytree(self.plugin_skills / skill, project_skills / skill, ignore=shutil.ignore_patterns("__pycache__"))
+        entries = found()
+        for skill in WORK_SKILLS:
+            entry = self.visible(entries, skill)
+            self.assertEqual(entry["where"], "project")
+            self.assertTrue(same_path(entry["path"], project_skills / skill))
+            self.assertTrue(same_path(entry["readme"], project_skills / skill / "README.md"))
 
     def test_skill_without_readme_falls_back_to_skill_md(self):
         bare = make_skill(self.copilot_home / "skills" / "kettle", "kettle", "湯をわかす。")

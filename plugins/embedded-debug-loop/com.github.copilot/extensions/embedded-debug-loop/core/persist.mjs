@@ -1,5 +1,6 @@
 // 記録のファイルの読み書き。置き場所は <COPILOT_HOME または ~/.copilot>/plugin-data/embedded-debug-loop/。
-// - settings.json：Web管理画面の設定。作業フォルダごとに分けて持つ（{ "folders": { "<作業フォルダ>": { 設定 } } }）
+// - settings.json：Web管理画面の設定。作業フォルダごとに分けて持つ（{ "folders": { "<作業フォルダ>": { 設定 } } }）。
+//   Windows では、作業フォルダの大文字と小文字を区別しない（C:\Work と c:\work は同じフォルダ）
 // - runs/<実行の番号>/run.json：実行の記録（変わるたびに書き直す）
 // - runs/<実行の番号>/events.jsonl：あとで振り返るための出来事の記録（1行に1件、足していく）
 // 書けなくても例外を投げない。理由は標準エラーに出す（標準出力は Copilot CLI との通信に使われる）。
@@ -26,7 +27,7 @@ function writeJson(file, value) {
   fs.renameSync(tmp, file);
 }
 
-export function createPersist(baseDir) {
+export function createPersist(baseDir, { platform = process.platform } = {}) {
   const runsDir = path.join(baseDir, 'runs');
   const runDir = (id) => path.join(runsDir, id);
   const report = (what, error) => console.error(`[Web管理画面] ${what}：${error?.message ?? error}`);
@@ -37,18 +38,24 @@ export function createPersist(baseDir) {
     const all = readJson(settingsFile)?.folders;
     return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
   };
+  // 同じ作業フォルダかを比べる形。Windows のフォルダの名前は、大文字と小文字を区別しない
+  const keyOf = platform === 'win32' ? (folder) => folder.toLowerCase() : (folder) => folder;
+  const sameFolder = (a, b) => keyOf(a) === keyOf(b);
 
   return {
     baseDir,
     /** その作業フォルダの設定。なければ null */
     readSettings(folder) {
-      const saved = folders()[folder];
+      const all = folders();
+      const found = Object.hasOwn(all, folder) ? folder : Object.keys(all).find((key) => sameFolder(key, folder));
+      const saved = found === undefined ? undefined : all[found];
       return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : null;
     },
     /** その作業フォルダの設定を書く。ほかのフォルダの設定は残す */
     writeSettings(folder, settings) {
       try {
-        writeJson(settingsFile, { folders: { ...folders(), [folder]: settings } });
+        const others = Object.fromEntries(Object.entries(folders()).filter(([key]) => !sameFolder(key, folder)));
+        writeJson(settingsFile, { folders: { ...others, [folder]: settings } });
         return true;
       } catch (error) {
         report('設定を保存できませんでした', error);

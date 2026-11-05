@@ -13,8 +13,12 @@
 すべて合格なら終了コード 0、1つでも不合格や動かせないテストがあれば 1 を返す。
 Python 3.8 以上の標準の部品だけを使う。
 結果は、Python の既定の文字コードで書く（書けない文字は \\uXXXX の形にする）。
+テストに、文字コードの環境変数（PYTHONIOENCODING）を足さない。スキルのスクリプトを、
+利用者の PC と同じ既定の文字コードで動かすため。
 """
 
+import codecs
+import locale
 import os
 import re
 import shutil
@@ -43,19 +47,31 @@ def python_groups():
     return groups
 
 
-def run(command, cwd):
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+def python_output_encoding():
+    """子の Python が、パイプに書くときの文字コード（PYTHONIOENCODING があればそれ、なければ既定）"""
+    for name in (os.environ.get("PYTHONIOENCODING", "").split(":")[0].strip(), locale.getpreferredencoding(False)):
+        try:
+            if name:
+                return codecs.lookup(name).name
+        except LookupError:
+            pass
+    return "utf-8"
+
+
+def run(command, cwd, encoding):
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     try:
         done = subprocess.run(command, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               timeout=TIMEOUT_SECONDS)
-        return done.returncode, done.stdout.decode("utf-8", errors="replace")
+        return done.returncode, done.stdout.decode(encoding, errors="replace")
     except subprocess.TimeoutExpired as error:
-        out = (error.stdout or b"").decode("utf-8", errors="replace")
+        out = (error.stdout or b"").decode(encoding, errors="replace")
         return None, out + "\n{} 秒たっても終わらないため、止めました。".format(TIMEOUT_SECONDS)
 
 
 def run_python(name, cwd, start):
-    code, out = run([sys.executable, "-m", "unittest", "discover", "-s", start, "-p", "test_*.py", "-v"], cwd)
+    code, out = run([sys.executable, "-m", "unittest", "discover", "-s", start, "-p", "test_*.py", "-v"], cwd,
+                    python_output_encoding())
     m = re.search(r"^Ran (\d+) tests?", out, re.M)
     total = int(m.group(1)) if m else 0
     bad = 0
@@ -79,7 +95,7 @@ def run_node():
     if node is None:
         return {"name": name, "total": 0, "bad": 1,
                 "output": "node（Node.js 20 以上）が見つからないため、Web管理画面のテストを動かせませんでした。"}
-    code, out = run([node, "--test", "--test-reporter=tap"] + [str(f) for f in files], ROOT)
+    code, out = run([node, "--test", "--test-reporter=tap"] + [str(f) for f in files], ROOT, "utf-8")
 
     def count(label):
         m = re.search(r"^# {} (\d+)".format(label), out, re.M)
