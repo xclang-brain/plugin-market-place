@@ -13,6 +13,13 @@
 終了コード：run は 0＝成功、1＝ビルドの失敗、2＝設定の問題。
             check は 0＝問題なし、2＝問題あり。config-path は 0。
 
+設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
+  config.yaml  設定ファイル（無ければ config-template.yaml から作る）
+  logs/        ログ
+  .gitignore   中身は *（設定やログを git に入れないため）
+作業フォルダは、今のフォルダ（--workdir で変えられる）。
+設定ファイルの場所は、--config で変えられる。
+
 Python 3.8 以降の標準ライブラリだけで動く。
 """
 
@@ -29,11 +36,14 @@ import tempfile
 import time
 import traceback
 
-SKILL = "cross-compile"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
+# スキルの名前は、このスキルのフォルダの名前（名前を変えて写したら、その名前）
+SKILL = os.path.basename(SKILL_DIR)
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
-CONFIG_DIR_NAME = ".embedded-debug-loop"
+DATA_DIR_NAME = "." + SKILL  # 作業フォルダの中の、設定とログのフォルダ
+CONFIG_FILE_NAME = "config.yaml"
+LOGS_DIR_NAME = "logs"
 COMMANDS = ("run", "config-path", "check")
 
 REQUIRED_KEYS = ("outputs",)
@@ -298,15 +308,15 @@ def resolve_paths(opts):
     if opts["config"]:
         config = os.path.abspath(os.path.expanduser(opts["config"]))
     else:
-        config = os.path.join(workdir, CONFIG_DIR_NAME, SKILL + ".yaml")
+        config = os.path.join(workdir, DATA_DIR_NAME, CONFIG_FILE_NAME)
     return workdir, config
 
 
-def _config_dir_of(path):
-    """path か、その上にある .embedded-debug-loop フォルダの場所。無ければ None。"""
+def _data_dir_of(path):
+    """path か、その上にある、設定とログのフォルダの場所。無ければ None。"""
     p = os.path.abspath(path)
     while True:
-        if os.path.basename(p) == CONFIG_DIR_NAME:
+        if os.path.basename(p) == DATA_DIR_NAME:
             return p
         parent = os.path.dirname(p)
         if parent == p:
@@ -315,9 +325,9 @@ def _config_dir_of(path):
 
 
 def ensure_gitignore(path):
-    """path か、その上にある .embedded-debug-loop フォルダに .gitignore が無ければ作る
+    """path か、その上にある、設定とログのフォルダに .gitignore が無ければ作る
     （中身は * の1行）。すでにあれば、そのままにする。作れなくても止めない。"""
-    top = _config_dir_of(path)
+    top = _data_dir_of(path)
     if top is None or not os.path.isdir(top):
         return
     target = os.path.join(top, ".gitignore")
@@ -336,7 +346,7 @@ def ensure_gitignore(path):
 
 
 def make_dirs(path):
-    """フォルダを作る。.embedded-debug-loop フォルダに .gitignore が無ければ、それも作る。"""
+    """フォルダを作る。設定とログのフォルダに .gitignore が無ければ、それも作る。"""
     os.makedirs(path, exist_ok=True)
     ensure_gitignore(path)
 
@@ -403,9 +413,9 @@ def added_sentence(added):
 
 def open_config(opts, workdir, config):
     """設定ファイルを用意する。無ければひな形から作り、項目が足りなければ足す。
-    .embedded-debug-loop フォルダに .gitignore が無ければ作る。作ったら True。
+    設定とログのフォルダに .gitignore が無ければ作る。作ったら True。
     足した項目の名前は opts["added"] に入れる。"""
-    ensure_gitignore(os.path.join(workdir, CONFIG_DIR_NAME))
+    ensure_gitignore(os.path.join(workdir, DATA_DIR_NAME))
     created = ensure_config(config)
     ensure_gitignore(config)
     opts["added"] = [] if created else add_missing_keys(config)
@@ -420,7 +430,7 @@ def ensure_config(path):
         return False
     if not os.path.isfile(TEMPLATE):
         raise SettingsProblem([
-            "設定のひな形 {} がありません。スキルを入れ直してください。".format(TEMPLATE)], path)
+            "設定のひな形 {} がありません。スキルのフォルダを写し直してください。".format(TEMPLATE)], path)
     try:
         make_dirs(os.path.dirname(path))
         shutil.copyfile(TEMPLATE, path)
@@ -613,7 +623,7 @@ def progress(text):
 
 
 def new_log_path(workdir):
-    logs = os.path.join(workdir, CONFIG_DIR_NAME, "logs")
+    logs = os.path.join(workdir, DATA_DIR_NAME, LOGS_DIR_NAME)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     try:
         make_dirs(logs)

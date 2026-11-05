@@ -28,7 +28,7 @@ password_env: ""
 passive: true
 
 # 機器に送るファイル（必須）。作業フォルダからの相対パスで書く。
-# 作業フォルダとは、.embedded-debug-loop フォルダがあるフォルダ。
+# 作業フォルダとは、ふつうは、設定ファイルが入ったフォルダの親のフォルダ。
 # 例：["my_app"]
 # 例：["build/my_app", "conf/my_app.conf"]
 files: []

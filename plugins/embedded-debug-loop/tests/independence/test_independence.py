@@ -53,6 +53,11 @@ def token(word):
     return re.compile(r"(?<![A-Za-z0-9_\-])" + re.escape(word) + r"(?![A-Za-z0-9_\-])", re.IGNORECASE)
 
 
+def name_token(word):
+    """スキルの名前としての出現。大文字と小文字を分ける（unittest の setUp は数えない）"""
+    return re.compile(r"(?<![A-Za-z0-9_\-])" + re.escape(word) + r"(?![A-Za-z0-9_\-])")
+
+
 def hits(path, patterns):
     found = []
     for lineno, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
@@ -84,7 +89,7 @@ class SkillIndependence(unittest.TestCase):
         problems = []
         for skill in SKILL_NAMES:
             others = [s for s in SKILL_NAMES if s != skill]
-            patterns = [(name, token(name)) for name in others]
+            patterns = [(name, name_token(name)) for name in others]
             patterns += [(w, re.compile(re.escape(w))) for w in [
                 "device-worker", "orchestrator", "verifier", "作業エージェント", "統括", "検証エージェント",
                 "Web管理画面", "エクステンション", "extension"]]
