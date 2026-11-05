@@ -53,7 +53,9 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 
 - 設定ファイルは、プロジェクトのフォルダの、スキルごとのフォルダにできます（`.cross-compile/config.yaml`、`.deploy/config.yaml`、`.log-capture/config.yaml`）。直接書き換えてもかまいません。項目の意味は、ファイルの中の説明に書いてあります。
 - これらのフォルダには、スキルが `.gitignore`（中身は `*`）を自動で作ります。設定やログ（パスワードを含むことがあります）は Git に入りません。
-- スキルだけで設定するときは、`/embedded-debug-loop:cross-compile 設定ファイルの場所を教えて` のように3つのスキルで設定ファイルを作り、`/embedded-debug-loop:setup` で埋めます（くわしくは [スキルを単体で使う](docs/guide/1-skills.md)）。
+- 作業エージェントを使わず、スキルのコマンドで設定するときは、次のようにします（くわしくは [スキルを単体で使う](docs/guide/1-skills.md)）。
+  1. ビルド・転送・ログ取得のスキルに、「設定ファイルの場所を教えて」と頼みます（例：`/embedded-debug-loop:cross-compile 設定ファイルの場所を教えて`）。設定ファイルができます。
+  2. `/embedded-debug-loop:setup` で、できた設定ファイルを埋めます。
 
 ## 1段階目：スキルを1つずつ使う
 

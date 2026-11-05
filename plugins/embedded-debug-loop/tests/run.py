@@ -63,7 +63,9 @@ def run_python(name, cwd, start):
             bad += int(value)
     if code != 0 and bad == 0:
         bad = 1  # 数えられない失敗（読み込みの失敗、時間切れなど）
-    return {"name": name, "total": total, "bad": bad, "output": out}
+    m = re.search(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", out, re.M)
+    skipped = int(m.group(1)) if m else 0
+    return {"name": name, "total": total, "bad": bad, "skipped": skipped, "output": out}
 
 
 def run_node():
@@ -111,15 +113,23 @@ def main(argv):
 
     print("試験の結果")
     for r in results:
+        skipped = r.get("skipped", 0)
+        note = "（うち {} 件は、要る道具がないため飛ばしました。記録は -v で見られます）".format(skipped) if skipped else ""
         if r["bad"]:
-            print("  × {}：{} 件中 {} 件が不合格".format(r["name"], r["total"], r["bad"]))
+            print("  × {}：{} 件中 {} 件が不合格{}".format(r["name"], r["total"], r["bad"], note))
+        elif skipped:
+            print("  △ {}：{} 件中 {} 件が合格{}".format(r["name"], r["total"], r["total"] - skipped, note))
         else:
             print("  ○ {}：{} 件すべて合格".format(r["name"], r["total"]))
     total = sum(r["total"] for r in results)
     bad = sum(r["bad"] for r in results)
+    skipped = sum(r.get("skipped", 0) for r in results)
     if bad:
         print("不合格があります（合計 {} 件中 {} 件）。上の記録を見てください。".format(total, bad))
         return 1
+    if skipped:
+        print("不合格はありません（合計 {} 件。うち {} 件は飛ばしました）。".format(total, skipped))
+        return 0
     print("すべて合格しました（合計 {} 件）。".format(total))
     return 0
 

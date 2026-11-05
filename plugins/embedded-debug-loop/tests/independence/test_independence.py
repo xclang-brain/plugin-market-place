@@ -1,4 +1,4 @@
-"""部品の独立性を確かめる試験（憲章 第25条、仕様 REQ-001〜REQ-005）。
+"""部品の独立性を確かめる試験（憲章 第25条、仕様 REQ-001〜REQ-005、REQ-102、REQ-106、REQ-108）。
 
 確かめること：
 - 1段階目：4つのスキルは、それぞれのフォルダだけで完結する（利用者は、プラグインを入れずに、
@@ -92,15 +92,26 @@ class SkillIndependence(unittest.TestCase):
             patterns = [(name, name_token(name)) for name in others]
             patterns += [(w, re.compile(re.escape(w))) for w in [
                 "device-worker", "orchestrator", "verifier", "作業エージェント", "統括", "検証エージェント",
-                "Web管理画面", "エクステンション", "extension"]]
+                "Web管理画面", "管理画面", "エクステンション", "extension"]]
             patterns += PLUGIN_WORDS
             for path in text_files(SKILLS_DIR / skill):
                 problems += hits(path, patterns)
         self.assertEqual(problems, [], "スキルが、プラグイン・ほかのスキル・エージェントのことを書いています：\n" + "\n".join(problems))
 
+    def test_description_names_no_slash_command(self):
+        """SKILL.md の description に、スラッシュコマンドの名前を書かない（名前を変えて写すと食い違うため）"""
+        for skill in SKILL_NAMES:
+            text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
+            m = re.search(r"^description:\s*(.*)$", text, re.M)
+            self.assertIsNotNone(m, f"{skill} の SKILL.md に description がありません")
+            found = re.findall(r"(?<![\w./])/[a-z][a-z0-9-]*", m.group(1))
+            self.assertEqual(found, [], f"{skill} の description に、スラッシュコマンドの名前があります：{found}")
+
     def test_no_path_outside_the_folder(self):
         """スキルのフォルダの外を指さない（../ で外へ出る、プラグインの根や tests/ を指す）"""
-        patterns = [("../", re.compile(r"\.\.[/\\]")),
+        patterns = [("../", re.compile(r"(?<!\.)\.\.[/\\]")),  # 「...\n」のような省略の点は数えない
+                    ("parents[2] 以上", re.compile(r"parents\[[2-9]\]")),
+                    ("プラグインの定義", re.compile(r"plugin\.json|com\.github\.copilot")),
                     ("プラグインの根の環境変数", re.compile(r"PLUGIN_ROOT|CLAUDE_PLUGIN|COPILOT_PLUGIN")),
                     ("プラグインの tests/", re.compile(r"tests/(independence|extension|skills)"))]
         problems = []
@@ -144,7 +155,8 @@ class SkillIndependence(unittest.TestCase):
             for copied_name in (skill, f"my-{skill}"):
                 with self.subTest(skill=skill, copied_as=copied_name), tempfile.TemporaryDirectory() as tmp:
                     lone = Path(tmp) / "home" / ".copilot" / "skills" / copied_name
-                    shutil.copytree(SKILLS_DIR / skill, lone)
+                    shutil.copytree(SKILLS_DIR / skill, lone, ignore=shutil.ignore_patterns("__pycache__"))
+                    before = sorted(str(p.relative_to(lone)) for p in lone.rglob("*"))
                     work = Path(tmp) / "project"
                     work.mkdir()
                     run = lambda *args: subprocess.run(
@@ -163,11 +175,26 @@ class SkillIndependence(unittest.TestCase):
                     checked = run("check")
                     data = json.loads(checked.stdout)
                     self.assertIn("ok", data)
+                    for out in (result, data):
+                        if "skill" in out:
+                            self.assertEqual(out["skill"], copied_name, f"{skill}: 結果の skill が、写したフォルダの名前ではありません")
+                    for line in (made.stderr + checked.stderr).splitlines():
+                        m = re.match(r"^\[([^\]]+)\] ", line)
+                        if m:
+                            self.assertEqual(m.group(1), copied_name, f"{skill}: 経過の表示の頭が、写したフォルダの名前ではありません：{line}")
+                    logs = work / f".{copied_name}" / "logs"
+                    if logs.is_dir():
+                        for log in logs.iterdir():
+                            self.assertTrue(log.name.startswith(copied_name + "-"), f"{skill}: ログの名前が、写したフォルダの名前で始まりません：{log.name}")
                     if result["missing"]:
                         self.assertFalse(data["ok"], f"{skill}: 必須の項目が空なのに、確かめが ok になりました")
                         self.assertTrue(data.get("problems"), f"{skill}: 問題の説明がありません")
                     self.assertEqual(sorted(p.name for p in work.iterdir()), [f".{copied_name}"],
                                      f"{skill}: 作業フォルダに、.{copied_name}/ のほかのものができました")
+                    self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["home", "project"],
+                                     f"{skill}: 作業フォルダの外に、何かができました")
+                    after = sorted(str(p.relative_to(lone)) for p in lone.rglob("*"))
+                    self.assertEqual(after, before, f"{skill}: スキルのフォルダの中が変わりました")
 
     def test_each_skill_tests_pass_alone(self):
         """スキルのフォルダだけを写した場所で、README に書いた動かし方で、そのスキルの試験が通る"""
@@ -231,6 +258,8 @@ class WorkerIndependence(unittest.TestCase):
         for skill in WORK_SKILLS:
             forbidden += [k for k in template_keys(skill) if len(k) > 3]
         found = [w for w in forbidden if token(w).search(self.text)]
+        # 設定ファイルやログの名前・場所は、字の並びとして探す（config.yaml の .yaml も見つける）
+        found += [w for w in [".yaml", ".yml", "config.yaml", "logs/"] if w in self.text]
         self.assertEqual(found, [], f"作業エージェントが、スキルの中身を書いています：{found}")
 
     def test_no_upper_layer(self):
