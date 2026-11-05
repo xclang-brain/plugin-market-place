@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""設定のスキルの道具（scripts/config_tool.py）の試験。
+"""このスキルの道具（scripts/config_tool.py）の試験。
 
 道具は、どんな設定ファイルでも扱えなければならない。
-そのため、ほかのスキルの設定ファイルではなく、この試験のための見本
-（コーヒーメーカーとネットワークカメラ）で試す。
+そのため、この試験のための見本（コーヒーメーカーとネットワークカメラ）で試す。
 標準ライブラリだけで動く。PyYAML があれば、書き込んだファイルが
 ふつうの YAML として読めるかも確かめる。
+
+このスキルのフォルダで、次のように動かす。
+  python3 -m unittest discover -s tests -v
 """
 
 import json
@@ -18,8 +20,8 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-TOOL = os.path.join(PLUGIN, "skills", "setup", "scripts", "config_tool.py")
+SKILL_DIR = os.path.dirname(HERE)
+TOOL = os.path.join(SKILL_DIR, "scripts", "config_tool.py")
 FIXTURES = os.path.join(HERE, "fixtures")
 COFFEE = "coffee-machine.yaml"
 CAMERA = "network-camera.yaml"
@@ -32,12 +34,12 @@ except ImportError:
     HAVE_YAML = False
 
 
-def run_tool(args, cwd, stdin=None, env=None):
+def run_tool(args, cwd, stdin=None, env=None, tool=TOOL):
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
     proc = subprocess.run(
-        [sys.executable, TOOL] + list(args),
+        [sys.executable, tool] + list(args),
         cwd=cwd,
         input=stdin.encode("utf-8") if isinstance(stdin, str) else stdin,
         stdout=subprocess.PIPE,
@@ -115,55 +117,226 @@ class ToolTestCase(unittest.TestCase):
 # list
 # ---------------------------------------------------------------------------
 
+# 項目のすぐ上に # の説明がある形（候補になる）
+DESCRIBED = "# 見本\n\n# 名前（必須）。\nname: \"\"\n"
+# 説明のない形（候補にならない）
+PLAIN = "name: \"\"\ncount: 1\n"
+HEADER_ONLY = "# 見本のファイル。\n\nname: \"\"\n"
+BARE_HASH = "#\nname: \"\"\n"
+# 中を見ないフォルダ
+SKIPPED = (".git", "node_modules", "__pycache__", ".venv", "venv", os.path.join("a", "node_modules"))
+
+
+def tree(folder):
+    """フォルダの中のすべてのもの（作業フォルダからの場所。区切りは /）。"""
+    out = []
+    for root, dirs, files in os.walk(folder):
+        for name in dirs + files:
+            out.append(os.path.relpath(os.path.join(root, name), folder).replace(os.sep, "/"))
+    return sorted(out)
+
+
+def snapshot(folder):
+    """フォルダの中のファイルと、その中身。"""
+    out = {}
+    for root, dirs, files in os.walk(folder):
+        for name in files:
+            path = os.path.join(root, name)
+            with open(path, "rb") as f:
+                out[os.path.relpath(path, folder)] = f.read()
+    return out
+
+
 class ListTest(ToolTestCase):
+    """list：作業フォルダの中から、項目のすぐ上に # の説明があるファイルを探す。"""
+
+    EXPECTED = [COFFEE, ".myapp/extra.yml", ".myapp/" + CAMERA, "a/b/c/deep.yaml"]
+
     def setUp(self):
         ToolTestCase.setUp(self)
-        self.conf = os.path.join(self.tmp, ".embedded-debug-loop")
-        self.copy(COFFEE, self.conf)
-        self.copy(CAMERA, self.conf)
-        os.makedirs(os.path.join(self.conf, "logs"))
-        with open(os.path.join(self.conf, "notes.txt"), "w") as f:
-            f.write("not yaml\n")
-        os.makedirs(os.path.join(self.conf, "folder.yaml"))  # フォルダは数えない
+        self.copy(COFFEE)
+        self.copy(CAMERA, os.path.join(self.tmp, ".myapp"))     # 点で始まるフォルダも見る
+        self.put(".myapp/extra.yml", DESCRIBED)                   # .yml も探す
+        self.put("a/b/c/deep.yaml", DESCRIBED)                    # 3 段下までは探す
+        self.put("a/b/c/d/too-deep.yaml", DESCRIBED)              # 4 段下は探さない
+        for folder in SKIPPED:
+            self.put(os.path.join(folder, "x.yaml"), DESCRIBED)
+        self.put("plain.yaml", PLAIN)
+        self.put("header-only.yaml", HEADER_ONLY)
+        self.put("bare-hash.yaml", BARE_HASH)
+        self.put("notes.txt", DESCRIBED)
+        os.makedirs(os.path.join(self.tmp, "folder.yaml"))        # フォルダは数えない
 
-    def test_list_default_folder(self):
+    def put(self, rel, text):
+        path = os.path.join(self.tmp, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(text if isinstance(text, bytes) else text.encode("utf-8"))
+        return path
+
+    def names(self, data):
+        return [d["name"] for d in data["details"]]
+
+    def test_search_shape(self):
         data = self.ok("list")
-        self.assertEqual(os.path.realpath(data["dir"]), os.path.realpath(self.conf))
+        self.assertEqual(set(data), {"ok", "dir", "exists", "max_depth", "files", "details", "unreadable"})
+        self.assertEqual(os.path.realpath(data["dir"]), os.path.realpath(self.tmp))
         self.assertTrue(data["exists"])
-        names = [os.path.basename(p) for p in data["files"]]
-        self.assertEqual(names, [COFFEE, CAMERA])
+        self.assertEqual(data["max_depth"], 3)
+        self.assertEqual(self.names(data), self.EXPECTED)
+        self.assertEqual(data["files"], [os.path.join(data["dir"], *n.split("/")) for n in self.EXPECTED])
         for p in data["files"]:
             self.assertTrue(os.path.isabs(p))
+        self.assertEqual(data["unreadable"], [])
         details = {d["name"]: d for d in data["details"]}
+        self.assertEqual(set(details[COFFEE]), {"file", "name", "header", "items", "missing"})
         self.assertEqual(details[COFFEE]["header"], "コーヒーメーカーの設定ファイルです（試験用の見本）。")
+        self.assertEqual(details[COFFEE]["items"], 11)
         self.assertEqual(details[COFFEE]["missing"], ["machine_name"])
-        self.assertEqual(details[CAMERA]["missing"], ["camera_ip"])
+        self.assertEqual(details[".myapp/" + CAMERA]["missing"], ["camera_ip"])
+        self.assertEqual(details["a/b/c/deep.yaml"]["header"], "見本")
 
-    def test_list_workdir_and_dir(self):
+    def test_depth_limit(self):
+        names = self.names(self.ok("list"))
+        self.assertIn("a/b/c/deep.yaml", names)
+        self.assertNotIn("a/b/c/d/too-deep.yaml", names)
+
+    def test_skipped_folders(self):
+        names = self.names(self.ok("list"))
+        for folder in SKIPPED:
+            self.assertNotIn(folder.replace(os.sep, "/") + "/x.yaml", names)
+
+    def test_dot_folders_are_searched(self):
+        names = self.names(self.ok("list"))
+        self.assertIn(".myapp/extra.yml", names)
+        self.assertIn(".myapp/" + CAMERA, names)
+
+    def test_only_files_with_described_keys(self):
+        self.put("one-described.yaml", "count: 1\n# 色。\ncolor: \"red\"\n")
+        names = self.names(self.ok("list"))
+        self.assertIn("one-described.yaml", names)      # 説明のある項目が1つでもあれば候補
+        for name in ("plain.yaml", "header-only.yaml", "bare-hash.yaml", "notes.txt", "folder.yaml"):
+            self.assertNotIn(name, names)
+
+    def test_broken_file_reported_without_failing(self):
+        self.put("conf/broken.yaml", "# 名前\nname: \"x\"\n# 組\nnested:\n  a: 1\n")
+        self.put("conf/broken-plain.yaml", "a:\n  b: 1\n")                       # 説明がない
+        self.put("conf/sjis.yaml", "# 説明\nname: 名前\n".encode("cp932"))
+        data = self.ok("list")
+        self.assertEqual(self.names(data), self.EXPECTED)                       # 候補にはしない
+        unreadable = {d["name"]: d for d in data["unreadable"]}
+        self.assertEqual(sorted(unreadable), ["conf/broken.yaml", "conf/sjis.yaml"])
+        self.assertEqual(set(unreadable["conf/broken.yaml"]), {"file", "name", "error"})
+        self.assertIn("入れ子", unreadable["conf/broken.yaml"]["error"])
+        self.assertIn("UTF-8", unreadable["conf/sjis.yaml"]["error"])
+        self.assertEqual(unreadable["conf/broken.yaml"]["file"], os.path.join(data["dir"], "conf", "broken.yaml"))
+
+    def test_workdir_option(self):
         other = tempfile.mkdtemp(prefix="setup-test-cwd-")
         self.addCleanup(shutil.rmtree, other, True)
-        data = self.ok("list", "--workdir", self.tmp, cwd=other)
-        self.assertEqual(len(data["files"]), 2)
-        data = self.ok("list", "--dir", self.conf, cwd=other)
-        self.assertEqual(len(data["files"]), 2)
-        data = self.ok("list", "--dir=" + self.conf, cwd=other)
-        self.assertEqual(len(data["files"]), 2)
+        for args in (("list", "--workdir", self.tmp), ("list", "--workdir=" + self.tmp)):
+            data = self.ok(*args, cwd=other)
+            self.assertEqual(data["dir"], os.path.abspath(self.tmp))
+            self.assertEqual(self.names(data), self.EXPECTED)
+        self.assertEqual(self.ok("list", cwd=other)["files"], [])
 
-    def test_list_missing_folder(self):
+    def test_dir_option_is_unchanged(self):
+        """--dir は、そのフォルダの中（下のフォルダは見ない）の YAML を、説明がなくても全部返す。"""
+        self.put(".myapp/plain.yaml", PLAIN)
+        self.put(".myapp/broken.yaml", "a:\n  b: 1\n")
+        self.put(".myapp/sub/x.yaml", DESCRIBED)
+        self.put(".myapp/notes.txt", DESCRIBED)
+        other = tempfile.mkdtemp(prefix="setup-test-cwd-")
+        self.addCleanup(shutil.rmtree, other, True)
+        folder = os.path.join(self.tmp, ".myapp")
+        for args, cwd in ((("list", "--dir", ".myapp"), self.tmp),
+                          (("list", "--dir", folder), other),
+                          (("list", "--dir=" + folder), other),
+                          (("list", "--dir", ".myapp", "--workdir", self.tmp), other)):
+            data = self.ok(*args, cwd=cwd)
+            self.assertEqual(set(data), {"ok", "dir", "exists", "files", "details"})
+            self.assertEqual(os.path.realpath(data["dir"]), os.path.realpath(folder))
+            self.assertTrue(data["exists"])
+            names = ["broken.yaml", "extra.yml", CAMERA, "plain.yaml"]
+            self.assertEqual([os.path.basename(p) for p in data["files"]], names)
+            self.assertEqual(self.names(data), names)
+            broken = [d for d in data["details"] if d["name"] == "broken.yaml"][0]
+            self.assertIn("入れ子", broken["error"])
+
+    def test_dir_option_missing_folder(self):
+        data = self.ok("list", "--dir", "none")
+        self.assertFalse(data["exists"])
+        self.assertEqual(data["files"], [])
+        self.assertEqual(data["dir"], os.path.join(os.path.realpath(self.tmp), "none"))
+
+    def test_empty_workdir_creates_nothing(self):
         empty = tempfile.mkdtemp(prefix="setup-test-empty-")
         self.addCleanup(shutil.rmtree, empty, True)
         data = self.ok("list", cwd=empty)
+        self.assertTrue(data["exists"])
+        self.assertEqual((data["files"], data["details"], data["unreadable"]), ([], [], []))
+        self.assertEqual(os.listdir(empty), [])
+
+    def test_missing_workdir(self):
+        missing = os.path.join(self.tmp, "none")
+        data = self.ok("list", "--workdir", missing)
         self.assertFalse(data["exists"])
         self.assertEqual(data["files"], [])
-        self.assertEqual(os.path.realpath(data["dir"]),
-                         os.path.join(os.path.realpath(empty), ".embedded-debug-loop"))
+        self.assertFalse(os.path.exists(missing))
 
-    def test_list_reports_broken_file_without_failing(self):
-        with open(os.path.join(self.conf, "broken.yaml"), "w", encoding="utf-8") as f:
-            f.write("a:\n  b: 1\n")
-        data = self.ok("list")
-        broken = [d for d in data["details"] if d["name"] == "broken.yaml"][0]
-        self.assertIn("入れ子", broken["error"])
+    def test_own_folder_is_not_searched(self):
+        """このスキルのフォルダが作業フォルダの中にあっても、中の試験の見本は候補に出さない。"""
+        work = tempfile.mkdtemp(prefix="setup-test-work-")
+        self.addCleanup(shutil.rmtree, work, True)
+        kit = os.path.join(work, "kit")
+        shutil.copytree(SKILL_DIR, kit, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        with open(os.path.join(work, "app.yaml"), "w", encoding="utf-8") as f:
+            f.write(DESCRIBED)
+        code, data, _ = run_tool(["list"], work, tool=os.path.join(kit, "scripts", "config_tool.py"))
+        self.assertEqual(code, 0, data)
+        self.assertEqual(self.names(data), ["app.yaml"])
+        # ほかの場所の道具から見れば、kit/ はふつうのフォルダ（3 段下の見本も見つかる）
+        names = self.names(self.ok("list", cwd=work))
+        self.assertIn("kit/tests/fixtures/" + COFFEE, names)
+
+
+class StandaloneTest(unittest.TestCase):
+    """このフォルダだけを空の場所に写しても動くこと（名前を変えた写しも）。
+    作業フォルダには、点で始まるフォルダもファイルも作らないこと。"""
+
+    def test_copied_folder_works_in_empty_workdir(self):
+        for folder_name in ("setup", "yaml-filler"):
+            with self.subTest(folder=folder_name):
+                base = tempfile.mkdtemp(prefix="setup-test-copy-")
+                self.addCleanup(shutil.rmtree, base, True)
+                copy = os.path.join(base, "place", folder_name)
+                shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                tool = os.path.join(copy, "scripts", "config_tool.py")
+                skill_before = snapshot(copy)
+                work = os.path.join(base, "work")
+                os.makedirs(os.path.join(work, "conf"))
+                coffee = os.path.join(work, "coffee.yaml")
+                shutil.copyfile(os.path.join(FIXTURES, COFFEE), coffee)
+                shutil.copyfile(os.path.join(FIXTURES, CAMERA), os.path.join(work, "conf", "camera.yaml"))
+
+                def call(*args, **kw):
+                    code, data, _ = run_tool(args, work, tool=tool, **kw)
+                    self.assertEqual(code, 0, data)
+                    self.assertTrue(data["ok"], data)
+                    return data
+
+                data = call("list")
+                self.assertEqual([d["name"] for d in data["details"]], ["coffee.yaml", "conf/camera.yaml"])
+                self.assertEqual(call("show", "coffee.yaml")["missing"], ["machine_name"])
+                self.assertTrue(call("set", "coffee.yaml", "machine_name", "--stdin", stdin="1号機\n")["changed"])
+                self.assertTrue(call("set", "conf/camera.yaml", "rtsp_port", "--stdin", "--json",
+                                     stdin="8554\n")["changed"])
+                self.assertEqual(call("get", coffee, "machine_name")["value"], "1号機")
+                self.assertEqual(call("show", "coffee.yaml")["missing"], [])
+                # 作業フォルダには、点で始まるものも、ほかのものも、何もできない
+                self.assertEqual(tree(work), ["coffee.yaml", "conf", "conf/camera.yaml"])
+                # 写したスキルのフォルダも、書き換えない
+                self.assertEqual(snapshot(copy), skill_before)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +532,7 @@ class ShowTest(ToolTestCase):
 
     def test_secret_never_printed(self):
         path = self.copy(CAMERA)
-        for args in (("show", path), ("get", path, "api_token"), ("list", "--dir", self.tmp)):
+        for args in (("show", path), ("get", path, "api_token"), ("list", "--dir", self.tmp), ("list",)):
             code, data, out = self.tool(*args)
             self.assertEqual(code, 0)
             self.assertNotIn("tk-0123456789abcdef", out)
@@ -367,10 +540,10 @@ class ShowTest(ToolTestCase):
 
     def test_env_defined(self):
         path = self.copy(CAMERA)
-        self.ok("set", path, "api_token_env", "EDL_TEST_CAMERA_TOKEN")
-        it = {i["key"]: i for i in self.tool("show", path, env={"EDL_TEST_CAMERA_TOKEN": ""})[1]["items"]}
+        self.ok("set", path, "api_token_env", "SETUP_TEST_TOKEN")
+        it = {i["key"]: i for i in self.tool("show", path, env={"SETUP_TEST_TOKEN": ""})[1]["items"]}
         self.assertFalse(it["api_token_env"]["env_defined"])
-        it = {i["key"]: i for i in self.tool("show", path, env={"EDL_TEST_CAMERA_TOKEN": "x"})[1]["items"]}
+        it = {i["key"]: i for i in self.tool("show", path, env={"SETUP_TEST_TOKEN": "x"})[1]["items"]}
         self.assertTrue(it["api_token_env"]["env_defined"])
         self.assertNotIn("env_defined", it["rtsp_port"])
 
@@ -802,6 +975,9 @@ class RefuseTest(ToolTestCase):
             os.makedirs(folder, exist_ok=True)
             shutil.copyfile(path, os.path.join(folder, "bad.yaml"))
             code, data, out = self.tool("list", "--dir", folder)
+            self.assertEqual(code, 0)
+            self.assertNotIn("hunter2", out, text)
+            code, data, out = self.tool("list")  # 作業フォルダを探すときも
             self.assertEqual(code, 0)
             self.assertNotIn("hunter2", out, text)
 

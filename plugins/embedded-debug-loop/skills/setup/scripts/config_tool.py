@@ -12,6 +12,11 @@
 - set の値は、--stdin で標準入力から渡すのがよい（例：--stdin <<'VALUE_END' の次の行に値、
   その次の行に VALUE_END）。値がコマンドの行に出ない。最後の改行1つは値に含めない。
   --json を付けると、値を JSON として読む（数・true / false・リスト）。
+- list は、作業フォルダ（今のフォルダか --workdir）と、その下 3 段までのフォルダから、
+  *.yaml・*.yml のうち、項目のすぐ上に # の説明があるファイルを、候補として探す。
+  .git・node_modules などのフォルダ（SKIP_DIRS）と、このスキルのフォルダの中は見ない。
+  点で始まるほかのフォルダの中は見る。何も作らない。
+  --dir を付けると、そのフォルダの中（下のフォルダは見ない）の *.yaml・*.yml を全部返す。
 - 結果は、いつも JSON 1つを標準出力に書く（UTF-8）。
 - 終了コード: 0 成功 / 2 ファイルや引数の問題 / 1 思わぬエラー。
 - 読める YAML は、次の書き方だけ。
@@ -40,8 +45,14 @@ import tempfile
 import traceback
 import unicodedata
 
-CONFIG_DIR_NAME = ".embedded-debug-loop"
 MASK = "＊＊＊"
+
+# list で探す深さ（作業フォルダの下の、フォルダの段の数）と、中を見ないフォルダ。
+SEARCH_DEPTH = 3
+SKIP_DIRS = (".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+             ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache")
+# このスキルのフォルダ（scripts/ の親）。中の試験の見本を、候補に出さないため。
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 USAGE = [
     "config_tool.py list [--dir フォルダ] [--workdir フォルダ]",
@@ -927,14 +938,50 @@ def convert_input(item, raw, use_json):
 # サブコマンド
 # ---------------------------------------------------------------------------
 
-def cmd_list(opts, pos):
-    if pos:
-        raise ToolError("list には、ファイルの名前を付けません。フォルダを指定するときは --dir を使います。")
-    workdir = os.path.abspath(os.path.expanduser(opts["workdir"])) if opts["workdir"] else os.getcwd()
-    if opts["dir"]:
-        folder = resolve_path(opts["dir"], workdir)
-    else:
-        folder = os.path.join(workdir, CONFIG_DIR_NAME)
+def _is_yaml_file(name, path):
+    return name.lower().endswith((".yaml", ".yml")) and os.path.isfile(path)
+
+
+def _file_detail(path, name):
+    """list の1つのファイルの情報。(読めた Document か None, 情報) を返す。"""
+    try:
+        doc = load(path)
+    except ToolError as e:
+        return None, {"file": path, "name": name, "error": e.message}
+    return doc, {
+        "file": path,
+        "name": name,
+        "header": doc.header[0] if doc.header else "",
+        "items": len(doc.items),
+        "missing": [it.key for it in doc.items if it.required and is_empty(it.value)],
+    }
+
+
+def _has_described_key(doc):
+    """項目のすぐ上に、空でない # の説明がある項目が、1つ以上あるか。"""
+    return any(any(line.strip() for line in it.comments) for it in doc.items)
+
+
+def _looks_described(path):
+    """読めないファイルでも、項目のすぐ上に # の説明がある形かを、行だけで見る。"""
+    try:
+        with open(path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return True  # 中を見られない。読めないファイルとして知らせる。
+    if text.startswith("﻿"):
+        text = text[1:]
+    prev = ""
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
+        if _classify(line) == "key" and prev.startswith("#") and _comment_text(prev).strip():
+            return True
+        prev = line
+    return False
+
+
+def list_folder(folder):
+    """--dir のフォルダの中（下のフォルダは見ない）の *.yaml・*.yml を、全部返す。"""
     if not os.path.isdir(folder):
         return {"ok": True, "dir": folder, "exists": False, "files": [], "details": []}
     try:
@@ -945,21 +992,65 @@ def cmd_list(opts, pos):
     details = []
     for name in names:
         path = os.path.join(folder, name)
-        if not name.lower().endswith((".yaml", ".yml")) or not os.path.isfile(path):
+        if not _is_yaml_file(name, path):
             continue
         files.append(path)
-        try:
-            doc = load(path)
-            details.append({
-                "file": path,
-                "name": name,
-                "header": doc.header[0] if doc.header else "",
-                "items": len(doc.items),
-                "missing": [it.key for it in doc.items if it.required and is_empty(it.value)],
-            })
-        except ToolError as e:
-            details.append({"file": path, "name": name, "error": e.message})
+        details.append(_file_detail(path, name)[1])
     return {"ok": True, "dir": folder, "exists": True, "files": files, "details": details}
+
+
+def _walk_yaml(workdir):
+    """作業フォルダと、その下 SEARCH_DEPTH 段までのフォルダの *.yaml・*.yml を、(パス, 名前) で返す。
+
+    名前は、作業フォルダからの場所（区切りは /）。フォルダごとに、ファイルを先に、名前の順に返す。
+    """
+    own = os.path.realpath(SKILL_DIR)
+
+    def on_error(err):
+        if os.path.abspath(err.filename or "") == workdir:
+            raise ToolError("フォルダの中を見られません（{}）：{}".format(_os_reason(err), workdir))
+
+    for root, dirs, files in os.walk(workdir, onerror=on_error):
+        rel = os.path.relpath(root, workdir)
+        depth = 0 if rel == os.curdir else len(rel.split(os.sep))
+        if depth >= SEARCH_DEPTH:
+            dirs[:] = []
+        else:
+            dirs[:] = sorted(d for d in dirs
+                             if d not in SKIP_DIRS and os.path.realpath(os.path.join(root, d)) != own)
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            if _is_yaml_file(name, path):
+                yield path, os.path.relpath(path, workdir).replace(os.sep, "/")
+
+
+def search_workdir(workdir):
+    """作業フォルダの中から、項目のすぐ上に # の説明があるファイルを、候補として探す。
+
+    読めないファイルのうち、その形に見えるものは、候補にせず unreadable に入れる。
+    """
+    result = {"ok": True, "dir": workdir, "exists": os.path.isdir(workdir), "max_depth": SEARCH_DEPTH,
+              "files": [], "details": [], "unreadable": []}
+    if not result["exists"]:
+        return result
+    for path, name in _walk_yaml(workdir):
+        doc, detail = _file_detail(path, name)
+        if doc is None:
+            if _looks_described(path):
+                result["unreadable"].append(detail)
+        elif _has_described_key(doc):
+            result["files"].append(path)
+            result["details"].append(detail)
+    return result
+
+
+def cmd_list(opts, pos):
+    if pos:
+        raise ToolError("list には、ファイルの名前を付けません。フォルダを指定するときは --dir を使います。")
+    workdir = os.path.abspath(os.path.expanduser(opts["workdir"])) if opts["workdir"] else os.getcwd()
+    if opts["dir"]:
+        return list_folder(resolve_path(opts["dir"], workdir))
+    return search_workdir(workdir)
 
 
 def _need(pos, count, usage):

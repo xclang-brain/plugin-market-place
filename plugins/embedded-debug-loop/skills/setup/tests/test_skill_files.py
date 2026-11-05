@@ -1,38 +1,33 @@
 # -*- coding: utf-8 -*-
-"""設定のスキルのフォルダ（skills/setup/）そのものの試験。
+"""このスキルのフォルダそのものの試験。
 
 - SKILL.md の先頭の情報（name・description）があること。
 - 対話の進め方に要ることが書いてあること。
-- ほかのスキル・エージェント・プラグインのほかの部分を知らないこと（独立していること）。
+- README.md に、人向けの使い方が書いてあること。
+- フォルダの外を指さないこと。
 - 道具が標準ライブラリだけを使い、Python 3.8 の文法で書かれていること。
+
+このスキルのフォルダで、次のように動かす。
+  python3 -m unittest discover -s tests -v
 """
 
 import ast
+import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
+import shutil
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-SKILL_DIR = os.path.join(PLUGIN, "skills", "setup")
+SKILL_DIR = os.path.dirname(HERE)
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
+README = os.path.join(SKILL_DIR, "README.md")
 TOOL = os.path.join(SKILL_DIR, "scripts", "config_tool.py")
-
-# このスキルのフォルダに、あってはならない言葉。
-FORBIDDEN = [
-    # ほかのスキルの名前
-    "cross-compile", "cross_compile", "deploy", "log-capture", "log_capture",
-    # エージェントの名前と呼び名
-    "device-worker", "device_worker", "orchestrator", "verifier",
-    "作業エージェント", "統括", "検証エージェント", "検証",
-    # Web の画面（拡張）
-    "Web管理画面", "管理画面", "extension", "拡張", ".mjs",
-    # ほかのスキルの仕事の中身（このスキルは、設定ファイルの中身を知らない）
-    "ビルド", "クロスコンパイル", "コンパイル", "デプロイ", "転送", "FTP", "ftp",
-    "シリアル", "serial", "ログ取得", "キャプチャ", "capture", "make", "Makefile",
-    "機器", "ボード", "SDK", "sensor",
-]
+# フォルダの外へ出る参照（「..」と「/」）
+PARENT_REF = os.pardir + "/"
 
 
 def skill_files():
@@ -42,6 +37,14 @@ def skill_files():
             if name.endswith(".pyc"):
                 continue
             yield os.path.join(root, name)
+
+
+def tool_constant(name):
+    """道具の中の、そのままの値で書いた定数を読む（道具を import しない）。"""
+    for node in ast.parse(read(TOOL)).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError("道具に {} がありません".format(name))
 
 
 def read(path):
@@ -74,9 +77,31 @@ class SkillMdTest(unittest.TestCase):
         desc = self.fields.get("description", "")
         self.assertTrue(desc)
         self.assertLessEqual(len(desc), 1024)
-        self.assertIn("/embedded-debug-loop:setup", desc)
         self.assertIn("YAML", desc)
         self.assertEqual(set(self.fields), {"name", "description"})
+        # 「/名前:スキル名」の形の呼び方は書かない（入れ物の名前で変わる）
+        self.assertNotRegex(self.text, r"/[\w.-]+:[\w.-]+")
+
+    def test_files_are_chosen_from_candidates(self):
+        """ファイルの場所が渡されないときは、作業フォルダの中の候補から選んでもらう。"""
+        files = self.section("### 1. 設定するファイルを決める", "### 2. ファイルごとに進める")
+        for word in ("`list` を実行して、候補のファイルを探します。",
+                     "候補が1つでも聞きます。",
+                     "「どのファイルを設定しますか。ほかのファイルなら、その場所を書いてください。」",
+                     "`name` は、作業フォルダからのファイルの場所です。",
+                     "候補が2つ以上なら、最後に「全部」を加えます。",
+                     "候補がなければ、「作業フォルダの中に、設定できるファイルが見つかりませんでした。」",
+                     "ファイルの場所を ask_user で聞きます。選択肢は付けません。",
+                     "`unreadable`"):
+            self.assertIn(word, files, word)
+        tool = self.section("## 道具", "### 値の渡し方")
+        self.assertIn("作業フォルダと、その下 3 段までのフォルダを探します。", tool)
+        self.assertIn("項目のすぐ上に `#` の説明があるファイルが候補です。", tool)
+
+    def test_no_data_folder(self):
+        """このスキルは、作業フォルダに、自分のフォルダを持たない。"""
+        self.assertNotRegex(self.text, r"`\.[\w-]+/`")
+        self.assertNotIn("config.yaml", self.text)
 
     def test_dialogue_is_described(self):
         body = self.body
@@ -334,27 +359,66 @@ class SkillMdTest(unittest.TestCase):
         self.assertEqual(long_ones, [])
 
 
-class IndependenceTest(unittest.TestCase):
-    def test_no_forbidden_words(self):
-        found = []
-        for path in skill_files():
-            text = read(path)
-            for word in FORBIDDEN:
-                if word.isascii():
-                    hit = re.search(r"(?<![A-Za-z0-9_])" + re.escape(word) + r"(?![A-Za-z0-9_])", text,
-                                    re.IGNORECASE if word.islower() else 0)
-                else:
-                    hit = word in text
-                if hit:
-                    found.append("{}: {}".format(os.path.relpath(path, PLUGIN), word))
-        self.assertEqual(found, [])
+class ReadmeTest(unittest.TestCase):
+    """人向けの使い方（README.md）。このフォルダだけを受け取った人が読む。"""
 
+    def setUp(self):
+        self.text = read(README)
+
+    def test_sections(self):
+        for heading in ("## 何をするスキルか", "## 必要なもの", "## 置き方", "## 呼び方",
+                        "## 埋められるファイル", "## 候補のファイルの探し方", "## 結果の見方",
+                        "## うまくいかないとき", "## 試験の動かし方"):
+            self.assertIn(heading, self.text, heading)
+        self.assertIn("Python 3.8 以上", self.text)
+        self.assertIn("`.github/skills/setup/`", self.text)
+        self.assertIn("`~/.copilot/skills/setup/`", self.text)
+        self.assertIn("`/skills reload`", self.text)
+        self.assertIn("`/setup", self.text)
+        self.assertIn("フォルダの名前と、`SKILL.md` の `name:` を同じ名前にします。", self.text)
+
+    def test_test_command_runs_from_this_folder(self):
+        self.assertIn("このフォルダで、次を実行します。\n\n```bash\npython3 -m unittest discover -s tests -v\n```",
+                      self.text)
+
+    def test_search_rules_match_the_tool(self):
+        section = self.text[self.text.index("## 候補のファイルの探し方"):self.text.index("## 結果の見方")]
+        for name in tool_constant("SKIP_DIRS"):
+            self.assertIn("`{}`".format(name), section, name)
+        self.assertIn("その下 {} 段までのフォルダを探します。".format(tool_constant("SEARCH_DEPTH")), section)
+        self.assertIn("点で始まるフォルダ", section)
+        self.assertIn("このスキルのフォルダ", section)
+
+    def test_example_yaml_can_be_filled(self):
+        """README の例のファイルを、道具がそのとおりに読めること。"""
+        blocks = re.findall(r"```yaml\n(.*?)```", self.text, re.S)
+        self.assertEqual(len(blocks), 1)
+        work = tempfile.mkdtemp(prefix="setup-test-readme-")
+        self.addCleanup(shutil.rmtree, work, True)
+        path = os.path.join(work, "example.yaml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(blocks[0])
+        out = subprocess.run([sys.executable, TOOL, "show", path], stdout=subprocess.PIPE, timeout=60).stdout
+        data = json.loads(out.decode("utf-8"))
+        self.assertTrue(data["ok"], data)
+        self.assertTrue(data["header"])
+        it = {i["key"]: i for i in data["items"]}
+        self.assertTrue(it["name"]["required"])
+        self.assertEqual(it["name"]["examples"], ["東の温室"])
+        self.assertEqual(it["interval_seconds"]["type"], "number")
+        self.assertEqual(it["unit"]["choices"], ["c", "f"])
+        self.assertEqual(it["notify_to"]["type"], "list")
+        self.assertTrue(it["password"]["secret"])
+        self.assertEqual(it["password"]["env_alternative"], "password_env")
+        self.assertFalse(it["password_env"]["ask_alone"])
+        listed = subprocess.run([sys.executable, TOOL, "list"], cwd=work, stdout=subprocess.PIPE, timeout=60).stdout
+        self.assertEqual(json.loads(listed.decode("utf-8"))["files"], [path])
+
+
+class FolderTest(unittest.TestCase):
     def test_no_reference_outside_own_folder(self):
         for path in skill_files():
-            text = read(path)
-            self.assertNotIn("../", text, path)
-            self.assertNotIn("skills/", text, path)
-            self.assertNotIn("agents/", text, path)
+            self.assertNotIn(PARENT_REF, read(path), path)
 
     def test_only_stdlib_imports(self):
         tree = ast.parse(read(TOOL))
@@ -374,8 +438,11 @@ class IndependenceTest(unittest.TestCase):
         ast.parse(read(TOOL), feature_version=(3, 8))
 
     def test_only_expected_files(self):
-        rel = sorted(os.path.relpath(p, SKILL_DIR) for p in skill_files())
-        self.assertEqual(rel, ["SKILL.md", os.path.join("scripts", "config_tool.py")])
+        rel = sorted(os.path.relpath(p, SKILL_DIR).replace(os.sep, "/") for p in skill_files())
+        self.assertEqual(rel, ["README.md", "SKILL.md", "scripts/config_tool.py",
+                               "tests/__init__.py",
+                               "tests/fixtures/coffee-machine.yaml", "tests/fixtures/network-camera.yaml",
+                               "tests/test_config_tool.py", "tests/test_skill_files.py"])
 
 
 if __name__ == "__main__":
