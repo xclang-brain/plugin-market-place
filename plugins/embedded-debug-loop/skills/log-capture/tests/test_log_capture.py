@@ -3,7 +3,9 @@
 
 機器のシリアルコンソールのまね（fake_console.py）を pty で作り、
 スクリプトを別のプロセスとして動かして、JSON と終わりのコードを確かめる。
-標準ライブラリだけで動く。
+標準ライブラリだけで動く。スキルのフォルダで、次のように動かす。
+
+  python3 -m unittest discover -s tests
 """
 
 import ast
@@ -27,15 +29,21 @@ if HERE not in sys.path:
 
 from fake_console import KERNEL_LINE, FakeDevice, Relay  # noqa: E402
 
-ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-SKILL_DIR = os.path.join(ROOT, "skills", "log-capture")
+# パスは、この試験のファイルの場所から求める（スキルのフォルダの外は見ない）
+SKILL_DIR = os.path.dirname(HERE)
+SKILL_NAME = os.path.basename(SKILL_DIR)   # フォルダの名前を変えて写したら、その名前
+DATA_DIR_NAME = "." + SKILL_NAME           # 作業フォルダの中の、設定とログのフォルダ
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "capture.py")
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
+README = os.path.join(SKILL_DIR, "README.md")
 
 # 終了コードを調べるために、各コマンドの後に送るコマンド（機器のまねは前後の空白を除いて覚える）
-MARKER = "echo __EDL_RC=$?"
-MARKER_TAG = "__EDL_RC"
+MARKER = "echo __LOGCAP_RC=$?"
+MARKER_TAG = "__LOGCAP_RC"
+
+# 試験で使う、ないはずのシリアルポート
+MISSING_PORT = "/dev/ttyLOGCAP-test-missing"
 
 TEMPLATE_KEYS = [
     "port", "baud", "login_user", "login_password", "login_password_env", "prompt",
@@ -56,14 +64,30 @@ def load_module():
     return mod
 
 
+_MODULE = []
+
+
+def script_module():
+    """スクリプトを1回だけ読み込んで、同じものを返す。"""
+    if not _MODULE:
+        _MODULE.append(load_module())
+    return _MODULE[0]
+
+
 class CaptureTestCase(unittest.TestCase):
     """機器のまねを立て、スクリプトを動かすための土台。"""
 
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="edl-log-capture-")
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.relay = None
-        self.device = None
+    relay = None
+    device = None
+    _tmp = None
+
+    @property
+    def tmp(self):
+        """この試験だけの作業フォルダ（初めて使うときに作り、試験の後で消す）。"""
+        if self._tmp is None:
+            self._tmp = tempfile.mkdtemp(prefix="log-capture-test-")
+            self.addCleanup(shutil.rmtree, self._tmp, True)
+        return self._tmp
 
     def start_device(self, plugged=True, device=True, **kw):
         self.relay = Relay().start()
@@ -77,7 +101,7 @@ class CaptureTestCase(unittest.TestCase):
 
     @property
     def config_path(self):
-        return os.path.join(self.tmp, ".embedded-debug-loop", "log-capture.yaml")
+        return os.path.join(self.tmp, DATA_DIR_NAME, "config.yaml")
 
     def write_config(self, **values):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -113,8 +137,8 @@ class CaptureTestCase(unittest.TestCase):
 
     def read_log(self, data):
         self.assertTrue(os.path.isabs(data["log"]))
-        self.assertTrue(data["log"].startswith(os.path.join(self.tmp, ".embedded-debug-loop", "logs")))
-        self.assertRegex(os.path.basename(data["log"]), r"^log-capture-\d{8}-\d{6}(-\d+)?\.log$")
+        self.assertTrue(data["log"].startswith(os.path.join(self.tmp, DATA_DIR_NAME, "logs") + os.sep))
+        self.assertRegex(os.path.basename(data["log"]), r"^%s-\d{8}-\d{6}(-\d+)?\.log$" % re.escape(SKILL_NAME))
         with open(data["log"], encoding="utf-8") as f:
             return f.read()
 
@@ -146,7 +170,7 @@ class RunLoginAndCommands(CaptureTestCase):
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["skill"], "log-capture")
+        self.assertEqual(data["skill"], SKILL_NAME)
         self.assertTrue(data["logged_in"])
         self.assertTrue(data["logged_out"])
         self.assertEqual(len(data["commands"]), 1)
@@ -325,9 +349,9 @@ class RunLoginAndCommands(CaptureTestCase):
     def test_password_from_environment_variable_is_never_shown(self):
         secret = "s3cret-PW-7781"
         port = self.start_device(login=True, password=secret)
-        self.write_config(port=port, login_password="", login_password_env="EDL_TEST_SERIAL_PW",
+        self.write_config(port=port, login_password="", login_password_env="LOG_CAPTURE_TEST_PW",
                           commands=["echo hi"])
-        code, data = self.capture("run", env={"EDL_TEST_SERIAL_PW": secret})
+        code, data = self.capture("run", env={"LOG_CAPTURE_TEST_PW": secret})
         self.assertEqual(code, 0, data)
         self.assertEqual(self.device.login_attempts, [("root", True)])
         self.assertNotIn(secret, json.dumps(data, ensure_ascii=False))
@@ -336,9 +360,9 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_environment_variable_wins_over_password(self):
         port = self.start_device(login=True, password="from-env")
-        self.write_config(port=port, login_password="from-file", login_password_env="EDL_TEST_SERIAL_PW",
+        self.write_config(port=port, login_password="from-file", login_password_env="LOG_CAPTURE_TEST_PW",
                           commands=["echo hi"])
-        code, data = self.capture("run", env={"EDL_TEST_SERIAL_PW": "from-env"})
+        code, data = self.capture("run", env={"LOG_CAPTURE_TEST_PW": "from-env"})
         self.assertEqual(code, 0, data)
 
     def test_wrong_password(self):
@@ -364,11 +388,11 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_empty_password_from_environment_variable(self):
         port = self.start_device(login=True)
-        self.write_config(port=port, login_password="", login_password_env="EDL_TEST_SERIAL_PW",
+        self.write_config(port=port, login_password="", login_password_env="LOG_CAPTURE_TEST_PW",
                           commands=["echo hi"])
-        code, data = self.capture("run", env={"EDL_TEST_SERIAL_PW": ""})
+        code, data = self.capture("run", env={"LOG_CAPTURE_TEST_PW": ""})
         self.assertEqual(code, 1, data)
-        self.assertIn("環境変数 EDL_TEST_SERIAL_PW の中身が空", data["message"])
+        self.assertIn("環境変数 LOG_CAPTURE_TEST_PW の中身が空", data["message"])
 
 
 # ---------------------------------------------------------------------------
@@ -651,18 +675,18 @@ class RunFailures(CaptureTestCase):
         self.assertIn("baud", data["message"])
 
     def test_missing_port(self):
-        self.write_config(port="/dev/ttyEDL-test-missing", commands=["echo hi"])
+        self.write_config(port=MISSING_PORT, commands=["echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 1, data)
         self.assertFalse(data["ok"])
-        self.assertIn("/dev/ttyEDL-test-missing", data["message"])
+        self.assertIn(MISSING_PORT, data["message"])
         self.assertIn("見つかりません", data["message"])
         self.assertIn("USB ケーブル", data["message"])
         self.assertIn("available_ports", data)
         self.assertLess(self.elapsed, 5)
 
     def test_port_written_without_dev(self):
-        self.write_config(port="ttyEDL-test-missing", commands=["echo hi"])
+        self.write_config(port=os.path.basename(MISSING_PORT), commands=["echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 1, data)
         self.assertIn("/dev から書いてください", data["message"])
@@ -786,7 +810,7 @@ class Settings(CaptureTestCase):
 
     def test_new_folder_gets_gitignore(self):
         self.capture("config-path")
-        gi = os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")
+        gi = os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")
         with open(gi, encoding="utf-8") as f:
             self.assertEqual(f.read(), "*\n")
         with open(gi, "w", encoding="utf-8") as f:
@@ -797,15 +821,15 @@ class Settings(CaptureTestCase):
 
     def test_existing_folder_without_gitignore_gets_one(self):
         """ほかのものが先にフォルダを作っても、.gitignore がなければ作る。"""
-        os.makedirs(os.path.join(self.tmp, ".embedded-debug-loop"))
+        os.makedirs(os.path.join(self.tmp, DATA_DIR_NAME))
         self.capture("config-path")
         self.assertTrue(os.path.isfile(self.config_path))
-        with open(os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore"), encoding="utf-8") as f:
+        with open(os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "*\n")
 
     def test_gitignore_is_made_again_when_removed(self):
         self.capture("config-path")
-        gi = os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")
+        gi = os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")
         for command in ("config-path", "check", "run"):
             os.unlink(gi)
             self.capture(command)
@@ -813,9 +837,9 @@ class Settings(CaptureTestCase):
                 self.assertEqual(f.read(), "*\n", command)
 
     def test_gitignore_in_work_folder_with_config_elsewhere(self):
-        os.makedirs(os.path.join(self.tmp, ".embedded-debug-loop"))
+        os.makedirs(os.path.join(self.tmp, DATA_DIR_NAME))
         self.capture("config-path", "--config", os.path.join(self.tmp, "sub", "my.yaml"))
-        self.assertTrue(os.path.isfile(os.path.join(self.tmp, ".embedded-debug-loop", ".gitignore")))
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")))
 
     # --- ひな形に増えた項目を、古い設定ファイルに足す ---
 
@@ -909,7 +933,7 @@ class Settings(CaptureTestCase):
         blocker = os.path.join(self.tmp, "afile")
         with open(blocker, "w") as f:
             f.write("x")
-        bad = os.path.join(blocker, "log-capture.yaml")
+        bad = os.path.join(blocker, "config.yaml")
         code, data = self.capture("config-path", "--config", bad)
         self.assertEqual(code, 0, data)
         self.assertFalse(data["created"])
@@ -947,12 +971,12 @@ class Settings(CaptureTestCase):
         self.assertRegex(data["problems"][0], r"\d+ 行目")
 
     def test_password_env_not_set(self):
-        self.write_config(port="/dev/ttyUSB0", login_password="", login_password_env="EDL_TEST_NOT_SET_X",
+        self.write_config(port="/dev/ttyUSB0", login_password="", login_password_env="LOG_CAPTURE_TEST_NOT_SET",
                           commands=["echo hi"])
-        env = {k: v for k, v in os.environ.items() if k != "EDL_TEST_NOT_SET_X"}
+        env = {k: v for k, v in os.environ.items() if k != "LOG_CAPTURE_TEST_NOT_SET"}
         code, data = self.capture("run", env=env)
         self.assertEqual(code, 2, data)
-        self.assertIn("EDL_TEST_NOT_SET_X", data["problems"][0])
+        self.assertIn("LOG_CAPTURE_TEST_NOT_SET", data["problems"][0])
 
     def test_login_required_but_user_empty(self):
         port = self.start_device(login=True)
@@ -1030,7 +1054,7 @@ class Check(CaptureTestCase):
         self.assertTrue(any("port" in p for p in data["problems"]))
 
     def test_check_missing_port(self):
-        self.write_config(port="/dev/ttyEDL-test-missing")
+        self.write_config(port=MISSING_PORT)
         code, data = self.capture("check")
         self.assertEqual(code, 2, data)
         self.assertIn("見つかりません", data["problems"][0])
@@ -1057,9 +1081,9 @@ class Check(CaptureTestCase):
 
 class Parts(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
-        cls.m = load_module()
+    @property
+    def m(self):
+        return script_module()
 
     def test_clean_removes_escapes_and_cr(self):
         raw = "\x1b[?2004h\x1b[01;32mroot@b\x1b[00m:~# \x1b]0;title\x07ab\bc\r\nx\x1b(B\x1b=y"
@@ -1078,28 +1102,28 @@ class Parts(unittest.TestCase):
 
     def test_find_exit_code(self):
         f = self.m.find_exit_code
-        self.assertEqual(f(" echo __EDL_RC=$?\n__EDL_RC=0\nroot@b:~# "), 0)
-        self.assertEqual(f("echo __EDL_RC=$?\n__EDL_RC=127\n[127] root@b:~# "), 127)
+        self.assertEqual(f(" echo __LOGCAP_RC=$?\n__LOGCAP_RC=0\nroot@b:~# "), 0)
+        self.assertEqual(f("echo __LOGCAP_RC=$?\n__LOGCAP_RC=127\n[127] root@b:~# "), 127)
         # 返事の行の前後に、プロンプトや機器のメッセージが付いても読む
-        self.assertEqual(f("root@b:~# __EDL_RC=2\n"), 2)
-        self.assertEqual(f("[  1.0] usb 1-1: x__EDL_RC=1\n# "), 1)
+        self.assertEqual(f("root@b:~# __LOGCAP_RC=2\n"), 2)
+        self.assertEqual(f("[  1.0] usb 1-1: x__LOGCAP_RC=1\n# "), 1)
         # エコーだけ（数がない）なら読めない
-        self.assertIsNone(f("root@b:~# echo __EDL_RC=$?\n"))
-        self.assertIsNone(f("fish: $? is not the exit status.\necho __EDL_RC=$?\n> "))
+        self.assertIsNone(f("root@b:~# echo __LOGCAP_RC=$?\n"))
+        self.assertIsNone(f("fish: $? is not the exit status.\necho __LOGCAP_RC=$?\n> "))
         self.assertIsNone(f(""))
 
     def test_drop_marker_lines(self):
-        lines = ["__EDL_RC=0", "root@b:~#  echo __EDL_RC=$?", "[DBG] AVG=3", "done"]
+        lines = ["__LOGCAP_RC=0", "root@b:~#  echo __LOGCAP_RC=$?", "[DBG] AVG=3", "done"]
         self.assertEqual(self.m.drop_marker_lines(lines), ["[DBG] AVG=3", "done"])
 
     def test_strip_marker(self):
         f = self.m.strip_marker
-        self.assertEqual(f("root@b:~#  echo __EDL_RC=$?\r\n"), ("", False))  # 送った行は行ごと
-        self.assertEqual(f("__EDL_RC=0\r\n"), ("", True))
-        self.assertEqual(f("\x1b[?2004l\r__EDL_RC=127\r\n"), ("", True))
+        self.assertEqual(f("root@b:~#  echo __LOGCAP_RC=$?\r\n"), ("", False))  # 送った行は行ごと
+        self.assertEqual(f("__LOGCAP_RC=0\r\n"), ("", True))
+        self.assertEqual(f("\x1b[?2004l\r__LOGCAP_RC=127\r\n"), ("", True))
         # 機器のメッセージと同じ行に来たら、メッセージは残す
-        self.assertEqual(f("[  1.0] usb 1-1: x__EDL_RC=1\r\n"), ("[  1.0] usb 1-1: x\r\n", True))
-        self.assertEqual(f("echo __EDL_RC=$?\n"), ("", False))
+        self.assertEqual(f("[  1.0] usb 1-1: x__LOGCAP_RC=1\r\n"), ("[  1.0] usb 1-1: x\r\n", True))
+        self.assertEqual(f("echo __LOGCAP_RC=$?\n"), ("", False))
         self.assertEqual(f("[DBG] AVG=3\r\n"), ("[DBG] AVG=3\r\n", False))
         self.assertEqual(f("fish: $? is not the exit status.\n"), ("fish: $? is not the exit status.\n", False))
 
@@ -1111,8 +1135,8 @@ class Parts(unittest.TestCase):
     def test_log_file_replaces_marker_with_exit_line(self):
         log, buf = self.log_file()
         # 文字は、行の途中で切れて届く
-        for chunk in ["root@b:~# true\r", "\n", "root@b:~# ", " echo __ED", "L_RC=$?\r\n__EDL", "_RC=0\r\nroot@b:~# "]:
-            if chunk == " echo __ED":
+        for chunk in ["root@b:~# true\r", "\n", "root@b:~# ", " echo __LOG", "CAP_RC=$?\r\n__LOGCAP", "_RC=0\r\nroot@b:~# "]:
+            if chunk == " echo __LOG":
                 log.hold()
             log.device(chunk)
         log.write_exit_line(0)
@@ -1124,7 +1148,7 @@ class Parts(unittest.TestCase):
         log, buf = self.log_file()
         log.device("hi\r\n[1] \r\n# ")
         log.hold()
-        log.device(" echo __EDL_RC=$?\r\n__EDL_RC=1\r\n[0] \r\n# ")
+        log.device(" echo __LOGCAP_RC=$?\r\n__LOGCAP_RC=1\r\n[0] \r\n# ")
         log.write_exit_line(1)
         log.note("\n# end\n")
         self.assertEqual(buf.getvalue(), "hi\r\n[1] \r\n（終了コード：1）\n[0] \r\n# \n# end\n")
@@ -1133,7 +1157,7 @@ class Parts(unittest.TestCase):
         log, buf = self.log_file()
         log.device("hi\r\n$ ")
         log.hold()
-        log.device(" echo __EDL_RC=$?\r\nfish: $? is not the exit status.\r\necho __EDL_RC=$?\r\n> ")
+        log.device(" echo __LOGCAP_RC=$?\r\nfish: $? is not the exit status.\r\necho __LOGCAP_RC=$?\r\n> ")
         log.write_exit_line(None)
         log.flush()
         self.assertEqual(buf.getvalue(),
@@ -1149,7 +1173,7 @@ class Parts(unittest.TestCase):
     def test_log_file_drops_late_marker_lines(self):
         # 返事が遅れて、次のコマンドの出力に紛れ込んだとき。終了コードの行は増やさない
         log, buf = self.log_file()
-        log.device("root@b:~# echo hi\r\n__EDL_RC=0\r\nhi\r\nroot@b:~#  echo __EDL_RC=$?")
+        log.device("root@b:~# echo hi\r\n__LOGCAP_RC=0\r\nhi\r\nroot@b:~#  echo __LOGCAP_RC=$?")
         log.flush()
         self.assertEqual(buf.getvalue(), "root@b:~# echo hi\r\nhi\r\n")
 
@@ -1157,10 +1181,10 @@ class Parts(unittest.TestCase):
         log, buf = self.log_file()
         log.device("out\r\n# ")
         log.hold()
-        log.device(" echo __EDL_RC=$?\r\n[  5.0] usb 1-1: x\r\n")
+        log.device(" echo __LOGCAP_RC=$?\r\n[  5.0] usb 1-1: x\r\n")
         log.note("\n# 思わぬエラー\n")
         self.assertEqual(buf.getvalue(), "out\r\n[  5.0] usb 1-1: x\r\n# 思わぬエラー\n")
-        self.assertNotIn("EDL", buf.getvalue())
+        self.assertNotIn("LOGCAP", buf.getvalue())
 
     def test_log_file_writes_long_lines_without_newline(self):
         log, buf = self.log_file()
@@ -1266,14 +1290,14 @@ class Parts(unittest.TestCase):
              "login_password_env": ["z"], "prompt": ["p"], "commands": {"a": 1},
              "command_timeout_seconds": 0, "listen_seconds": -1, "logout": "maybe"},
             {"port": "/dev/ttyUSB0", "prompt": "[", "commands": ["", "echo hi"]},
-            {"port": "/dev/ttyUSB0", "login_password": "", "login_password_env": "EDL_TEST_NOT_SET_Y"},
+            {"port": "/dev/ttyUSB0", "login_password": "", "login_password_env": "LOG_CAPTURE_TEST_NOT_SET_2"},
         ]
         seen = 0
         for over in cases:
             cfg = self.m.read_yaml(TEMPLATE)
             cfg.update(over)
             with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("EDL_TEST_NOT_SET_Y", None)
+                os.environ.pop("LOG_CAPTURE_TEST_NOT_SET_2", None)
                 _s, problems = self.m.validate(cfg)
             self.assertTrue(problems, over)
             for p in problems:
@@ -1325,37 +1349,45 @@ class Parts(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 独り立ち：ほかの部品に頼らないこと
+# 独り立ち：このフォルダだけで動くこと
 # ---------------------------------------------------------------------------
-
-FORBIDDEN_WORDS = [
-    "setup", "セットアップ", "cross-compile", "deploy", "デプロイ",
-    "device-worker", "orchestrator", "verifier",
-    "作業エージェント", "統括", "検証エージェント", "Web管理画面", "Web 管理画面",
-    "extension", "エクステンション", "エージェント", "agent",
-]
 
 STDLIB_ALLOWED = {
     "argparse", "codecs", "datetime", "errno", "fcntl", "glob", "json", "os", "re",
     "select", "shutil", "struct", "sys", "termios", "time", "traceback",
 }
 
+# フォルダの外へ出るパスの書き方。この試験のファイルにも、そのままは書かない
+OUTSIDE = os.pardir + "/"
 
-class Independence(unittest.TestCase):
+# 写すときに付いてくることがある、ごみ
+JUNK = ("__pycache__", "*.pyc")
 
-    def skill_files(self):
-        for folder, _, files in os.walk(SKILL_DIR):
-            if "__pycache__" in folder:
-                continue
-            for name in files:
+
+def skill_files():
+    """スキルのフォルダの中のファイル（__pycache__ などのごみは除く）。"""
+    for folder, dirs, files in os.walk(SKILL_DIR):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(files):
+            if not name.endswith(".pyc"):
                 yield os.path.join(folder, name)
 
-    def test_no_words_about_other_parts(self):
-        for path in self.skill_files():
-            with open(path, encoding="utf-8") as f:
-                text = f.read().lower()
-            for word in FORBIDDEN_WORDS:
-                self.assertNotIn(word.lower(), text, "%s に「%s」があります" % (path, word))
+
+class SelfContained(unittest.TestCase):
+
+    def test_no_path_goes_outside_the_folder(self):
+        """どのテキストにも、フォルダの外へ出るパスを書かない。"""
+        seen = 0
+        for path in skill_files():
+            with open(path, "rb") as f:
+                raw = f.read()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            seen += 1
+            self.assertNotIn(OUTSIDE, text, path)
+        self.assertGreaterEqual(seen, 6)
 
     def test_script_uses_only_stdlib_and_own_folder(self):
         with open(SCRIPT, encoding="utf-8") as f:
@@ -1370,7 +1402,7 @@ class Independence(unittest.TestCase):
                 names.add(node.module.split(".")[0])
         self.assertTrue(names <= STDLIB_ALLOWED, names - STDLIB_ALLOWED)
         self.assertNotIn("sys.path", source)
-        self.assertNotIn("../", source)
+        self.assertNotIn(OUTSIDE, source)
 
     def test_skill_md_does_not_show_exit_codes(self):
         """スクリプト自身の終了コードで場合分けを書くと、モデルが利用者に見せてしまう。
@@ -1438,8 +1470,14 @@ class Independence(unittest.TestCase):
         self.assertNotIn("ようすを確かめて", text)
 
     def test_skill_files_are_only_its_own(self):
-        rel = sorted(os.path.relpath(p, SKILL_DIR) for p in self.skill_files())
-        self.assertEqual(rel, ["SKILL.md", "config-template.yaml", os.path.join("scripts", "capture.py")])
+        rel = sorted(os.path.relpath(p, SKILL_DIR) for p in skill_files())
+        self.assertEqual(rel, [
+            "README.md", "SKILL.md", "config-template.yaml",
+            os.path.join("scripts", "capture.py"),
+            os.path.join("tests", "__init__.py"),
+            os.path.join("tests", "fake_console.py"),
+            os.path.join("tests", "test_log_capture.py"),
+        ])
 
     def test_skill_md_frontmatter(self):
         with open(SKILL_MD, encoding="utf-8") as f:
@@ -1447,10 +1485,23 @@ class Independence(unittest.TestCase):
         m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
         self.assertIsNotNone(m)
         front = dict(line.split(":", 1) for line in m.group(1).splitlines() if ":" in line)
-        self.assertEqual(front["name"].strip(), "log-capture")
-        self.assertIn("/embedded-debug-loop:log-capture", front["description"])
+        # name は、フォルダの名前と同じにする（名前を変えて写したときは、両方を変える）
+        self.assertEqual(front["name"].strip(), SKILL_NAME)
+        self.assertIn("スラッシュコマンド", front["description"])
+        self.assertNotRegex(text, r"/[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]")  # 「/なにか:名前」の形のコマンドは書かない
         for sub in ("capture.py run", "capture.py config-path", "capture.py check"):
             self.assertIn(sub, text)
+        self.assertIn("`config.yaml`", text)
+        self.assertIn("`logs`", text)
+
+    def test_readme_covers_the_settings_and_the_test_command(self):
+        with open(README, encoding="utf-8") as f:
+            text = f.read()
+        for key in TEMPLATE_KEYS:
+            self.assertIn("`%s`" % key, text, key)
+        for word in ("/skills reload", ".github/skills/", "~/.copilot/skills/", "config.yaml",
+                     "python3 -m unittest discover -s tests", "Python 3.8"):
+            self.assertIn(word, text, word)
 
     def test_template_comments(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -1471,6 +1522,85 @@ class Independence(unittest.TestCase):
             if m.group(1) == "port":
                 self.assertIn("必須", first)
         self.assertEqual(keys, TEMPLATE_KEYS)
+
+
+
+# ---------------------------------------------------------------------------
+# スキルのフォルダだけを写して使う
+# ---------------------------------------------------------------------------
+
+class CopiedFolder(unittest.TestCase):
+    """このフォルダだけを、空の場所に写して動かす（名前を変えて写すこともある）。"""
+
+    def use_copy(self, name):
+        place = tempfile.mkdtemp(prefix="log-capture-copy-")
+        self.addCleanup(shutil.rmtree, place, True)
+        skills = os.path.join(place, "skills")
+        work = os.path.join(place, "work")    # 空の作業フォルダ
+        home = os.path.join(place, "home")    # 空のホーム
+        for folder in (skills, work, home):
+            os.makedirs(folder)
+        copy = os.path.join(skills, name)
+        shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns(*JUNK))
+        copied = sorted(os.path.relpath(os.path.join(d, f), copy)
+                        for d, _, fs in os.walk(copy) for f in fs)
+        script = os.path.join(copy, "scripts", "capture.py")
+        env = dict(os.environ, HOME=home, PYTHONDONTWRITEBYTECODE="1")
+        env.pop("PYTHONPATH", None)
+
+        def capture(*args):
+            p = subprocess.run([sys.executable, script] + list(args), cwd=work, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            out = p.stdout.decode("utf-8")
+            self.assertNotIn("Traceback", out + p.stderr.decode("utf-8"))
+            return p.returncode, json.loads(out)
+
+        data_dir = os.path.join(work, "." + name)
+
+        # config-path：設定ファイルを、作業フォルダの .<写したフォルダの名前>/ に作る
+        code, data = capture("config-path")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["config"], os.path.join(data_dir, "config.yaml"))
+        self.assertTrue(data["created"])
+        self.assertEqual(os.listdir(work), ["." + name])
+        self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml"])
+        with open(os.path.join(data_dir, ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "*\n")
+        with open(TEMPLATE, encoding="utf-8") as a, open(data["config"], encoding="utf-8") as b:
+            self.assertEqual(a.read(), b.read())
+
+        # check：ログを、同じフォルダの logs/ に作る
+        with open(data["config"], encoding="utf-8") as f:
+            text = f.read()
+        text = re.sub(r'(?m)^port: ""$', lambda m: 'port: "%s"' % MISSING_PORT, text)
+        with open(data["config"], "w", encoding="utf-8") as f:
+            f.write(text)
+        code, data = capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["skill"], name)
+        self.assertIn("見つかりません", data["problems"][0])
+        self.assertEqual(os.path.dirname(data["log"]), os.path.join(data_dir, "logs"))
+        self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
+        self.assertEqual(os.listdir(work), ["." + name])
+        self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml", "logs"])
+
+        # ほかの場所には、何も作らない（点で始まるほかのフォルダもできない）
+        self.assertEqual(sorted(os.listdir(place)), ["home", "skills", "work"])
+        self.assertEqual(os.listdir(home), [])
+        self.assertEqual(os.listdir(skills), [name])
+        self.assertEqual(sorted(os.path.relpath(os.path.join(d, f), copy)
+                                for d, _, fs in os.walk(copy) for f in fs), copied)
+        dot_dirs = sorted(os.path.join(d, x) for d, ds, _ in os.walk(place) for x in ds if x.startswith("."))
+        self.assertEqual(dot_dirs, [data_dir])
+
+    def test_copy_with_the_same_name(self):
+        self.use_copy(SKILL_NAME)
+
+    def test_copy_with_another_name(self):
+        other = "serial-console-log"
+        if other == SKILL_NAME:
+            other += "-2"
+        self.use_copy(other)
 
 
 if __name__ == "__main__":
