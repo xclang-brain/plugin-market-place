@@ -12,6 +12,7 @@ ARM 向けの SDK の環境設定ファイルがあれば、ARM 向けのビル�
   python3 -m unittest discover -s tests -v    （Linux など）
 """
 
+import codecs
 import ast
 import contextlib
 import importlib.util
@@ -2021,6 +2022,33 @@ class ReadmeTest(unittest.TestCase):
         needs = self.text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
         self.assertLess(needs.index("Windows"), needs.index("Linux"))
         self.assertIn("wsl", self.text)
+
+
+class ConsoleCodePageTest(unittest.TestCase):
+    """Windows で、出力先がコンソールでないときは、コンソールの文字コードで書く。"""
+
+    def _stream(self, tty):
+        class Buffer(io.BytesIO):
+            def isatty(self):
+                return tty
+        return io.TextIOWrapper(Buffer(), encoding="utf-8")
+
+    def test_streams_follow_the_console_on_windows(self):
+        m = BUILD
+        for console, tty, expected in (("cp932", False, "cp932"), ("cp932", True, "utf-8"),
+                                       (None, False, "utf-8")):
+            out, err = self._stream(tty), self._stream(tty)
+            with mock.patch.object(m, "console_code_page", return_value=console), \
+                    mock.patch.object(m.sys, "stdout", out), mock.patch.object(m.sys, "stderr", err):
+                m.setup_streams()
+            for s in (out, err):
+                self.assertEqual(codecs.lookup(s.encoding).name, expected, (console, tty))
+                self.assertEqual(s.errors, "backslashreplace")
+
+    def test_no_console_outside_windows(self):
+        if os.name == "nt":
+            self.skipTest("Windows では、コンソールの文字コードを返す")
+        self.assertIsNone(BUILD.console_code_page())
 
 
 if __name__ == "__main__":

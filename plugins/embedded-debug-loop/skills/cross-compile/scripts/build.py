@@ -790,11 +790,40 @@ def summary_of(settings):
 # 出力と記録
 # ---------------------------------------------------------------------------
 
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（cp932 など）。コンソールがなければ None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except Exception:
+        return None
+    if not cp:
+        return None
+    name = "cp%d" % cp
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
 def setup_streams():
-    """標準出力と標準エラー出力は、Python の既定の文字コードのまま、書けない文字で止まらないようにする。"""
+    """標準出力と標準エラー出力を、読む側の文字コードに合わせ、書けない文字で止まらないようにする。
+
+    Windows で、出力先がコンソールでない（パイプなど）ときは、コンソールの文字コードで書く。
+    PowerShell は、この文字コードで読む。Python 3.15 からの既定（UTF-8 モード）のままだと、
+    日本語の Windows では文字化けする。
+    """
+    encoding = console_code_page()
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="backslashreplace")
+            if encoding and not stream.isatty():
+                stream.reconfigure(encoding=encoding, errors="backslashreplace")
+            else:
+                stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):
             pass
 

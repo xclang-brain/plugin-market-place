@@ -1429,15 +1429,41 @@ def _escape_unwritable(text, encoding):
     return "".join(out)
 
 
-def emit(obj):
-    """結果の JSON を、Python の既定の文字コードで標準出力に書く。
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（cp932 など）。コンソールがなければ None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except Exception:
+        return None
+    if not cp:
+        return None
+    name = "cp%d" % cp
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
 
-    Windows で PowerShell が読むときも、文字化けしないようにするため（UTF-8 のバイト列を直接書かない）。
+
+def emit(obj):
+    """結果の JSON を、読む側の文字コードで標準出力に書く（UTF-8 のバイト列を直接書かない）。
+
+    Windows で、出力先がコンソールでない（パイプなど）ときは、コンソールの文字コードで書く。
+    PowerShell は、この文字コードで読む。Python 3.15 からの既定（UTF-8 モード）のままだと、
+    日本語の Windows では文字化けする。
     """
     stream = sys.stdout
+    encoding_cp = console_code_page()
     try:
-        stream.reconfigure(errors="backslashreplace")
-    except (AttributeError, ValueError):
+        if encoding_cp and not stream.isatty():
+            stream.reconfigure(encoding=encoding_cp, errors="backslashreplace")
+        else:
+            stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError, OSError):
         pass
     encoding = getattr(stream, "encoding", None) or locale.getpreferredencoding(False)
     text = json.dumps(obj, ensure_ascii=False, indent=2) + "\n"

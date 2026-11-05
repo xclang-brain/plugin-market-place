@@ -84,15 +84,43 @@ BAD_NAME_CHARS = '/\\:*?"<>|'
 # 出力
 # ---------------------------------------------------------------------------
 
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（cp932 など）。コンソールがなければ None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except Exception:
+        return None
+    if not cp:
+        return None
+    name = "cp%d" % cp
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
 def prepare_streams():
-    """標準出力と標準エラーは、Python の既定の文字コードのまま、書けない文字を \\ の形にする。
-    （日本語の Windows では、PowerShell が cp932 で読む。UTF-8 のバイト列を直接書くと文字化けする）"""
+    """標準出力と標準エラーを、読む側の文字コードに合わせ、書けない文字を \\ の形にする。
+
+    Windows で、出力先がコンソールでない（パイプなど）ときは、コンソールの文字コードで書く。
+    PowerShell は、この文字コードで読む。Python 3.15 からの既定（UTF-8 モード）のままだと、
+    日本語の Windows では文字化けする。
+    """
+    encoding = console_code_page()
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
         try:
-            reconfigure(errors="backslashreplace")
+            if encoding and not stream.isatty():
+                reconfigure(encoding=encoding, errors="backslashreplace")
+            else:
+                reconfigure(errors="backslashreplace")
         except (ValueError, OSError):
             pass
 

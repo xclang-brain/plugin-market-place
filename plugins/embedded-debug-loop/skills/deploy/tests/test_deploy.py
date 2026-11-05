@@ -13,6 +13,8 @@
      （このスキルのフォルダで）
 """
 
+import codecs
+import io
 import contextlib
 import errno
 import importlib.util
@@ -28,6 +30,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import zlib
 
 # パスは、この試験のファイルの場所から求める（tests/ の親が、このスキルのフォルダ）。
@@ -1421,7 +1424,7 @@ class SelfContainedTest(unittest.TestCase):
         with open(SCRIPT, encoding="utf-8") as fh:
             text = fh.read()
         imports = re.findall(r"^\s*(?:import|from)\s+([A-Za-z_][\w.]*)", text, re.M)
-        allowed = {"argparse", "datetime", "errno", "ftplib", "json", "os", "posixpath",
+        allowed = {"argparse", "codecs", "ctypes", "datetime", "errno", "ftplib", "json", "os", "posixpath",
                    "re", "shutil", "socket", "sys", "time", "traceback", "zlib"}
         self.assertEqual(set(i.split(".")[0] for i in imports) - allowed, set())
         self.assertNotIn("sys.path", text)
@@ -1510,6 +1513,33 @@ class SkillFilesTest(unittest.TestCase):
             text = fh.read()
         self.assertNotIn("ようすを確かめて", text)
         self.assertNotIn("状態を確かめて", text)
+
+
+class ConsoleCodePageTest(unittest.TestCase):
+    """Windows で、出力先がコンソールでないときは、コンソールの文字コードで書く。"""
+
+    def _stream(self, tty):
+        class Buffer(io.BytesIO):
+            def isatty(self):
+                return tty
+        return io.TextIOWrapper(Buffer(), encoding="utf-8")
+
+    def test_streams_follow_the_console_on_windows(self):
+        m = deploy
+        for console, tty, expected in (("cp932", False, "cp932"), ("cp932", True, "utf-8"),
+                                       (None, False, "utf-8")):
+            out, err = self._stream(tty), self._stream(tty)
+            with mock.patch.object(m, "console_code_page", return_value=console), \
+                    mock.patch.object(m.sys, "stdout", out), mock.patch.object(m.sys, "stderr", err):
+                m.prepare_streams()
+            for s in (out, err):
+                self.assertEqual(codecs.lookup(s.encoding).name, expected, (console, tty))
+                self.assertEqual(s.errors, "backslashreplace")
+
+    def test_no_console_outside_windows(self):
+        if os.name == "nt":
+            self.skipTest("Windows では、コンソールの文字コードを返す")
+        self.assertIsNone(deploy.console_code_page())
 
 
 if __name__ == "__main__":

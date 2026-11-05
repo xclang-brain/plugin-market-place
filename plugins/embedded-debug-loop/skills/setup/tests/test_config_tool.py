@@ -10,6 +10,8 @@
   python3 -m unittest discover -s tests -v
 """
 
+import codecs
+import io
 import importlib.util
 import json
 import locale
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
@@ -1248,6 +1251,33 @@ class ParseTest(ToolTestCase):
         self.assertEqual(theirs["greeting"], "yes")  # 文字の yes は true にならない
         self.assertEqual(theirs["last_service"], "null")
         self.assertEqual(theirs["water_temp_c"], -0.001)
+
+
+class ConsoleCodePageTest(unittest.TestCase):
+    """Windows で、出力先がコンソールでないときは、コンソールの文字コードで書く。"""
+
+    def _stream(self, tty):
+        class Buffer(io.BytesIO):
+            def isatty(self):
+                return tty
+        return io.TextIOWrapper(Buffer(), encoding="utf-8")
+
+    def test_streams_follow_the_console_on_windows(self):
+        m = load_tool_module()
+        for console, tty, expected in (("cp932", False, "cp932"), ("cp932", True, "utf-8"),
+                                       (None, False, "utf-8")):
+            out, err = self._stream(tty), self._stream(tty)
+            with mock.patch.object(m, "console_code_page", return_value=console), \
+                    mock.patch.object(m.sys, "stdout", out), mock.patch.object(m.sys, "stderr", err):
+                m.emit({'a': '日本語'})
+            for s in (out,):
+                self.assertEqual(codecs.lookup(s.encoding).name, expected, (console, tty))
+                self.assertEqual(s.errors, "backslashreplace")
+
+    def test_no_console_outside_windows(self):
+        if os.name == "nt":
+            self.skipTest("Windows では、コンソールの文字コードを返す")
+        self.assertIsNone(load_tool_module().console_code_page())
 
 
 if __name__ == "__main__":

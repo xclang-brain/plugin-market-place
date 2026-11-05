@@ -594,7 +594,7 @@ class FolderTest(unittest.TestCase):
 
     def test_only_stdlib_imports(self):
         tree = ast.parse(read(TOOL))
-        allowed = {"json", "math", "os", "re", "stat", "sys", "tempfile", "traceback", "unicodedata", "errno",
+        allowed = {"json", "codecs", "ctypes", "math", "os", "re", "stat", "sys", "tempfile", "traceback", "unicodedata", "errno",
                    "hashlib", "codecs", "locale", "winreg"}
         names = set()
         for node in ast.walk(tree):
