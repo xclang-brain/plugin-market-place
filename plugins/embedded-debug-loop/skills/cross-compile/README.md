@@ -8,7 +8,7 @@
 
 ## 使い始める
 
-作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）には、ビルドしたいプロジェクトのフォルダを使います。
+Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動します。このフォルダを作業フォルダと呼びます。
 
 1. このフォルダをまるごと、`<作業フォルダ>/.github/skills/cross-compile/` にコピーします。すべての作業フォルダで使うときは、`~/.copilot/skills/cross-compile/` にコピーします。
 2. 作業フォルダで Copilot CLI を起動します。起動済みなら `/skills reload` を実行します。
@@ -71,7 +71,7 @@ python3 .github/skills/cross-compile/scripts/build.py <コマンド>
 
 パスワードの項目はありません。
 
-環境変数 `CC` があり、Makefile で `CC` を設定していなければ、`$(CC)` はそのコンパイラーになります。SDK の環境設定ファイルは、ふつう `CC` を設定します。
+SDK の環境設定ファイルは、ふつう環境変数 `CC` を設定します。Makefile で `CC` を設定していなければ、`$(CC)` はそのコンパイラーになります。
 
 ### 書き方
 
@@ -158,5 +158,5 @@ python3 -m unittest discover -s tests -v
 ```
 
 - 一時フォルダで小さな C のプロジェクトをビルドします。`make`・`gcc`・`bash` がないと、それを使うテストはスキップします。
-- ARM 向けのテストは、`sdk_env` の例のファイルがあり、読み込んだ後に SDK のコンパイラー（環境変数 `CC`）が使えるときだけ実行します。
-- `scripts/` と `tests/` にできる `__pycache__` は削除してかまいません。作らないときは `python3 -B` で実行します。
+- ARM 向けのテストは、`sdk_env` の例に書いたファイルが PC にあり、SDK のコンパイラー（`CC`）が使えるときだけ実行します。
+- `scripts/` と `tests/` にできる `__pycache__` は削除してかまいません。作らせないなら `python3 -B` で実行します。

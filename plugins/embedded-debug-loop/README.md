@@ -32,7 +32,7 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 
 インストール後に Copilot CLI を起動すると、`Extension "plugin:embedded-debug-loop:embedded-debug-loop" wants elevated permissions` と確認が出ます。
 3段階目の Web管理画面を使うなら「Yes」を選びます。
-「No」を選んだ後で使うときは、Copilot CLI を起動し直して「Yes」を選びます。
+「No」を選んだ後で使うときは、Copilot CLI を起動し直し、「Yes」を選びます。
 
 ## 最初に設定する
 
@@ -42,11 +42,10 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 2. `/agent` で `device-worker · plugin` を選びます。
 3. 「セットアップしたい」と頼みます。
 4. 値のない必須の項目を1つずつ聞かれるので、答えます。
-5. ほかの項目の一覧が出たら、「直す項目を選ぶ」を選び、下の表の項目に値を入れます。終わったら「これで終わる」を選びます。手順4〜5を、設定ファイルごとに繰り返します。
+5. ほかの項目の一覧が出たら、「直す項目を選ぶ」で下の表の項目に値を入れ、「これで終わる」を選びます。設定ファイルごとに、手順4〜5を繰り返します。
 6. 作業エージェントが設定と機器への接続を確認し、結果を伝えます。問題がなければ完了です。
 
-次の3つは必須ではないので、手順4では聞かれません。
-機器でプログラムを動かすなら、値が必要です。
+機器でプログラムを動かすなら、次の3つも入れます（必須ではないので、手順4では聞かれません）。
 
 | 項目（設定ファイル） | 入れる値 | 空のとき |
 | --- | --- | --- |
@@ -54,7 +53,7 @@ copilot plugin install embedded-debug-loop@plugin-market-place
 | `file_mode`（転送） | 送った後に付ける権限（例：755） | ふつうは機器で実行できない |
 | `commands`（ログ取得） | 機器で実行するコマンド（例：`["/opt/myapp/my_app"]`） | ログ取得がエラーで止まる（`listen_seconds` が既定の 0 のとき） |
 
-- 設定ファイルは、作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）の `.<スキル名>/config.yaml` にできます（例：`.deploy/config.yaml`）。直接書き換えてもかまいません。
+- 設定ファイルは、作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）の `.<スキル名>/config.yaml` です（例：`.deploy/config.yaml`）。直接書き換えてもかまいません。
 - ログは `.<スキル名>/logs/` に入ります。設定とログ（パスワードを含むことがある）は、Git にコミットされません（スキルが `.gitignore` を作ります）。
 - 作業エージェントを使わずに設定する方法は、[スキルを単体で使う](docs/guide/1-skills.md) にあります。
 

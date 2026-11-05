@@ -27,7 +27,7 @@ PC にあるファイルを、FTP で組み込み機器に送る GitHub Copilot 
 3. `/deploy` と入力して、このスキルが候補に出れば完了です。
 
 別の名前でコピーするときは、フォルダの名前と `SKILL.md` の `name:` をそろえます。
-このとき、`/deploy`・`.deploy`・ログの名前・`[deploy]` の `deploy` も、その名前になります。
+このとき、`/deploy`・`.deploy`・ログの名前・`[deploy]` も、その名前に変わります。
 
 ## 使い方
 
@@ -177,7 +177,7 @@ python3 -m unittest discover -s tests
 ```
 
 FTP サーバーを起動するテストには、`pyftpdlib` が要ります。読み込めなければ、そのテストはスキップされます（`skipped` と出ます）。
-すべて実行するときは、このフォルダの外に `pyftpdlib` をインストールし、その場所を環境変数 `DEPLOY_TEST_PYLIB` で指定できます（`:` 区切りで複数可）。
+`pyftpdlib` をこのフォルダの外の場所にインストールしたときは、その場所を環境変数 `DEPLOY_TEST_PYLIB` で指定します（`:` 区切りで複数可）。
 
 ```sh
 python3 -m pip install --target /tmp/pylib pyftpdlib
