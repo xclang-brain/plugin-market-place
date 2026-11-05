@@ -13,7 +13,7 @@ Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動�
 1. このフォルダをまるごと、`<作業フォルダ>/.github/skills/cross-compile/` にコピーします。すべての作業フォルダで使うときは、`~/.copilot/skills/cross-compile/` にコピーします。
 2. 作業フォルダで Copilot CLI を起動します。起動済みなら `/skills reload` を実行します。
 3. `/cross-compile 設定ファイルはどこ？` と入力します。設定ファイルができ、場所が表示されます。
-4. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けなら `sdk_env` も書きます（[項目](#項目)、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う)）。
+4. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けなら `sdk_env` も書きます（[項目](#項目)）。WSL の中の SDK を使うときは、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
 5. `/cross-compile ビルドして` と入力します。できたファイルのサイズと種類が表示されれば成功です。
 
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も同じ名前にします。
@@ -22,8 +22,8 @@ Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動�
 ## 必要なもの
 
 - Windows の PC（Linux でも動きます）
-- Python 3.8 以上（標準ライブラリだけで動きます。追加のインストールは要りません）
-- シェル：Windows は cmd（既定）か PowerShell、Linux は bash（既定）
+- Python 3.8 以上（追加のインストールは要りません）
+- シェル：Windows は cmd（既定）・PowerShell・Git for Windows の bash、Linux は bash（既定）
 - ビルドコマンドで使うツール（`make` など）
 - 機器の SDK（機器向けにビルドするとき）
 - `file` コマンド（任意）。あると、ファイルの種類をくわしく報告します。
@@ -67,8 +67,8 @@ py -3 .github\skills\cross-compile\scripts\build.py <コマンド>
 | 項目 | 意味 | 例 | 既定値 |
 | --- | --- | --- | --- |
 | `source_dir` | ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空か `"."` なら作業フォルダ | `"firmware/app"` | `"."` |
-| `shell` | コマンドと `sdk_env` を動かすシェル。`auto`（Windows は `cmd`、ほかは `bash`）・`cmd`・`powershell`（`pwsh` を使う。なければ `powershell`）・`bash` | `"powershell"` | `"auto"` |
-| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。機器向けなら必ず書く。空なら読み込まない。`cmd` は `.bat`・`.cmd` を `call`、`powershell` は `.ps1` を `.`、`bash` は `source` で読み込む | `'C:\sdk\setenv.bat'`、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"` | `""` |
+| `shell` | コマンドを実行し、`sdk_env` を読み込むシェル。`auto`（Windows は `cmd`、ほかは `bash`）・`cmd`・`powershell`（`pwsh` を使う。なければ `powershell`）・`bash`（Windows では Git for Windows などの bash。WSL の bash は使えない） | `"powershell"` | `"auto"` |
+| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けなら書く（WSL の中の SDK を使うときは空）。`shell` が `cmd` なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"` | `""` |
 | `build_command` | ビルドコマンド。ビルドするフォルダで、`shell` のシェルで実行する。空なら `make` | `"make -j4 all"` | `"make"` |
 | `clean_command` | ビルドの前のクリーンコマンド。空ならクリーンしない | `"make clean"` | `""` |
 | `outputs` | ビルドでできるファイル（必須）。ビルドするフォルダからの相対パス | `["my_app"]`、`["build/my_app.exe"]` | `[]` |
@@ -96,7 +96,7 @@ sdk_env: ""
 build_command: 'wsl bash -c "source /opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi && make"'
 ```
 
-`wsl` の後ろのコマンドは、ビルドするフォルダで動きます。「SDK を読み込みません」という注意が出るので、ビルドの後に、できたファイルの種類（例：ARM）を確認します。
+`wsl` の後ろのコマンドは、ビルドするフォルダで動きます。`sdk_env` が空なので「SDK を読み込みません」と出ます。機器向けにできたかは、できたファイルの種類（例：ARM）で確認します。
 
 ## 結果とログ
 
@@ -145,15 +145,17 @@ build_command: 'wsl bash -c "source /opt/poky/4.0/environment-setup-cortexa7t2hf
 | メッセージ・症状 | 対処 |
 | --- | --- |
 | outputs（…）が空です | `outputs` を書きます |
-| SDK を読み込みません（PC 用のプログラムになる） | 機器向けなら `sdk_env` を書きます。WSL の中で SDK を読み込むときは、できたファイルの種類を確認します |
+| SDK を読み込みません | 機器向けなら `sdk_env` を書きます。WSL の中で SDK を読み込むときは、できたファイルの種類を確認します |
 | sdk_env（SDK の環境設定ファイル）の … がありません／ファイルではありません | SDK のインストール先とファイル名を確認します |
 | shell（…）が cmd のときは、sdk_env（…）を .bat・.cmd のファイルにしてください | `shell` に合う種類のファイルにします。Linux の SDK なら [WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) |
-| … の読み込みが失敗しました／途中で終わってしまいます | SDK のインストールと、SDK のメッセージを確認します |
+| … の読み込みが失敗しました／途中で終わってしまいます／読み込み直すと、失敗しました | SDK のインストールと、SDK のメッセージを確認します |
 | … の読み込みが、… 秒たっても終わりません | 環境設定ファイルが入力を待っていないかを確認します |
 | source_dir（ビルドするフォルダ）の … がありません／フォルダではありません／移れません | `source_dir` を確認します |
+| … は「`\\`」で始まるので、cmd では使えません | `shell` を `powershell` にします |
 | … に、タブや改行が入っています | Windows のパスを [書き方](#書き方) のとおりに書きます |
 | … が見つかりません（ビルドコマンドやコンパイラー） | PC にインストールします。SDK のツールなら `sdk_env` を確認します |
 | PC に cmd が見つかりません（PowerShell・bash も同じ） | `shell` を、PC にあるシェルにします |
+| … は WSL の bash なので、使えません | Git for Windows を入れるか、`shell` を `cmd` か `powershell` にします。WSL の中でビルドするときは [WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) |
 | shell（…）は auto・cmd・powershell・bash のどれかで書いてください | `shell` を書き直します |
 | ビルドが失敗しました | エラーの行とログを見て、ソースや Makefile を直します |
 | 片付けのコマンド（…）が失敗しました | `clean_command` を確認します |
@@ -183,7 +185,7 @@ py -3 -m unittest discover -s tests -v
 
 Linux では `python3 -m unittest discover -s tests -v` です。
 
-- 主なテストは、Python でファイルを作るコマンドで、PC にあるシェルごとに動かします（cmd は Windows、PowerShell は `pwsh` か `powershell` があるとき、bash は Windows 以外）。
+- テストは、PC で使えるシェル（cmd・PowerShell・bash）ごとに動かします。
 - C のプロジェクトを実際にビルドするテストは、Windows 以外で `make`・`gcc`・`bash` があるときだけ実行します。
 - ARM 向けのテストは、`sdk_env` の例に書いたファイルが PC にあり、SDK のコンパイラー（`CC`）が使えるときだけ実行します。
 - `scripts/` と `tests/` にできる `__pycache__` は削除してかまいません。作らせないなら `-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。

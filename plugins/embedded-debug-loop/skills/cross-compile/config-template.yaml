@@ -7,16 +7,16 @@
 # 例：firmware/app
 source_dir: "."
 
-# コマンドと sdk_env を動かすシェル。auto・cmd・powershell・bash のどれか。
+# コマンドを実行し、sdk_env を読み込むシェル。auto・cmd・powershell・bash のどれか。
 # auto は、Windows では cmd、それ以外では bash。
+# Windows の bash は、Git for Windows などの bash（WSL の bash は使えない）。
 # 例：powershell
 shell: "auto"
 
-# ビルドの前に読み込む、SDK の環境設定ファイル。
-# 機器向けにビルドするなら、必ず書く。
-# 空なら SDK を読み込まず、PC のコンパイラーで PC 用のプログラムができる。
-# cmd では call、powershell では「.」、bash では source で読み込む。
-# cmd では .bat か .cmd、powershell では .ps1 のファイルにする。
+# ビルドの前に読み込む、SDK の環境設定ファイル。空なら読み込まない。
+# 機器向けにビルドするなら書く。
+# WSL の中の SDK を使うときは空にして、build_command に wsl で始まるコマンドを書く。
+# cmd では .bat か .cmd、powershell では .ps1 にする。
 # 例：'C:\sdk\setenv.bat'
 # 例：/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
 sdk_env: ""

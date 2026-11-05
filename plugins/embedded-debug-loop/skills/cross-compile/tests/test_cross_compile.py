@@ -2,7 +2,7 @@
 """cross-compile スキル（scripts/build.py）のテスト。
 
 主なテストは、OS に頼らないビルドのコマンド（tests/fake_build.py。Python でファイルを作る）で、
-この PC で使えるシェル（Windows は cmd と PowerShell、それ以外は bash と PowerShell）ごとに動かす。
+この PC で使えるシェル（cmd・PowerShell・bash。Windows の bash は Git for Windows などのもの）ごとに動かす。
 PC の make・gcc・bash で、小さな C のプロジェクトを実際にビルドするテストもある
 （Windows 以外で、make・gcc・bash があるときだけ）。
 ARM 向けの SDK の環境設定ファイルがあれば、ARM 向けのビルドも試す。
@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)  # このテストのフォルダ（tests）の親が、スキルのフォルダ
@@ -97,8 +98,8 @@ def shell_available(shell):
         return IS_WINDOWS
     if shell == "powershell":
         return have("pwsh") or have("powershell")
-    # Windows の bash（Git Bash か WSL か）は PC によって違うので、ここでは試さない
-    return not IS_WINDOWS and have("bash")
+    # Windows では、Git for Windows などの bash（WSL の bash は使わない）
+    return BUILD.find_shell("bash") is not None
 
 
 # make・gcc・bash で、実際に C のプログラムをビルドするテスト
@@ -128,8 +129,15 @@ def py_command(shell, *args):
 
 
 def stdout_encoding(env):
+    """スクリプトが標準出力と標準エラー出力に書く文字コード（パイプのとき）。"""
     value = (env or os.environ).get("PYTHONIOENCODING", "")
     return value.split(":")[0] or locale.getpreferredencoding(False)
+
+
+def as_written(text, env=None):
+    """スクリプトが、その文字コードで書いた後の文字（書けない文字は \\uXXXX になる）。"""
+    encoding = stdout_encoding(env)
+    return text.encode(encoding, "backslashreplace").decode(encoding)
 
 
 class Project(object):
@@ -194,7 +202,7 @@ def run_script(args, cwd=None, timeout=120, env=None, script=SCRIPT):
         raise AssertionError("標準出力が JSON 1つになっていません：\n" + out)
     if not isinstance(data, dict):
         raise AssertionError("JSON がオブジェクトではありません：" + out)
-    return r.returncode, data, r.stderr.decode("utf-8", "replace")
+    return r.returncode, data, r.stderr.decode(stdout_encoding(env), "replace")
 
 
 def read_log(path):
@@ -295,11 +303,13 @@ class TemplateTest(unittest.TestCase):
         with open(TEMPLATE, encoding="utf-8") as f:
             text = f.read()
         block = re.search(r"((?:^#.*\n)+)sdk_env:", text, re.M).group(1)
-        self.assertIn("機器向けにビルドするなら、必ず書く", block)
-        self.assertIn("PC 用", block)
+        self.assertIn("機器向けにビルドするなら書く", block)
         self.assertNotIn("必須", block, "必須の印を付けると、空のときにビルドできなくなる")
-        # シェルごとの読み込み方と、ファイルの種類
-        for word in ("call", "「.」", "source", ".bat", ".cmd", ".ps1"):
+        # WSL の中の SDK を使うときは空にする（「必ず書く」と食い違わない）
+        self.assertNotIn("必ず", block)
+        self.assertIn("WSL の中の SDK を使うときは空にして", block)
+        # シェルごとのファイルの種類
+        for word in (".bat", ".cmd", ".ps1"):
             self.assertIn(word, block)
 
     def test_shell_comment_lists_the_values_and_auto(self):
@@ -949,7 +959,7 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(os.path.exists(p.path("app")), "check でビルドしてはいけない")
 
     def test_empty_sdk_env_is_noted_not_failed(self):
-        """sdk_env が空でも失敗にはしないが、PC 用のプログラムになると、はっきり言う。"""
+        """sdk_env が空でも失敗にはしない。PC に cc があれば、PC 用のプログラムになると、はっきり言う。"""
         p = Project(self)
         p.fake()
         code, data, _ = p.run("check")
@@ -957,13 +967,64 @@ class CheckTest(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(len(data["notes"]), 1)
         note = data["notes"][0]
-        for word in ("sdk_env", "SDK を読み込みません", "PC のコンパイラー", "PC 用", "機器用ではありません"):
+        for word in ("sdk_env", "SDK を読み込みません"):
             self.assertIn(word, note)
         self.assertIn(note, data["message"])
         self.assertEqual(data["summary"]["compiler"], "cc")
+        path = data["summary"]["compiler_path"]
+        if path:
+            for word in ("PC のコンパイラー", "PC 用", "機器用ではありません", path):
+                self.assertIn(word, note)
+        else:
+            # PC に cc がない（Windows など）。WSL の中でビルドすることもあるので、言い切らない
+            self.assertIn("できたファイルの種類で確認", note)
+            self.assertNotIn("PC 用", note)
         if not IS_WINDOWS and have("cc"):
-            self.assertEqual(data["summary"]["compiler_path"], shutil.which("cc"))
-            self.assertIn(shutil.which("cc"), note)
+            self.assertEqual(path, shutil.which("cc"))
+
+    def test_note_without_a_compiler_does_not_say_pc(self):
+        for when in ("plan", "built"):
+            note = BUILD.sdk_note(None, when=when)
+            self.assertIn("SDK を読み込", note)
+            self.assertIn("できたファイルの種類で確認", note)
+            self.assertNotIn("PC 用", note)
+            self.assertNotIn("cc", note)
+        self.assertNotIn("種類", BUILD.sdk_note(None, when="failed"))
+        self.assertIn("PC 用", BUILD.sdk_note("/usr/bin/cc", when="built"))
+
+    def test_quoted_compiler_path_with_a_space(self):
+        """CC の「"」で囲んだパスは、空白があっても1語として探す（例：C:\\Program Files）。"""
+        tmp = os.path.realpath(tempfile.mkdtemp(prefix="cc-quoted-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        folder = os.path.join(tmp, "Program Files", "sdk")
+        os.makedirs(folder)
+        exe = os.path.join(folder, "my-gcc.exe" if IS_WINDOWS else "my-gcc")
+        with open(exe, "w") as f:
+            f.write("x")
+        os.chmod(exe, 0o755)
+        settings = {"source_dir": tmp, "shell": DEFAULT_SHELL}
+        for value in ('"{}" -O2'.format(exe), "'{}'".format(exe)):
+            cc = BUILD.compiler_of({"PATH": "", "PATHEXT": ".EXE", "CC": value}, settings)
+            self.assertEqual(cc["word"], exe, value)
+            self.assertEqual(cc["path"], exe, value)
+        self.assertEqual(BUILD.cc_word("gcc -O2"), "gcc")
+        self.assertEqual(BUILD.cc_word('"open'), '"open')
+
+    def test_cmd_cannot_use_a_folder_starting_with_backslashes(self):
+        """cmd は「\\\\」で始まるフォルダ（ネットワークや WSL の中）に移れない。動かす前に止める。"""
+        unc = r"\\wsl.localhost\Ubuntu\home\me\proj"
+        exists, isdir = os.path.exists, os.path.isdir
+        # フォルダはあることにする（ネットワークを見に行かない）
+        with mock.patch.object(BUILD, "_abs", lambda workdir, path: unc), \
+                mock.patch.object(BUILD, "find_shell", lambda name: "shell"), \
+                mock.patch.object(os.path, "exists", lambda p: p == unc or exists(p)), \
+                mock.patch.object(os.path, "isdir", lambda p: p == unc or isdir(p)):
+            s, problems = BUILD.normalize({"shell": "cmd", "outputs": ["app"]}, "w")
+            self.assertFalse(s["runnable"])
+            self.assertTrue(any(unc in x and "powershell" in x for x in problems), problems)
+            s, problems = BUILD.normalize({"shell": "powershell", "outputs": ["app"]}, "w")
+            self.assertTrue(s["runnable"])
+            self.assertEqual(problems, [])
 
     def test_compiler_from_environment_is_named(self):
         p = Project(self)
@@ -1144,7 +1205,7 @@ class ShellScenarios(object):
         self.assertTrue(data["ok"])
         self.assertEqual(data["skill"], SKILL_NAME)
         self.assertIn("成功", data["message"])
-        self.assertIn("ビルドを始めます", err)
+        self.assertIn(as_written("ビルドを始めます"), err)
         self.assertEqual(data["shell_program"], BUILD.find_shell(self.SHELL))
         out = data["outputs"][0]
         self.assertEqual(out["path"], p.path("app"))
@@ -1154,9 +1215,7 @@ class ShellScenarios(object):
         self.assertIn("シェル：{}".format(self.SHELL), log)
         self.assertIn("==> ビルドのコマンドを実行します", log)
         self.assertIn("wrote app", log)
-        if self.SHELL != "powershell":
-            # PowerShell は、子の出力を自分の文字コードで書き直すことがあるので、ここでは比べない
-            self.assertIn("日本語の出力", log)
+        self.assertIn("日本語の出力", log)  # ビルドの出力の UTF-8 は、そのままログに残る
 
     def test_stale_then_clean(self):
         p = self.project(build_command=self.py("once", "app"))
@@ -1283,10 +1342,50 @@ class ShellScenarios(object):
         self.assertIn("種類：ARM", data["message"])
         self.assertIn("できたファイルの種類は ARM です", data["notes"][0])
 
+    def test_function_defined_by_the_sdk(self):
+        """SDK が決めた関数も、コマンドで使える（SDK を、コマンドと同じシェルで読み込む）。
+        SDK が自分のフォルダに移っても、コマンドはビルドするフォルダで動く。"""
+        if self.SHELL == "cmd":
+            self.skipTest("cmd の SDK が決められるのは、環境変数だけです")
+        p = self.project()
+        body = self.py("write", "app")
+        if self.SHELL == "powershell":
+            text = "function build_it { " + body + " }\nSet-Location $PSScriptRoot\n"
+            name = "sdk.ps1"
+        else:
+            text = "build_it() { " + body + "; }\ncd \"$(dirname \"${BASH_SOURCE[0]}\")\"\n"
+            name = "sdk.sh"
+        sdk = p.write(os.path.join("sdk dir", name), text)
+        p.fake(shell=self.SHELL, sdk_env=sdk, build_command="build_it")
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 0, data)
+        code, data, _ = p.run("run")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(os.path.isfile(p.path("app")))
 
-@unittest.skipUnless(shell_available("bash"), "bash（Windows 以外）がありません")
+
+@unittest.skipUnless(shell_available("bash"),
+                     "bash がありません（Windows では、WSL の bash は使いません）")
 class BashScenarioTest(ShellScenarios, unittest.TestCase):
     SHELL = "bash"
+    START = 8 if IS_WINDOWS else 2
+
+    def test_sdk_that_fails_when_loaded_again(self):
+        """コマンドの前に SDK を読み込み直して失敗したら、SDK の読み込みの失敗として伝える。"""
+        p = self.project()
+        count = quote_for("bash", p.path("count.txt"))
+        sdk = p.write(os.path.join("sdk dir", "sdk.sh"), (
+            "n=$(cat {0} 2>/dev/null || echo 0)\n"
+            "n=$((n + 1))\n"
+            "echo \"$n\" > {0}\n"
+            "[ \"$n\" -lt 2 ] || return 3\n").format(count))
+        p.fake(shell=self.SHELL, sdk_env=sdk)
+        code, data, _ = p.run("run")
+        self.assertEqual(code, 1, data)
+        self.assertEqual(data["failed_step"], "sdk_env")
+        self.assertIn("読み込み直すと、失敗しました（終了コード 3）", data["message"])
+        self.assertIn("読み込み直す", read_log(data["log"]))
+        self.assertFalse(os.path.exists(p.path("app")))
 
 
 @unittest.skipUnless(shell_available("cmd"), "cmd は Windows だけです")
@@ -1609,6 +1708,40 @@ class ArmSdkTest(unittest.TestCase):
 # シェルに渡すスクリプト（Windows がなくても確かめられること）
 # ---------------------------------------------------------------------------
 
+class WindowsBashTest(unittest.TestCase):
+    """Windows の bash の探し方（WSL を起動する bash.exe は使わない）。Windows がなくても確かめる。"""
+
+    ENV = {"SystemRoot": r"C:\Windows", "ProgramFiles": r"C:\Program Files"}
+    WSL = r"C:\WINDOWS\system32\bash.exe"
+    GIT = r"C:\Program Files\Git\bin\bash.exe"
+
+    def find(self, path, files):
+        env = dict(self.ENV, PATH=path)
+        return BUILD.find_windows_bash(env, isfile=set(files).__contains__)
+
+    def test_wsl_bash_is_skipped_and_git_bash_is_used(self):
+        # Git for Windows は、ふつう Git\cmd だけを PATH に入れる
+        found = self.find(r"C:\WINDOWS\system32;C:\Program Files\Git\cmd", [self.WSL, self.GIT])
+        self.assertEqual(found, (self.GIT, self.WSL))
+
+    def test_bash_on_path_comes_first(self):
+        msys = r"C:\msys64\usr\bin\bash.exe"
+        found = self.find(r"C:\WINDOWS\system32;C:\msys64\usr\bin", [self.WSL, msys, self.GIT])
+        self.assertEqual(found, (msys, self.WSL))
+
+    def test_only_wsl_bash(self):
+        apps = r"C:\Users\me\AppData\Local\Microsoft\WindowsApps"
+        found = self.find(apps, [apps + r"\bash.exe"])
+        self.assertEqual(found, (None, apps + r"\bash.exe"))
+        found = self.find(r"C:\WINDOWS\system32", [self.WSL])
+        self.assertEqual(found, (None, self.WSL))
+        message = BUILD.shell_missing_message("bash", windows=True, wsl=self.WSL)
+        for word in (self.WSL, "WSL の bash なので、使えません", "Git for Windows", "wsl で始まる"):
+            self.assertIn(word, message)
+        message = BUILD.shell_missing_message("bash", windows=True)
+        self.assertIn("Git for Windows", message)
+
+
 class ShellScriptTest(unittest.TestCase):
 
     def test_auto_is_cmd_on_windows_and_bash_elsewhere(self):
@@ -1629,10 +1762,26 @@ class ShellScriptTest(unittest.TestCase):
     def test_powershell_scripts(self):
         for text in (BUILD.PS_LOAD, BUILD.PS_RUN):
             text.encode("ascii")
+            # -Command の引数で渡すので、コマンドラインで崩れる「"」と「\」を使わない
+            self.assertNotIn('"', text)
+            self.assertNotIn("\\", text)
         self.assertIn(". $env:BUILD_SKILL_SDK_ENV", BUILD.PS_LOAD)
-        self.assertIn("Invoke-Expression $env:BUILD_SKILL_COMMAND", BUILD.PS_RUN)
+        # コマンドの前に、同じシェルで SDK を読み込み直す（SDK の関数も使える）
+        self.assertIn(". $env:BUILD_SKILL_SDK_ENV", BUILD.PS_RUN)
+        self.assertLess(BUILD.PS_RUN.index("BUILD_SKILL_SDK_ENV"),
+                        BUILD.PS_RUN.index("Invoke-Expression $env:BUILD_SKILL_COMMAND"))
+        # スクリプトはファイルにしない（実行ポリシーは、-Command の文字にはかからない）
+        self.assertEqual(BUILD.PS_OPTIONS[-1], "-Command")
+        self.assertNotIn("-File", BUILD.PS_OPTIONS)
         self.assertIn("-ExecutionPolicy", BUILD.PS_OPTIONS)
-        self.assertEqual(BUILD.PS_OPTIONS[-1], "-File")
+        s = {"shell": "powershell", "shell_program": "pwsh"}
+        self.assertEqual(BUILD.shell_argv(s, ps_script=BUILD.PS_RUN)[-1], BUILD.PS_RUN)
+
+    def test_bash_scripts_load_the_sdk_in_the_same_shell(self):
+        self.assertIn('source "$BUILD_SKILL_SDK_ENV"', BUILD.BASH_LOAD)
+        self.assertIn("command -v", BUILD.BASH_LOAD)
+        self.assertIn('source "$BUILD_SKILL_SDK_ENV"', BUILD.BASH_RUN)
+        self.assertTrue(BUILD.BASH_RUN.endswith("set -e\nset -o pipefail\n"))
 
     def test_cmd_command_line(self):
         s = {"shell": "cmd", "shell_program": r"C:\Windows\system32\cmd.exe"}
