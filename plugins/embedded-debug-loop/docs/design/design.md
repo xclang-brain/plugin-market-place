@@ -21,28 +21,28 @@
 flowchart TB
     subgraph L3["3段階目　機器を知らない PDS の仕組み（/agent で統括エージェントを選んで使う）"]
         direction LR
-        UI["Web管理画面<br/>設定・実行のようす・結果<br/>（Copilot のエクステンション）"]
-        ORC["統括エージェント<br/>計画を立て、評価を記録する<br/>（ファイルは直さない）"]
-        VER["検証エージェント<br/>合格の条件ごとに確かめる<br/>（成果物は直さない）"]
+        UI["［エクステンション］<br/>Web管理画面<br/>設定・実行のようす・結果"]
+        ORC["［カスタムエージェント］<br/>統括エージェント<br/>計画を立て、評価を記録する<br/>（ファイルは直さない）"]
+        VER["［カスタムエージェント］<br/>検証エージェント<br/>合格の条件ごとに確かめる<br/>（成果物は直さない）"]
         UI <-- "記録" --> ORC
         ORC -- "頼む" --> VER
     end
 
     subgraph L2["2段階目　機器に固有のことを吸収する層（/agent で単体でも使える。セットアップも頼める）"]
-        WRK["組み込み機器の作業エージェント<br/>直す → ビルド → 転送 → ログ取得 を繰り返す<br/>「使うスキル」の表：役割 → 名前 だけ"]
+        WRK["［カスタムエージェント］<br/>組み込み機器の作業エージェント<br/>直す → ビルド → 転送 → ログ取得 を繰り返す<br/>「使うスキル」の表：役割 → 名前 だけ"]
     end
 
     subgraph L1["1段階目　互いを知らない4つのスキル（スラッシュコマンドで単体でも使える）"]
         direction LR
-        SETUP["setup<br/>YAML を対話で埋める"]
-        CC["cross-compile<br/>SDK を読み込み make"]
-        DEP["deploy<br/>FTP・権限・サム値"]
-        LOG["log-capture<br/>シリアルでコマンドと記録"]
+        SETUP["［スキル］<br/>setup<br/>YAML を対話で埋める"]
+        CC["［スキル］<br/>cross-compile<br/>SDK を読み込み make"]
+        DEP["［スキル］<br/>deploy<br/>FTP・権限・サム値"]
+        LOG["［スキル］<br/>log-capture<br/>シリアルでコマンドと記録"]
         SETUP ~~~ CC ~~~ DEP ~~~ LOG
     end
 
-    CFG[(".embedded-debug-loop/スキル名.yaml<br/>スキルごとの設定（説明のコメントつき）")]
-    DEV[["組み込み機器（Linux）<br/>FTP サーバー・シリアルコンソール"]]
+    CFG[("［設定ファイル（データ）］<br/>.embedded-debug-loop/スキル名.yaml<br/>スキルごとの設定（説明のコメントつき）")]
+    DEV[["［プラグインの外］<br/>組み込み機器（Linux）<br/>FTP サーバー・シリアルコンソール"]]
 
     L3 -- "ふつうの文で頼む（準備の確認 / 1回の試行）<br/>作業エージェントの名前は設定で選ぶ → 差し替えられる" --> L2
     L2 -- "名前でスキルを読み、書かれたとおりに使う" --> L1
@@ -61,14 +61,27 @@ flowchart TB
 ```
 
 矢印は「頼む・使う」の向きです。上の段は、下の段の名前（作業エージェントの名前・スキルの名前）だけを持ち、中身は持ちません。
+図の［ ］は、そのブロックを作っているハーネスの部品の種類です。
 
-| 部品 | 置き場所 | 知っていること |
-| --- | --- | --- |
-| スキル（4つ） | `skills/<名前>/` | 自分のことだけ |
-| 作業エージェント | `com.github.copilot/agents/device-worker.agent.md` | スキルの名前と役割（「使うスキル」の表） |
-| 統括エージェント | `com.github.copilot/agents/orchestrator.agent.md` | PDS の進め方。作業エージェントの名前は設定から受け取る |
-| 検証エージェント | `com.github.copilot/agents/verifier.agent.md` | 合格の条件で確かめること |
-| エクステンション | `com.github.copilot/extensions/embedded-debug-loop/` | 記録のツール、画面、Copilot CLI のイベント。既定の作業エージェントの名前は `defaults.json`（データ）にだけある |
+### 2.1 ブロックごとのハーネスの部品
+
+| ブロック（図） | ハーネスの部品 | 置き場所 | 使っている Copilot CLI の機能 | 知っていること |
+| --- | --- | --- | --- | --- |
+| Web管理画面 | エクステンション | `com.github.copilot/extensions/embedded-debug-loop/`（入口は `extension.mjs`。既定の値は `defaults.json`） | 統括エージェント向けのツール6つ（`embedded-debug-loop_open`・`_prepare`・`_plan`・`_study`・`_finish`・`_issue`）。フック2つ（`onPreToolUse`：実行中の統括エージェントのファイル編集・コマンド・スキルを断る。`onSubagentStop`：作業・検証エージェントの返事を受け取る）。イベントの受け取り（`session.on`）。`session.send`（開始の知らせ）・`session.abort`（止める）・`session.log`（チャットへの知らせ）。`session.rpc`（エージェントの一覧と切り替え、モデルの一覧、サブエージェントのモデルと考える深さの設定）。127.0.0.1 の HTTP サーバー（画面） | 記録のツール、画面、Copilot CLI のイベント。既定の作業エージェントの名前は `defaults.json`（データ）にだけある |
+| 統括エージェント | カスタムエージェント | `com.github.copilot/agents/orchestrator.agent.md` | `/agent` で選ぶメインのエージェント。`tools`：`agent`（`task` で作業エージェントと検証エージェントを呼ぶ）・`read`・`search`・`ask_user`・エクステンションのツール6つ | PDS の進め方。作業エージェントの名前は設定から受け取る |
+| 検証エージェント | カスタムエージェント | `com.github.copilot/agents/verifier.agent.md` | 統括エージェントから `task` で呼ばれるサブエージェント。`tools`：`read`・`search` | 合格の条件で確かめること |
+| 組み込み機器の作業エージェント | カスタムエージェント | `com.github.copilot/agents/device-worker.agent.md` | `/agent` で選ぶメインのエージェント、または統括エージェントから `task` で呼ばれるサブエージェント。`tools`：`read`・`edit`・`search`・`execute`・`skill`（スキルを読む）・`ask_user` | スキルの名前と役割（「使うスキル」の表） |
+| setup | スキル（`SKILL.md` ＋ Python のスクリプト） | `skills/setup/`（`scripts/config_tool.py`） | スラッシュコマンド `/embedded-debug-loop:setup`、または `skill` ツール。質問は `ask_user` | 自分のことだけ（YAML のコメントだけを頼りにする） |
+| cross-compile | スキル（`SKILL.md` ＋ Python のスクリプト ＋ 設定のひな形） | `skills/cross-compile/`（`scripts/build.py`、`config-template.yaml`） | スラッシュコマンド `/embedded-debug-loop:cross-compile`、または `skill` ツール。スクリプトはシェルのツールで動かす | 自分のことだけ |
+| deploy | スキル（同上） | `skills/deploy/`（`scripts/deploy.py`、`config-template.yaml`） | スラッシュコマンド `/embedded-debug-loop:deploy`、または `skill` ツール | 自分のことだけ |
+| log-capture | スキル（同上） | `skills/log-capture/`（`scripts/capture.py`、`config-template.yaml`） | スラッシュコマンド `/embedded-debug-loop:log-capture`、または `skill` ツール | 自分のことだけ |
+| 設定ファイル | ハーネスの部品ではない（利用者のデータ） | 作業フォルダの `.embedded-debug-loop/<スキル名>.yaml` | — | — |
+| 組み込み機器 | プラグインの外 | — | — | — |
+
+- 使っていない部品：MCP サーバー（`mcp.json`）、プラグインのフックの設定（`hooks.json`）、LSP、指示ファイル（`copilot-instructions.md` など）。
+- フックは、プラグインの `hooks.json` ではなく、エクステンションの中で登録している（上の表の `onPreToolUse`・`onSubagentStop`）。
+- スキルのスクリプトは、Python 3 の標準ライブラリだけで書いている（追加のパッケージは要らない）。
+- プラグインの全体の情報は `plugin.json`（Agent Plugins の形式）にある。
 
 ## 3. 部品の間の約束
 
