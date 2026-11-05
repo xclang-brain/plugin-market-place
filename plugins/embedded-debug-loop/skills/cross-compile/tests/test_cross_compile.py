@@ -25,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import unittest
@@ -129,8 +130,30 @@ def py_command(shell, *args):
     return "& " + text if shell == "powershell" else text
 
 
-def stdout_encoding(env):
-    """スクリプトが標準出力と標準エラー出力に書く文字コード（パイプのとき）。"""
+# Windows で、スクリプトをコンソールなしで動かす（スクリプトは Python の既定の文字コードで書く）
+NO_CONSOLE = {"creationflags": subprocess.DETACHED_PROCESS} if IS_WINDOWS else {}
+
+
+def console_code_page():
+    """Windows で、このテストのプロセスのコンソールの出力の文字コード（cp932 など）。なければ None。
+    スクリプトのプロセスは、同じコンソールを受け継ぐ。"""
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    if not cp:
+        return None
+    try:
+        return codecs.lookup("cp%d" % cp).name
+    except LookupError:
+        return None
+
+
+def stdout_encoding(env, console=True):
+    """スクリプトが標準出力と標準エラー出力に書く文字コード（パイプのとき）。
+    Windows でコンソールを受け継ぐときは、コンソールの文字コード。ほかは Python の既定。"""
+    if console and console_code_page():
+        return console_code_page()
     value = (env or os.environ).get("PYTHONIOENCODING", "")
     return value.split(":")[0] or locale.getpreferredencoding(False)
 
@@ -632,7 +655,8 @@ class StreamAndEncodingTest(unittest.TestCase):
             self.assertEqual(f.read().decode("utf-8"), "見出し\nエラー: 見つかりません\r\n")
 
     def test_stdout_in_narrow_encodings_is_still_json(self):
-        """標準出力は Python の既定の文字コードで書く。書けない文字は \\uXXXX にする。"""
+        """コンソールがないときは、標準出力は Python の既定の文字コードで書く。書けない文字は \\uXXXX にする。
+        （Windows でコンソールがあるときに、その文字コードで書くことは、ConsoleCodePageTest で確かめる）"""
         p = Project(self)
         for encoding in ("ascii", "cp932", "utf-8"):
             env = {k: v for k, v in os.environ.items() if k.upper() != "CC"}
@@ -640,7 +664,7 @@ class StreamAndEncodingTest(unittest.TestCase):
             env.pop("PYTHONUTF8", None)
             r = subprocess.run([sys.executable, SCRIPT, "config-path", "--workdir", p.dir],
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, env=env, timeout=60)
+                               stderr=subprocess.PIPE, env=env, timeout=60, **NO_CONSOLE)
             data = json.loads(r.stdout.decode(encoding))
             self.assertIn("設定ファイル", data["message"], encoding)
             if encoding == "ascii":
@@ -1770,7 +1794,7 @@ class ShellScriptTest(unittest.TestCase):
         # コマンドの前に、同じシェルで SDK を読み込み直す（SDK の関数も使える）
         self.assertIn(". $env:BUILD_SKILL_SDK_ENV", BUILD.PS_RUN)
         self.assertLess(BUILD.PS_RUN.index("BUILD_SKILL_SDK_ENV"),
-                        BUILD.PS_RUN.index("Invoke-Expression $env:BUILD_SKILL_COMMAND"))
+                        BUILD.PS_RUN.index("Invoke-Expression ($env:BUILD_SKILL_COMMAND"))
         # スクリプトはファイルにしない（実行ポリシーは、-Command の文字にはかからない）
         self.assertEqual(BUILD.PS_OPTIONS[-1], "-Command")
         self.assertNotIn("-File", BUILD.PS_OPTIONS)
@@ -1828,6 +1852,32 @@ def all_files(top):
     return sorted(found)
 
 
+def is_stdlib(name):
+    """標準ライブラリのモジュールか。Python 3.10 からは sys.stdlib_module_names で、
+    それより前は、組み込みか、標準ライブラリのフォルダ（site-packages の外）にあるかで決める。"""
+    names = getattr(sys, "stdlib_module_names", None)
+    if names is not None:
+        return name in names
+    if name in sys.builtin_module_names:
+        return True
+    spec = importlib.util.find_spec(name)
+    if spec is None or not spec.origin:
+        return False
+    if spec.origin in ("built-in", "frozen"):
+        return True
+    paths = sysconfig.get_paths()
+    origin = os.path.normcase(os.path.realpath(spec.origin))
+    if "site-packages" in origin.split(os.sep) or "dist-packages" in origin.split(os.sep):
+        return False
+    for key in ("stdlib", "platstdlib"):
+        root = os.path.normcase(os.path.realpath(paths[key]))
+        if origin.startswith(root + os.sep):
+            return True
+    # Windows の拡張モジュール（DLLs のフォルダ）など
+    root = os.path.normcase(os.path.realpath(sys.base_prefix))
+    return origin.startswith(root + os.sep)
+
+
 class SelfContainedTest(unittest.TestCase):
 
     def test_no_path_goes_out_of_the_folder(self):
@@ -1852,12 +1902,7 @@ class SelfContainedTest(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom):
                     self.assertEqual(node.level, 0, "相対 import は使わない")
                     names.add(node.module.split(".")[0])
-            stdlib = getattr(sys, "stdlib_module_names", None)
-            if stdlib is None:
-                stdlib = {"datetime", "json", "locale", "os", "platform", "re", "shlex",
-                          "shutil", "signal", "subprocess", "sys", "tempfile", "time",
-                          "traceback"}
-            self.assertEqual(sorted(n for n in names if n not in stdlib), [], script)
+            self.assertEqual(sorted(n for n in names if not is_stdlib(n)), [], script)
 
     def test_stdout_is_written_as_text(self):
         """標準出力にバイト列を直接書かない（日本語の Windows では文字化けする）。"""

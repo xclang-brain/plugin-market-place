@@ -41,10 +41,31 @@ except ImportError:
 
 
 _STDOUT_ENCODING = {}
+IS_WINDOWS = os.name == "nt"
+# Windows で、道具をコンソールなしで動かす（道具は Python の既定の文字コードで書く）
+NO_CONSOLE = {"creationflags": subprocess.DETACHED_PROCESS} if IS_WINDOWS else {}
 
 
-def child_stdout_encoding(env):
-    """道具の標準出力をパイプで受けるときの、道具の側の文字コード（Python の既定のもの）。"""
+def console_code_page():
+    """Windows で、このテストのプロセスのコンソールの出力の文字コード（cp932 など）。なければ None。
+    道具のプロセスは、同じコンソールを受け継ぐ。"""
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    if not cp:
+        return None
+    try:
+        return codecs.lookup("cp%d" % cp).name
+    except LookupError:
+        return None
+
+
+def child_stdout_encoding(env, console=True):
+    """道具の標準出力をパイプで受けるときの、道具の側の文字コード。
+    Windows でコンソールを受け継ぐときは、コンソールの文字コード。ほかは Python の既定のもの。"""
+    if console and console_code_page():
+        return console_code_page()
     key = (env.get("PYTHONIOENCODING", ""), env.get("PYTHONUTF8", ""))
     if key not in _STDOUT_ENCODING:
         out = subprocess.run([sys.executable, "-c", "import sys; print(sys.stdout.encoding)"],
@@ -62,10 +83,16 @@ def load_tool_module():
     return module
 
 
-def run_tool(args, cwd, stdin=None, env=None, tool=TOOL):
+def run_tool(args, cwd, stdin=None, env=None, tool=TOOL, console=True):
+    """道具を動かす。console=False なら、Windows ではコンソールを受け継がずに動かす。"""
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
+    extra = {}
+    if not console:
+        extra.update(NO_CONSOLE)
+        if stdin is None:
+            extra["stdin"] = subprocess.DEVNULL
     proc = subprocess.run(
         [sys.executable, tool] + list(args),
         cwd=cwd,
@@ -74,8 +101,9 @@ def run_tool(args, cwd, stdin=None, env=None, tool=TOOL):
         stderr=subprocess.PIPE,
         env=full_env,
         timeout=60,
+        **extra
     )
-    out = proc.stdout.decode(child_stdout_encoding(full_env))
+    out = proc.stdout.decode(child_stdout_encoding(full_env, console))
     try:
         data = json.loads(out)
     except ValueError:
@@ -752,7 +780,7 @@ class SetTest(ToolTestCase):
                               input="給湯室の「１号機」\r\n".encode("cp932"), stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, env=env, timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
-        self.assertTrue(json.loads(proc.stdout.decode("utf-8"))["changed"])
+        self.assertTrue(json.loads(proc.stdout.decode(child_stdout_encoding(env)))["changed"])
         self.assertEqual(self.value(path, "machine_name"), "給湯室の「１号機」")
         self.assertIn('machine_name: "給湯室の「１号機」"'.encode("utf-8"), self.read(path))
 
@@ -781,13 +809,14 @@ class SetTest(ToolTestCase):
         self.assertIn(sample[0].encode("utf-8"), self.read(path))
 
     def test_stdout_uses_python_default_encoding(self):
-        """結果は Python の既定の文字コードで書く。書けない文字は \\uXXXX にして、JSON として読めるままにする。"""
+        """コンソールがないときは、結果は Python の既定の文字コードで書く。書けない文字は \\uXXXX にして、
+        JSON として読めるままにする（Windows でコンソールがあるときは、ConsoleCodePageTest で確かめる）。"""
         path = self.copy(COFFEE)
         value = "給湯室の１号機 😀 é"
         self.ok("set", path, "greeting", "--stdin", stdin=value + "\n")
         for encoding in ("cp932", "cp1252", "ascii", "utf-8"):
             env = {"PYTHONIOENCODING": encoding}
-            code, data, out = self.tool("get", path, "greeting", env=env)
+            code, data, out = self.tool("get", path, "greeting", env=env, console=False)
             self.assertEqual(code, 0, out)
             self.assertEqual(data["value"], value, encoding)
             out.encode(encoding)  # その文字コードだけで書かれている

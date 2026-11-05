@@ -19,6 +19,7 @@ skills は、設定するスキルを探す。どんなスキルでも見つけ�
   python3 -m unittest discover -s tests -v
 """
 
+import codecs
 import json
 import os
 import shutil
@@ -33,6 +34,25 @@ OWN_NAME = os.path.basename(SKILL_DIR)
 
 RESULT_KEYS = {"ok", "workdir", "searched", "skills", "unreadable"}
 SKILL_KEYS = {"name", "path", "where", "skill_md", "readme", "description", "hidden"}
+
+IS_WINDOWS = os.name == "nt"
+# Windows で、道具をコンソールなしで動かす（道具は Python の既定の文字コードで書く）
+NO_CONSOLE = {"creationflags": subprocess.DETACHED_PROCESS} if IS_WINDOWS else {}
+
+
+def console_code_page():
+    """Windows で、このテストのプロセスのコンソールの出力の文字コード（cp932 など）。なければ None。
+    道具のプロセスは、同じコンソールを受け継ぐ。"""
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    if not cp:
+        return None
+    try:
+        return codecs.lookup("cp%d" % cp).name
+    except LookupError:
+        return None
 
 
 def snapshot(folder):
@@ -100,7 +120,8 @@ class SkillsTestCase(unittest.TestCase):
         return path
 
     def run_skills(self, *args, **kw):
-        """env の値が None の環境変数は、渡さない。"""
+        """env の値が None の環境変数は、渡さない。
+        console=False なら、Windows ではコンソールを受け継がずに動かす（道具は Python の既定の文字コードで書く）。"""
         env = dict(os.environ)
         extra = {"COPILOT_HOME": self.home, "HOME": self.userhome, "USERPROFILE": self.userhome}
         extra.update(kw.pop("env", {}))
@@ -109,12 +130,15 @@ class SkillsTestCase(unittest.TestCase):
                 env.pop(name, None)
             else:
                 env[name] = value
+        console = kw.pop("console", True)
         proc = subprocess.run([sys.executable, kw.pop("tool", self.tool), "skills"] + list(args),
-                              cwd=kw.pop("cwd", self.work), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              env=env, timeout=60)
+                              cwd=kw.pop("cwd", self.work), stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=60,
+                              **({} if console else NO_CONSOLE))
         self.assertEqual(kw, {})
-        encoding = subprocess.run([sys.executable, "-c", "import sys; print(sys.stdout.encoding)"],
-                                  stdout=subprocess.PIPE, env=env, timeout=60).stdout.decode("ascii").strip()
+        encoding = (console and console_code_page()) or subprocess.run(
+            [sys.executable, "-c", "import sys; print(sys.stdout.encoding)"],
+            stdout=subprocess.PIPE, env=env, timeout=60).stdout.decode("ascii").strip()
         data = json.loads(proc.stdout.decode(encoding))
         return proc.returncode, data
 
@@ -456,11 +480,12 @@ class SkillFolderTest(SkillsTestCase):
         self.assertIn("UTF-8", unreadable["not-utf8"]["error"])
 
     def test_japanese_output_on_other_code_pages(self):
-        """日本語の説明は、Python の既定の文字コードが cp932 でも ASCII でも、JSON として正しく読める。"""
+        """日本語の説明は、Python の既定の文字コードが cp932 でも ASCII でも、JSON として正しく読める
+        （コンソールがないとき。Windows でコンソールがあるときは、その文字コードで書く）。"""
         self.make_skill(self.project, "jp", description="機器に送る。設定ファイルを使う 😀")
         for encoding in ("cp932", "ascii", "utf-8"):
             env = {"COPILOT_HOME": self.home, "PYTHONIOENCODING": encoding}
-            data = self.skills(env=env)
+            data = self.skills(env=env, console=False)
             self.assertEqual(data["skills"][0]["description"], "機器に送る。設定ファイルを使う 😀", encoding)
 
 

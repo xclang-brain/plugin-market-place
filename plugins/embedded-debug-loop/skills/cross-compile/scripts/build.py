@@ -1103,6 +1103,8 @@ PS_LOAD = "\n".join([
 # PowerShell：同じシェルで SDK を読み込み直してから（出力は捨てる。読み込めたら
 # BUILD_SKILL_LOADED のファイルを作る）、BUILD_SKILL_COMMAND を、打ち込んだときと同じように動かす。
 # 0 でない $LASTEXITCODE はその値で、コマンドが見つからないときは 127 で、ほかの失敗は 1 で終わる。
+# 成功したかは、コマンドの最後の文の直後の $? で見る（コマンドの後ろに、$? を受け取る文を足して動かす）。
+# Invoke-Expression の後の $? は、中の「cd x && ビルド」の cd が失敗しても真のままになる。
 # Windows PowerShell 5.1 は、ネイティブのコマンドの標準エラー出力を NativeCommandError として
 # 記録し、$? を偽にすることがある。それだけなら失敗にしない。
 PS_RUN = "\n".join([
@@ -1121,9 +1123,10 @@ PS_RUN = "\n".join([
     "$global:LASTEXITCODE = 0",
     "$Error.Clear()",
     "$ok = $true",
+    "$global:BuildSkillLastOk = $true",
     "try {",
-    "    Invoke-Expression $env:BUILD_SKILL_COMMAND",
-    "    $ok = $?",
+    "    Invoke-Expression ($env:BUILD_SKILL_COMMAND + [char]10 + '$global:BuildSkillLastOk = $?')",
+    "    $ok = $? -and $global:BuildSkillLastOk",
     "} catch {",
     "    Write-Output $_.Exception.Message",
     "    $ok = $false",

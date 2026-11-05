@@ -59,8 +59,31 @@ def _load_module():
 deploy = _load_module()
 
 
+IS_WINDOWS = os.name == "nt"
+# Windows で、スクリプトをコンソールなしで動かす（スクリプトは Python の既定の文字コードで書く）
+NO_CONSOLE = {"creationflags": subprocess.DETACHED_PROCESS} if IS_WINDOWS else {}
+
+
+def console_code_page():
+    """Windows で、この試験のプロセスのコンソールの出力の文字コード（cp932 など）。なければ None。
+    スクリプトのプロセスは、同じコンソールを受け継ぐ。"""
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    if not cp:
+        return None
+    try:
+        return codecs.lookup("cp%d" % cp).name
+    except LookupError:
+        return None
+
+
 def _child_encoding():
-    """スクリプトが、パイプにつないだ標準出力に使う文字コード（この環境の Python の既定）。"""
+    """スクリプトが、パイプにつないだ標準出力に使う文字コード。
+    Windows でコンソールを受け継ぐときは、コンソールの文字コード。ほかは、この環境の Python の既定。"""
+    if console_code_page():
+        return console_code_page()
     proc = subprocess.run(
         [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdout.encoding)"],
         stdout=subprocess.PIPE, check=True)
@@ -637,13 +660,15 @@ def template_without(*keys):
 
 
 class OutputTest(unittest.TestCase):
-    """標準出力は Python の既定の文字コードで書き、書けない文字があっても JSON として読めること。"""
+    """コンソールがないときは、標準出力は Python の既定の文字コードで書き、書けない文字があっても
+    JSON として読めること（Windows でコンソールがあるときは、ConsoleCodePageTest で確かめる）。"""
 
     def run_script(self, workdir, encoding, *args):
         env = dict(os.environ, PYTHONIOENCODING=encoding)
         proc = subprocess.run(
             [sys.executable, SCRIPT] + list(args) + ["--workdir", workdir],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=60)
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            timeout=60, **NO_CONSOLE)
         return proc.returncode, proc.stdout, proc.stderr
 
     def workdir(self):
