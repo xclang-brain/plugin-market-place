@@ -27,11 +27,12 @@ Windows では、GitHub Actions でテストを確認しています。Windows �
 
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/setup/`
-   - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\setup\`（Linux では `~/.copilot/skills/setup/`）
+   - すべての作業フォルダで使う：`$env:USERPROFILE\.copilot\skills\setup\`（Linux では `~/.copilot/skills/setup/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
-3. `/setup` と入力して、このスキルが候補に出れば完了です。
+3. `/skills list` に `setup` が出れば完了です。
 
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。
+呼び出しは `/<新しい名前>` になります。
 
 ## 使い方
 
@@ -43,24 +44,24 @@ Copilot CLI で「セットアップしたい」と頼むか、`/setup` に続�
 | `/setup <スキルの名前> を設定して` | そのスキルを設定します |
 | `/setup <スキルの名前> の <項目の名前> を直したい` | その項目だけを質問します |
 
-Esc で質問を取り消すと、そこで止まり、書き換えた項目と結果を表示します。
-
-プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
+- Esc で質問を取り消すと、そこで止まり、書き換えた項目と結果を表示します。
+- プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
 
 ## スキルの探し方
 
-次の順に、`SKILL.md` があるフォルダを探します。名前がドットで始まるフォルダは見ません。
+次の順に、`SKILL.md` があるフォルダを探します。
 
 1. `.github/skills/`
 2. `.agents/skills/`
 3. `.claude/skills/`
-4. `%USERPROFILE%\.copilot\skills\`（Linux では `~/.copilot/skills/`。環境変数 `COPILOT_HOME` があれば、その中の `skills`）
-5. `%USERPROFILE%\.agents\skills\`（Linux では `~/.agents/skills/`）
+4. `$env:USERPROFILE\.copilot\skills\`（Linux では `~/.copilot/skills/`。環境変数 `COPILOT_HOME` があれば、その中の `skills`）
+5. `$env:USERPROFILE\.agents\skills\`（Linux では `~/.agents/skills/`）
 6. このフォルダの隣のフォルダ
 
 1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します。
 リポジトリの外では、ホームフォルダまで探します。
 Copilot CLI の設定で足したスキルのフォルダ（`COPILOT_SKILLS_DIRS` など）は探しません。
+探す場所の中で、名前がドットで始まるフォルダ（例：`.old`）は、スキルとして扱いません。
 
 同じ名前のスキルがあるときは、先に見つかったほうを設定します。
 この順は、Copilot CLI 1.0.105 がスキルを選ぶ順と同じです。
@@ -103,12 +104,14 @@ YAML の設定ファイルは、次の形で書くと、コメントも説明と
 
 1. 渡し方の質問で「環境変数で渡す」を選び、環境変数の名前を答えます。ファイルには名前だけが書き込まれます。
 2. 設定が終わったら、Copilot CLI を終了します。
-3. 同じ端末で値を設定します。PowerShell は `$env:名前 = '値'`、bash は `export 名前=値` です。
+3. 同じ端末で値を設定します。
+   - Windows（PowerShell）：`$env:名前 = '値'`
+   - Linux（bash）：`export 名前='値'`
 4. Copilot CLI を起動し直します。
 
 ## うまくいかないとき
 
-| 症状 | 対処 |
+| 症状・メッセージ | 対処 |
 | --- | --- |
 | `/setup` が出てこない | フォルダの場所と、`name:` がフォルダの名前と同じかを確認し、`/skills reload` を実行します |
 | 設定したいスキルが候補に出ない | そのスキルが「スキルの探し方」の場所にあるかを確認します |
@@ -120,20 +123,33 @@ YAML の設定ファイルは、次の形で書くと、コメントも説明と
 | 何も書き換わらない | `copilot -p` などの対話しない使い方では書き換えません。対話モードで依頼し直します |
 | `py` や `python3` が見つからない | Python 3.8 以上をインストールします |
 
-見つかるスキルは、作業フォルダで次を実行すると JSON で確認できます（Linux では `py -3` を `python3` に変えます）。
-`hidden` が true のスキルは、同じ名前のスキルが先に見つかったため、設定しません。
+## スクリプトを直接実行する
+
+見つかるスキルは、作業フォルダをカレントディレクトリにして次を実行すると、JSON で確認できます。
 
 ```
+# Windows（PowerShell）
 py -3 <このフォルダ>/scripts/config_tool.py skills
+# Linux（bash）
+python3 <このフォルダ>/scripts/config_tool.py skills
 ```
+
+`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/setup`）。`py` がないときは `python` を使います。
+`hidden` が true のスキルは、同じ名前のスキルが先に見つかったため、設定しません。
+
+JSON は標準出力に出ます。Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。
 
 ## テストを実行する
 
-このフォルダで、次を実行します（Linux では `py -3` を `python3` に変えます）。
+このフォルダで、次を実行します。
 
 ```
-py -3 -m unittest discover -s tests -v
+# Windows（PowerShell）
+py -3 -m unittest discover -s tests
+# Linux（bash）
+python3 -m unittest discover -s tests
 ```
 
 最後に `OK` と出れば成功です。PyYAML があれば、書き換えたファイルを PyYAML でも読めるかもテストします。
-`__pycache__` を残したくないときは、`-m` の前に `-B` を付けます。
+
+`__pycache__` を残さないときは、`-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。

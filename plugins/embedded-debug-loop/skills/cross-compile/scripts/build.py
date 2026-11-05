@@ -1573,7 +1573,11 @@ def cmd_check(opts):
     if problems:
         result["message"] = problems_message(problems)
         return 2, result
-    result["message"] = "設定に問題はありません。ビルドの準備ができています。" + "".join(notes)
+    if notes:
+        # 注意があるときは「問題はありません」と言い切らない
+        result["message"] = "ビルドの準備はできています。ただし、" + "".join(notes)
+    else:
+        result["message"] = "設定に問題はありません。ビルドの準備ができています。"
     return 0, result
 
 

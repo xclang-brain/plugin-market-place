@@ -1121,9 +1121,18 @@ class RefuseTest(ToolTestCase):
             self.assertNotIn("hunter2", out, text)
 
     def test_missing_file_and_folder(self):
-        data, _ = self.fail_("show", os.path.join(self.tmp, "none.yaml"))
-        self.assertIn("ファイルがありません", data["error"])
-        self.assertIs(data["exists"], False)  # ないことを、名前で見分けられる
+        # show は、作る前にファイルがあるかを確かめるのに使う。ないことは失敗にしない
+        # （失敗にすると、Copilot CLI の画面に、毎回赤い ✗ が出る）。
+        missing = os.path.join(self.tmp, "none.yaml")
+        code, data, _ = self.tool("show", missing)
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data, {"ok": True, "file": missing, "exists": False})
+        self.assertIs(self.ok("show", self.copy(COFFEE))["exists"], True)
+        # get と set は、ないファイルを失敗にする（ないことを、名前で見分けられる）
+        for args in (("get", missing, "name"), ("set", missing, "name", "--stdin")):
+            data, _ = self.fail_(*args, stdin="x\n")
+            self.assertIn("ファイルがありません", data["error"])
+            self.assertIs(data["exists"], False)
         data, _ = self.fail_("show", self.tmp)
         self.assertIn("フォルダ", data["error"])
         self.assertNotIn("exists", data)
@@ -1169,7 +1178,7 @@ class RefuseTest(ToolTestCase):
 
     def test_unsupported_is_only_for_the_layout(self):
         """ファイルがない・フォルダ・読めない、では "unsupported" を付けない。"""
-        data, _ = self.fail_("show", os.path.join(self.tmp, "none.yaml"))
+        data = self.ok("show", os.path.join(self.tmp, "none.yaml"))
         self.assertNotIn("unsupported", data)
         data, _ = self.fail_("show", self.tmp)
         self.assertNotIn("unsupported", data)

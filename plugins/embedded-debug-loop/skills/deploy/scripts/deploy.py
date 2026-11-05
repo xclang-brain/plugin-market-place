@@ -1434,8 +1434,12 @@ def cmd_check(workdir, config):
     elif login_error:
         message = login_error
     else:
-        message = ("設定に問題はありません。機器 %s に FTP でログインできました。" % summary.get("host")
-                   + "".join(notes))
+        logged_in = "機器 %s に FTP でログインできました。" % summary.get("host")
+        if notes:
+            # 注意があるときは「問題はありません」と言い切らない
+            message = logged_in + "ただし、" + "".join(notes)
+        else:
+            message = "設定に問題はありません。" + logged_in
     if login_error:
         problems.append(login_error)
     ok = not problems

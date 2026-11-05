@@ -382,6 +382,18 @@ class YamlReaderTest(unittest.TestCase):
                 for word in ("下の", "上の", "上から", "このスキル", "この項目"):
                     self.assertNotIn(word, comment, comment)
 
+    def test_password_comment_says_it_is_needed_with_user(self):
+        """設定を案内する側が「必ず書く」の言い方で、ふだん埋める項目だと分かるように。"""
+        with open(TEMPLATE, encoding="utf-8") as fh:
+            text = fh.read()
+        block = re.search(r"((?:^#.*\n)+)password:", text, re.M).group(1)
+        self.assertIn("user を書いたら、必ず書く（password_env で渡すときは空）。", block)
+        self.assertNotIn("必須", block, "必須の印を付けると、anonymous や環境変数で渡すときに困る")
+        # README の項目の表も同じ言い方にする（YAML のコメントを読まない人と道具のため）
+        with open(os.path.join(SKILL_DIR, "README.md"), encoding="utf-8") as fh:
+            self.assertIn("| `password` | FTP のパスワード。`user` を書いたら、必ず書く（`password_env` で渡すときは空） | 空 |",
+                          fh.read())
+
     def test_file_mode_comment_says_files_are_not_executable(self):
         with open(TEMPLATE, encoding="utf-8") as fh:
             text = fh.read()
@@ -1427,9 +1439,10 @@ class FtpServerTest(unittest.TestCase):
         self.assertNotIn("log", data)
         self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
         self.assertEqual(data["notes"], [deploy.NO_MODE_NOTE])
+        # 注意があるときは「問題はありません」と言い切らず、「ただし、」で注意を続ける
         self.assertEqual(data["message"],
-                         "設定に問題はありません。機器 127.0.0.1 に FTP でログインできました。"
-                         + deploy.NO_MODE_NOTE)
+                         "機器 127.0.0.1 に FTP でログインできました。ただし、" + deploy.NO_MODE_NOTE)
+        self.assertNotIn("問題はありません", data["message"])
 
     def test_check_wrong_password(self):
         ws = Workspace(self)
@@ -1667,7 +1680,7 @@ class SkillFilesTest(unittest.TestCase):
         self.assertLess(text.index("py -3 -m unittest discover -s tests"),
                         text.index("python3 -m unittest discover -s tests"))
         # 個人のフォルダも Windows を先に書く
-        self.assertLess(text.index("`%USERPROFILE%\\.copilot\\skills\\deploy\\`"),
+        self.assertLess(text.index("`$env:USERPROFILE\\.copilot\\skills\\deploy\\`"),
                         text.index("`~/.copilot/skills/deploy/`"))
 
     def test_readme_shares_wording_with_other_skills(self):
@@ -1686,6 +1699,42 @@ class SkillFilesTest(unittest.TestCase):
         self.assertNotIn("用意して", text)
         with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
             self.assertIn("「設定ファイルを作って」と頼まれたとき", fh.read())
+
+    def test_layout_shared_with_other_skills(self):
+        """スキルの README でそろえる書き方：節の並び、インストールの確認、名前を変えたコピー、コマンドの書き方。"""
+        with open(os.path.join(SKILL_DIR, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
+        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方", "設定ファイル",
+                                    "結果とログ", "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
+        # README に書いた名前（フォルダの名前を変えても、README は書き換えない）
+        self.assertIn("\n3. `/skills list` に `deploy` が出れば完了です。\n", text)
+        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("\n- GitHub Copilot CLI\n", needs)
+        # できることの箇条は、言い切りの形（「…する。」）
+        can = text.split("## できること", 1)[1].split("\n## ", 1)[0]
+        for line in can.splitlines():
+            if line.startswith("- "):
+                self.assertFalse(line.endswith("ます。"), line)
+        # うまくいかないときの表の見出し
+        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
+        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
+        self.assertNotIn("%USERPROFILE%", text)
+        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
+                      "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
+                      "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
+        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/deploy.py <サブコマンド>\n"
+                      "# Linux（bash）\npython3 <このフォルダ>/scripts/deploy.py <サブコマンド>\n```", text)
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
+                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
+        for line in text.splitlines():
+            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
+        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n", text)
+        # パスワードを環境変数で渡す例は、Windows（PowerShell）と Linux（bash）の2つ
+        part = text.split("### パスワードを環境変数で渡す", 1)[1].split("\n## ", 1)[0]
+        self.assertRegex(part, r"\n   - Windows（PowerShell）：`\$env:[A-Z_]+ = '[^']+'`\n"
+                               r"   - Linux（bash）：`export [A-Z_]+='[^']+'`\n")
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""

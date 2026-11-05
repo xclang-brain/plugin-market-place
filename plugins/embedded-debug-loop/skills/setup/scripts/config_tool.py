@@ -27,6 +27,8 @@
   --json を付けると、値を JSON として読む（数・true / false・リスト）。
 - 結果は、いつも JSON 1つを標準出力に書く。文字コードは Python の既定のもの。
   その文字コードで書けない文字は、JSON の \\uXXXX の形にする。ファイルは、いつも UTF-8 で読み書きする。
+- show は、ファイルがなければ "ok": true と "exists": false を返す（終了コード 0）。
+  get と set は、ファイルがなければ失敗にする。
 - 終了コード: 0 成功 / 2 ファイルや引数の問題 / 1 思わぬエラー。
 - 読める YAML は、次の書き方だけ。
   - 先頭の列に「項目: 値」。入れ子はなし。
@@ -1209,11 +1211,15 @@ def _need(pos, count, usage):
 def cmd_show(opts, pos):
     _need(pos, 1, USAGE[1])
     path = resolve_path(pos[0], opts["workdir"])
+    if not os.path.exists(path):
+        # ないことは失敗ではない（作る前に、ファイルがあるかを確かめるために使う）。
+        return {"ok": True, "file": path, "exists": False}
     doc = load(path)
     items = [item_info(doc, it) for it in doc.items]
     return {
         "ok": True,
         "file": path,
+        "exists": True,
         "header": "\n".join(doc.header).strip(),
         "items": items,
         "missing": [it["key"] for it in items if it["required"] and it["empty"]],

@@ -25,40 +25,21 @@ Windows では、GitHub Actions でテストを確認しています。Windows �
 
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/deploy/`
-   - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\deploy\`（Linux では `~/.copilot/skills/deploy/`）
+   - すべての作業フォルダで使う：`$env:USERPROFILE\.copilot\skills\deploy\`（Linux では `~/.copilot/skills/deploy/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
-3. `/deploy` と入力して、このスキルが候補に出れば完了です。
+3. `/skills list` に `deploy` が出れば完了です。
 
-別の名前でコピーするときは、フォルダの名前と `SKILL.md` の `name:` をそろえます。
-`/deploy`・`.deploy`・ログの名前・`[deploy]` も、その名前に変わります。
+フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。
+呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、ログファイルの名前の先頭は `<新しい名前>-` になります。
 
 ## 使い方
 
 1. `/deploy 設定ファイルを作って` と入力します。設定ファイルがなければ作られ、場所が表示されます。
 2. 設定ファイルに、必須の `host`・`files`・`remote_dir` を書きます。必要なら `user`・`password` も書きます（[項目](#項目)）。
-3. `/deploy 設定を確認して` と入力します。FTP でログインできるかも試します（ファイルは送りません）。「設定に問題はありません」と出れば、準備完了です。
+3. `/deploy 設定を確認して` と入力します。FTP でログインできるかも試します（ファイルは送りません）。「… に FTP でログインできました」と出れば、準備完了です。「ただし、」の後に注意が出たら、その内容を確認します。
 4. `/deploy 機器に送って` と入力します。送ったファイル・送り先・権限・サム値の表が出れば完了です。
 
-プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
-
-### スクリプトを直接実行する
-
-スクリプトは、カレントディレクトリを作業フォルダとして使います。
-
-```powershell
-py -3 <このフォルダ>/scripts/deploy.py <コマンド>
-```
-
-`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/deploy`）。
-`py` がないときは `python`、Linux では `python3` にします。
-
-`<コマンド>` は次のどれかです。
-
-- `config-path`：設定ファイルの場所を表示する（なければ作る）
-- `check`：設定を確認する（ファイルは作らない）
-- `run`：機器に送る（コマンドを省略したときも `run`）
-
-`--workdir <フォルダ>` で作業フォルダを、`--config <ファイル>` で設定ファイルを指定できます。
+- プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
 
 ## 設定ファイル
 
@@ -82,7 +63,7 @@ py -3 <このフォルダ>/scripts/deploy.py <コマンド>
 | `host` | 機器の IP アドレスかホスト名（必須）。例：`"192.168.1.50"` | 空 |
 | `port` | FTP のポート番号 | `21` |
 | `user` | FTP のユーザー名。空なら anonymous でログインする | `"root"` |
-| `password` | FTP のパスワード | 空 |
+| `password` | FTP のパスワード。`user` を書いたら、必ず書く（`password_env` で渡すときは空） | 空 |
 | `password_env` | パスワードを入れた環境変数の名前（[下記](#パスワードを環境変数で渡す)） | 空 |
 | `passive` | パッシブモードを使うか | `true` |
 | `files` | 送るファイル（必須）。作業フォルダからの相対パスか絶対パス。例：`["build/my_app", "conf/my_app.conf"]` | `[]` |
@@ -97,12 +78,9 @@ py -3 <このフォルダ>/scripts/deploy.py <コマンド>
 ### パスワードを環境変数で渡す
 
 1. 設定ファイルの `password_env` に、環境変数の名前（例：`DEVICE_FTP_PASSWORD`）を書きます。
-2. Copilot CLI を起動する前に、その環境変数を設定します。
-
-   ```powershell
-   $env:DEVICE_FTP_PASSWORD = '機器のパスワード'
-   copilot
-   ```
+2. Copilot CLI を起動する前に、同じ端末でその環境変数を設定します。
+   - Windows（PowerShell）：`$env:DEVICE_FTP_PASSWORD = '機器のパスワード'`
+   - Linux（bash）：`export DEVICE_FTP_PASSWORD='機器のパスワード'`
 
 環境変数があれば `password` より優先し、なければ `password` を使います。
 どちらもなければ、設定の問題として知らせます。
@@ -110,10 +88,12 @@ py -3 <このフォルダ>/scripts/deploy.py <コマンド>
 パスワードは、画面にもログにも出しません。
 ただし、`password` の行の書き方に誤り（閉じていない `"` など）があると、パスワードを含むその行がエラーメッセージに出ます。
 
-## 直接実行したときの結果
+## 結果とログ
+
+### スクリプトの出力
 
 標準出力に、結果の JSON が1つ出ます。
-途中経過は、標準エラー出力に `[deploy]` で始まる行で出ます。
+途中経過は、標準エラー出力に `[deploy]`（このフォルダの名前）で始まる行で出ます。
 Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。
 
 `run` と `check` の JSON の主な項目です。
@@ -141,7 +121,7 @@ Windows では、コンソールの文字コード（日本語の Windows では
 
 `config-path` は、設定ファイルを読めないときも 0 です。
 
-## ログ
+### ログ
 
 `run` は、実行するたびに次のログファイルを作ります。
 
@@ -157,7 +137,7 @@ Windows では、コンソールの文字コード（日本語の Windows では
 
 メッセージに、原因と確認する点があります。詳しくは、ログ（`check` では標準エラー出力）を見ます。
 
-| 症状・メッセージ | 確認すること |
+| 症状・メッセージ | 対処 |
 | --- | --- |
 | `/deploy` が出てこない | 置き場所。フォルダの名前と `SKILL.md` の `name:` が同じか。そのあと `/skills reload` を実行する |
 | 「FTP でつながりません（接続が拒否されました）」 | 機器の電源。FTP サーバーが動いているか |
@@ -177,21 +157,53 @@ Windows では、コンソールの文字コード（日本語の Windows では
 | 「思わぬエラーで止まりました」 | ログ（`check` では標準エラー出力） |
 | 「大きさは確かめていません」 | エラーではない（FTP サーバーが `SIZE` に未対応） |
 
+## スクリプトを直接実行する
+
+作業フォルダをカレントディレクトリにして、次のように実行します。
+
+```
+# Windows（PowerShell）
+py -3 <このフォルダ>/scripts/deploy.py <サブコマンド>
+# Linux（bash）
+python3 <このフォルダ>/scripts/deploy.py <サブコマンド>
+```
+
+`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/deploy`）。`py` がないときは `python` を使います。
+
+`<サブコマンド>` は次のどれかです。
+
+- `run`：機器に送る（サブコマンドを省略したときも `run`）
+- `config-path`：設定ファイルの場所を表示する（なければ作る）
+- `check`：設定を確認する（ファイルは作らない）
+
+次のオプションを付けられます。
+
+- `--workdir <フォルダ>`：作業フォルダを指定する（既定はカレントディレクトリ）
+- `--config <ファイル>`：別の場所の設定ファイルを使う
+
 ## テストを実行する
 
-このフォルダで実行します。最後に `OK` と出れば通っています。実機は要りません。
+このフォルダで、次を実行します。
 
-```powershell
+```
+# Windows（PowerShell）
 py -3 -m unittest discover -s tests
+# Linux（bash）
+python3 -m unittest discover -s tests
 ```
 
-Linux では `python3 -m unittest discover -s tests` です。
-`tests/__pycache__` を残したくないときは、`py -3 -B -m unittest discover -s tests` で実行します。
+最後に `OK` と出れば成功です。実機は要りません。
 
 FTP サーバーを起動するテストには `pyftpdlib` が要ります。なければ、そのテストはスキップされます。
-`--target` で別の場所にインストールしたときは、その場所を環境変数 `DEPLOY_TEST_PYLIB` に設定します（複数なら `;` 区切り。Linux では `:`）。
+`--target` で別の場所にインストールしたときは、その場所を環境変数 `DEPLOY_TEST_PYLIB` に設定します（複数なら Windows では `;`、Linux では `:` で区切る）。
 
-```powershell
+```
+# Windows（PowerShell）
 py -3 -m pip install --target "$env:TEMP\pylib" pyftpdlib
 $env:DEPLOY_TEST_PYLIB = "$env:TEMP\pylib"
+# Linux（bash）
+python3 -m pip install --target /tmp/pylib pyftpdlib
+export DEPLOY_TEST_PYLIB=/tmp/pylib
 ```
+
+`__pycache__` を残さないときは、`-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。

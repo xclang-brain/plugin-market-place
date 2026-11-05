@@ -173,10 +173,14 @@ class SkillMdTest(unittest.TestCase):
                      "そのスキルの `path` に置き換えます。",
                      "Python の呼び方（`python3` など）は、`<python>` に合わせます。",
                      "作り方が書いてなければ、作りません。",
-                     "YAML のファイルを作ったら、もう一度 `show` を実行します。"):
+                     "YAML のファイルを作ったら、もう一度 `show` を実行します。",
+                     # コマンドが成功してもファイルがないときは、伝えるエラーがない。言う文を決める
+                     "まだ `\"exists\": false` なら、「<name> の設定ファイルを作れませんでした。」と伝えて、次のスキルに進みます。"):
             self.assertIn(word, part, word)
         tool = self.section("## 道具", "### `skills` の結果")
-        self.assertIn("ファイルがないとき、`show` の結果には `\"exists\": false` が入ります。", tool)
+        # ないことは失敗ではない（道具も "ok": true を返す。test_config_tool.py）
+        self.assertIn("ファイルがないとき、`show` は `\"ok\": true` と `\"exists\": false` を返します。", tool)
+        self.assertIn("| `exists` | ファイルがあれば true。", self.section("### `show` の結果", "`items` の1つ1つには"))
         # --workdir は、サブコマンドの前でも後でもよい（道具がどちらも受け付ける）
         self.assertIn("サブコマンドの前でも後でもかまいません。", tool)
 
@@ -253,7 +257,9 @@ class SkillMdTest(unittest.TestCase):
         self.assertIn("PowerShell では、`@'` は行の最後に、`'@` は行の先頭に書きます。", tool)
         secret = self.section("#### 4-4. パスワードなど", "#### 4-5. 書き終えたら")
         self.assertIn("PowerShell：`$env:名前 = '値'`", secret)
-        self.assertIn("bash：`export 名前=値`", secret)
+        # bash では、値を ' で囲まないと、$ や空白で違う値になる
+        self.assertIn("bash：`export 名前='値'`", secret)
+        self.assertNotIn("export 名前=値", self.body)
 
     def test_no_data_folder(self):
         """このスキルは、作業フォルダに、自分のフォルダを持たない。"""
@@ -348,9 +354,18 @@ class SkillMdTest(unittest.TestCase):
     def test_fill_recommended_sentence_is_kept(self):
         """「必ず書く」の文を省くと、空のままでよい項目に見える。"""
         section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
-        self.assertIn("今の値が空で、`fill_recommended` が true なら、コメントの「必ず書く」の文を、省かずに入れます。",
-                      section)
+        self.assertIn("<comment> は省かずに入れます。「必ず」や「必須」の文も残します。", section)
         self.assertIn("`fill_recommended`", self.section("`items` の1つ1つには", "## 利用者に見せる言葉"))
+
+    def test_must_fill_sentence_is_not_repeated(self):
+        """コメントに「必ず書く」があるのに、「…必ず書く項目です。」を足して、同じことを2回言った。"""
+        section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
+        self.assertIn("「必ず書く項目です。」のような文は足しません（同じことを2回書かない）。", section)
+        # 「「必ず書く」の文を入れます」は、「…と足します」の箇条と並ぶと、足せと読める。
+        # 道具は「必ず」で推奨の項目を決めるので、そのときコメントにはいつも「必ず」がある
+        self.assertNotIn("「必ず書く」の文を、省かずに入れます", self.body)
+        # 足す文を手本として示さない（手本があると、コメントに加えて、もう一度足す）
+        self.assertNotIn("例：「…なら、必ず書く項目です。」", self.body)
 
     def test_recommended_items_are_asked_one_by_one(self):
         """「必ず書く」項目を「今の値のままでよいですか」にまとめると、機器で動かない設定のまま終わった。"""
@@ -450,6 +465,16 @@ class SkillMdTest(unittest.TestCase):
         self.assertIn("まだ1つも聞いていないとき：「この N 個の項目は、今の値のままでよいですか。」", order)
         self.assertIn("表の前の文でも「ほかの」を使いません。", order)
         self.assertIn("列は「項目」「今の値」「説明」です。", self.body)
+        # 表を質問の文に入れると、質問の欄に「|」の文字のまま出た
+        self.assertIn("表は、質問の文に入れません", order)
+
+    def test_rest_question_is_the_same_for_other_formats(self):
+        """INI のファイルで、表を質問の文に入れ、項目の数（N）を抜いて聞いた。"""
+        other = self.section("#### 4-6. `show` と `set` を使わないファイル", "### 5. 終わりの報告")
+        # まだ1つも聞いていないときの「この N 個の…」も示す（片方だけだと「ほかの」に寄る）
+        self.assertIn("「ほかの項目」も、表をチャットに出してから、"
+                      "4-1 の 4 と同じ文（「ほかの N 個の…」か「この N 個の…」）で聞きます。", other)
+        self.assertNotIn("例：「ほかの N 個の項目は", other)
 
     def test_rewriting_by_hand_waits_for_the_user(self):
         """自分で書き換えると答えたのに、待たずに先へ進むと、書く時間がない。"""
@@ -502,6 +527,15 @@ class SkillMdTest(unittest.TestCase):
                      "呼び出し元は、報告の後に、自分の作業を続けてかまいません。",
                      "このスキルの報告で、呼び出し元の手番を終えることはしません。"):
             self.assertIn(word, section, word)
+
+    def test_hidden_skills_are_not_reported(self):
+        """使われないスキル（同じ名前で隠れたもの）のことを、聞かれていないのに伝えた。
+        終わりの報告の後（設定の確認、最後のまとめ）にも出たので、報告だけでなく、いつも話さない決まりにする。"""
+        words = self.section("## 利用者に見せる言葉", "## 質問のしかた")
+        self.assertIn("`hidden` が true のスキル（同じ名前で使われないもの）のことは話しません。"
+                      "終わりの報告の 6 にも入れません。", words)
+        # 同じ名前は3つの場所にあることもある。「2つ」と書かない
+        self.assertNotIn("同じ名前のスキルが2つ", self.body)
 
     def test_table_cut_is_described(self):
         section = self.section("### 5. 終わりの報告", "## 守ること")
@@ -584,7 +618,7 @@ class ReadmeTest(unittest.TestCase):
                       "Windows の Copilot CLI との組み合わせは、まだ確認していません。", need)
         # 個人のフォルダは、Windows の場所を先に書く
         install = self.section("## インストールする", "## 使い方")
-        self.assertLess(install.index("`%USERPROFILE%\\.copilot\\skills\\"), install.index("`~/.copilot/skills/"))
+        self.assertLess(install.index("`$env:USERPROFILE\\.copilot\\skills\\"), install.index("`~/.copilot/skills/"))
         # スキルの名前は書き換えられることがあるので、名前を除いた形で確かめる
         self.assertIn("`.github/skills/", self.text)
         self.assertIn("`~/.copilot/skills/", self.text)
@@ -596,11 +630,50 @@ class ReadmeTest(unittest.TestCase):
         self.assertIn("`/setup`", usage)
         self.assertIn("を直したい` | その項目だけを質問します |", usage)
 
+    def test_layout_shared_with_other_skills(self):
+        """スキルの README でそろえる書き方：節の並び、インストールの確認、コマンドの書き方、
+        文字コードの文、環境変数の例。setup は「設定ファイル」「結果とログ」の代わりに自分の節を置く。"""
+        text = self.text
+        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
+        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方",
+                                    "スキルの探し方", "設定されるスキルの書き方", "パスワードなどの項目",
+                                    "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
+        # README に書いた名前で確かめる。名前を変えたコピーでも README は書き換えないので、
+        # フォルダの名前（SKILL_NAME）とは比べない（test_config_tool.py の名前を変えたコピーのテスト）
+        self.assertIn("\n3. `/skills list` に `setup` が出れば完了です。\n", text)
+        # 名前を変えたコピーの文。setup には設定とログのフォルダがないので、呼び出しだけを書く
+        self.assertIn("\nフォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
+                      "呼び出しは `/<新しい名前>` になります。\n", text)
+        needs = self.section("## 必要なもの", "## インストールする")
+        self.assertIn("\n- GitHub Copilot CLI\n", needs)
+        # できることの箇条は、言い切りの形（「…する。」）
+        for line in self.section("## できること", "## 必要なもの").splitlines():
+            if line.startswith("- "):
+                self.assertFalse(line.endswith("ます。"), line)
+        # うまくいかないときの表の見出し
+        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
+        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
+        self.assertNotIn("%USERPROFILE%", text)
+        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/config_tool.py skills\n"
+                      "# Linux（bash）\npython3 <このフォルダ>/scripts/config_tool.py skills\n```", text)
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
+                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
+        for line in text.splitlines():
+            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
+        self.assertIn("Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n",
+                      self.section("## スクリプトを直接実行する", "## テストを実行する"))
+        # パスワードを環境変数で渡す例は、Windows（PowerShell）と Linux（bash）の2つ
+        self.assertIn("\n   - Windows（PowerShell）：`$env:名前 = '値'`\n"
+                      "   - Linux（bash）：`export 名前='値'`\n",
+                      self.section("## パスワードなどの項目", "## うまくいかないとき"))
+
     def test_test_command_runs_from_this_folder(self):
         part = self.section("## テストを実行する", "最後に `OK` と出れば成功です。")
         self.assertIn("このフォルダで、次を実行します", part)
-        self.assertIn("```\npy -3 -m unittest discover -s tests -v\n```", part)  # Windows を先に
-        self.assertIn("`python3`", part)
+        # 1つの囲みに、Windows を先に、Linux を後に書く（ほかのスキルの README と同じ書き方）
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
+                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", part)
         # テストで、このフォルダに __pycache__ を残さない動かし方も示す
         self.assertIn("`-B`", self.text[self.text.index("## テストを実行する"):])
 
@@ -608,8 +681,8 @@ class ReadmeTest(unittest.TestCase):
         part = self.section("## スキルの探し方", "## 設定されるスキルの書き方")
         # 個人のフォルダは、Windows の場所を先に書く
         places = ["1. `.github/skills/`", "2. `.agents/skills/`", "3. `.claude/skills/`",
-                  "4. `%USERPROFILE%\\.copilot\\skills\\`（Linux では `~/.copilot/skills/`",
-                  "5. `%USERPROFILE%\\.agents\\skills\\`（Linux では `~/.agents/skills/`）",
+                  "4. `$env:USERPROFILE\\.copilot\\skills\\`（Linux では `~/.copilot/skills/`",
+                  "5. `$env:USERPROFILE\\.agents\\skills\\`（Linux では `~/.agents/skills/`）",
                   "6. このフォルダの隣のフォルダ"]
         for line in places:
             self.assertIn(line, part, line)
@@ -618,7 +691,10 @@ class ReadmeTest(unittest.TestCase):
         self.assertEqual(len(tool_search_order()), len(places))
         self.assertIn("1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します", part)
         self.assertIn("`COPILOT_HOME`", part)
-        self.assertIn("名前がドットで始まるフォルダは見ません。", part)
+        # 探す場所の中の、ドットで始まるフォルダを除く（道具の _skill_folders）。
+        # 探す場所（.github/skills/ など）の名前もドットで始まるので、「どの」フォルダかを書く
+        self.assertIn("探す場所の中で、名前がドットで始まるフォルダ（例：`.old`）は、スキルとして扱いません。", part)
+        self.assertNotIn("名前がドットで始まるフォルダは見ません。", part)
         self.assertIn("先に見つかったほうを設定します。", part)
         # Copilot CLI と順が違う場合も書く（確かめた版とともに）
         self.assertIn("Copilot CLI 1.0.105 がスキルを選ぶ順と同じです。", part)
@@ -659,7 +735,13 @@ class ReadmeTest(unittest.TestCase):
 
     def test_no_python3_only_commands(self):
         """Windows を先に書く。コマンドの例は py -3 で、Linux での言い換えを添える。"""
-        self.assertNotRegex(self.text, r"(?m)^python3 ")
+        lines = self.text.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("python3 "):
+                # python3 の行は、同じ囲みの Windows（py -3）の行の後に、Linux の行として書く
+                self.assertEqual(lines[i - 1], "# Linux（bash）", line)
+                self.assertEqual(lines[i - 2], "py -3 " + line[len("python3 "):], line)
+                self.assertEqual(lines[i - 3], "# Windows（PowerShell）", line)
         self.assertIn("py -3 <このフォルダ>/scripts/config_tool.py skills", self.text)
 
 

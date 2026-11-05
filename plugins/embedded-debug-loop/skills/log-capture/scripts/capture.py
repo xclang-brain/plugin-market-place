@@ -2022,18 +2022,24 @@ def cmd_check(args):
         ser = open_port(s.port, s.baud)
         con = Console(ser, s.port, None)
         state = wake(con, s)
+        cautions = []
         if state == "login":
             login(con, s)
-            out_ok = logout(con, s)
-            message = (
-                "シリアルポート %s で機器につながり、%s でログインできました。" % (s.port, s.login_user)
-                + ("ログアウトしました。" if out_ok else "exit を送りましたが、ログインの求めに戻ったかは確かめられませんでした。")
-            )
+            message = "シリアルポート %s で機器につながり、%s でログインできました。" % (s.port, s.login_user)
+            if logout(con, s):
+                message += "ログアウトしました。"
+            else:
+                cautions.append("exit を送った後、ログインの求めに戻ったかは確認できませんでした。")
             out["summary"]["console"] = "ログインできた"
         else:
             message = "シリアルポート %s で機器につながり、シェルのプロンプトを確かめました（ログインは不要でした）。" % s.port
             out["summary"]["console"] = "シェルのプロンプトが出た"
-        message += "".join(out["notes"])
+        cautions += out["notes"]
+        if cautions:
+            # 注意があるときは「問題はありません」と言い切らない
+            message += "ただし、" + "".join(cautions)
+        else:
+            message = "設定に問題はありません。" + message
         out["ok"] = True
     except Failure as f:
         out["problems"].append(f.message)

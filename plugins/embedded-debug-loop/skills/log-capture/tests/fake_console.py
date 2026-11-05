@@ -231,7 +231,7 @@ class FakeDevice(object):
     def __init__(self, relay, login=True, user="root", password="root", ansi=False,
                  garbage=False, ticker=None, wrap=0, wrap_repeat=False, responses=None,
                  ignore_interrupt=(), left_at_password=False, status_prompt=False, dollar_q=True,
-                 prompt_text=None):
+                 prompt_text=None, exit_logs_out=True):
         self.relay = relay
         self.sock = relay.dev_sock
         self.need_login = login
@@ -250,6 +250,7 @@ class FakeDevice(object):
         self.dollar_q = dollar_q            # False なら $? が使えないシェルのまね
         self.status = 0                     # 直前のコマンドの終了コード（$?）
         self.prompt_text = prompt_text      # プロンプトを差し替える（複数の行のプロンプトなど）
+        self.exit_logs_out = exit_logs_out  # False なら exit でログインの求めに戻らない（シェルのプロンプトのまま）
         self.state = "login" if login else "shell"
         self.pending_user = ""
         self.left_at_password = left_at_password
@@ -418,7 +419,7 @@ class FakeDevice(object):
         self.executed.append(cmd)
         if cmd == "exit":
             self.exits += 1
-            if self.logged_in_by_login:
+            if self.logged_in_by_login and self.exit_logs_out:
                 self.logged_in_by_login = False
                 self.state = "login"
                 self.out("logout\n")

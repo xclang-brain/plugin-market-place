@@ -1,28 +1,18 @@
 # cross-compile：クロスコンパイルのスキル
 
-機器で動かすプログラムを、PC でビルドするスキルです。GitHub Copilot CLI で使います。
+機器で動かすプログラムを、PC でビルドする GitHub Copilot CLI のスキルです。このフォルダだけで動きます。
 
-- SDK（例：Yocto の SDK）の環境設定ファイルを読み込んでから、`make` などでビルドします。
-- 設定に書いたファイルができたか、今回作り直されたかを確認し、サイズと種類（例：ARM 用）を報告します。
-- ビルドだけを行い、機器への転送や実行はしません。
+## できること
 
-## 使い始める
-
-Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動します。このフォルダを作業フォルダと呼びます。
-
-1. このフォルダをまるごと、`<作業フォルダ>/.github/skills/cross-compile/` にコピーします。すべての作業フォルダで使うときは、`%USERPROFILE%\.copilot\skills\cross-compile\`（Linux では `~/.copilot/skills/cross-compile/`）にコピーします。
-2. 作業フォルダで Copilot CLI を起動します。起動済みなら `/skills reload` を実行します。
-3. `/cross-compile 設定ファイルを作って` と入力します。設定ファイルができ、場所が表示されます。
-4. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けにビルドするなら、`sdk_env` も必ず書きます（[項目](#項目)）。WSL の中の SDK を使うときは、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
-5. `/cross-compile ビルドして` と入力します。できたファイルのサイズと種類が表示されれば成功です。
-
-フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も同じ名前にします。
-呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、ログファイル名の先頭は `<新しい名前>-` になります。
+- SDK（例：Yocto の SDK）の環境設定ファイルを読み込んでから、`make` などでビルドする。
+- 設定に書いたファイルができたか、今回作り直されたかを確認し、サイズと種類（例：ARM 用）を報告する。
+- ビルドだけを行い、機器への転送や実行はしない。
 
 ## 必要なもの
 
 - Windows の PC（Linux でも動きます）
 - Python 3.8 以上（追加のインストールは要りません）
+- GitHub Copilot CLI
 - シェル：Windows は cmd（既定）・PowerShell・Git for Windows の bash、Linux は bash（既定）
 - ビルドコマンドで使うツール（`make` など）
 - 機器の SDK（機器向けにビルドするとき）
@@ -30,26 +20,27 @@ Copilot CLI は、ビルドしたいプロジェクトのフォルダで起動�
 
 Windows では、GitHub Actions でテストを確認しています。Windows の Copilot CLI との組み合わせは、まだ確認していません。
 
+## インストールする
+
+1. このフォルダを、次のどちらかにコピーします。
+   - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/cross-compile/`
+   - すべての作業フォルダで使う：`$env:USERPROFILE\.copilot\skills\cross-compile\`（Linux では `~/.copilot/skills/cross-compile/`）
+2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
+3. `/skills list` に `cross-compile` が出れば完了です。
+
+フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。
+呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、ログファイルの名前の先頭は `<新しい名前>-` になります。
+
 ## 使い方
 
-| 依頼 | 例 | スクリプトのコマンド |
-| --- | --- | --- |
-| ビルド | `/cross-compile ビルドして` | `run`（省略できる） |
-| 設定ファイルを作る（あれば場所を出す） | `/cross-compile 設定ファイルを作って` | `config-path` |
-| 設定の確認（ビルドはしない） | `/cross-compile 設定を確認して` | `check` |
+Copilot CLI は、ビルドしたいプロジェクトのフォルダ（作業フォルダ）で起動します。
 
+1. `/cross-compile 設定ファイルを作って` と入力します。設定ファイルがなければ作られ、場所が表示されます。
+2. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けにビルドするなら、`sdk_env` も必ず書きます（[項目](#項目)）。WSL の中の SDK を使うときは、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
+3. `/cross-compile ビルドして` と入力します。できたファイルのサイズと種類が表示されれば成功です。
+
+- 設定の確認だけをするときは、`/cross-compile 設定を確認して` と入力します（ビルドはしません）。「ただし、」の後に注意が出たら、その内容を確認します。
 - プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
-
-スクリプトを直接実行するときは、作業フォルダで次のように実行します（パスはインストール先に合わせます）。
-
-```powershell
-py -3 .github\skills\cross-compile\scripts\build.py <コマンド>
-```
-
-`py` がないときは `python` を使います。Linux では `python3` を使い、パスを `/` で区切ります。
-
-- `--workdir <フォルダ>`：作業フォルダを指定します（既定はカレントディレクトリ）。
-- `--config <ファイル>`：別の場所の設定ファイルを使います。
 
 ## 設定ファイル
 
@@ -71,7 +62,7 @@ py -3 .github\skills\cross-compile\scripts\build.py <コマンド>
 | --- | --- | --- | --- |
 | `source_dir` | ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空か `"."` なら作業フォルダ | `"firmware/app"` | `"."` |
 | `shell` | コマンドを実行し、`sdk_env` を読み込むシェル。`auto`（Windows は `cmd`、ほかは `bash`）・`cmd`・`powershell`（`pwsh` を使う。なければ `powershell`）・`bash`（Windows では Git for Windows などの bash。WSL の bash は使えない） | `"powershell"` | `"auto"` |
-| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けにビルドするなら、必ず書く（WSL の中の SDK を使うときは空）。`shell` が `cmd` なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`（Windows で使う SDK）、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"`（Linux で使う Yocto の SDK） | `""` |
+| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けにビルドするなら、必ず書く（WSL の中の SDK を使うときは空）。`shell` が `cmd`（Windows の `auto` も同じ）なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`（Windows で使う SDK）、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"`（Linux で使う Yocto の SDK） | `""` |
 | `build_command` | ビルドコマンド。ビルドするフォルダで、`shell` のシェルで実行する。空なら `make` | `"make -j4 all"` | `"make"` |
 | `clean_command` | ビルドの前のクリーンコマンド。空ならクリーンしない | `"make clean"` | `""` |
 | `outputs` | ビルドでできるファイル（必須）。ビルドするフォルダからの相対パス | `["my_app"]`、`["build/my_app.exe"]` | `[]` |
@@ -101,6 +92,8 @@ build_command: 'wsl bash -c "source /opt/poky/4.0/environment-setup-cortexa7t2hf
 `wsl` の後ろのコマンドは、ビルドするフォルダで動きます。機器向けにできたかは、できたファイルの種類（例：ARM）で確認します。
 
 ## 結果とログ
+
+### スクリプトの出力
 
 スクリプトは、結果を1つの JSON で標準出力に、途中経過を標準エラー出力に出します。
 Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。
@@ -144,7 +137,7 @@ Windows では、コンソールの文字コード（日本語の Windows では
 
 ## うまくいかないとき
 
-| メッセージ・症状 | 対処 |
+| 症状・メッセージ | 対処 |
 | --- | --- |
 | outputs（…）が空です | `outputs` を書きます |
 | SDK を読み込みません | 機器向けなら `sdk_env` を書きます。WSL の中で SDK を読み込むときは、できたファイルの種類を確認します |
@@ -174,20 +167,48 @@ Windows では、コンソールの文字コード（日本語の Windows では
 | 設定ファイルの場所 … は、フォルダです | そのフォルダの名前を変えるか、`--config` を使います |
 | 設定のひな形 … がありません | このフォルダをまるごとコピーし直します |
 | 作業フォルダ … がありません | `--workdir` のフォルダを確認します |
-| 「…」は使えません／… の後ろに、パスを書いてください | スクリプトの引数を「使い方」のとおりに直します |
+| 「…」は使えません／… の後ろに、パスを書いてください | スクリプトの引数を「スクリプトを直接実行する」のとおりに直します |
 | スクリプトの中で思わぬエラーが起きました | ログ（`check` では標準エラー出力）を確認します |
 | `/cross-compile` が候補に出てこない | インストール先と、`SKILL.md` の `name:` がフォルダ名と同じかを確認し、`/skills reload` を実行します |
 
-## テストを実行する
+## スクリプトを直接実行する
 
-このフォルダで、次のコマンドを実行します。最後に `OK` と出れば通っています。
+作業フォルダをカレントディレクトリにして、次のように実行します。
 
-```powershell
-py -3 -m unittest discover -s tests -v
+```
+# Windows（PowerShell）
+py -3 <このフォルダ>/scripts/build.py <サブコマンド>
+# Linux（bash）
+python3 <このフォルダ>/scripts/build.py <サブコマンド>
 ```
 
-Linux では `python3 -m unittest discover -s tests -v` です。
+`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/cross-compile`）。`py` がないときは `python` を使います。
+
+`<サブコマンド>` は次のどれかです。
+
+- `run`：ビルドする（サブコマンドを省略したときも `run`）
+- `config-path`：設定ファイルを作る（あれば場所を出す）
+- `check`：設定を確認する（ビルドはしない。ファイルは作らない）
+
+次のオプションを付けられます。
+
+- `--workdir <フォルダ>`：作業フォルダを指定する（既定はカレントディレクトリ）
+- `--config <ファイル>`：別の場所の設定ファイルを使う
+
+## テストを実行する
+
+このフォルダで、次を実行します。
+
+```
+# Windows（PowerShell）
+py -3 -m unittest discover -s tests
+# Linux（bash）
+python3 -m unittest discover -s tests
+```
+
+最後に `OK` と出れば成功です。
 
 - C のプロジェクトを実際にビルドするテストは、Windows 以外で `make`・`gcc`・`bash` があるときだけ実行します。
 - ARM 向けのテストは、`sdk_env` の例に書いたファイルが PC にあり、SDK のコンパイラー（`CC`）が使えるときだけ実行します。
-- `scripts/` と `tests/` にできる `__pycache__` は削除してかまいません。作らせないなら `-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。
+
+`__pycache__` を残さないときは、`-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。

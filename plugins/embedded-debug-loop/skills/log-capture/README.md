@@ -1,7 +1,6 @@
 # log-capture：シリアルコンソールの記録
 
-機器のシリアルコンソールで、コマンドを実行して出力を記録する GitHub Copilot CLI のスキルです。
-このフォルダだけで動きます。
+機器のシリアルコンソールで、コマンドを実行して出力を記録する GitHub Copilot CLI のスキルです。このフォルダだけで動きます。
 
 ## できること
 
@@ -24,12 +23,12 @@ Windows では、GitHub Actions でテストを確認しています。Windows �
 
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/log-capture/`
-   - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\log-capture\`（Linux では `~/.copilot/skills/log-capture/`）
+   - すべての作業フォルダで使う：`$env:USERPROFILE\.copilot\skills\log-capture\`（Linux では `~/.copilot/skills/log-capture/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
-3. `/skills list` を実行し、一覧に `log-capture` があれば完了です。
+3. `/skills list` に `log-capture` が出れば完了です。
 
-別の名前でコピーするときは、`SKILL.md` の `name:` も同じ名前にします。
-設定とログのフォルダは `.<その名前>/` になり、ログファイルの名前の頭もその名前になります。
+フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。
+呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、ログファイルの名前の先頭は `<新しい名前>-` になります。
 
 ## 使い方
 
@@ -39,30 +38,13 @@ Windows では、GitHub Actions でテストを確認しています。Windows �
    ほかの項目も機器に合わせます。
 3. `/log-capture 設定を確認して` と入力します（機器のシェルでコマンドは実行しません）。
    「… でログインできました」と出れば、設定は完了です（ログインが要らない機器では「… シェルのプロンプトを確かめました」）。
+   「ただし、」の後に注意が出たら、その内容を確認します。
 4. `/log-capture 機器で /opt/myapp/my_app を動かして、出力を見せて` のように依頼します。
    コマンドの出力、終了コード、ログファイルの場所が表示されます。
 
 - 依頼の文にコマンドを書くと、今回だけ、設定の `commands` の代わりにそのコマンドを実行します。
 - 記録だけするときは、`/log-capture 機器の出力を 30 秒記録して` のように依頼します。
 - プラグインに入れて配られているときは、`/<プラグインの名前>:<スキル名>` でも呼べます。
-
-### スクリプトを直接実行する
-
-作業フォルダをカレントディレクトリにして、次のように実行します。ほかの場所に置いたときは、パスを変えます。
-
-```
-# Windows（py がなければ python）
-py -3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オプション]
-# Linux
-python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オプション]
-```
-
-サブコマンドの `config-path`・`check`・`run` が、上の手順 1・3・4 にあたります。
-
-- `--command 'コマンド'`（run のとき）：`commands` の代わりに実行する。複数指定できる。値の中の `'` は、PowerShell では `''`、bash では `'\''` と書く
-- `--listen-only 秒数`（run のとき）：コマンドを実行せず、その秒数だけ記録する
-- `--workdir フォルダ`：作業フォルダを指定する
-- `--config ファイル`：別の場所の設定ファイルを使う
 
 ## 設定ファイル
 
@@ -95,9 +77,9 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 ### パスワードを環境変数で渡す
 
 1. 設定ファイルの `login_password_env` に、環境変数の名前（例：`"DEVICE_PASSWORD"`）を書きます。`login_password` は空にします。
-2. Copilot CLI を起動する前に、同じ端末で環境変数を設定します。
+2. Copilot CLI を起動する前に、同じ端末でその環境変数を設定します。
    - Windows（PowerShell）：`$env:DEVICE_PASSWORD = '機器のパスワード'`
-   - Linux：`export DEVICE_PASSWORD='機器のパスワード'`
+   - Linux（bash）：`export DEVICE_PASSWORD='機器のパスワード'`
 
 環境変数は `login_password` より優先します。
 環境変数がなく、`login_password` も空なら、機器に接続せずに止まります（`login_user` が空なら止まりません）。
@@ -148,7 +130,7 @@ check は失敗したときも 2、config-path は設定に問題があっても
 
 ## うまくいかないとき
 
-| 出た文・起きたこと | 確認すること |
+| 症状・メッセージ | 対処 |
 | --- | --- |
 | 設定ファイルがありません | `/log-capture 設定ファイルを作って` と依頼する |
 | `/log-capture` が使えない | 置き場所と、フォルダの名前が `SKILL.md` の `name:` と同じか。直したら `/skills reload` を実行する |
@@ -170,16 +152,44 @@ check は失敗したときも 2、config-path は設定に問題があっても
 | baud（シリアルの速さ）の … は使えません | 9600、38400、57600、115200 などの決まった速さにする |
 | 終了コードが「読めませんでした」になる | 機器のシェルで `$?` が使えるか（fish などでは使えません） |
 
-## テストを実行する
+## スクリプトを直接実行する
 
-このフォルダで次のコマンドを実行し、最後に `OK` と出れば成功です。
+作業フォルダをカレントディレクトリにして、次のように実行します。
 
 ```
-# Windows（py がなければ python）
+# Windows（PowerShell）
+py -3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]
+# Linux（bash）
+python3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]
+```
+
+`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/log-capture`）。`py` がないときは `python` を使います。
+
+`<サブコマンド>` は次のどれかです。
+
+- `run`：機器でコマンドを実行し、出力を記録する（サブコマンドを省略したときも `run`）
+- `config-path`：設定ファイルの場所を表示する（なければ作る）
+- `check`：設定を確認する（ファイルは作らない）
+
+次のオプションを付けられます。
+
+- `--command 'コマンド'`（run のとき）：`commands` の代わりに実行する。複数指定できる。値の中の `'` は、PowerShell では `''`、bash では `'\''` と書く
+- `--listen-only 秒数`（run のとき）：コマンドを実行せず、その秒数だけ記録する
+- `--workdir <フォルダ>`：作業フォルダを指定する（既定はカレントディレクトリ）
+- `--config <ファイル>`：別の場所の設定ファイルを使う
+
+## テストを実行する
+
+このフォルダで、次を実行します。
+
+```
+# Windows（PowerShell）
 py -3 -m unittest discover -s tests
-# Linux
+# Linux（bash）
 python3 -m unittest discover -s tests
 ```
 
+最後に `OK` と出れば成功です。
 機器は要りません。TCP で接続する模擬の機器を使います（Linux では、疑似端末で接続するテストも動きます）。
+
 `__pycache__` を残さないときは、`-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。

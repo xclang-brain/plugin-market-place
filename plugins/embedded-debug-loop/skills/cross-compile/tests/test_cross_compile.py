@@ -332,9 +332,8 @@ class TemplateTest(unittest.TestCase):
         self.assertNotIn("必須", block, "必須の印を付けると、空のときにビルドできなくなる")
         # WSL の中の SDK を使うときは空にする（「必ず書く」の例外として書く）
         self.assertIn("ただし、WSL の中の SDK を使うときは空にして", block)
-        # シェルごとのファイルの種類
-        for word in (".bat", ".cmd", ".ps1"):
-            self.assertIn(word, block)
+        # シェルごとのファイルの種類。どの項目のことかが分かるように、shell の名前で言う
+        self.assertIn("shell が cmd（Windows の auto も同じ）なら .bat・.cmd、powershell なら .ps1 にする。", block)
         # 例が何の例か（Windows で使う SDK と、Linux で使う Yocto の SDK）が分かる
         self.assertIn("例の1つ目は Windows で使う SDK（cmd 用）、2つ目は Linux で使う Yocto の SDK（bash 用）。",
                       block)
@@ -1030,7 +1029,9 @@ class CheckTest(unittest.TestCase):
         note = data["notes"][0]
         for word in ("sdk_env", "SDK を読み込みません"):
             self.assertIn(word, note)
-        self.assertIn(note, data["message"])
+        # 注意があるときは「問題はありません」と言い切らず、「ただし、」で注意を続ける
+        self.assertEqual(data["message"], "ビルドの準備はできています。ただし、" + note)
+        self.assertNotIn("問題はありません", data["message"])
         self.assertEqual(data["summary"]["compiler"], "cc")
         path = data["summary"]["compiler_path"]
         if path:
@@ -1416,6 +1417,8 @@ class ShellScenarios(object):
         code, data, _ = p.run("check")
         self.assertEqual(code, 0, data)
         self.assertEqual(data["notes"], [])
+        # 注意がないときだけ「問題はありません」と言う
+        self.assertEqual(data["message"], "設定に問題はありません。ビルドの準備ができています。")
         self.assertEqual(data["summary"]["compiler"], sys.executable)
         if " " not in sys.executable:
             self.assertTrue(data["summary"]["compiler_path"])
@@ -2212,7 +2215,7 @@ class ReadmeTest(unittest.TestCase):
         self.assertLess(needs.index("Windows"), needs.index("Linux"))
         self.assertIn("wsl", self.text)
         # 個人のフォルダの場所も、Windows を先に書く
-        self.assertLess(self.text.index("`%USERPROFILE%\\.copilot\\skills\\cross-compile\\`"),
+        self.assertLess(self.text.index("`$env:USERPROFILE\\.copilot\\skills\\cross-compile\\`"),
                         self.text.index("`~/.copilot/skills/cross-compile/`"))
 
     def test_windows_status_is_at_the_end_of_needs(self):
@@ -2239,6 +2242,40 @@ class ReadmeTest(unittest.TestCase):
         self.assertIn("| スクリプトの中で思わぬエラーが起きました | ログ（`check` では標準エラー出力）を確認します |",
                       self.text)
         self.assertNotIn("そこに新しい設定ファイルができます", self.text)
+
+    def test_layout_shared_with_other_skills(self):
+        """スキルの README でそろえる書き方：節の並び、インストールの確認、名前を変えたコピー、コマンドの書き方。"""
+        text = self.text
+        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
+        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方", "設定ファイル",
+                                    "結果とログ", "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
+        # README に書いた名前（フォルダの名前を変えても、README は書き換えない）
+        self.assertIn("\n3. `/skills list` に `cross-compile` が出れば完了です。\n", text)
+        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("\n- GitHub Copilot CLI\n", needs)
+        # できることの箇条は、言い切りの形（「…する。」）
+        can = text.split("## できること", 1)[1].split("\n## ", 1)[0]
+        for line in can.splitlines():
+            if line.startswith("- "):
+                self.assertFalse(line.endswith("ます。"), line)
+        # うまくいかないときの表の見出し
+        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
+        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
+        self.assertNotIn("%USERPROFILE%", text)
+        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
+                      "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
+                      "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
+        # check は注意を「ただし、」の後に続ける。その読み方を、ほかのスキルと同じ文で書く
+        self.assertIn("と入力します（ビルドはしません）。「ただし、」の後に注意が出たら、その内容を確認します。\n",
+                      text)
+        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/build.py <サブコマンド>\n"
+                      "# Linux（bash）\npython3 <このフォルダ>/scripts/build.py <サブコマンド>\n```", text)
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
+                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
+        for line in text.splitlines():
+            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
+        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n", text)
 
     def test_no_test_duration(self):
         """テストの時間は OS で違うので書かない。"""

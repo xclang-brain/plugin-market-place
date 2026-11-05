@@ -16,7 +16,7 @@ shell: "auto"
 # ビルドの前に読み込む、SDK の環境設定ファイル。空なら読み込まない。
 # 機器向けにビルドするなら、必ず書く。
 # ただし、WSL の中の SDK を使うときは空にして、build_command に wsl で始まるコマンドを書く。
-# cmd では .bat か .cmd、powershell では .ps1 にする。
+# shell が cmd（Windows の auto も同じ）なら .bat・.cmd、powershell なら .ps1 にする。
 # 例の1つ目は Windows で使う SDK（cmd 用）、2つ目は Linux で使う Yocto の SDK（bash 用）。
 # 例：'C:\sdk\setenv.bat'
 # 例：/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi

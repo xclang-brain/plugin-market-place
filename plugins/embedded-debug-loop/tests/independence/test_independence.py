@@ -12,9 +12,11 @@
     設定の確認（check）は、設定ファイルがなくても、作業フォルダに何も作らない。
 - 2段階目：作業エージェントは、スキルの名前を「使うスキル」の表にだけ書く。スキルの中身
   （スクリプトの名前、設定の項目、設定ファイルの置き場所、転送やログ取得の方法）を書いていない。
+  セットアップでは、設定のスキルに渡す名前を、読む前にチャットに書く。
 - 3段階目：統括エージェント・検証エージェント・エクステンションは、機器・ビルド・転送・ログ取得の
   方法やスキルの名前を書いていない。作業エージェントの名前は、設定のデータ（defaults.json）にだけある。
-  定義の例に、具体の値（答えになりうる数字）を書いていない。
+  定義の例に、具体の値（答えになりうる数字）を書いていない。利用者への質問の例や選択肢にも、
+  頼みに書かれていない値を作って入れない。
 - 文書：上の段の文書（プラグインの README、作業エージェントの README の統括・検証の部分、
   3段階目のガイド、置き換えのガイド）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
   3段階目のガイドは、作業エージェントが機器のものだと前提にしない。置き換えた作業エージェントは、
@@ -22,6 +24,8 @@
 - 置き換え：スキルを、別の中身・別の設定の形のスキルに置き換えても（作業エージェントごと置き換えても）、
   setup の skills がそれを見つけ、作業エージェント・統括エージェントの定義を変えずに済む。
   setup を作業フォルダに置き換えたときは、設定するスキルも同じ場所に置けば見つかる（置き換えのガイドの決まり）。
+  置き換えのガイドの約束のコメントの言葉（「必須」「必ず」「例：」「選べる値：」）で書けば、setup が読み分ける。
+  作業エージェントのコピーは、プラグインを更新したら作り直す（コピーは古いまま残る）。
 - スキルのスクリプトの出力は、設計書 3.8 の文字コード（Windows ではコンソールの文字コード）で読む。
 
   python3 -m unittest discover -s tests/independence -v
@@ -444,6 +448,9 @@ class WorkerIndependence(unittest.TestCase):
         self.assertIn("名前", a1.group(0))
         self.assertNotRegex(a1.group(0), r"設定ファイルの場所(の一覧)?を(返|渡して)", "設定ファイルの場所を集めて渡しています")
         self.assertNotRegex(self.text, r"設定ファイルの場所を返す", "スキルに、設定ファイルの場所を返すよう頼んでいます")
+        # skill ツールは名前しか受け取らない。渡す名前は、設定のスキルを読む前にチャットに書く（利用者にも見える）
+        self.assertRegex(a1.group(0), r"設定のスキルを読む前に、チャットに「<スキルの名前>",
+                         "セットアップで、渡すスキルの名前をチャットに書いていません")
 
     def test_no_upper_layer(self):
         found = [w for w in ["Web管理画面", "統括", "検証エージェント", "orchestrator", "verifier", "embedded-debug-loop_"]
@@ -483,6 +490,12 @@ class OrchestrationIndependence(unittest.TestCase):
                         if re.search(r"[0-9０-９]", quoted):
                             problems.append(f"{path.relative_to(ROOT)}:{lineno}: 「{quoted}」")
         self.assertEqual(problems, [], "定義の例に、具体の値があります：\n" + "\n".join(problems))
+
+    def test_questions_hold_no_invented_values(self):
+        """利用者への質問の例や選択肢に、頼みに書かれていない値を作って入れない（例の欄に、答えの値を作って書いたため）"""
+        text = (AGENTS_DIR / "orchestrator.agent.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"質問の例や選択肢に、頼みに書かれていない値[^\n]*作って入れない",
+                         "統括エージェントに、質問の例や選択肢に値を作って入れない決まりがありません")
 
     def test_worker_name_only_in_defaults(self):
         defaults = EXT_DIR / "defaults.json"
@@ -556,6 +569,17 @@ class DocumentIndependence(unittest.TestCase):
                          "置き換えのガイドに、最初の依頼で作業エージェントを選ぶ手順がありません")
         self.assertNotIn("Web管理画面の「設定」で、作業エージェントに新しい名前を選びます", replace,
                          "置き換えのガイドが、Web管理画面で選ぶ方法を主にしています")
+
+    def test_worker_copy_is_renewed_after_update(self):
+        """作業エージェントのコピーは、インストールしたプラグインから作り、プラグインを更新したら作り直す。
+        コピーは古いまま残り、設定のスキルへの頼み方などが、プラグインの部品と食い違うため"""
+        text = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
+        part = section(text, "作業エージェントを置き換える")
+        self.assertIsNotNone(part, "置き換えのガイドに「## 作業エージェントを置き換える」の節がありません")
+        self.assertIn("インストールしたプラグインの", part, "コピー元が、インストールしたプラグインではありません")
+        self.assertRegex(part, r"プラグインを更新したら、コピーし直して、手順 2〜3 をやり直",
+                         "プラグインを更新したら、コピーし直して書き換え直す手順がありません")
+        self.assertNotIn("GitHub", part, "コピー元に、バージョンを見分けられない GitHub が残っています")
 
     def test_worker_readme_knows_only_names_and_roles(self):
         """作業エージェントの README は、作業エージェントの定義と同じく、スキルの名前と役割だけを書く"""
@@ -711,6 +735,29 @@ class SkillReplacement(unittest.TestCase):
             self.assertEqual(entry["where"], "project")
             self.assertTrue(same_path(entry["path"], project_skills / skill))
             self.assertTrue(same_path(entry["readme"], project_skills / skill / "README.md"))
+
+    def test_guide_comment_words_work_with_setup(self):
+        """置き換えのガイドの約束（設定のコメント）の言葉で書いた、知らないスキルの設定ファイルを、setup が読み分ける"""
+        guide = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
+        row = next((cells for cells in table_rows(guide) if cells and cells[0] == "設定のコメント"), None)
+        self.assertIsNotNone(row, "置き換えのガイドの約束に「設定のコメント」の行がありません")
+        for word in ["「必須」", "「必ず」", "「例：」", "「選べる値：」"]:
+            self.assertIn(word, row[1], f"置き換えのガイドの約束に、コメントの言葉 {word} がありません")
+        # setup は「例：」「選べる値：」を、コメントの行の先頭にあるときだけ読む
+        self.assertIn("行の先頭", row[1], "置き換えのガイドの約束に、「例：」などを行の先頭に書くことがありません")
+        cfg = self.project / ".kettle" / "settings.yaml"
+        cfg.parent.mkdir()
+        cfg.write_text("# 湯わかし器の設定\n\n# 湯わかし器の名前（必須）\nname: \n\n"
+                       "# 湯の温度。使うなら、必ず書く。\n# 例：90\ntemperature: \n\n"
+                       "# 音を鳴らすか。\n# 選べる値：on / off\nsound: off\n", encoding="utf-8")
+        shown = run_tool(self.setup_dir / "scripts" / "config_tool.py", "show", str(cfg), cwd=self.project)
+        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
+        items = {item["key"]: item for item in json.loads(shown.stdout)["items"]}
+        self.assertTrue(items["name"]["required"], "「必須」の項目が、必須になりません")
+        self.assertFalse(items["temperature"]["required"])
+        self.assertTrue(items["temperature"]["fill_recommended"], "「必ず」の項目が、必須の次に聞く項目になりません")
+        self.assertEqual([str(v) for v in items["temperature"]["examples"]], ["90"], "「例：」の値が、選択肢の例になりません")
+        self.assertEqual(items["sound"]["choices"], ["on", "off"], "「選べる値：」の値が、選べる値になりません")
 
     def test_skill_without_readme_falls_back_to_skill_md(self):
         bare = make_skill(self.copilot_home / "skills" / "kettle", "kettle", "湯をわかす。")

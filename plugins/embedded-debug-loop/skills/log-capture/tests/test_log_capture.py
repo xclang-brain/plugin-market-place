@@ -1182,10 +1182,26 @@ class Check(CaptureTestCase):
         self.assertEqual(self.device.executed, ["exit"])  # コマンドは実行しない
         self.assertEqual(self.device.state, "login")
         self.assertEqual(data["notes"], [])
+        # 注意がないときだけ「問題はありません」と言う
+        self.assertTrue(data["message"].startswith("設定に問題はありません。シリアルポート "), data["message"])
         # ログは作らない
         self.assertNotIn("log", data)
         self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME))), ["config.yaml"])
         self.assertNotIn("ログ：", self.stderr)
+
+    def test_check_logout_not_confirmed(self):
+        """exit の後にログインの求めに戻らなかったら、「問題はありません」と言わず、「ただし、」で伝える。"""
+        port = self.start_device(login=True, exit_logs_out=False)
+        self.write_config(port=port, login_password="root", commands=["echo hi"])
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["notes"], [])
+        self.assertEqual(self.device.executed, ["exit"])
+        self.assertEqual(data["message"],
+                         "シリアルポート %s で機器につながり、root でログインできました。"
+                         "ただし、exit を送った後、ログインの求めに戻ったかは確認できませんでした。" % port)
+        self.assertNotIn("問題はありません", data["message"])
 
     def test_check_shell_without_login(self):
         port = self.start_device(login=False)
@@ -1240,13 +1256,17 @@ class Check(CaptureTestCase):
         self.assertEqual(data["notes"], [
             "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"
             "機器でプログラムを動かしてログを取るなら、commands を書いてください。"])
-        self.assertTrue(data["message"].endswith(data["notes"][0]), data["message"])
+        # 注意があるときは「問題はありません」と言い切らず、「ただし、」で注意を続ける
+        self.assertTrue(data["message"].endswith("ただし、" + data["notes"][0]), data["message"])
+        self.assertNotIn("問題はありません", data["message"])
         for values in ({"commands": ["echo hi"]}, {"listen_seconds": 10}):
             self.write_config(port=port, **values)
             code, data = self.capture("check")
             self.assertEqual(code, 0, data)
             self.assertEqual(data["notes"], [], values)
             self.assertNotIn("commands", data["message"], values)
+            self.assertTrue(data["message"].startswith("設定に問題はありません。"), data["message"])
+            self.assertNotIn("ただし", data["message"], values)
         # listen_seconds の値が空（「listen_seconds:」だけの行）のときも、0 と同じに注意する
         path = self.write_config(port=port)
         with open(path, encoding="utf-8") as f:
@@ -1968,11 +1988,47 @@ class SelfContained(unittest.TestCase):
         # Windows を先に書く
         self.assertLess(text.index("COM3"), text.index("/dev/ttyUSB0"))
         self.assertLess(text.index("py -3"), text.index("python3"))
-        self.assertLess(text.index("%USERPROFILE%\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
+        self.assertLess(text.index("$env:USERPROFILE\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
         self.assertIn("Windows では、GitHub Actions でテストを確認しています。"
                       "Windows の Copilot CLI との組み合わせは、まだ確認していません。", text)
         self.assertIn("設定ファイルを作って", text)
         self.assertNotRegex(text, r"\d+ ?分ほど")   # テストの時間は、OS で違うので書かない
+
+    def test_layout_shared_with_other_skills(self):
+        """スキルの README でそろえる書き方：節の並び、インストールの確認、名前を変えたコピー、コマンドの書き方。"""
+        with open(README, encoding="utf-8") as f:
+            text = f.read()
+        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
+        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方", "設定ファイル",
+                                    "結果とログ", "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
+        # README に書いた名前（フォルダの名前を変えても、README は書き換えない）
+        self.assertIn("\n3. `/skills list` に `log-capture` が出れば完了です。\n", text)
+        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("\n- GitHub Copilot CLI\n", needs)
+        # できることの箇条は、言い切りの形（「…する。」）
+        can = text.split("## できること", 1)[1].split("\n## ", 1)[0]
+        for line in can.splitlines():
+            if line.startswith("- "):
+                self.assertFalse(line.endswith("ます。"), line)
+        # うまくいかないときの表の見出し
+        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
+        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
+        self.assertNotIn("%USERPROFILE%", text)
+        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
+                      "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
+                      "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
+        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]\n"
+                      "# Linux（bash）\npython3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]\n```", text)
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
+                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
+        for line in text.splitlines():
+            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
+        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n", text)
+        # パスワードを環境変数で渡す例は、Windows（PowerShell）と Linux（bash）の2つ
+        part = text.split("### パスワードを環境変数で渡す", 1)[1].split("\n## ", 1)[0]
+        self.assertRegex(part, r"\n   - Windows（PowerShell）：`\$env:[A-Z_]+ = '[^']+'`\n"
+                               r"   - Linux（bash）：`export [A-Z_]+='[^']+'`\n")
 
     def test_skill_md_check_creates_nothing(self):
         with open(SKILL_MD, encoding="utf-8") as f:
