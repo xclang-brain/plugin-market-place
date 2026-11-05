@@ -3,19 +3,22 @@
 """PC にあるファイルを、FTP で機器に送る。
 
 使い方:
-  python3 deploy.py [run | config-path | check] [--workdir フォルダ] [--config ファイル]
+  deploy.py [run | config-path | check] [--workdir フォルダ] [--config ファイル]
+  （Windows では py -3 deploy.py …、それ以外では python3 deploy.py …）
 
   run          設定ファイルのとおりに、ファイルを機器に送る（省略したときもこれ）
   config-path  設定ファイルの場所を出す。なければ、ひな形から作る
-  check        設定を確かめ、機器に FTP でログインできるかを試す
+  check        設定を確かめ、機器に FTP でログインできるかを試す。ファイルは作らない
+               （設定ファイルがなければ、作らずに、ないと答える。記録のファイルも作らない）
 
 設定と記録は、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
-  config.yaml  設定ファイル（なければ、ひな形 config-template.yaml から作る）
-  logs/        記録のファイル
-  .gitignore   中身は * の1行（設定や記録を git に入れないため）
+  config.yaml  設定ファイル（config-path と run は、なければ、ひな形 config-template.yaml から作る）
+  logs/        記録のファイル（run のとき）
+  .gitignore   中身は * の1行（設定や記録を git に入れないため。config-path と run が作る）
 
 標準出力には、結果の JSON を1つだけ出す。途中のようすは標準エラーに出す。
-Python 3.8 以上の標準ライブラリだけで動く。
+どちらも Python の既定の文字コードで書く（書けない文字は \\ の形にする）。
+Python 3.8 以上の標準ライブラリだけで動く。Windows でも Linux でも動く。
 """
 
 import argparse
@@ -70,35 +73,92 @@ DEFAULTS = {
 }
 
 USAGE_JA = (
-    "使い方：python3 deploy.py [run | config-path | check] "
+    "使い方：deploy.py [run | config-path | check] "
     "[--workdir フォルダ] [--config 設定ファイル]"
 )
+
+# checksum_suffix に使えない文字（Windows か Linux で、ファイルの名前に使えないもの）
+BAD_NAME_CHARS = '/\\:*?"<>|'
 
 
 # ---------------------------------------------------------------------------
 # 出力
 # ---------------------------------------------------------------------------
 
-def _write_text(stream, text):
-    data = text.encode("utf-8")
-    buf = getattr(stream, "buffer", None)
-    if buf is not None:
-        buf.write(data)
-        buf.flush()
-    else:
-        stream.write(text)
-        stream.flush()
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（cp932 など）。コンソールがなければ None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except Exception:
+        return None
+    if not cp:
+        return None
+    name = "cp%d" % cp
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
+def prepare_streams():
+    """標準出力と標準エラーを、読む側の文字コードに合わせ、書けない文字を \\ の形にする。
+
+    Windows で、出力先がコンソールでない（パイプなど）ときは、コンソールの文字コードで書く。
+    PowerShell は、この文字コードで読む。Python 3.15 からの既定（UTF-8 モード）のままだと、
+    日本語の Windows では文字化けする。
+    """
+    encoding = console_code_page()
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if encoding and not stream.isatty():
+                reconfigure(encoding=encoding, errors="backslashreplace")
+            else:
+                reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
+def json_for(stream, obj):
+    """obj の JSON の文。stream の文字コードで書けない文字は、JSON の \\uXXXX にする
+    （JSON として読めるままにする）。"""
+    text = json.dumps(obj, ensure_ascii=False)
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+        return text
+    except UnicodeEncodeError:
+        pass
+    except LookupError:
+        return json.dumps(obj)
+    out = []
+    for ch in text:
+        try:
+            ch.encode(encoding)
+        except UnicodeEncodeError:
+            ch = json.dumps(ch)[1:-1]
+        out.append(ch)
+    return "".join(out)
 
 
 def emit(obj):
     """結果の JSON を標準出力に1つだけ出す。"""
-    _write_text(sys.stdout, json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.write(json_for(sys.stdout, obj) + "\n")
+    sys.stdout.flush()
 
 
 def progress(text):
     """途中のようすを標準エラーに出す。"""
     try:
-        _write_text(sys.stderr, "[%s] %s\n" % (SKILL, text))
+        sys.stderr.write("[%s] %s\n" % (SKILL, text))
+        sys.stderr.flush()
     except Exception:
         pass
 
@@ -134,6 +194,20 @@ class Log(object):
             self._fh = None
 
 
+class StderrLog(Log):
+    """check 用。記録のファイルは作らず、記録の文（機器の答え、失敗の詳しいこと）も標準エラーに出す。"""
+
+    def __init__(self):
+        Log.__init__(self, None)
+
+    def write(self, text):
+        for line in str(text).splitlines() or [""]:
+            progress(line)
+
+    def say(self, text):
+        self.write(text)
+
+
 def _config_dir_of(path):
     """path か、その上にあるデータのフォルダ（DATA_DIR_NAME）の場所。なければ None。"""
     p = os.path.abspath(path)
@@ -155,8 +229,10 @@ def ensure_gitignore(path):
     target = os.path.join(top, ".gitignore")
     if os.path.lexists(target):
         return
+    # Windows では、O_BINARY を付けないと、改行が \r\n になる
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     try:
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        fd = os.open(target, flags, 0o644)
     except OSError:
         return
     try:
@@ -348,7 +424,7 @@ def read_config_text(text):
     values = {}
     raws = {}
     list_key = None
-    if text.startswith("﻿"):
+    if text.startswith("\ufeff"):
         text = text[1:]
     for lineno, line in enumerate(text.splitlines(), 1):
         s = line.rstrip()
@@ -396,13 +472,15 @@ def read_config_text(text):
 
 
 def read_config_file(path):
+    # メッセージに path を書かない（problems_message が設定ファイルの場所を足す。
+    # config-path の結果には config がある）
     try:
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
     except UnicodeDecodeError:
-        raise ConfigError("設定ファイル %s が UTF-8 で読めません。" % path)
+        raise ConfigError("設定ファイルが UTF-8 で読めません。UTF-8 で保存し直してください。")
     except OSError as e:
-        raise ConfigError("設定ファイル %s が開けません（%s）。" % (path, _os_reason(e)))
+        raise ConfigError("設定ファイルが開けません（%s）。" % _os_reason(e))
     return read_config_text(text)
 
 
@@ -672,6 +750,13 @@ def validate(values, raws, workdir, environ=None):
             if not isinstance(item, str) or item.strip() == "":
                 problems.append("files に、ファイルの名前でない値があります（%s）。" % (item,))
                 continue
+            if re.search(r"[\x00-\x1f]", item):
+                # "C:\temp\new" のように " で囲むと、\t と \n がタブと改行として読まれる
+                problems.append(
+                    "files の %s に、タブや改行が入っています（\" で囲むと、\\t はタブ、"
+                    "\\n は改行として読まれます）。パスは / で区切るか、' で囲んでください。"
+                    % visible(item))
+                continue
             rel = item.strip()
             path = rel if os.path.isabs(rel) else os.path.join(workdir, rel)
             path = os.path.normpath(path)
@@ -696,8 +781,15 @@ def validate(values, raws, workdir, environ=None):
     if _is_empty(remote_dir):
         problems.append("remote_dir（機器の送り先のフォルダ）が空です。")
         remote_dir = ""
-    elif not isinstance(remote_dir, str) or "\n" in remote_dir:
+    elif not isinstance(remote_dir, str):
         problems.append("remote_dir はフォルダのパスにしてください（今の値：%s）。" % (remote_dir,))
+        remote_dir = ""
+    elif "\\" in remote_dir or re.search(r"[\x00-\x1f]", remote_dir):
+        # Windows の書き方（\ で区切る）。機器では、名前に \ を含むフォルダができてしまう。
+        # " で囲むと \t や \n はタブや改行になるので、それも同じに扱う。
+        problems.append(
+            "remote_dir は機器のパスなので、\\ ではなく / で区切ってください（今の値：%s）。"
+            % visible(remote_dir).strip())
         remote_dir = ""
     else:
         remote_dir = remote_dir.strip()
@@ -732,12 +824,22 @@ def validate(values, raws, workdir, environ=None):
         if suffix.strip() == "":
             problems.append(
                 "checksum_suffix（サム値のファイルの名前の後ろに付ける文字）が空です。")
-        elif "/" in suffix or "\n" in suffix:
+        elif any(c in BAD_NAME_CHARS or ord(c) < 32 for c in suffix):
             problems.append(
-                "checksum_suffix に / は使えません（今の値：%s）。" % suffix)
+                "checksum_suffix に、ファイルの名前に使えない文字（%s）は使えません（今の値：%s）。"
+                % (" ".join(BAD_NAME_CHARS), visible(suffix)))
     s["checksum_suffix"] = suffix
 
     return s, problems, notes, not conn_bad
+
+
+_CONTROL_NAMES = {"\t": "\\t", "\n": "\\n", "\r": "\\r", "\b": "\\b", "\f": "\\f"}
+
+
+def visible(text):
+    """タブや改行などの見えない文字を、\\t・\\n などの形にする（メッセージに出すため）。"""
+    return re.sub(r"[\x00-\x1f]",
+                  lambda m: _CONTROL_NAMES.get(m.group(0), "\\x%02x" % ord(m.group(0))), text)
 
 
 def summary_of(settings):
@@ -821,8 +923,11 @@ def _is_timeout(e):
     return isinstance(e, (socket.timeout, TimeoutError))
 
 
+# 機器までの経路がないときのエラーの番号。Windows では WSA の番号になる。
 _UNREACH = set(
-    getattr(errno, n) for n in ("EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN", "ENETDOWN")
+    getattr(errno, n) for n in (
+        "EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN", "ENETDOWN",
+        "WSAEHOSTUNREACH", "WSAENETUNREACH", "WSAEHOSTDOWN", "WSAENETDOWN")
     if hasattr(errno, n))
 
 
@@ -923,6 +1028,8 @@ def ftp_login(settings, log):
     port = settings["port"]
     timeout = settings["timeout_seconds"]
     ftp = ftplib.FTP()
+    # Python 3.8 の既定は latin-1。3.9 以降と同じく、ファイルやフォルダの名前を UTF-8 で送る。
+    ftp.encoding = "utf-8"
     log.say("機器 %s の %s 番ポートに FTP でつなぎます（最長 %s 秒待ちます）。"
             % (host, port, _fmt_seconds(timeout)))
     try:
@@ -1260,16 +1367,44 @@ def _load(workdir, config):
     return created, added, values, raws, []
 
 
+def _load_existing(config):
+    """check 用。ファイルを作らずに、今ある設定ファイルを読む。(added, values, raws, problems) を返す。
+    足りない項目は、ほかのコマンドと同じく、設定ファイルに足す。"""
+    if not os.path.isfile(config):
+        return [], None, None, ["設定ファイルの場所 %s は、ファイルではありません。" % config]
+    added = add_missing_keys(config)
+    try:
+        values, raws = read_config_file(config)
+    except ConfigError as e:
+        return added, None, None, [str(e)]
+    return added, values, raws, []
+
+
+# file_mode が空のとき、check で伝える注意（問題ではない）。
+NO_MODE_NOTE = ("file_mode が空なので、送った後に権限を付けません。"
+                "FTP で送ったファイルは、ふつうは実行できない権限になります。"
+                "機器でプログラムを実行するなら、file_mode に 755 などを書いてください。")
+
+
 def cmd_check(workdir, config):
-    log = open_log(workdir)
-    log.write("%s check を始めます。設定ファイル：%s" % (SKILL, config))
-    created, added, values, raws, problems = _load(workdir, config)
+    """設定を確かめる。作業フォルダには、ファイルを作らない（設定ファイル・.gitignore・記録のファイル）。"""
+    log = StderrLog()
+    if not os.path.exists(config):
+        message = "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config
+        progress(message)
+        emit({"ok": False, "skill": SKILL, "problems": [message], "notes": [], "summary": {},
+              "message": message, "config": config, "created": False, "added": []})
+        return 2
+    added, values, raws, problems = _load_existing(config)
     summary = {}
+    notes = []
     login_error = None
     if values is not None:
         settings, problems, notes, connect_ready = validate(values, raws, workdir)
         settings["config_path"] = config
         summary = summary_of(settings)
+        if _is_empty(_as_text("file_mode", values, raws)):
+            notes.append(NO_MODE_NOTE)
         for n in notes:
             log.say(n)
         if connect_ready:
@@ -1293,29 +1428,31 @@ def cmd_check(workdir, config):
         else:
             summary["login"] = "試していない（設定の問題を先に直してください）"
     if problems:
-        message = problems_message(problems, config, created)
+        message = problems_message(problems, config, False)
         if login_error:
             message = login_error + "ほかに、" + message
     elif login_error:
         message = login_error
     else:
-        message = "設定に問題はありません。機器 %s に FTP でログインできました。" % summary.get("host")
+        logged_in = "機器 %s に FTP でログインできました。" % summary.get("host")
+        if notes:
+            # 注意があるときは「問題はありません」と言い切らない
+            message = logged_in + "ただし、" + "".join(notes)
+        else:
+            message = "設定に問題はありません。" + logged_in
     if login_error:
         problems.append(login_error)
-    for p in problems:
-        log.write("問題：%s" % p)
     ok = not problems
     log.say(message)
-    log.close()
     emit(with_added({
         "ok": ok,
         "skill": SKILL,
         "problems": problems,
+        "notes": notes,
         "summary": summary,
         "message": message,
         "config": config,
-        "created": created,
-        "log": log.path,
+        "created": False,
     }, added))
     return 0 if ok else 2
 
@@ -1406,6 +1543,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def main(argv=None):
+    prepare_streams()
     parser = _Parser(prog="deploy.py", add_help=False)
     parser.add_argument("command", nargs="?", default="run",
                         choices=["run", "config-path", "check"])
@@ -1428,6 +1566,12 @@ def main(argv=None):
         return cmd_run(workdir, config)
     except Exception:
         detail = traceback.format_exc()
+        if args.command == "check":
+            # check は、記録のファイルも作らない。くわしいことは標準エラーに出す
+            progress(detail.rstrip())
+            message = "思わぬエラーで止まりました（%s）。" % detail.strip().splitlines()[-1]
+            emit({"ok": False, "skill": SKILL, "message": message, "config": config})
+            return 1
         log = open_log(workdir)
         log.write("思わぬエラー：\n" + detail)
         log.close()

@@ -13,7 +13,8 @@ export const EXT_DIR = path.join(PLUGIN_ROOT, 'com.github.copilot', 'extensions'
 export const WORKER = 'demo-plugin:helper-a';
 export const VERIFIER = 'demo-plugin:checker-b';
 export const LEAD = 'demo-plugin:lead-c'; // 統括エージェント（defaults.json の orchestrator）
-export const CWD = '/w/project'; // セッションの作業フォルダ
+// セッションの作業フォルダ。エクステンションと同じく path.resolve で作る（Windows では D:\\w\\project のようになる）
+export const CWD = path.resolve('/w/project');
 
 export function tempDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edl-ext-'));

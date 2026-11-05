@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
-"""試験用の、機器のシリアルコンソールのまね。
+"""テスト用の、機器のシリアルコンソールのまね。
 
-PC 側の pty（スクリプトが開くシリアルポート）と、機器側の pty を、
-中継のスレッドでつなぐ。機器側では、ログインとシェルをまねるスレッドが動く。
+スクリプトが開く PC 側と、機器のまねの間を、中継のスレッドでつなぐ。
 
-  スクリプト ⇄ [PC 側 pty] ⇄ 中継 ⇄ [機器側 pty] ⇄ 機器のまね
+  スクリプト ⇄ [PC 側] ⇄ 中継 ⇄ [ソケットの組] ⇄ 機器のまね
+
+PC 側は2つから選ぶ。
+- "tcp"（既定）：127.0.0.1 の TCP。スクリプトの port は socket://127.0.0.1:<番号>。
+  どの OS でも動く。
+- "pty"（Linux だけ）：疑似端末。スクリプトの port は /dev/pts/N（本物のシリアルポートの道）。
 
 中継を止めると「ケーブルが抜けた（何も届かない）」状態になり、
-PC 側の親を閉じると「USB が抜けた（読むとエラー）」状態になる。
+pull_usb() で PC 側を閉じると「USB が抜けた（読むとエラー）」状態になる。
 
 シェルのまねは、直前のコマンドの終了コード（$?）を覚えていて、
 echo の引数の $? を、その数に置き換える。
@@ -15,9 +19,9 @@ echo の引数の $? を、その数に置き換える。
 
 import os
 import select
+import socket
 import threading
 import time
-import tty
 
 HOST = "myboard"
 PLAIN_PROMPT = "root@myboard:~# "
@@ -39,21 +43,44 @@ DEFAULT_RESPONSES = {
     "color": "\x1b[1;31m[DBG]\x1b[0m VALUE=\x1b[33m3\x1b[0m\n\x1b[32mOK\x1b[0m",
 }
 
+SEND_WAIT = 2.0  # 書き込みで待つ最長の秒数（相手が読まなくなっても、止まったままにしない）
+
+
+def _sendall(sock, data):
+    try:
+        sock.sendall(data)
+    except OSError:
+        pass
+
 
 class Relay(object):
-    """PC 側の pty と機器側の pty の間で、バイトを運ぶ。"""
+    """PC 側と機器のまねの間で、バイトを運ぶ。"""
 
-    def __init__(self):
-        self.pc_master, self.pc_slave = os.openpty()
-        self.dev_master, self.dev_slave = os.openpty()
-        tty.setraw(self.pc_slave)
-        tty.setraw(self.dev_slave)
-        self.port = os.ttyname(self.pc_slave)
-        for fd in (self.pc_master, self.dev_master):
-            os.set_blocking(fd, False)
+    def __init__(self, mode="tcp"):
+        self.mode = mode
+        # 機器のまねとの間は、ソケットの組（どの OS でも動く）
+        self.dev_peer, self.dev_sock = socket.socketpair()
+        for s in (self.dev_peer, self.dev_sock):
+            s.settimeout(SEND_WAIT)
+        self.listener = None
+        self.conn = None        # tcp：スクリプトとの接続
+        self.pc_master = None   # pty：PC 側の疑似端末の親
+        self.pc_slave = None
+        if mode == "pty":
+            import tty  # Linux など（pty のテストは Linux のときだけ動かす）
+            self.pc_master, self.pc_slave = os.openpty()
+            tty.setraw(self.pc_slave)
+            os.set_blocking(self.pc_master, False)
+            self.port = os.ttyname(self.pc_slave)
+        else:
+            self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener.bind(("127.0.0.1", 0))
+            self.listener.listen(4)
+            self.port = "socket://127.0.0.1:%d" % self.listener.getsockname()[1]
         self.plugged = True
         self.from_pc = bytearray()   # スクリプトが送ったもの（つながっている間）
         self.sent_while_unplugged = bytearray()
+        self.connections = 0         # tcp：スクリプトが接続した回数
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._closed_pc = False
@@ -70,71 +97,143 @@ class Relay(object):
         self.plugged = True
 
     def pull_usb(self):
-        """USB の変換器ごと抜けたときのまね：PC 側の親を閉じる。"""
+        """USB の変換器ごと抜けたときのまね：PC 側を閉じる。"""
         with self._lock:
-            if not self._closed_pc:
-                self._closed_pc = True
+            if self._closed_pc:
+                return
+            self._closed_pc = True
+            if self.mode == "pty":
                 try:
                     os.close(self.pc_master)
                 except OSError:
                     pass
+            elif self.conn is not None:
+                # 送る側だけを閉じる。スクリプトは、届いた文字を読み切った後に「切れた」を知る。
+                # 閉じるのは、スクリプトが閉じた後に、中継のスレッドがする
+                # （読んでいない文字を残して閉じると、RST で届いた文字が消えることがある）
+                try:
+                    self.conn.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
 
-    def _write(self, fd, data):
-        while data:
+    def _to_pc(self, data):
+        if self.mode == "pty":
+            while data:
+                try:
+                    n = os.write(self.pc_master, data)
+                    data = data[n:]
+                except BlockingIOError:
+                    time.sleep(0.01)
+                except OSError:
+                    return
+        elif self.conn is not None:
+            _sendall(self.conn, data)
+
+    def _pc_readable(self):
+        """PC 側から読めるもの（なければ None）。"""
+        if self._closed_pc:
+            return None
+        return self.pc_master if self.mode == "pty" else self.conn
+
+    def _read_pc(self, src):
+        """PC 側から読む。相手が閉じたら None。"""
+        try:
+            if self.mode == "pty":
+                return os.read(src, 4096)
+            data = src.recv(4096)
+        except (BlockingIOError, InterruptedError):
+            return b""
+        except OSError:
+            data = b""
+        if not data and self.mode == "tcp":
+            # スクリプトが閉じた（または pull_usb の後）
+            with self._lock:
+                if self.conn is src:
+                    self.conn = None
             try:
-                n = os.write(fd, data)
-                data = data[n:]
-            except BlockingIOError:
-                time.sleep(0.01)
+                src.close()
             except OSError:
-                return
+                pass
+            return None
+        return data
 
     def _loop(self):
         while not self._stop.is_set():
             with self._lock:
-                fds = [self.dev_master] + ([] if self._closed_pc else [self.pc_master])
+                pc = self._pc_readable()
+                if pc is None and self.mode == "tcp" and self.conn is not None:
+                    pc = self.conn  # pull_usb の後：閉じたことを読んで片付ける
+            fds = [self.dev_peer] + ([pc] if pc is not None else [])
+            if self.listener is not None:
+                fds.append(self.listener)
             try:
                 ready, _, _ = select.select(fds, [], [], 0.05)
             except (OSError, ValueError):
                 time.sleep(0.05)
                 continue
-            for fd in ready:
-                try:
-                    data = os.read(fd, 4096)
-                except (BlockingIOError, OSError):
+            for src in ready:
+                if src is self.listener:
+                    try:
+                        conn, _ = self.listener.accept()
+                    except OSError:
+                        continue
+                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    conn.settimeout(SEND_WAIT)
+                    with self._lock:
+                        old, self.conn = self.conn, conn
+                        self.connections += 1
+                    if old is not None:
+                        try:
+                            old.close()
+                        except OSError:
+                            pass
                     continue
+                if src is self.dev_peer:
+                    try:
+                        data = self.dev_peer.recv(4096)
+                    except OSError:
+                        continue
+                    if data and self.plugged and not self._closed_pc:
+                        self._to_pc(data)
+                    continue
+                data = self._read_pc(src)
                 if not data:
                     continue
-                if fd == self.dev_master:
-                    if self.plugged and not self._closed_pc:
-                        self._write(self.pc_master, data)
+                if self._closed_pc:
+                    continue
+                if self.plugged:
+                    self.from_pc.extend(data)
+                    _sendall(self.dev_peer, data)
                 else:
-                    if self.plugged:
-                        self.from_pc.extend(data)
-                        self._write(self.dev_master, data)
-                    else:
-                        self.sent_while_unplugged.extend(data)
+                    self.sent_while_unplugged.extend(data)
 
     def stop(self):
         self._stop.set()
         self.thread.join(2)
         self.pull_usb()
-        for fd in (self.pc_slave, self.dev_master, self.dev_slave):
+        socks = [self.dev_peer, self.dev_sock, self.listener, self.conn]
+        for s in socks:
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        if self.pc_slave is not None:
             try:
-                os.close(fd)
+                os.close(self.pc_slave)
             except OSError:
                 pass
 
 
 class FakeDevice(object):
-    """機器側の pty で動く、ログインとシェルのまね。"""
+    """ソケットの組の機器側で動く、ログインとシェルのまね。"""
 
     def __init__(self, relay, login=True, user="root", password="root", ansi=False,
                  garbage=False, ticker=None, wrap=0, wrap_repeat=False, responses=None,
                  ignore_interrupt=(), left_at_password=False, status_prompt=False, dollar_q=True,
-                 prompt_text=None):
+                 prompt_text=None, exit_logs_out=True):
         self.relay = relay
-        self.fd = relay.dev_slave
+        self.sock = relay.dev_sock
         self.need_login = login
         self.user = user
         self.password = password
@@ -151,6 +250,7 @@ class FakeDevice(object):
         self.dollar_q = dollar_q            # False なら $? が使えないシェルのまね
         self.status = 0                     # 直前のコマンドの終了コード（$?）
         self.prompt_text = prompt_text      # プロンプトを差し替える（複数の行のプロンプトなど）
+        self.exit_logs_out = exit_logs_out  # False なら exit でログインの求めに戻らない（シェルのプロンプトのまま）
         self.state = "login" if login else "shell"
         self.pending_user = ""
         self.left_at_password = left_at_password
@@ -169,20 +269,10 @@ class FakeDevice(object):
     # --- 出力 ---
     def out(self, text):
         data = text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
-        while data:
-            try:
-                n = os.write(self.fd, data)
-                data = data[n:]
-            except BlockingIOError:
-                time.sleep(0.01)
-            except OSError:
-                return
+        _sendall(self.sock, data)
 
     def raw(self, data):
-        try:
-            os.write(self.fd, data)
-        except OSError:
-            pass
+        _sendall(self.sock, data)
 
     def prompt(self):
         self.col = 0
@@ -195,7 +285,6 @@ class FakeDevice(object):
         self.out("\n%s login: " % HOST)
 
     def start(self):
-        os.set_blocking(self.fd, False)
         self.out("\nU-Boot 2022.04\nStarting kernel ...\n\nPoky (Yocto Project Reference Distro) 4.0 %s ttyS0\n" % HOST)
         if self.state == "login":
             self.login_prompt()
@@ -228,15 +317,17 @@ class FakeDevice(object):
                     self.prompt()
                 continue
             try:
-                ready, _, _ = select.select([self.fd], [], [], 0.02)
+                ready, _, _ = select.select([self.sock], [], [], 0.02)
             except (OSError, ValueError):
                 return
             if not ready:
                 continue
             try:
-                data = os.read(self.fd, 1024)
-            except (BlockingIOError, OSError):
+                data = self.sock.recv(1024)
+            except OSError:
                 continue
+            if not data:
+                return  # 中継が閉じた
             for ch in data.decode("utf-8", "replace"):
                 self._char(ch)
 
@@ -328,7 +419,7 @@ class FakeDevice(object):
         self.executed.append(cmd)
         if cmd == "exit":
             self.exits += 1
-            if self.logged_in_by_login:
+            if self.logged_in_by_login and self.exit_logs_out:
                 self.logged_in_by_login = False
                 self.state = "login"
                 self.out("logout\n")

@@ -6,7 +6,12 @@ import nodeHttp from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 
+import { createPersist } from '../../com.github.copilot/extensions/embedded-debug-loop/core/persist.mjs';
 import { CWD, EXT_DIR, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
+
+// 作業フォルダ。エクステンションと同じく path.resolve で作る（Windows ではドライブ名が付く）
+const A = path.resolve('/w/a');
+const B = path.resolve('/w/b');
 
 async function opened(t, options) {
   const ctx = await startWith(t, options);
@@ -257,11 +262,11 @@ test('設定は作業フォルダごとに保存し、ほかの作業フォル�
   const file = path.join(dataDir, 'settings.json');
   const a = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
   await http(a.api('/api/settings'), { method: 'POST', body: { worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4 } });
-  assert.equal(a.app.store.snapshot().folder, '/w/a');
+  assert.equal(a.app.store.snapshot().folder, A);
 
   const b = await opened(t, { dataDir, fake: { cwd: '/w/b' } });
   let state = (await http(b.api('/api/state'))).data;
-  assert.equal(state.folder, '/w/b');
+  assert.equal(state.folder, B);
   assert.equal(state.settings.worker, WORKER, 'ほかのフォルダでは、既定（defaults.json）のまま');
   assert.equal(state.settings.maxIterations, 3);
   const r = await b.fake.call('open', { request: '別の作業' });
@@ -273,8 +278,24 @@ test('設定は作業フォルダごとに保存し、ほかの作業フォル�
   assert.equal(state.settings.worker, 'only-a:helper');
   assert.equal(state.settings.maxIterations, 4);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepEqual(Object.keys(saved.folders).sort(), ['/w/a', '/w/b']);
-  assert.equal(saved.folders['/w/b'].maxIterations, 6);
+  assert.deepEqual(Object.keys(saved.folders).sort(), [A, B].sort());
+  assert.equal(saved.folders[B].maxIterations, 6);
+});
+
+test('設定：Windows では、作業フォルダの大文字と小文字を区別しない。ほかの OS では区別する', (t) => {
+  const win = createPersist(tempDir(t), { platform: 'win32' });
+  assert.equal(win.writeSettings('C:\\Work\\app', { worker: 'a' }), true);
+  assert.deepEqual(win.readSettings('c:\\work\\APP'), { worker: 'a' });
+  win.writeSettings('c:\\work\\app', { worker: 'b' });
+  win.writeSettings('C:\\Other', { worker: 'c' });
+  const saved = JSON.parse(fs.readFileSync(path.join(win.baseDir, 'settings.json'), 'utf8'));
+  assert.deepEqual(saved, { folders: { 'c:\\work\\app': { worker: 'b' }, 'C:\\Other': { worker: 'c' } } }, '同じフォルダの前の書き方は残さない');
+
+  const linux = createPersist(tempDir(t), { platform: 'linux' });
+  linux.writeSettings('/w/App', { worker: 'a' });
+  assert.equal(linux.readSettings('/w/app'), null);
+  linux.writeSettings('/w/app', { worker: 'b' });
+  assert.deepEqual(linux.readSettings('/w/App'), { worker: 'a' });
 });
 
 test('設定：フォルダで分けていない古い設定のファイルは読まず、既定を使う', async (t) => {
@@ -331,6 +352,6 @@ test('設定：作業フォルダが変わったら（/cd）、そのフォル�
   a.app.store.useFolder('/w/b');
   assert.equal(a.app.store.settings.worker, WORKER);
   a.app.store.useFolder('/w/a/');
-  assert.equal(a.app.store.folder, '/w/a', '末尾の / は同じフォルダとみなす');
+  assert.equal(a.app.store.folder, A, '末尾の / は同じフォルダとみなす');
   assert.equal(a.app.store.settings.worker, 'only-a:helper');
 });

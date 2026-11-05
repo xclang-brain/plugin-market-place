@@ -1,21 +1,26 @@
 # -*- coding: utf-8 -*-
-"""log-capture スキル（scripts/capture.py）の試験。
+"""log-capture スキル（scripts/capture.py）のテスト。
 
-機器のシリアルコンソールのまね（fake_console.py）を pty で作り、
+機器のシリアルコンソールのまね（fake_console.py）を作り、
 スクリプトを別のプロセスとして動かして、JSON と終わりのコードを確かめる。
-標準ライブラリだけで動く。スキルのフォルダで、次のように動かす。
+主なテストは、TCP（socket://127.0.0.1:<番号>）でつなぐので、Windows でも動く。
+疑似端末（pty）でつなぐテストは、Linux のときだけ動く。
+スキルのフォルダで、次のように動かす（Windows では python3 の代わりに py -3）。
 
   python3 -m unittest discover -s tests
 """
 
 import ast
+import codecs
 import errno
-import fcntl
+import hashlib
+import io
 import importlib.util
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -23,27 +28,80 @@ import time
 import unittest
 from unittest import mock
 
+# スキルのフォルダ（scripts/vendor/ も）に __pycache__ を作らない。テストの間ずっと有効にする
+# （pyserial は、loop:// などを使うときに、後から読み込むため）
+sys.dont_write_bytecode = True
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from fake_console import KERNEL_LINE, FakeDevice, Relay  # noqa: E402
 
-# パスは、この試験のファイルの場所から求める（スキルのフォルダの外は見ない）
+# パスは、このテストのファイルの場所から求める（スキルのフォルダの外は見ない）
 SKILL_DIR = os.path.dirname(HERE)
 SKILL_NAME = os.path.basename(SKILL_DIR)   # フォルダの名前を変えて写したら、その名前
 DATA_DIR_NAME = "." + SKILL_NAME           # 作業フォルダの中の、設定とログのフォルダ
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "capture.py")
+VENDOR_DIR = os.path.join(SKILL_DIR, "scripts", "vendor")
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
 README = os.path.join(SKILL_DIR, "README.md")
+
+IS_WINDOWS = os.name == "nt"
+IS_LINUX = sys.platform.startswith("linux")
 
 # 終了コードを調べるために、各コマンドの後に送るコマンド（機器のまねは前後の空白を除いて覚える）
 MARKER = "echo __LOGCAP_RC=$?"
 MARKER_TAG = "__LOGCAP_RC"
 
-# 試験で使う、ないはずのシリアルポート
-MISSING_PORT = "/dev/ttyLOGCAP-test-missing"
+# テストで使う、ないはずのシリアルポート
+MISSING_PORT = "COM250" if IS_WINDOWS else "/dev/ttyLOGCAP-test-missing"
+
+_ENCODING = []
+
+
+def console_code_page():
+    """Windows で、このプロセスのコンソールの出力の文字コード（cp932 など）。なければ None。
+    スクリプトのプロセスは、同じコンソールを受け継ぐ。"""
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    if not cp:
+        return None
+    try:
+        return codecs.lookup("cp%d" % cp).name
+    except LookupError:
+        return None
+
+
+def child_encoding():
+    """スクリプトのプロセスが、標準出力（パイプ）に使う文字コード。
+    Windows でコンソールがあれば、その文字コード。なければ Python の既定。"""
+    if not _ENCODING:
+        encoding = console_code_page()
+        if not encoding:
+            p = subprocess.run([sys.executable, "-c", "import sys; sys.stdout.write(sys.stdout.encoding)"],
+                               stdout=subprocess.PIPE, timeout=60)
+            encoding = p.stdout.decode("ascii").strip() or "utf-8"
+        _ENCODING.append(encoding)
+    return _ENCODING[0]
+
+
+_ESCAPE_RE = re.compile(r"\\(?:x([0-9a-f]{2})|u([0-9a-f]{4})|U([0-9a-f]{8}))")
+
+
+def unescape(text, encoding=None):
+    """文字コードで書けずに \\uXXXX の形になった文字を、元に戻す（標準エラーを読むとき）。"""
+    if codecs.lookup(encoding or child_encoding()).name == "utf-8":
+        return text
+    return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1) or m.group(2) or m.group(3), 16)), text)
+
+
+def make_tmp(prefix):
+    """一時フォルダ。Windows の短い名前（RUNNER~1 など）にならないように、本当の名前にする。"""
+    return os.path.realpath(tempfile.mkdtemp(prefix=prefix))
 
 TEMPLATE_KEYS = [
     "port", "baud", "login_user", "login_password", "login_password_env", "prompt",
@@ -52,15 +110,9 @@ TEMPLATE_KEYS = [
 
 
 def load_module():
-    # スキルのフォルダに __pycache__ を作らない
-    saved = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    try:
-        spec = importlib.util.spec_from_file_location("log_capture_script", SCRIPT)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    finally:
-        sys.dont_write_bytecode = saved
+    spec = importlib.util.spec_from_file_location("log_capture_script", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
     return mod
 
 
@@ -83,14 +135,16 @@ class CaptureTestCase(unittest.TestCase):
 
     @property
     def tmp(self):
-        """この試験だけの作業フォルダ（初めて使うときに作り、試験の後で消す）。"""
+        """このテストだけの作業フォルダ（初めて使うときに作り、テストの後で消す）。"""
         if self._tmp is None:
-            self._tmp = tempfile.mkdtemp(prefix="log-capture-test-")
+            self._tmp = make_tmp("log-capture-test-")
             self.addCleanup(shutil.rmtree, self._tmp, True)
         return self._tmp
 
-    def start_device(self, plugged=True, device=True, **kw):
-        self.relay = Relay().start()
+    def start_device(self, plugged=True, device=True, mode="tcp", **kw):
+        """機器のまねを立て、スクリプトの port に書く値を返す。
+        mode="tcp" なら socket://127.0.0.1:<番号>、mode="pty"（Linux だけ）なら /dev/pts/N。"""
+        self.relay = Relay(mode).start()
         self.addCleanup(self.relay.stop)
         if not plugged:
             self.relay.unplug()
@@ -125,8 +179,9 @@ class CaptureTestCase(unittest.TestCase):
         p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            env=e, timeout=timeout, cwd=self.tmp)
         self.elapsed = time.monotonic() - started
-        out = p.stdout.decode("utf-8")
-        self.stderr = p.stderr.decode("utf-8")
+        # スクリプトは、Python の既定の文字コードで書く（Windows では cp1252 や cp932 など）
+        out = p.stdout.decode(child_encoding())
+        self.stderr = unescape(p.stderr.decode(child_encoding(), "replace"))
         try:
             data = json.loads(out)
         except ValueError:
@@ -689,31 +744,17 @@ class RunFailures(CaptureTestCase):
         self.assertIn("available_ports", data)
         self.assertLess(self.elapsed, 5)
 
-    def test_port_written_without_dev(self):
-        self.write_config(port=os.path.basename(MISSING_PORT), commands=["echo hi"])
+    def test_nothing_listens_on_the_socket(self):
+        # socket:// の先に、何も待っていない
+        holder = socket.socket()
+        holder.bind(("127.0.0.1", 0))
+        free = holder.getsockname()[1]
+        holder.close()
+        self.write_config(port="socket://127.0.0.1:%d" % free, commands=["echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 1, data)
-        self.assertIn("/dev から書いてください", data["message"])
-
-    def test_port_is_not_a_serial_port(self):
-        plain = os.path.join(self.tmp, "not-a-port")
-        with open(plain, "w") as f:
-            f.write("x")
-        self.write_config(port=plain, commands=["echo hi"])
-        code, data = self.capture("run")
-        self.assertEqual(code, 1, data)
-        self.assertIn("シリアルポートではありません", data["message"])
-
-    def test_port_used_by_another_program(self):
-        port = self.start_device(login=False)
-        self.write_config(port=port, commands=["echo hi"])
-        holder = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        self.addCleanup(os.close, holder)
-        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        code, data = self.capture("run")
-        self.assertEqual(code, 1, data)
-        self.assertIn("ほかのプログラム", data["message"])
-        self.assertEqual(self.device.executed, [])
+        self.assertIn("を開けません", data["message"])
+        self.assertTrue(os.path.isfile(data["log"]))
 
     def test_usb_pulled_during_command(self):
         port = self.start_device(login=False)
@@ -779,6 +820,103 @@ class RunListen(CaptureTestCase):
 
 
 # ---------------------------------------------------------------------------
+# 本物のシリアルポートの道（疑似端末。Linux だけ）
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(IS_LINUX, "疑似端末（pty）のテストは、Linux のときだけ動かす")
+class PtyPort(CaptureTestCase):
+    """port に /dev/pts/N を書いて、pyserial のシリアルポートの道（serialposix）を通す。"""
+
+    def test_login_command_and_logout(self):
+        port = self.start_device(mode="pty", login=True)
+        self.assertTrue(port.startswith("/dev/"), port)
+        self.write_config(port=port, login_password="root",
+                          commands=["start-app /opt/myapp/my_app", "false"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual([c["output"] for c in data["commands"]],
+                         ["[DBG] start\n[DBG] VALUE=3\nmy_app: done", ""])
+        self.assertEqual([c["exit_code"] for c in data["commands"]], [0, 1])
+        self.assertTrue(data["logged_out"])
+        self.assertEqual(self.device.executed,
+                         ["start-app /opt/myapp/my_app", MARKER, "false", MARKER, "exit"])
+
+    def test_timeout_then_ctrl_c(self):
+        port = self.start_device(mode="pty", login=False)
+        self.write_config(port=port, command_timeout_seconds=1, commands=["start-app /opt/hang", "echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertTrue(data["commands"][0]["timed_out"])
+        self.assertEqual(data["commands"][1]["output"], "hi")
+        self.assertEqual(self.device.interrupts, 1)
+
+    def test_check_and_listen_only(self):
+        port = self.start_device(mode="pty", login=True, ticker=0.2)
+        self.write_config(port=port, login_password="root")
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertIn("ログインできました", data["message"])
+        code, data = self.capture("run", "--listen-only", "1")
+        self.assertEqual(code, 0, data)
+        self.assertIn(KERNEL_LINE, data["listen"]["output"])
+
+    def test_no_response_at_all(self):
+        port = self.start_device(mode="pty", plugged=False)
+        self.write_config(port=port, commands=["echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("応答がありません", data["message"])
+        self.assertEqual(bytes(self.relay.sent_while_unplugged), b"\r\r")
+
+    def test_usb_pulled_during_command(self):
+        port = self.start_device(mode="pty", login=False)
+        self.write_config(port=port, commands=["pull-usb", "echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("途中で切れました", data["message"])
+        self.assertEqual(data["not_run"], ["echo hi"])
+        self.assertIn("bye", data["commands"][0]["output"])
+
+    def test_port_used_by_another_program(self):
+        import fcntl
+        port = self.start_device(mode="pty", login=False)
+        self.write_config(port=port, commands=["echo hi"])
+        holder = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("ほかのプログラム", data["message"])
+        self.assertIn("minicom", data["message"])
+        self.assertEqual(self.device.executed, [])
+
+
+@unittest.skipIf(IS_WINDOWS, "Linux などのデバイスのファイルのテスト")
+class PosixPortPaths(CaptureTestCase):
+
+    def test_port_written_without_dev(self):
+        self.write_config(port=os.path.basename(MISSING_PORT), commands=["echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("/dev から書いてください", data["message"])
+
+    def test_port_is_not_a_serial_port(self):
+        plain = os.path.join(self.tmp, "not-a-port")
+        with open(plain, "w") as f:
+            f.write("x")
+        self.write_config(port=plain, commands=["echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("シリアルポートではありません", data["message"])
+
+    def test_port_is_a_folder(self):
+        self.write_config(port=self.tmp, commands=["echo hi"])
+        code, data = self.capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("フォルダで、シリアルポートではありません", data["message"])
+
+
+# ---------------------------------------------------------------------------
 # 設定の問題と config-path
 # ---------------------------------------------------------------------------
 
@@ -795,7 +933,8 @@ class Settings(CaptureTestCase):
         self.assertEqual(
             data["message"],
             "設定ファイルがなかったので、ひな形から作りました。"
-            "port（機器につながるシリアルポート）が空です。/dev/ttyUSB0 のように書いてください。"
+            "port（機器につながるシリアルポート）が空です。"
+            "COM3（Windows）や /dev/ttyUSB0（Linux）のように書いてください。"
             "設定ファイルは %s です。" % self.config_path)
         with open(TEMPLATE, encoding="utf-8") as a, open(self.config_path, encoding="utf-8") as b:
             self.assertEqual(a.read(), b.read())
@@ -815,8 +954,8 @@ class Settings(CaptureTestCase):
     def test_new_folder_gets_gitignore(self):
         self.capture("config-path")
         gi = os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")
-        with open(gi, encoding="utf-8") as f:
-            self.assertEqual(f.read(), "*\n")
+        with open(gi, "rb") as f:
+            self.assertEqual(f.read(), b"*\n")  # Windows でも \r\n にしない
         with open(gi, "w", encoding="utf-8") as f:
             f.write("logs/\n")
         self.capture("config-path")
@@ -828,17 +967,20 @@ class Settings(CaptureTestCase):
         os.makedirs(os.path.join(self.tmp, DATA_DIR_NAME))
         self.capture("config-path")
         self.assertTrue(os.path.isfile(self.config_path))
-        with open(os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore"), encoding="utf-8") as f:
-            self.assertEqual(f.read(), "*\n")
+        with open(os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore"), "rb") as f:
+            self.assertEqual(f.read(), b"*\n")
 
     def test_gitignore_is_made_again_when_removed(self):
         self.capture("config-path")
         gi = os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")
-        for command in ("config-path", "check", "run"):
+        for command in ("config-path", "run"):
             os.unlink(gi)
             self.capture(command)
-            with open(gi, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "*\n", command)
+            with open(gi, "rb") as f:
+                self.assertEqual(f.read(), b"*\n", command)
+        os.unlink(gi)
+        self.capture("check")   # check は、ファイルを作らない
+        self.assertFalse(os.path.lexists(gi))
 
     def test_gitignore_in_work_folder_with_config_elsewhere(self):
         os.makedirs(os.path.join(self.tmp, DATA_DIR_NAME))
@@ -1039,9 +1181,27 @@ class Check(CaptureTestCase):
         self.assertEqual(self.device.login_attempts, [("root", True)])
         self.assertEqual(self.device.executed, ["exit"])  # コマンドは実行しない
         self.assertEqual(self.device.state, "login")
-        log = self.assert_log_has_no_marker(data)
-        self.assertIn("myboard login: root", log)
-        self.assertNotIn("（終了コード", log)
+        self.assertEqual(data["notes"], [])
+        # 注意がないときだけ「問題はありません」と言う
+        self.assertTrue(data["message"].startswith("設定に問題はありません。シリアルポート "), data["message"])
+        # ログは作らない
+        self.assertNotIn("log", data)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME))), ["config.yaml"])
+        self.assertNotIn("ログ：", self.stderr)
+
+    def test_check_logout_not_confirmed(self):
+        """exit の後にログインの求めに戻らなかったら、「問題はありません」と言わず、「ただし、」で伝える。"""
+        port = self.start_device(login=True, exit_logs_out=False)
+        self.write_config(port=port, login_password="root", commands=["echo hi"])
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["notes"], [])
+        self.assertEqual(self.device.executed, ["exit"])
+        self.assertEqual(data["message"],
+                         "シリアルポート %s で機器につながり、root でログインできました。"
+                         "ただし、exit を送った後、ログインの求めに戻ったかは確認できませんでした。" % port)
+        self.assertNotIn("問題はありません", data["message"])
 
     def test_check_shell_without_login(self):
         port = self.start_device(login=False)
@@ -1052,12 +1212,75 @@ class Check(CaptureTestCase):
         self.assertIn("ログインは不要", data["message"])
         self.assertEqual(self.device.executed, [])
 
-    def test_check_fresh_config(self):
+    def test_check_without_config_creates_nothing(self):
         code, data = self.capture("check")
         self.assertEqual(code, 2, data)
         self.assertFalse(data["ok"])
-        self.assertTrue(data["created"])
+        self.assertFalse(data["created"])
+        self.assertEqual(data["config"], self.config_path)
+        self.assertEqual(data["message"],
+                         "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % self.config_path)
+        self.assertEqual(data["problems"], [data["message"]])
+        self.assertEqual(data["notes"], [])
+        self.assertNotIn("log", data)
+        self.assertEqual(os.listdir(self.tmp), [])   # 設定、.gitignore、ログのどれも作らない
+        # 別の場所を指したときも
+        other = os.path.join(self.tmp, "sub", "my.yaml")
+        code, data = self.capture("check", "--config", other)
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["config"], other)
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_check_fresh_config(self):
+        self.capture("config-path")
+        code, data = self.capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertFalse(data["ok"])
+        self.assertFalse(data["created"])
         self.assertTrue(any("port" in p for p in data["problems"]))
+        # ひな形のままでは commands が空で listen_seconds も 0。問題ではなく、注意として伝える
+        self.assertEqual(len(data["notes"]), 1)
+        self.assertTrue(data["notes"][0].startswith(
+            "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"), data["notes"])
+        self.assertFalse(any("listen_seconds" in p for p in data["problems"]))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME))), [".gitignore", "config.yaml"])
+
+    def test_check_notes_when_nothing_to_run(self):
+        """commands が空で listen_seconds も 0 なら、check は ok のまま、注意（notes）で知らせる。"""
+        port = self.start_device(login=False)
+        self.write_config(port=port)
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["problems"], [])
+        self.assertEqual(data["notes"], [
+            "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"
+            "機器でプログラムを動かしてログを取るなら、commands を書いてください。"])
+        # 注意があるときは「問題はありません」と言い切らず、「ただし、」で注意を続ける
+        self.assertTrue(data["message"].endswith("ただし、" + data["notes"][0]), data["message"])
+        self.assertNotIn("問題はありません", data["message"])
+        for values in ({"commands": ["echo hi"]}, {"listen_seconds": 10}):
+            self.write_config(port=port, **values)
+            code, data = self.capture("check")
+            self.assertEqual(code, 0, data)
+            self.assertEqual(data["notes"], [], values)
+            self.assertNotIn("commands", data["message"], values)
+            self.assertTrue(data["message"].startswith("設定に問題はありません。"), data["message"])
+            self.assertNotIn("ただし", data["message"], values)
+        # listen_seconds の値が空（「listen_seconds:」だけの行）のときも、0 と同じに注意する
+        path = self.write_config(port=port)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        text, n = re.subn(r"(?m)^listen_seconds:.*$", "listen_seconds:", text)
+        self.assertEqual(n, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertIsNone(data["summary"]["listen_seconds"])
+        self.assertEqual(len(data["notes"]), 1, data)
+        self.assertEqual(self.device.executed, [])
 
     def test_check_missing_port(self):
         self.write_config(port=MISSING_PORT)
@@ -1275,18 +1498,155 @@ class Parts(unittest.TestCase):
                 self.m.read_yaml(path)
             self.assertEqual(cm.exception.lineno, line, body)
 
-    def test_permission_denied_message(self):
-        with mock.patch.object(self.m.os, "open", side_effect=PermissionError(errno.EACCES, "x")):
+    # --- シリアルポートを開けないとき（pyserial のエラーを、OS ごとに文にする） ---
+
+    def open_fails(self, error, windows, port="/dev/ttyUSB0", ports=()):
+        """pyserial が error を出したときに、open_port が出す Failure。"""
+        with mock.patch.object(self.m, "IS_WINDOWS", windows), \
+                mock.patch.object(self.m, "find_ports", return_value=list(ports)), \
+                mock.patch.object(self.m, "_lock_owner", return_value=None), \
+                mock.patch.object(self.m.serial, "serial_for_url", side_effect=error):
             with self.assertRaises(self.m.Failure) as cm:
-                self.m.open_port("/dev/ttyUSB0", 115200)
-        self.assertIn("権限がありません", cm.exception.message)
-        self.assertIn("dialout", cm.exception.message)
+                self.m.open_port(port, 115200)
+        self.assertTrue(cm.exception.message.endswith("。"), cm.exception.message)
+        return cm.exception
+
+    def serial_error(self, *args):
+        return self.m.serial.SerialException(*args)
+
+    def test_permission_denied_message(self):
+        f = self.open_fails(self.serial_error(
+            errno.EACCES, "could not open port /dev/ttyUSB0: [Errno 13] Permission denied: '/dev/ttyUSB0'"), False)
+        self.assertIn("権限がありません", f.message)
+        self.assertIn("dialout", f.message)
 
     def test_busy_message(self):
-        with mock.patch.object(self.m.os, "open", side_effect=OSError(errno.EBUSY, "busy")):
-            with self.assertRaises(self.m.Failure) as cm:
-                self.m.open_port("/dev/ttyUSB0", 115200)
-        self.assertIn("ほかのプログラム", cm.exception.message)
+        f = self.open_fails(self.serial_error(errno.EBUSY, "could not open port /dev/ttyUSB0: busy"), False)
+        self.assertIn("ほかのプログラム", f.message)
+        self.assertIn("minicom", f.message)
+        # pyserial の exclusive=True（flock）で、ほかのプログラムが使っていると分かったとき
+        f = self.open_fails(self.serial_error(
+            errno.EWOULDBLOCK, "Could not exclusively lock port /dev/ttyUSB0: [Errno 11] Resource temporarily unavailable"),
+            False)
+        self.assertIn("ほかのプログラム", f.message)
+
+    def test_missing_port_message_lists_ports(self):
+        f = self.open_fails(self.serial_error(
+            errno.ENOENT, "could not open port /dev/ttyUSB9: [Errno 2] No such file or directory"), False,
+            port="/dev/ttyUSB9", ports=["/dev/ttyACM0", "/dev/ttyUSB0"])
+        self.assertIn("シリアルポート /dev/ttyUSB9 が見つかりません", f.message)
+        self.assertIn("この PC で見つかったシリアルポートは、/dev/ttyACM0、/dev/ttyUSB0 です。", f.message)
+        self.assertEqual(f.extra["available_ports"], ["/dev/ttyACM0", "/dev/ttyUSB0"])
+
+    def test_not_a_serial_port_message(self):
+        f = self.open_fails(self.serial_error(
+            "Could not configure port: (25, 'Inappropriate ioctl for device')"), False, port="/tmp/x")
+        self.assertIn("シリアルポートではありません", f.message)
+
+    def test_windows_port_in_use(self):
+        # Windows では、ほかのプログラムが開いている COM ポートは「アクセスが拒否されました」になる
+        f = self.open_fails(self.serial_error(
+            "could not open port 'COM3': PermissionError(13, 'アクセスが拒否されました。', None, 5)"), True,
+            port="COM3", ports=["COM3"])
+        self.assertIn("シリアルポート COM3 は、ほかのプログラムが使っています", f.message)
+        self.assertIn("Tera Term", f.message)
+        self.assertNotIn("dialout", f.message)
+
+    def test_windows_port_not_found(self):
+        error = self.serial_error(
+            "could not open port 'COM9': FileNotFoundError(2, '指定されたファイルが見つかりません。', None, 2)")
+        f = self.open_fails(error, True, port="COM9", ports=["COM3", "COM10"])
+        self.assertIn("シリアルポート COM9 が見つかりません", f.message)
+        self.assertIn("この PC で見つかったシリアルポートは、COM3、COM10 です。", f.message)
+        self.assertNotIn("/dev", f.message)
+        self.assertNotIn("COM3 のように", f.message)
+        # COM の形でない名前なら、書き方も伝える
+        f = self.open_fails(error, True, port="ttyUSB0")
+        self.assertIn("port は COM3 のように書いてください。", f.message)
+
+    def test_windows_other_errors(self):
+        # 番号の分からないエラーで、ポートが一覧にない：見つからないと伝える
+        error = self.serial_error("could not open port 'COM7': OSError(22, 'x', None, 1167)")
+        f = self.open_fails(error, True, port="COM7", ports=["COM3"])
+        self.assertIn("見つかりません", f.message)
+        # 一覧にあるなら、エラーの文をそのまま添える
+        f = self.open_fails(error, True, port="COM7", ports=["COM7"])
+        self.assertIn("シリアルポート COM7 を開けません（could not open port", f.message)
+        # 速さなどを設定できない
+        f = self.open_fails(self.serial_error(
+            "Cannot configure port, something went wrong. Original message: OSError(22, 'x', None, 87)"), True,
+            port="COM3", ports=["COM3"])
+        self.assertIn("速さなどを設定できません", f.message)
+
+    def test_unknown_url(self):
+        f = self.open_fails(ValueError("invalid URL, protocol 'foo' not known"), False, port="foo://x")
+        self.assertIn("シリアルポート foo://x を開けません", f.message)
+
+    def test_real_open_and_console_over_loop_url(self):
+        """pyserial の loop://（書いたものが、そのまま読める）で、開く・送る・読む・閉じるを通す。"""
+        ser = self.m.open_port("loop://", 115200)
+        try:
+            con = self.m.Console(ser, "loop://", None)
+            con.send("hello\r\n")
+            self.assertGreater(con.read(1.0), 0)
+            con.drain()
+            self.assertEqual(con.segment(), "hello\r\n")
+            self.assertEqual(con.read(0.1), 0)  # もう何も届かない
+        finally:
+            self.m.close_port(ser)
+
+    def test_find_ports_uses_pyserial(self):
+        class Info(object):
+            def __init__(self, device):
+                self.device = device
+        found = [Info("COM10"), Info("COM3"), Info("COM3"), Info("COM1")]
+        with mock.patch.object(self.m.serial.tools.list_ports, "comports", return_value=found):
+            self.assertEqual(self.m.find_ports(), ["COM1", "COM3", "COM10"])
+        with mock.patch.object(self.m.serial.tools.list_ports, "comports", side_effect=OSError("x")):
+            self.assertEqual(self.m.find_ports(), [])
+
+    def test_lock_owner_is_not_checked_on_windows(self):
+        # Windows の os.kill(pid, 0) はプロセスを止めてしまうので、呼ばない
+        with mock.patch.object(self.m, "IS_WINDOWS", True), mock.patch.object(self.m.os, "kill") as kill:
+            self.assertIsNone(self.m._lock_owner("COM3"))
+        kill.assert_not_called()
+        self.assertIsNone(self.m._lock_owner("socket://127.0.0.1:1"))
+
+    # --- 標準出力の文字コード ---
+
+    def test_streams_follow_the_console_on_windows(self):
+        """Windows で、出力先がコンソールでないときは、コンソールの文字コードにする。
+        出力先がコンソールのときと、コンソールがない（Windows 以外も）ときは、Python の既定のまま。"""
+
+        def stream(tty):
+            class Buffer(io.BytesIO):
+                def isatty(self):
+                    return tty
+            return io.TextIOWrapper(Buffer(), encoding="utf-8")
+
+        for console, tty, expected in (("cp932", False, "cp932"), ("cp932", True, "utf-8"),
+                                       (None, False, "utf-8")):
+            out, err = stream(tty), stream(tty)
+            with mock.patch.object(self.m, "console_code_page", return_value=console), \
+                    mock.patch.object(self.m.sys, "stdout", out), mock.patch.object(self.m.sys, "stderr", err):
+                self.m.setup_streams()
+            for s in (out, err):
+                self.assertEqual(codecs.lookup(s.encoding).name, expected, (console, tty))
+                self.assertEqual(s.errors, "backslashreplace")
+        with mock.patch.object(self.m, "IS_WINDOWS", False):
+            self.assertIsNone(self.m.console_code_page())
+
+    def test_for_stream_keeps_json_readable(self):
+        f = self.m.for_stream
+        text = json.dumps({"a": "日本語 é ＊＊＊ \U0001F600"}, ensure_ascii=False)
+        self.assertEqual(f(text, "utf-8"), text)
+        for encoding in ("cp932", "cp1252", "ascii"):
+            out = f(text, encoding)
+            out.encode(encoding)  # 書ける
+            self.assertEqual(json.loads(out), {"a": "日本語 é ＊＊＊ \U0001F600"}, encoding)
+        self.assertIn("日本語", f(text, "cp932"))   # 書ける文字は、そのまま
+        self.assertIn("\\u00e9", f(text, "cp932"))  # 書けない文字は \uXXXX
+        self.assertEqual(f(text, None), text)
 
     def test_every_problem_ends_a_sentence(self):
         """問題の文が「例：…」で終わると、次の文とつながって読めない。"""
@@ -1360,8 +1720,31 @@ class Parts(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 STDLIB_ALLOWED = {
-    "argparse", "codecs", "datetime", "errno", "fcntl", "glob", "json", "os", "re",
-    "select", "shutil", "struct", "sys", "termios", "time", "traceback",
+    "argparse", "codecs", "ctypes", "datetime", "errno", "json", "os", "re",
+    "shutil", "struct", "sys", "time", "traceback",
+}
+VENDORED = {"serial"}  # scripts/vendor/ に同梱したもの
+
+# 同梱の pyserial 3.5 のファイル（PyPI の pyserial-3.5-py2.py3-none-any.whl と、
+# sdist の LICENSE.txt）。中身を変えていないことを、SHA-256 で確かめる。
+# 改行は \n にそろえてから比べる（Windows の git が \r\n にして取り出すことがあるため）。
+PYSERIAL_FILES = {
+    "serial/LICENSE.txt": "f91cb9813de6a5b142b8f7f2dede630b5134160aedaeaf55f4d6a7e2593ca3f3",
+    "serial/__init__.py": "5dec897fdef45a0eaf63eacda1e01d62e1e75490302584ae0238f75376592344",
+    "serial/serialposix.py": "5d56f98513391e1766a1847a04e2e1202ced4172a152803ba1c823a149a9b6f9",
+    "serial/serialutil.py": "3c84f8c7c319f161a85d6f8db5bedc4f65255714589bdcbeee6f2daf65a17c0a",
+    "serial/serialwin32.py": "17681ea9a650120c71db1aae9b8881301a40d38c47b34bb0da050e3f5bfbbe00",
+    "serial/win32.py": "964eaba1df661e4ab381c8666aa077ca08939260164cd434d0827df39663bd32",
+    "serial/tools/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "serial/tools/list_ports.py": "7830e8c888684b77fd0f7095a6d86a95052a891da5f97d154c618e063b8ce1ec",
+    "serial/tools/list_ports_common.py": "c791c88211b8348cfe5dfe625fa1a4ef165f75e69db36b6a0ac7f226187721fb",
+    "serial/tools/list_ports_linux.py": "5275355583f534923b27c667ee063e03699b8b596e81b159495ced7d7f0fd695",
+    "serial/tools/list_ports_osx.py": "7a879f3068ae26a0be382bbd6805aaa895fbe701a5073a2a67a91d98c03cd8b3",
+    "serial/tools/list_ports_posix.py": "118a83e6445b9347f66b9b1c6914b8b605860729e4a551fbee36bf1ba4b75211",
+    "serial/tools/list_ports_windows.py": "53813370e02253ae8b5a83dd317236a0e3382c2779bcac0edc381e4d3e8cdea7",
+    "serial/urlhandler/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "serial/urlhandler/protocol_loop.py": "e5b6abaeefe17f03646b28e3073e30dec9c1267d06ec2f9f1bbf9098769e4d6a",
+    "serial/urlhandler/protocol_socket.py": "428b5a1c23ddeadf74dd6ffd7dad8bbffe6e125ab49e88abd828b5d1af7ced73",
 }
 
 # フォルダの外へ出るパスの書き方。この試験のファイルにも、そのままは書かない
@@ -1412,9 +1795,96 @@ class SelfContained(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 self.assertEqual(node.level, 0, "相対の import は使わない")
                 names.add(node.module.split(".")[0])
-        self.assertTrue(names <= STDLIB_ALLOWED, names - STDLIB_ALLOWED)
-        self.assertNotIn("sys.path", source)
+        self.assertTrue(names <= STDLIB_ALLOWED | VENDORED, names - STDLIB_ALLOWED - VENDORED)
+        # 読み込みの道に足すのは、自分のフォルダの vendor だけ
+        self.assertEqual(re.findall(r"sys\.path\.\w+\([^)]*\)", source), ["sys.path.insert(0, VENDOR_DIR)"])
+        self.assertIn('VENDOR_DIR = os.path.join(SCRIPT_DIR, "vendor")', source)
         self.assertNotIn(OUTSIDE, source)
+
+    def test_vendored_pyserial_is_unchanged(self):
+        found = {}
+        for folder, dirs, files in os.walk(VENDOR_DIR):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in files:
+                if name.endswith(".pyc"):
+                    continue
+                path = os.path.join(folder, name)
+                with open(path, "rb") as f:
+                    data = f.read().replace(b"\r\n", b"\n")
+                found[os.path.relpath(path, VENDOR_DIR).replace(os.sep, "/")] = hashlib.sha256(data).hexdigest()
+        self.assertEqual(found, PYSERIAL_FILES)
+
+    def test_vendored_pyserial_is_loaded_first(self):
+        """ほかに serial という名前のものが入っていても、同梱の pyserial を使う。"""
+        m = script_module()
+        self.assertTrue(os.path.abspath(m.serial.__file__).startswith(os.path.join(VENDOR_DIR, "serial") + os.sep),
+                        m.serial.__file__)
+        self.assertEqual(m.serial.__version__, "3.5")
+        place = make_tmp("log-capture-other-serial-")
+        self.addCleanup(shutil.rmtree, place, True)
+        os.makedirs(os.path.join(place, "serial"))
+        with open(os.path.join(place, "serial", "__init__.py"), "w", encoding="utf-8") as f:
+            f.write("raise ImportError('this is not the bundled pyserial')\n")
+        env = dict(os.environ, PYTHONPATH=place, PYTHONDONTWRITEBYTECODE="1")
+        p = subprocess.run([sys.executable, SCRIPT, "--help"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           env=env, cwd=place, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(json.loads(p.stdout.decode(child_encoding()))["ok"])
+
+    def test_running_the_script_leaves_no_bytecode(self):
+        """PYTHONDONTWRITEBYTECODE がなくても、スキルのフォルダに __pycache__ を作らない。"""
+        place = make_tmp("log-capture-bytecode-")
+        self.addCleanup(shutil.rmtree, place, True)
+        copy = os.path.join(place, SKILL_NAME)
+        shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns(*(JUNK + NOT_OURS)))
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
+        work = os.path.join(place, "work")
+        os.makedirs(work)
+        p = subprocess.run([sys.executable, os.path.join(copy, "scripts", "capture.py"), "config-path"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=work, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        made = [d for d, ds, _ in os.walk(copy) if os.path.basename(d) == "__pycache__"]
+        self.assertEqual(made, [])
+
+    def test_output_encoding(self):
+        """標準出力と標準エラーは、Windows ではコンソールの文字コード（cp932 など）、
+        それ以外では Python の既定（PYTHONIOENCODING の値など）で書く。
+        UTF-8 モード（-X utf8。Python 3.15 からの既定）でも、Windows ではコンソールに合わせる。
+        書けない文字は \\uXXXX の形にするので、どの文字コードでも JSON として読める。"""
+        place = make_tmp("log-capture-encoding-")
+        self.addCleanup(shutil.rmtree, place, True)
+        work = os.path.join(place, "作業-é")
+        os.makedirs(work)
+        expected = os.path.join(work, DATA_DIR_NAME, "config.yaml")
+        os.makedirs(os.path.dirname(expected))
+        with open(TEMPLATE, encoding="utf-8") as f:
+            text = f.read().replace('port: ""', 'port: "%s"' % MISSING_PORT)
+        with open(expected, "w", encoding="utf-8") as f:
+            f.write(text)
+        for io_encoding, options in (("cp932", []), ("ascii", []), ("utf-8", []), (None, ["-X", "utf8"])):
+            env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+            for key in ("PYTHONIOENCODING", "PYTHONUTF8"):
+                env.pop(key, None)
+            if io_encoding:
+                env["PYTHONIOENCODING"] = io_encoding
+            encoding = console_code_page() or io_encoding or "utf-8"   # 読む側の文字コード
+            for args in (["config-path"], ["check", "--config", expected]):
+                p = subprocess.run([sys.executable] + options + [SCRIPT] + args, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, env=env, cwd=work, timeout=60)
+                where = (io_encoding, options, args)
+                out = p.stdout.decode(encoding)
+                err = p.stderr.decode(encoding)
+                self.assertNotIn("Traceback", out + err)
+                data = json.loads(out)
+                self.assertEqual(data["config"], expected, where)
+                if args[0] == "check":
+                    self.assertIn("シリアルポート %s が見つかりません。" % MISSING_PORT, data["message"], where)
+                    err = unescape(err, encoding)
+                    self.assertIn("シリアルポート %s を開きます" % MISSING_PORT, err, where)
+                    self.assertFalse(os.path.exists(os.path.join(work, DATA_DIR_NAME, "logs")), where)
+                if encoding == "cp932":
+                    self.assertIn("作業", out)        # cp932 で書ける文字は、そのまま
+                    self.assertIn("\\u00e9", out)    # é は cp932 で書けない
 
     def test_skill_md_does_not_show_exit_codes(self):
         """スクリプト自身の終了コードで場合分けを書くと、モデルが利用者に見せてしまう。
@@ -1483,13 +1953,13 @@ class SelfContained(unittest.TestCase):
 
     def test_skill_files_are_only_its_own(self):
         rel = sorted(os.path.relpath(p, SKILL_DIR) for p in skill_files())
-        self.assertEqual(rel, [
+        self.assertEqual(rel, sorted([
             "README.md", "SKILL.md", "config-template.yaml",
             os.path.join("scripts", "capture.py"),
             os.path.join("tests", "__init__.py"),
             os.path.join("tests", "fake_console.py"),
             os.path.join("tests", "test_log_capture.py"),
-        ])
+        ] + [os.path.join("scripts", "vendor", *name.split("/")) for name in PYSERIAL_FILES]))
 
     def test_skill_md_frontmatter(self):
         with open(SKILL_MD, encoding="utf-8") as f:
@@ -1512,9 +1982,61 @@ class SelfContained(unittest.TestCase):
         for key in TEMPLATE_KEYS:
             self.assertIn("`%s`" % key, text, key)
         for word in ("/skills reload", ".github/skills/", "~/.copilot/skills/", "config.yaml",
-                     "python3 -m unittest discover -s tests", "python3 -B -m unittest discover -s tests",
-                     "Python 3.8"):
+                     "py -3 -m unittest discover -s tests", "python3 -m unittest discover -s tests",
+                     "Python 3.8", "pyserial 3.5", "COM3", "/dev/ttyUSB0"):
             self.assertIn(word, text, word)
+        # Windows を先に書く
+        self.assertLess(text.index("COM3"), text.index("/dev/ttyUSB0"))
+        self.assertLess(text.index("py -3"), text.index("python3"))
+        self.assertLess(text.index("%USERPROFILE%\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
+        self.assertIn("Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。", text)
+        self.assertIn("設定ファイルを作って", text)
+        self.assertNotRegex(text, r"\d+ ?分ほど")   # テストの時間は、OS で違うので書かない
+
+    def test_layout_shared_with_other_skills(self):
+        """スキルの README でそろえる書き方：節の並び、インストールの確認、名前を変えたコピー、コマンドの書き方。"""
+        with open(README, encoding="utf-8") as f:
+            text = f.read()
+        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
+        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方", "設定ファイル",
+                                    "結果とログ", "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
+        # README に書いた名前（フォルダの名前を変えても、README は書き換えない）
+        self.assertIn("\n3. `/skills list` に `log-capture` が出れば完了です。\n", text)
+        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("\n- GitHub Copilot CLI\n", needs)
+        # できることの箇条は、言い切りの形（「…する。」）
+        can = text.split("## できること", 1)[1].split("\n## ", 1)[0]
+        for line in can.splitlines():
+            if line.startswith("- "):
+                self.assertFalse(line.endswith("ます。"), line)
+        # うまくいかないときの表の見出し
+        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
+        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
+        self.assertNotIn("$env:USERPROFILE", text)
+        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
+                      "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
+                      "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
+        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]\n"
+                      "# Linux（bash）\npython3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]\n```", text)
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
+                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
+        for line in text.splitlines():
+            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
+        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n", text)
+        # パスワードを環境変数で渡す例は、Windows（PowerShell）と Linux（bash）の2つ
+        part = text.split("### パスワードを環境変数で渡す", 1)[1].split("\n## ", 1)[0]
+        self.assertRegex(part, r"\n   - Windows（PowerShell）：`\$env:[A-Z_]+ = '[^']+'`\n"
+                               r"   - Linux（bash）：`export [A-Z_]+='[^']+'`\n")
+
+    def test_skill_md_check_creates_nothing(self):
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("check は、ファイル（設定ファイル、`.gitignore`、ログ）を作りません。", text)
+        self.assertIn("「設定ファイルを作って」と頼まれたとき", text)
+        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("`notes`", section)
+        self.assertIn("頼まれるまで、設定ファイルは作りません。", section)
 
     def test_template_comments(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -1549,7 +2071,7 @@ class CopiedFolder(unittest.TestCase):
     """このフォルダだけを、空の場所に写して動かす（名前を変えて写すこともある）。"""
 
     def use_copy(self, name):
-        place = tempfile.mkdtemp(prefix="log-capture-copy-")
+        place = make_tmp("log-capture-copy-")
         self.addCleanup(shutil.rmtree, place, True)
         skills = os.path.join(place, "skills")
         work = os.path.join(place, "work")    # 空の作業フォルダ
@@ -1561,14 +2083,16 @@ class CopiedFolder(unittest.TestCase):
         copied = sorted(os.path.relpath(os.path.join(d, f), copy)
                         for d, _, fs in os.walk(copy) for f in fs)
         script = os.path.join(copy, "scripts", "capture.py")
-        env = dict(os.environ, HOME=home, PYTHONDONTWRITEBYTECODE="1")
-        env.pop("PYTHONPATH", None)
+        # Windows のホームは USERPROFILE
+        env = dict(os.environ, HOME=home, USERPROFILE=home, PYTHONDONTWRITEBYTECODE="1")
+        for key in ("PYTHONPATH", "COPILOT_HOME"):
+            env.pop(key, None)
 
         def capture(*args):
             p = subprocess.run([sys.executable, script] + list(args), cwd=work, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-            out = p.stdout.decode("utf-8")
-            err = p.stderr.decode("utf-8")
+            out = p.stdout.decode(child_encoding())
+            err = unescape(p.stderr.decode(child_encoding(), "replace"))
             self.assertNotIn("Traceback", out + err)
             # 経過の表示の頭は、写したフォルダの名前
             for line in err.splitlines():
@@ -1577,6 +2101,14 @@ class CopiedFolder(unittest.TestCase):
 
         data_dir = os.path.join(work, "." + name)
 
+        # check：設定ファイルがなければ、何も作らずに、そう返す
+        code, data = capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["skill"], name)
+        self.assertTrue(data["message"].startswith("設定ファイルがありません"), data["message"])
+        self.assertEqual(data["config"], os.path.join(data_dir, "config.yaml"))
+        self.assertEqual(os.listdir(work), [])
+
         # config-path：設定ファイルを、作業フォルダの .<写したフォルダの名前>/ に作る
         code, data = capture("config-path")
         self.assertEqual(code, 0, data)
@@ -1584,21 +2116,30 @@ class CopiedFolder(unittest.TestCase):
         self.assertTrue(data["created"])
         self.assertEqual(os.listdir(work), ["." + name])
         self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml"])
-        with open(os.path.join(data_dir, ".gitignore"), encoding="utf-8") as f:
-            self.assertEqual(f.read(), "*\n")
+        with open(os.path.join(data_dir, ".gitignore"), "rb") as f:
+            self.assertEqual(f.read(), b"*\n")
         with open(TEMPLATE, encoding="utf-8") as a, open(data["config"], encoding="utf-8") as b:
             self.assertEqual(a.read(), b.read())
 
-        # check：ログを、同じフォルダの logs/ に作る
+        # check：ログは作らない
         with open(data["config"], encoding="utf-8") as f:
             text = f.read()
         text = re.sub(r'(?m)^port: ""$', lambda m: 'port: "%s"' % MISSING_PORT, text)
+        text = re.sub(r'(?m)^commands: \[\]$', lambda m: 'commands: ["echo hi"]', text)
         with open(data["config"], "w", encoding="utf-8") as f:
             f.write(text)
         code, data = capture("check")
         self.assertEqual(code, 2, data)
         self.assertEqual(data["skill"], name)
         self.assertIn("見つかりません", data["problems"][0])
+        self.assertNotIn("log", data)
+        self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml"])
+
+        # run：ログを、同じフォルダの logs/ に作る
+        code, data = capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertEqual(data["skill"], name)
+        self.assertIn("見つかりません", data["message"])
         self.assertEqual(os.path.dirname(data["log"]), os.path.join(data_dir, "logs"))
         self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
         self.assertEqual(os.listdir(work), ["." + name])

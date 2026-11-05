@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""YAML の設定ファイルを、コメントと項目の並びを残したまま読み書きする道具。
+"""スキルを探す道具と、YAML の設定ファイルをコメントと項目の並びを残したまま読み書きする道具。
 
 使い方:
-  config_tool.py list [--dir フォルダ] [--workdir フォルダ]
-  config_tool.py show ファイル
-  config_tool.py get ファイル 項目
-  config_tool.py set ファイル 項目 値 [--json]
-  config_tool.py set ファイル 項目 --stdin [--json]
+  config_tool.py skills [--workdir フォルダ]
+  config_tool.py show ファイル [--workdir フォルダ]
+  config_tool.py get ファイル 項目 [--workdir フォルダ]
+  config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]
 
-- set の値は、--stdin で標準入力から渡すのがよい（例：--stdin <<'VALUE_END' の次の行に値、
-  その次の行に VALUE_END）。値がコマンドの行に出ない。最後の改行1つは値に含めない。
+- --workdir・--json・--stdin は、サブコマンドの前に書いても後に書いてもよい。
+- skills は、スキルのフォルダ（SKILL.md があるフォルダ）を、次の順に探して返す。何も作らない。
+  1. .github/skills/、.agents/skills/、.claude/skills/（project）。この順に、それぞれ作業フォルダ
+     （今のフォルダか --workdir）から上へ探す。上は Git のリポジトリの一番上まで。リポジトリの外なら、
+     ホームフォルダまで（ホームフォルダの外なら、いちばん上まで）。
+  2. COPILOT_HOME（なければ ~/.copilot）の skills/（personal）
+  3. ~/.agents/skills/（personal）
+  4. このスキルのフォルダの隣のフォルダ（sibling）
+  この順は、Copilot CLI 1.0.105 の copilot skill list で確かめた、同じ名前のスキルが選ばれる順と同じ
+  （--plugin-dir で読み込んだプラグインのスキルは、2 と 3 より先に選ばれる）。
+  名前（SKILL.md の name:。なければフォルダの名前）が同じスキルは、先に見つかったものだけが使われる。
+  後のものは hidden を true にする。このスキル自身は返さない。点で始まるフォルダは見ない。
+- set の値は、--stdin で標準入力から渡す。値がコマンドの行に出ない。
+  （テストのために、値を「set ファイル 項目 値」と引数で渡すこともできる。）
+  標準入力はバイト列で読み、UTF-8（BOM があれば外す）で読めなければ、OS の既定の文字コードで読む。
+  最後の改行1つ（\\r\\n か \\n）は値に含めない。
   --json を付けると、値を JSON として読む（数・true / false・リスト）。
-- list は、作業フォルダ（今のフォルダか --workdir）と、その下 3 段までのフォルダから、
-  *.yaml・*.yml のうち、項目のすぐ上に # の説明があるファイルを、候補として探す。
-  .git・node_modules などのフォルダ（SKIP_DIRS）と、スキルのフォルダ（SKILL.md があるフォルダ。
-  このスキルのフォルダも）の中は見ない。スキルの中のひな形や試験の見本を、候補に出さないため。
-  点で始まるほかのフォルダの中は見る。何も作らない。
-  --dir を付けると、そのフォルダの中（下のフォルダは見ない）の *.yaml・*.yml を全部返す。
-- 結果は、いつも JSON 1つを標準出力に書く（UTF-8）。
+- 結果は、いつも JSON 1つを標準出力に書く。文字コードは Python の既定のもの。
+  その文字コードで書けない文字は、JSON の \\uXXXX の形にする。ファイルは、いつも UTF-8 で読み書きする。
+- show は、ファイルがなければ "ok": true と "exists": false を返す（終了コード 0）。
+  get と set は、ファイルがなければ失敗にする。
 - 終了コード: 0 成功 / 2 ファイルや引数の問題 / 1 思わぬエラー。
 - 読める YAML は、次の書き方だけ。
   - 先頭の列に「項目: 値」。入れ子はなし。
@@ -35,12 +45,15 @@
 - Python 3.8 以上の標準ライブラリだけで動く。
 """
 
+import codecs
 import errno
 import hashlib
 import json
+import locale
 import math
 import os
 import re
+import stat
 import sys
 import tempfile
 import traceback
@@ -48,21 +61,15 @@ import unicodedata
 
 MASK = "＊＊＊"
 
-# list で探す深さ（作業フォルダの下の、フォルダの段の数）と、中を見ないフォルダ。
-SEARCH_DEPTH = 3
-SKIP_DIRS = (".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
-             ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache")
-# このスキルのフォルダ（scripts/ の親）。中の試験の見本を、候補に出さないため。
-# ほかのスキルのフォルダ（SKILL.md があるフォルダ）も、同じ理由で見ない。
+# このスキルのフォルダ（scripts/ の親）。skills の結果から除き、隣のフォルダを探すのに使う。
 SKILL_FILE = "SKILL.md"
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 USAGE = [
-    "config_tool.py list [--dir フォルダ] [--workdir フォルダ]",
-    "config_tool.py show ファイル",
-    "config_tool.py get ファイル 項目",
-    "config_tool.py set ファイル 項目 値 [--json]",
-    "config_tool.py set ファイル 項目 --stdin [--json]",
+    "config_tool.py skills [--workdir フォルダ]",
+    "config_tool.py show ファイル [--workdir フォルダ]",
+    "config_tool.py get ファイル 項目 [--workdir フォルダ]",
+    "config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]",
 ]
 
 TYPE_WORDS = {
@@ -81,6 +88,10 @@ class ToolError(Exception):
         Exception.__init__(self, message)
         self.message = message
         self.extra = extra
+
+
+class DuplicateKeyError(ToolError):
+    """同じ項目が2回書かれている。道具が読めない書き方ではなく、ファイルの誤り。"""
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +518,14 @@ class Document(object):
         self.items = []
         self.by_key = {}
         self.header = []
-        self._parse()
+        try:
+            self._parse()
+        except DuplicateKeyError:
+            raise
+        except ToolError as e:
+            # 道具が読めない書き方（入れ子など）。結果に "unsupported": true を付ける。
+            e.extra.setdefault("unsupported", True)
+            raise
 
     def text_of(self, index):
         return self.lines[index].rstrip("\r")
@@ -547,7 +565,7 @@ class Document(object):
             m = KEY_LINE_RE.match(lines[i])
             key = m.group(1)
             if key in self.by_key:
-                raise ToolError("項目「{}」が2回書かれています（{} 行目と {} 行目）。1つにしてください。".format(
+                raise DuplicateKeyError("項目「{}」が2回書かれています（{} 行目と {} 行目）。1つにしてください。".format(
                     key, self.by_key[key].start + 1, line_no))
             try:
                 value, style, inline, end = self._parse_value(i, m.group(2) or "", lines, kinds)
@@ -638,7 +656,7 @@ def resolve_path(path, workdir):
 
 def load(path):
     if not os.path.exists(path):
-        raise ToolError("ファイルがありません：{}".format(path), file=path)
+        raise ToolError("ファイルがありません：{}".format(path), file=path, exists=False)
     if os.path.isdir(path):
         raise ToolError("フォルダが指定されました。設定ファイルを指定してください：{}".format(path), file=path)
     try:
@@ -665,9 +683,13 @@ def write_atomic(path, data):
     target = os.path.realpath(path)
     folder = os.path.dirname(target)
     try:
-        mode = os.stat(target).st_mode & 0o7777
+        mode = stat.S_IMODE(os.stat(target).st_mode)
     except OSError:
         mode = None
+    if mode is not None and not mode & 0o222:
+        # 読み取り専用のファイルは書かない（Windows では置き換えられず、Linux では置き換わってしまう）。
+        raise ToolError("ファイルに書き込めません（読み取り専用です）。ファイルとフォルダの権限を確かめてください：{}".format(
+            path), file=path)
     tmp = None
     try:
         fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(target) + ".", suffix=".tmp", dir=folder)
@@ -685,6 +707,7 @@ def write_atomic(path, data):
     finally:
         if tmp is not None and os.path.exists(tmp):
             try:
+                os.chmod(tmp, stat.S_IREAD | stat.S_IWRITE)  # Windows では、読み取り専用のファイルを消せない
                 os.unlink(tmp)
             except OSError:
                 pass
@@ -708,18 +731,31 @@ DIGEST_ROUNDS = 20000
 _DIGEST_KEY = []
 
 
+def _windows_machine_guid():
+    """Windows の、この PC だけの番号（MachineGuid）。読めなければ空。"""
+    try:
+        import winreg
+        access = winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0, access) as k:
+            return str(winreg.QueryValueEx(k, "MachineGuid")[0]).strip().encode("utf-8")
+    except (ImportError, OSError):
+        return b""
+
+
 def _digest_key():
     """指紋を作るための、この PC だけの鍵。チャットには出ないので、指紋から値を当てにくい。"""
     if not _DIGEST_KEY:
         key = b""
+        if os.name == "nt":
+            key = _windows_machine_guid()
         for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+            if key:
+                break
             try:
                 with open(path, "rb") as f:
                     key = f.read().strip()
             except OSError:
                 continue
-            if key:
-                break
         _DIGEST_KEY.append(key)
     return _DIGEST_KEY[0]
 
@@ -942,120 +978,229 @@ def convert_input(item, raw, use_json):
 # サブコマンド
 # ---------------------------------------------------------------------------
 
-def _is_yaml_file(name, path):
-    return name.lower().endswith((".yaml", ".yml")) and os.path.isfile(path)
+def _place_key(path):
+    """同じ場所かを比べるための形（Windows では大文字と小文字を区別しない）。"""
+    return os.path.normcase(os.path.realpath(path))
 
 
-def _file_detail(path, name):
-    """list の1つのファイルの情報。(読めた Document か None, 情報) を返す。"""
-    try:
-        doc = load(path)
-    except ToolError as e:
-        return None, {"file": path, "name": name, "error": e.message}
-    return doc, {
-        "file": path,
-        "name": name,
-        "header": doc.header[0] if doc.header else "",
-        "items": len(doc.items),
-        "missing": [it.key for it in doc.items if it.required and is_empty(it.value)],
-    }
+def copilot_home():
+    """利用者のスキルを置く場所の親。環境変数 COPILOT_HOME、なければ ~/.copilot。"""
+    home = os.environ.get("COPILOT_HOME", "").strip()
+    if home:
+        return os.path.abspath(os.path.expanduser(home))
+    return os.path.join(os.path.expanduser("~"), ".copilot")
 
 
-def _has_described_key(doc):
-    """項目のすぐ上に、空でない # の説明がある項目が、1つ以上あるか。"""
-    return any(any(line.strip() for line in it.comments) for it in doc.items)
+# 作業フォルダとその上のフォルダで、スキルを置くフォルダ。Copilot CLI 1.0.105 が選ぶ順。
+PROJECT_SKILL_PARENTS = (".github", ".agents", ".claude")
 
 
-def _looks_described(path):
-    """読めないファイルでも、項目のすぐ上に # の説明がある形かを、行だけで見る。"""
-    try:
-        with open(path, "rb") as f:
-            text = f.read().decode("utf-8", "replace")
-    except OSError:
-        return True  # 中を見られない。読めないファイルとして知らせる。
-    if text.startswith("﻿"):
-        text = text[1:]
-    prev = ""
-    for line in text.split("\n"):
-        line = line.rstrip("\r")
-        if _classify(line) == "key" and prev.startswith("#") and _comment_text(prev).strip():
-            return True
-        prev = line
+def _is_git_root(folder):
+    """folder が Git のリポジトリ（作業ツリー）の一番上か。"""
+    dot_git = os.path.join(folder, ".git")
+    if os.path.isdir(dot_git):
+        return os.path.isfile(os.path.join(dot_git, "HEAD"))
+    if os.path.isfile(dot_git):  # git worktree などは、.git がファイル（gitdir: <場所>）
+        try:
+            with open(dot_git, "rb") as f:
+                text = f.read(4096).decode("utf-8", "replace").strip()
+        except OSError:
+            return False
+        if text.startswith("gitdir:"):
+            return os.path.isdir(os.path.join(folder, text[len("gitdir:"):].strip()))
     return False
 
 
-def list_folder(folder):
-    """--dir のフォルダの中（下のフォルダは見ない）の *.yaml・*.yml を、全部返す。"""
-    if not os.path.isdir(folder):
-        return {"ok": True, "dir": folder, "exists": False, "files": [], "details": []}
+def project_folders(workdir):
+    """作業フォルダと、その上のフォルダ（近い順）。
+
+    Git のリポジトリの中なら、その一番上まで。外なら、ホームフォルダまで（ホームフォルダの外なら、いちばん上まで）。
+    """
+    chain = []
+    folder = os.path.abspath(workdir)
+    while True:
+        chain.append(folder)
+        if _is_git_root(folder):
+            return chain
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    home = _place_key(os.path.expanduser("~"))
+    for i, folder in enumerate(chain):
+        if _place_key(folder) == home:
+            return chain[:i + 1]
+    return chain
+
+
+def skill_places(workdir):
+    """スキルを探す場所を、使われる順に返す。(どこ, フォルダ) の組。同じ場所は1回だけ。"""
+    places = []
+    for name in PROJECT_SKILL_PARENTS:
+        for folder in project_folders(workdir):
+            places.append(("project", os.path.join(folder, name, "skills")))
+    places.append(("personal", os.path.join(copilot_home(), "skills")))
+    places.append(("personal", os.path.join(os.path.expanduser("~"), ".agents", "skills")))
+    places.append(("sibling", os.path.dirname(SKILL_DIR)))
+    out = []
+    seen = set()
+    for where, place in places:
+        key = _place_key(place)
+        if key not in seen:
+            seen.add(key)
+            out.append((where, place))
+    return out
+
+
+FRONT_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*?))?[ \t]*$")
+BLOCK_HEAD_RE = re.compile(r"^([|>])[-+0-9]*[ \t]*(?:#.*)?$")
+
+
+def _front_value(raw, more):
+    """SKILL.md の先頭の情報の、1つの項目の値（文字）。more は、続きの行（字下げした行と空行）。"""
+    m = BLOCK_HEAD_RE.match(raw)
+    if m:
+        body = [line.strip() for line in more]
+        while body and not body[-1]:
+            body.pop()
+        if m.group(1) == "|":
+            return "\n".join(body)
+        out = []
+        for line in body:
+            if not line:
+                out.append("\n")
+            elif out and out[-1] != "\n":
+                out.append(" " + line)
+            else:
+                out.append(line)
+        return "".join(out)
+    text = " ".join([raw] + [line.strip() for line in more if line.strip()]).strip()
+    if text[:1] in ("\"", "'"):
+        try:
+            value, end = _scan_quoted(text, 0, 0)
+            _rest_is_comment(text[end:], 0)
+            return value
+        except ToolError:
+            return text
+    body, _ = _split_inline_comment(text)
+    return body
+
+
+def read_front_matter(path):
+    """SKILL.md の先頭の、--- で囲んだ情報を読む。{項目: 値（文字）} を返す。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise ToolError("SKILL.md を読めません（{}）。".format(_os_reason(e)))
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ToolError("SKILL.md を UTF-8 の文字として読めません。")
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[0].rstrip() != "---":
+        raise ToolError("SKILL.md の1行目が --- ではありません（name と description を --- で囲んで先頭に書きます）。")
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            end = i
+            break
+    if end is None:
+        raise ToolError("SKILL.md の先頭の情報が、--- で閉じていません。")
+    fields = {}
+    i = 1
+    while i < end:
+        line = lines[i]
+        m = FRONT_KEY_RE.match(line)
+        i += 1
+        if not m:
+            continue
+        more = []
+        while i < end and (lines[i].strip() == "" or lines[i][0] in " \t"):
+            more.append(lines[i])
+            i += 1
+        fields[m.group(1)] = _front_value(m.group(2) or "", more)
+    return fields
+
+
+def find_readme(folder):
+    """スキルのフォルダの README.md の場所。名前の大文字と小文字は問わない。なければ None。"""
+    exact = os.path.join(folder, "README.md")
+    if os.path.isfile(exact):
+        return exact
     try:
         names = sorted(os.listdir(folder))
-    except OSError as e:
-        raise ToolError("フォルダの中を見られません（{}）：{}".format(_os_reason(e), folder))
-    files = []
-    details = []
+    except OSError:
+        return None
     for name in names:
         path = os.path.join(folder, name)
-        if not _is_yaml_file(name, path):
+        if name.lower() == "readme.md" and os.path.isfile(path):
+            return path
+    return None
+
+
+def _skill_folders(place):
+    """場所の中の、SKILL.md があるフォルダ（名前の順）。点で始まるフォルダは見ない。"""
+    try:
+        names = sorted(os.listdir(place))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        folder = os.path.join(place, name)
+        if name.startswith(".") or not os.path.isdir(folder):
             continue
-        files.append(path)
-        details.append(_file_detail(path, name)[1])
-    return {"ok": True, "dir": folder, "exists": True, "files": files, "details": details}
+        if os.path.isfile(os.path.join(folder, SKILL_FILE)):
+            out.append(folder)
+    return out
 
 
-def _walk_yaml(workdir):
-    """作業フォルダと、その下 SEARCH_DEPTH 段までのフォルダの *.yaml・*.yml を、(パス, 名前) で返す。
-
-    名前は、作業フォルダからの場所（区切りは /）。フォルダごとに、ファイルを先に、名前の順に返す。
-    """
-    own = os.path.realpath(SKILL_DIR)
-
-    def on_error(err):
-        if os.path.abspath(err.filename or "") == workdir:
-            raise ToolError("フォルダの中を見られません（{}）：{}".format(_os_reason(err), workdir))
-
-    for root, dirs, files in os.walk(workdir, onerror=on_error):
-        rel = os.path.relpath(root, workdir)
-        depth = 0 if rel == os.curdir else len(rel.split(os.sep))
-        if depth >= SEARCH_DEPTH:
-            dirs[:] = []
-        else:
-            dirs[:] = sorted(d for d in dirs
-                             if d not in SKIP_DIRS and os.path.realpath(os.path.join(root, d)) != own
-                             and not os.path.isfile(os.path.join(root, d, SKILL_FILE)))
-        for name in sorted(files):
-            path = os.path.join(root, name)
-            if _is_yaml_file(name, path):
-                yield path, os.path.relpath(path, workdir).replace(os.sep, "/")
-
-
-def search_workdir(workdir):
-    """作業フォルダの中から、項目のすぐ上に # の説明があるファイルを、候補として探す。
-
-    読めないファイルのうち、その形に見えるものは、候補にせず unreadable に入れる。
-    """
-    result = {"ok": True, "dir": workdir, "exists": os.path.isdir(workdir), "max_depth": SEARCH_DEPTH,
-              "files": [], "details": [], "unreadable": []}
-    if not result["exists"]:
-        return result
-    for path, name in _walk_yaml(workdir):
-        doc, detail = _file_detail(path, name)
-        if doc is None:
-            if _looks_described(path):
-                result["unreadable"].append(detail)
-        elif _has_described_key(doc):
-            result["files"].append(path)
-            result["details"].append(detail)
+def find_skills(workdir):
+    """使えるスキルを、使われる順に探す。同じ名前は、先に見つかったものが使われる。"""
+    result = {"ok": True, "workdir": workdir, "searched": [], "skills": [], "unreadable": []}
+    own_key = _place_key(SKILL_DIR)
+    seen = set()     # 見つけたフォルダ（同じ場所を2回数えない）
+    winner = {}      # 名前 → 使われるスキルのフォルダ
+    for where, place in skill_places(workdir):
+        result["searched"].append({"where": where, "dir": place, "exists": os.path.isdir(place)})
+        for folder in _skill_folders(place):
+            key = _place_key(folder)
+            if key in seen:
+                continue
+            seen.add(key)
+            skill_md = os.path.join(folder, SKILL_FILE)
+            try:
+                fields = read_front_matter(skill_md)
+            except ToolError as e:
+                result["unreadable"].append({"path": folder, "where": where, "error": e.message})
+                continue
+            name = fields.get("name", "").strip() or os.path.basename(folder)
+            own = key == own_key
+            entry = {
+                "name": name,
+                "path": folder,
+                "where": where,
+                "skill_md": skill_md,
+                "readme": find_readme(folder),
+                "description": fields.get("description", "").strip(),
+                "hidden": name in winner,
+            }
+            if entry["hidden"]:
+                entry["hidden_by"] = winner[name]
+            else:
+                winner[name] = folder
+            if not own:
+                result["skills"].append(entry)
     return result
 
 
-def cmd_list(opts, pos):
+def cmd_skills(opts, pos):
     if pos:
-        raise ToolError("list には、ファイルの名前を付けません。フォルダを指定するときは --dir を使います。")
+        raise ToolError("skills には、ほかの引数を付けません。作業フォルダを変えるときは --workdir を使います。")
     workdir = os.path.abspath(os.path.expanduser(opts["workdir"])) if opts["workdir"] else os.getcwd()
-    if opts["dir"]:
-        return list_folder(resolve_path(opts["dir"], workdir))
-    return search_workdir(workdir)
+    return find_skills(workdir)
 
 
 def _need(pos, count, usage):
@@ -1066,11 +1211,15 @@ def _need(pos, count, usage):
 def cmd_show(opts, pos):
     _need(pos, 1, USAGE[1])
     path = resolve_path(pos[0], opts["workdir"])
+    if not os.path.exists(path):
+        # ないことは失敗ではない（作る前に、ファイルがあるかを確かめるために使う）。
+        return {"ok": True, "file": path, "exists": False}
     doc = load(path)
     items = [item_info(doc, it) for it in doc.items]
     return {
         "ok": True,
         "file": path,
+        "exists": True,
         "header": "\n".join(doc.header).strip(),
         "items": items,
         "missing": [it["key"] for it in items if it["required"] and it["empty"]],
@@ -1097,12 +1246,54 @@ def cmd_get(opts, pos):
     return result
 
 
-STDIN_HINT = ("値は、コマンドの後ろに <<'VALUE_END' を付け、次の行に値、"
-              "その次の行に VALUE_END と書いて渡してください。")
+STDIN_HINT = ("値は標準入力で渡してください。PowerShell では @' と '@ の間に値を書いてパイプで、"
+              "bash では <<'VALUE_END' の次の行に値、その次の行に VALUE_END と書いて渡します。")
+
+
+def fallback_encodings():
+    """標準入力が UTF-8 で読めないときに試す、OS の既定の文字コード（UTF-8 は除く）。"""
+    names = []
+    getencoding = getattr(locale, "getencoding", None)  # Python 3.11 から。UTF-8 モードでも OS の既定を返す
+    for name in ((getencoding() if getencoding else None), locale.getpreferredencoding(False)):
+        if not name:
+            continue
+        try:
+            canonical = codecs.lookup(name).name
+        except LookupError:
+            continue
+        if canonical != "utf-8" and canonical not in names:
+            names.append(canonical)
+    return names
+
+
+def decode_input(data, encodings=None):
+    """標準入力のバイト列を文字にする。UTF-8（BOM は外す）で読めなければ、OS の既定の文字コードで読む。
+
+    最後の改行1つ（\\r\\n か \\n）は値に含めない。
+    """
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+        for name in (fallback_encodings() if encodings is None else encodings):
+            try:
+                text = data.decode(name)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if text is None:
+            raise ToolError("標準入力を文字として読めません（UTF-8 でも、OS の既定の文字コードでもありません）。")
+    if text.endswith("\r\n"):
+        text = text[:-2]
+    elif text.endswith("\n"):
+        text = text[:-1]
+    return text
 
 
 def _read_stdin():
-    """--stdin の値を読む。最後の改行1つは値に含めない。何も届かなければ空の値。"""
+    """--stdin の値を読む。何も届かなければ空の値。"""
     stream = getattr(sys.stdin, "buffer", None)
     if stream is None:
         raise ToolError("--stdin を付けましたが、標準入力がありません。" + STDIN_HINT)
@@ -1113,23 +1304,15 @@ def _read_stdin():
     if interactive:
         # 値を渡し忘れると、入力を待ったまま止まってしまう。待たずに知らせる。
         raise ToolError("--stdin を付けましたが、値が渡されていません。" + STDIN_HINT)
-    data = stream.read()
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ToolError("標準入力を UTF-8 の文字として読めません。")
-    if text.endswith("\r\n"):
-        text = text[:-2]
-    elif text.endswith("\n"):
-        text = text[:-1]
-    return text
+    return decode_input(stream.read())
 
 
 def cmd_set(opts, pos):
     if opts["stdin"]:
-        _need(pos, 2, USAGE[4])
+        _need(pos, 2, USAGE[3])
         raw = _read_stdin()
     else:
+        # 値を引数で渡す形（テスト用）。使い方には --stdin の形だけを示す。
         _need(pos, 3, USAGE[3])
         raw = pos[2]
     path = resolve_path(pos[0], opts["workdir"])
@@ -1188,7 +1371,7 @@ def cmd_help(opts, pos):
 
 
 COMMANDS = {
-    "list": cmd_list,
+    "skills": cmd_skills,
     "show": cmd_show,
     "get": cmd_get,
     "set": cmd_set,
@@ -1197,7 +1380,7 @@ COMMANDS = {
 
 
 def parse_args(argv):
-    opts = {"json": False, "stdin": False, "dir": None, "workdir": None}
+    opts = {"json": False, "stdin": False, "workdir": None}
     pos = []
     only_pos = False
     i = 0
@@ -1211,14 +1394,13 @@ def parse_args(argv):
             opts["json"] = True
         elif a == "--stdin":
             opts["stdin"] = True
-        elif a in ("--dir", "--workdir"):
+        elif a == "--workdir":
             if i + 1 >= len(argv):
                 raise ToolError("{} の後ろに、フォルダを書いてください。".format(a))
-            opts[a[2:]] = argv[i + 1]
+            opts["workdir"] = argv[i + 1]
             i += 1
-        elif a.startswith("--dir=") or a.startswith("--workdir="):
-            name, val = a[2:].split("=", 1)
-            opts[name] = val
+        elif a.startswith("--workdir="):
+            opts["workdir"] = a.split("=", 1)[1]
         else:
             pos.append(a)
         i += 1
@@ -1228,17 +1410,77 @@ def parse_args(argv):
 def run(argv):
     if not argv or argv[0] in ("-h", "--help"):
         return cmd_help(None, None)
-    cmd = argv[0]
+    # --workdir などは、サブコマンドの前でも後でもよい。最初の引数（オプションでないもの）がサブコマンド。
+    opts, pos = parse_args(argv)
+    if not pos:
+        raise ToolError("サブコマンドがありません。使えるのは skills / show / get / set です。", usage=USAGE)
+    cmd = pos.pop(0)
+    if cmd in ("-h", "--help"):
+        return cmd_help(None, None)
     if cmd not in COMMANDS:
-        raise ToolError("知らないサブコマンドです：{}。使えるのは list / show / get / set です。".format(cmd), usage=USAGE)
-    opts, pos = parse_args(argv[1:])
+        raise ToolError("知らないサブコマンドです：{}。使えるのは skills / show / get / set です。".format(cmd), usage=USAGE)
     return COMMANDS[cmd](opts, pos)
 
 
+def _escape_unwritable(text, encoding):
+    """encoding で書けない文字を、JSON の \\uXXXX の形にする（JSON の文字列の中の文字だけが当てはまる）。"""
+    try:
+        text.encode(encoding)
+        return text
+    except UnicodeEncodeError:
+        pass
+    except LookupError:
+        return text
+    out = []
+    for ch in text:
+        try:
+            ch.encode(encoding)
+            out.append(ch)
+        except UnicodeEncodeError:
+            out.append(json.dumps(ch)[1:-1])
+    return "".join(out)
+
+
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（cp932 など）。コンソールがなければ None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except Exception:
+        return None
+    if not cp:
+        return None
+    name = "cp%d" % cp
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
 def emit(obj):
-    data = (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8", "backslashreplace")
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
+    """結果の JSON を、読む側の文字コードで標準出力に書く（UTF-8 のバイト列を直接書かない）。
+
+    Windows で、出力先がコンソールでない（パイプなど）ときは、コンソールの文字コードで書く。
+    PowerShell は、この文字コードで読む。Python 3.15 からの既定（UTF-8 モード）のままだと、
+    日本語の Windows では文字化けする。
+    """
+    stream = sys.stdout
+    encoding_cp = console_code_page()
+    try:
+        if encoding_cp and not stream.isatty():
+            stream.reconfigure(encoding=encoding_cp, errors="backslashreplace")
+        else:
+            stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError, OSError):
+        pass
+    encoding = getattr(stream, "encoding", None) or locale.getpreferredencoding(False)
+    text = json.dumps(obj, ensure_ascii=False, indent=2) + "\n"
+    stream.write(_escape_unwritable(text, encoding))
+    stream.flush()
 
 
 def main(argv=None):

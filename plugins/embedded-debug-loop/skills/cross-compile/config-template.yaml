@@ -1,18 +1,29 @@
 # クロスコンパイルのスキルの設定ファイルです。
-# 機器で動かすプログラムを、PC でビルドするやり方を書きます。
+# 機器で動かすプログラムを、PC でビルドする方法を書きます。
 # 作業フォルダは、ビルドしたいプロジェクトのフォルダです。ふつうは、このファイルが入ったフォルダの1つ外側です。
 
 # ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空や "." なら作業フォルダ。
+# Windows のパスは「/」で区切るか、全体を「'」で囲む。
 # 例：firmware/app
 source_dir: "."
 
-# ビルドの前に読み込む、SDK の環境設定ファイル。
+# コマンドを実行し、sdk_env を読み込むシェル。auto・cmd・powershell・bash のどれか。
+# auto は、Windows では cmd、それ以外では bash。
+# Windows の bash は、Git for Windows などの bash（WSL の bash は使えない）。
+# 例：powershell
+shell: "auto"
+
+# ビルドの前に読み込む、SDK の環境設定ファイル。空なら読み込まない。
 # 機器向けにビルドするなら、必ず書く。
-# 空なら SDK を読み込まず、PC のコンパイラーで PC 用のプログラムができる。
+# ただし、WSL の中の SDK を使うときは空にして、build_command に wsl で始まるコマンドを書く。
+# shell が cmd（Windows の auto も同じ）なら .bat・.cmd、powershell なら .ps1 にする。
+# 例の1つ目は Windows で使う SDK（cmd 用）、2つ目は Linux で使う Yocto の SDK（bash 用）。
+# 例：'C:\sdk\setenv.bat'
 # 例：/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
 sdk_env: ""
 
-# ビルドのコマンド。ビルドするフォルダの中で実行する。空なら make。
+# ビルドのコマンド。ビルドするフォルダの中で、shell のシェルで実行する。
+# 空なら make。
 # 例：make
 # 例：make -j4 all
 build_command: "make"
