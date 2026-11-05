@@ -484,13 +484,13 @@ class ReplaceableTest(SkillsTestCase):
         """.claude/skills/ や .agents/skills/ に置いた置き換えも見つかる。作業フォルダの下から動かしても同じ。"""
         sub = os.path.join(self.work, "sub")
         os.makedirs(sub)
-        self.make_skill(self.plugin, "deploy", description="元のスキル")
+        self.make_skill(self.plugin, "send-files", description="元のスキル")
         for folder in (".claude", ".agents"):
-            replacement = self.make_skill(os.path.join(self.work, folder, "skills"), "deploy",
+            replacement = self.make_skill(os.path.join(self.work, folder, "skills"), "send-files",
                                           description="置き換えたスキル")
             for cwd in (self.work, sub):
                 data = self.skills(cwd=cwd)
-                self.assertTrue(same(self.used(data, "deploy"), replacement), (folder, cwd))
+                self.assertTrue(same(self.used(data, "send-files"), replacement), (folder, cwd))
                 original = [s for s in data["skills"] if s["where"] == "sibling"][0]
                 self.assertIs(original["hidden"], True)
             shutil.rmtree(replacement)
