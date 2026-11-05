@@ -18,6 +18,7 @@ socket://ホスト:ポート（TCP。テスト用）を書ける。
 設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く
 （例：.log-capture/config.yaml と .log-capture/logs/）。
 フォルダの名前は、このスクリプトの場所（scripts/ の親のフォルダ）から求める。
+設定ファイルと .gitignore は、run と config-path が作る。check は、ファイルを作らない（ログも）。
 """
 
 import argparse
@@ -735,6 +736,17 @@ def validate(cfg):
         if key not in known:
             say("設定ファイルの %s は、このスキルでは使いません（そのままにします）。" % key)
     return s, problems
+
+
+NOTHING_TO_RUN = "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"
+
+
+def check_notes(cfg):
+    """check で知らせる注意（問題ではない）。commands が空で listen_seconds も 0 なら、そう言う。"""
+    raw = cfg.get("listen_seconds")
+    if _is_empty(cfg.get("commands")) and (raw is None or raw == "" or _number(raw) == 0):
+        return [NOTHING_TO_RUN + "機器でプログラムを動かしてログを取るなら、commands を書いてください。"]
+    return []
 
 
 def summary_of(cfg):
@@ -1825,10 +1837,7 @@ def cmd_run(args):
     elif args.command:
         commands = list(args.command)
     if not commands and not listen_seconds:
-        return _settings_problem(config, created, [
-            "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"
-            "どちらかを設定してください。"
-        ], added)
+        return _settings_problem(config, created, [NOTHING_TO_RUN + "どちらかを設定してください。"], added)
     if not commands:
         listen_only = True
 
@@ -1984,30 +1993,34 @@ def cmd_run(args):
 
 
 def cmd_check(args):
+    """設定を確かめる。ファイルは作らない（設定ファイル、.gitignore、ログ）。
+    足りない項目は、ほかのサブコマンドと同じく、設定ファイルに足す。"""
     workdir, config = _paths(args)
-    created, added = open_config(workdir, config)
+    if not os.path.exists(config):
+        message = "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config
+        emit({"ok": False, "skill": SKILL, "message": message, "problems": [message], "notes": [],
+              "summary": {}, "config": config, "created": False, "added": []})
+        return 2
+    added = add_missing_keys(config)
     cfg, problems = _load(config)
-    out = {"ok": False, "skill": SKILL, "problems": [], "summary": summary_of(cfg),
-           "config": config, "created": created}
+    out = {"ok": False, "skill": SKILL, "problems": [], "notes": [], "summary": summary_of(cfg),
+           "config": config, "created": False}
     if not problems:
         s, problems = validate(cfg)
         s.config = config
+        out["notes"] = check_notes(cfg)
     if problems:
         out["problems"] = problems
-        out["message"] = problems_message(problems, config, created)
+        out["message"] = problems_message(problems, config, False)
         emit(with_added(out, added))
         return 2
 
-    log_path, log = open_log(workdir, "check")
-    log_note(log, "# シリアルポート：%s（速さ %d）\n" % (s.port, s.baud))
-    log_note(log, "# ---- ここから下は、機器から届いた文字そのまま ----\n")
-    out["log"] = log_path
     ser = None
     message = ""
     try:
         say("シリアルポート %s を開きます（速さ %d）。" % (s.port, s.baud))
         ser = open_port(s.port, s.baud)
-        con = Console(ser, s.port, log)
+        con = Console(ser, s.port, None)
         state = wake(con, s)
         if state == "login":
             login(con, s)
@@ -2020,6 +2033,7 @@ def cmd_check(args):
         else:
             message = "シリアルポート %s で機器につながり、シェルのプロンプトを確かめました（ログインは不要でした）。" % s.port
             out["summary"]["console"] = "シェルのプロンプトが出た"
+        message += "".join(out["notes"])
         out["ok"] = True
     except Failure as f:
         out["problems"].append(f.message)
@@ -2032,18 +2046,12 @@ def cmd_check(args):
         )
         out["problems"].append(message)
     except Exception as e:
-        log_note(log, "\n# 思わぬエラー：\n" + traceback.format_exc())
-        message = "思わぬエラーで止まりました（%s: %s）。くわしくはログを見てください。" % (type(e).__name__, e)
+        say(traceback.format_exc())
+        message = "思わぬエラーで止まりました（%s: %s）。" % (type(e).__name__, e)
         out["problems"].append(message)
     finally:
         close_port(ser)
-        log_note(log, "\n# ---- ここまで ----\n# 結果：%s\n" % message)
-        try:
-            log.close()
-        except Exception:
-            pass
     out["message"] = message
-    say("ログ：%s" % log_path)
     emit(with_added(out, added))
     return 0 if out["ok"] else 2
 

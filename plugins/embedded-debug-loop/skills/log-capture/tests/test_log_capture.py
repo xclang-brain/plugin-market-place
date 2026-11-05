@@ -973,11 +973,14 @@ class Settings(CaptureTestCase):
     def test_gitignore_is_made_again_when_removed(self):
         self.capture("config-path")
         gi = os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")
-        for command in ("config-path", "check", "run"):
+        for command in ("config-path", "run"):
             os.unlink(gi)
             self.capture(command)
             with open(gi, "rb") as f:
                 self.assertEqual(f.read(), b"*\n", command)
+        os.unlink(gi)
+        self.capture("check")   # check は、ファイルを作らない
+        self.assertFalse(os.path.lexists(gi))
 
     def test_gitignore_in_work_folder_with_config_elsewhere(self):
         os.makedirs(os.path.join(self.tmp, DATA_DIR_NAME))
@@ -1178,9 +1181,11 @@ class Check(CaptureTestCase):
         self.assertEqual(self.device.login_attempts, [("root", True)])
         self.assertEqual(self.device.executed, ["exit"])  # コマンドは実行しない
         self.assertEqual(self.device.state, "login")
-        log = self.assert_log_has_no_marker(data)
-        self.assertIn("myboard login: root", log)
-        self.assertNotIn("（終了コード", log)
+        self.assertEqual(data["notes"], [])
+        # ログは作らない
+        self.assertNotIn("log", data)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME))), ["config.yaml"])
+        self.assertNotIn("ログ：", self.stderr)
 
     def test_check_shell_without_login(self):
         port = self.start_device(login=False)
@@ -1191,12 +1196,71 @@ class Check(CaptureTestCase):
         self.assertIn("ログインは不要", data["message"])
         self.assertEqual(self.device.executed, [])
 
-    def test_check_fresh_config(self):
+    def test_check_without_config_creates_nothing(self):
         code, data = self.capture("check")
         self.assertEqual(code, 2, data)
         self.assertFalse(data["ok"])
-        self.assertTrue(data["created"])
+        self.assertFalse(data["created"])
+        self.assertEqual(data["config"], self.config_path)
+        self.assertEqual(data["message"],
+                         "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % self.config_path)
+        self.assertEqual(data["problems"], [data["message"]])
+        self.assertEqual(data["notes"], [])
+        self.assertNotIn("log", data)
+        self.assertEqual(os.listdir(self.tmp), [])   # 設定、.gitignore、ログのどれも作らない
+        # 別の場所を指したときも
+        other = os.path.join(self.tmp, "sub", "my.yaml")
+        code, data = self.capture("check", "--config", other)
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["config"], other)
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_check_fresh_config(self):
+        self.capture("config-path")
+        code, data = self.capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertFalse(data["ok"])
+        self.assertFalse(data["created"])
         self.assertTrue(any("port" in p for p in data["problems"]))
+        # ひな形のままでは commands が空で listen_seconds も 0。問題ではなく、注意として伝える
+        self.assertEqual(len(data["notes"]), 1)
+        self.assertTrue(data["notes"][0].startswith(
+            "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"), data["notes"])
+        self.assertFalse(any("listen_seconds" in p for p in data["problems"]))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME))), [".gitignore", "config.yaml"])
+
+    def test_check_notes_when_nothing_to_run(self):
+        """commands が空で listen_seconds も 0 なら、check は ok のまま、注意（notes）で知らせる。"""
+        port = self.start_device(login=False)
+        self.write_config(port=port)
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["problems"], [])
+        self.assertEqual(data["notes"], [
+            "実行するコマンド（commands）が空で、記録する秒数（listen_seconds）も 0 です。"
+            "機器でプログラムを動かしてログを取るなら、commands を書いてください。"])
+        self.assertTrue(data["message"].endswith(data["notes"][0]), data["message"])
+        for values in ({"commands": ["echo hi"]}, {"listen_seconds": 10}):
+            self.write_config(port=port, **values)
+            code, data = self.capture("check")
+            self.assertEqual(code, 0, data)
+            self.assertEqual(data["notes"], [], values)
+            self.assertNotIn("commands", data["message"], values)
+        # listen_seconds の値が空（「listen_seconds:」だけの行）のときも、0 と同じに注意する
+        path = self.write_config(port=port)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        text, n = re.subn(r"(?m)^listen_seconds:.*$", "listen_seconds:", text)
+        self.assertEqual(n, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        self.assertTrue(data["ok"])
+        self.assertIsNone(data["summary"]["listen_seconds"])
+        self.assertEqual(len(data["notes"]), 1, data)
+        self.assertEqual(self.device.executed, [])
 
     def test_check_missing_port(self):
         self.write_config(port=MISSING_PORT)
@@ -1797,7 +1861,7 @@ class SelfContained(unittest.TestCase):
                     self.assertIn("シリアルポート %s が見つかりません。" % MISSING_PORT, data["message"], where)
                     err = unescape(err, encoding)
                     self.assertIn("シリアルポート %s を開きます" % MISSING_PORT, err, where)
-                    self.assertIn("ログ：%s" % os.path.join(work, DATA_DIR_NAME, "logs"), err, where)
+                    self.assertFalse(os.path.exists(os.path.join(work, DATA_DIR_NAME, "logs")), where)
                 if encoding == "cp932":
                     self.assertIn("作業", out)        # cp932 で書ける文字は、そのまま
                     self.assertIn("\\u00e9", out)    # é は cp932 で書けない
@@ -1904,6 +1968,20 @@ class SelfContained(unittest.TestCase):
         # Windows を先に書く
         self.assertLess(text.index("COM3"), text.index("/dev/ttyUSB0"))
         self.assertLess(text.index("py -3"), text.index("python3"))
+        self.assertLess(text.index("%USERPROFILE%\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
+        self.assertIn("Windows では、GitHub Actions でテストを確認しています。"
+                      "Windows の Copilot CLI との組み合わせは、まだ確認していません。", text)
+        self.assertIn("設定ファイルを作って", text)
+        self.assertNotRegex(text, r"\d+ ?分ほど")   # テストの時間は、OS で違うので書かない
+
+    def test_skill_md_check_creates_nothing(self):
+        with open(SKILL_MD, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("check は、ファイル（設定ファイル、`.gitignore`、ログ）を作りません。", text)
+        self.assertIn("「設定ファイルを作って」と頼まれたとき", text)
+        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
+        self.assertIn("`notes`", section)
+        self.assertIn("頼まれるまで、設定ファイルは作りません。", section)
 
     def test_template_comments(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -1968,6 +2046,14 @@ class CopiedFolder(unittest.TestCase):
 
         data_dir = os.path.join(work, "." + name)
 
+        # check：設定ファイルがなければ、何も作らずに、そう返す
+        code, data = capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["skill"], name)
+        self.assertTrue(data["message"].startswith("設定ファイルがありません"), data["message"])
+        self.assertEqual(data["config"], os.path.join(data_dir, "config.yaml"))
+        self.assertEqual(os.listdir(work), [])
+
         # config-path：設定ファイルを、作業フォルダの .<写したフォルダの名前>/ に作る
         code, data = capture("config-path")
         self.assertEqual(code, 0, data)
@@ -1980,16 +2066,25 @@ class CopiedFolder(unittest.TestCase):
         with open(TEMPLATE, encoding="utf-8") as a, open(data["config"], encoding="utf-8") as b:
             self.assertEqual(a.read(), b.read())
 
-        # check：ログを、同じフォルダの logs/ に作る
+        # check：ログは作らない
         with open(data["config"], encoding="utf-8") as f:
             text = f.read()
         text = re.sub(r'(?m)^port: ""$', lambda m: 'port: "%s"' % MISSING_PORT, text)
+        text = re.sub(r'(?m)^commands: \[\]$', lambda m: 'commands: ["echo hi"]', text)
         with open(data["config"], "w", encoding="utf-8") as f:
             f.write(text)
         code, data = capture("check")
         self.assertEqual(code, 2, data)
         self.assertEqual(data["skill"], name)
         self.assertIn("見つかりません", data["problems"][0])
+        self.assertNotIn("log", data)
+        self.assertEqual(sorted(os.listdir(data_dir)), [".gitignore", "config.yaml"])
+
+        # run：ログを、同じフォルダの logs/ に作る
+        code, data = capture("run")
+        self.assertEqual(code, 1, data)
+        self.assertEqual(data["skill"], name)
+        self.assertIn("見つかりません", data["message"])
         self.assertEqual(os.path.dirname(data["log"]), os.path.join(data_dir, "logs"))
         self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
         self.assertEqual(os.listdir(work), ["." + name])

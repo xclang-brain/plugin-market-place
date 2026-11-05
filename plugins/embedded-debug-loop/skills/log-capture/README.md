@@ -18,11 +18,13 @@
 - 機器のシリアルコンソールで、`$?` が使えるシェル（sh や bash）
 - Linux では、シリアルポートを開く権限。多くの場合、今のユーザーを `dialout` グループに追加し（`sudo usermod -aG dialout $USER`）、PC にログインし直します。
 
+Windows では、GitHub Actions でテストを確認しています。Windows の Copilot CLI との組み合わせは、まだ確認していません。
+
 ## インストールする
 
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/log-capture/`
-   - すべての作業フォルダで使う：`C:\Users\<ユーザー名>\.copilot\skills\log-capture\`（Linux では `~/.copilot/skills/log-capture/`）
+   - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\log-capture\`（Linux では `~/.copilot/skills/log-capture/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
 3. `/skills list` を実行し、一覧に `log-capture` があれば完了です。
 
@@ -31,7 +33,7 @@
 
 ## 使い方
 
-1. `/log-capture 設定ファイルはどこ？` と入力します。設定ファイルがなければ作られ、場所が表示されます。
+1. `/log-capture 設定ファイルを作って` と入力します。設定ファイルがなければ作られ、場所が表示されます。
 2. 設定ファイルの `port` に、シリアルポートを書きます。
    Windows では `COM3` の形です（番号はデバイスマネージャーで確認できます）。Linux では `/dev/ttyUSB0` の形です。
    ほかの項目も機器に合わせます。
@@ -46,7 +48,7 @@
 
 ### スクリプトを直接実行する
 
-作業フォルダをカレントディレクトリにして、次のように実行します。`~/.copilot/skills/` に置いたときは、パスを変えます。
+作業フォルダをカレントディレクトリにして、次のように実行します。ほかの場所に置いたときは、パスを変えます。
 
 ```
 # Windows（py がなければ python）
@@ -70,6 +72,7 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 - 設定は作業フォルダごとに別です。別のフォルダ（サブフォルダを含む）で使うと、そこに新しく作られます。いつも同じフォルダで使います。
 - 設定ファイルがなければ、スキルのフォルダのひな形 `config-template.yaml` をコピーして作ります。
 - `.log-capture/` に `.gitignore`（中身は `*`）がなければ作り、設定とログを git の管理対象から外します。
+- check は、これらのファイルもログも作りません。
 - スキルを更新してひな形の項目が増えたときは、足りない項目をひな形の値でファイルの最後に追加します。
 
 ### 項目
@@ -110,8 +113,7 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 ### スクリプトの出力
 
 スクリプトは、標準出力に JSON を1つ出します。
-文字コードは、Windows ではコンソールと同じ（日本語の Windows では cp932 など）、Linux では Python の既定です。
-書けない文字は `\uXXXX` の形にします。
+Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。
 主な項目は次のとおりです。
 
 | 項目 | 意味 |
@@ -122,6 +124,7 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 | `listen` | コマンドの後や、記録だけのときの出力 |
 | `not_run` | 実行しなかったコマンド |
 | `problems` | 設定の問題（check では失敗の理由も） |
+| `notes` | 注意（check のとき。問題ではない） |
 | `summary` | 設定の内容（check のとき。パスワードはマスクする） |
 | `config`・`log` | 設定ファイル・ログファイルの場所 |
 | `added` | 設定ファイルに追加した項目 |
@@ -136,7 +139,7 @@ check は失敗したときも 2、config-path は設定に問題があっても
 
 ### ログ
 
-- 作業フォルダの `.log-capture/logs/` に、開始日時を名前にして保存します（例：`log-capture-20261105-143000.log`）。同じ秒に2つできたときは、`-2` などが付きます。
+- ログを取るたびに、作業フォルダの `.log-capture/logs/` に、開始日時を名前にして保存します（例：`log-capture-20261105-143000.log`）。同じ秒に2つできたときは、`-2` などが付きます。
 - ファイルは UTF-8 です。
 - 先頭の `#` の行に、開始時刻、シリアルポート、実行するコマンドなどを書きます。
 - その後に、機器から届いた文字をそのまま（色の制御文字も）書き、最後に結果の文を書きます。
@@ -147,6 +150,7 @@ check は失敗したときも 2、config-path は設定に問題があっても
 
 | 出た文・起きたこと | 確認すること |
 | --- | --- |
+| 設定ファイルがありません | `/log-capture 設定ファイルを作って` と依頼する |
 | `/log-capture` が使えない | 置き場所と、フォルダの名前が `SKILL.md` の `name:` と同じか。直したら `/skills reload` を実行する |
 | シリアルポート … が見つかりません | ケーブルと `port`。文の最後に、PC で見つかったシリアルポートが出ていれば、その中から選ぶ。1つも出ないときは、デバイスマネージャーの「ポート (COM と LPT)」に USB シリアル変換器が出ているか。出ていなければ、そのドライバーをインストールする |
 | シリアルポート … は、ほかのプログラム…が使っています | 端末ソフト（Windows では Tera Term や PuTTY、Linux では minicom や screen など）を閉じる |
@@ -178,5 +182,4 @@ python3 -m unittest discover -s tests
 ```
 
 機器は要りません。TCP で接続する模擬の機器を使います（Linux では、疑似端末で接続するテストも動きます）。
-Linux では 3 分ほどかかります。
 `__pycache__` を残さないときは、`-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。
