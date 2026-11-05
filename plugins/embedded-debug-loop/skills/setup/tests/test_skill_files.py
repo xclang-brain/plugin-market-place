@@ -382,6 +382,21 @@ class SkillMdTest(unittest.TestCase):
         # 当てはまる場面のない決まりは置かない（「ファイルに空で残っている」と読まれる）
         self.assertNotIn("推奨で空の項目が残っているときは", order)
 
+    def test_empty_recommended_items_are_reported(self):
+        """「必ず書く」項目を空のままにしても、報告は「必須で空の項目はありません」だけだった。"""
+        report = self.section("### 5. 終わりの報告", "## 守ること")
+        required = report.index("3. 必須なのに空のままの項目（`missing`）があれば、その名前と説明")
+        recommended = report.index("推奨で空のままの項目（`fill_recommended` と `empty` がどちらも true）も伝えます。")
+        self.assertLess(required, recommended)
+        self.assertLess(recommended, report.index("4. 「あとでやる」と答えた項目があれば"))
+        self.assertIn("「空のままの『必ず書く』項目：<key>」と書き、コメントの「必ず」の文を添えます。", report)
+
+    def test_chosen_items_leave_the_choices(self):
+        """「直す項目を選ぶ」で直した項目が、次の「直す項目はどれですか」にも残った。"""
+        order = self.section("#### 4-1. 聞く順番", "#### 4-2. 1つの項目の聞き方")
+        self.assertIn("選ばれた項目を聞いたら、その項目を選択肢から外して、また同じ質問をします。", order)
+        self.assertIn("「これで終わる」か、項目がなくなるまで続けます。", order)
+
     def test_previous_answers_are_offered(self):
         """前のスキルで答えた機器の IP アドレスを、次のスキルでもう一度書かされた。"""
         section = self.section("#### 4-2. 1つの項目の聞き方", "#### 4-3. 答えを書き込む")
@@ -614,11 +629,10 @@ class ReadmeTest(unittest.TestCase):
         self.assertIn("Windows の PC", need)
         self.assertIn("Python 3.8 以上", need)
         # 確かめたことと、確かめていないことを書く（ほかのスキルの README と同じ文）
-        self.assertIn("Windows では、GitHub Actions でテストを確認しています。"
-                      "Windows の Copilot CLI との組み合わせは、まだ確認していません。", need)
+        self.assertIn("Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。", need)
         # 個人のフォルダは、Windows の場所を先に書く
         install = self.section("## インストールする", "## 使い方")
-        self.assertLess(install.index("`$env:USERPROFILE\\.copilot\\skills\\"), install.index("`~/.copilot/skills/"))
+        self.assertLess(install.index("`%USERPROFILE%\\.copilot\\skills\\"), install.index("`~/.copilot/skills/"))
         # スキルの名前は書き換えられることがあるので、名前を除いた形で確かめる
         self.assertIn("`.github/skills/", self.text)
         self.assertIn("`~/.copilot/skills/", self.text)
@@ -652,8 +666,8 @@ class ReadmeTest(unittest.TestCase):
                 self.assertFalse(line.endswith("ます。"), line)
         # うまくいかないときの表の見出し
         self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
-        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
-        self.assertNotIn("%USERPROFILE%", text)
+        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
+        self.assertNotIn("$env:USERPROFILE", text)
         # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
         self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/config_tool.py skills\n"
                       "# Linux（bash）\npython3 <このフォルダ>/scripts/config_tool.py skills\n```", text)
@@ -681,8 +695,8 @@ class ReadmeTest(unittest.TestCase):
         part = self.section("## スキルの探し方", "## 設定されるスキルの書き方")
         # 個人のフォルダは、Windows の場所を先に書く
         places = ["1. `.github/skills/`", "2. `.agents/skills/`", "3. `.claude/skills/`",
-                  "4. `$env:USERPROFILE\\.copilot\\skills\\`（Linux では `~/.copilot/skills/`",
-                  "5. `$env:USERPROFILE\\.agents\\skills\\`（Linux では `~/.agents/skills/`）",
+                  "4. `%USERPROFILE%\\.copilot\\skills\\`（Linux では `~/.copilot/skills/`",
+                  "5. `%USERPROFILE%\\.agents\\skills\\`（Linux では `~/.agents/skills/`）",
                   "6. このフォルダの隣のフォルダ"]
         for line in places:
             self.assertIn(line, part, line)

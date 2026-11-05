@@ -14,17 +14,19 @@
 - Python 3.8 以上（追加のインストールは要りません）
 - GitHub Copilot CLI
 - シェル：Windows は cmd（既定）・PowerShell・Git for Windows の bash、Linux は bash（既定）
-- ビルドコマンドで使うツール（`make` など）
-- 機器の SDK（機器向けにビルドするとき）
+- ビルドに使うツール（`make` など。Windows には標準で入っていません）
+- 機器の SDK（機器向けのとき。Linux 用は、Windows では WSL にインストールします）
 - `file` コマンド（任意）。あると、ファイルの種類をくわしく報告します。
 
-Windows では、GitHub Actions でテストを確認しています。Windows の Copilot CLI との組み合わせは、まだ確認していません。
+Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。
 
 ## インストールする
 
+プラグインと一緒にインストールしたときは、この手順は要りません。
+
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/cross-compile/`
-   - すべての作業フォルダで使う：`$env:USERPROFILE\.copilot\skills\cross-compile\`（Linux では `~/.copilot/skills/cross-compile/`）
+   - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\cross-compile\`（Linux では `~/.copilot/skills/cross-compile/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
 3. `/skills list` に `cross-compile` が出れば完了です。
 
@@ -36,7 +38,7 @@ Windows では、GitHub Actions でテストを確認しています。Windows �
 Copilot CLI は、ビルドしたいプロジェクトのフォルダ（作業フォルダ）で起動します。
 
 1. `/cross-compile 設定ファイルを作って` と入力します。設定ファイルがなければ作られ、場所が表示されます。
-2. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます。機器向けにビルドするなら、`sdk_env` も必ず書きます（[項目](#項目)）。WSL の中の SDK を使うときは、[WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
+2. 設定ファイルに `outputs`（ビルドでできるファイル）を書きます（[項目](#項目)）。機器向けなら `sdk_env` も書きます。WSL の中の SDK なら、代わりに [WSL の中の SDK を使う](#wsl-の中の-sdk-を使う) のとおりにします。
 3. `/cross-compile ビルドして` と入力します。できたファイルのサイズと種類が表示されれば成功です。
 
 - 設定の確認だけをするときは、`/cross-compile 設定を確認して` と入力します（ビルドはしません）。「ただし、」の後に注意が出たら、その内容を確認します。
@@ -48,13 +50,11 @@ Copilot CLI は、ビルドしたいプロジェクトのフォルダ（作業�
 
 親フォルダの設定ファイルは探しません。サブフォルダで実行すると、そのサブフォルダの `.cross-compile/` を使います。
 
-スクリプトは、次のことを自動で行います。
-
 - 設定ファイルがなければ、このフォルダの `config-template.yaml`（ひな形）をコピーして作ります。
 - `.cross-compile/` に `.gitignore`（中身は `*`）を作り、設定とログを Git から外します。すでにあれば変更しません。
 - スキルの更新でひな形に項目が増えたら、足りない項目をコメントと一緒にファイルの最後に追加します。ほかの部分は変更しません。
 
-`check` は、どのファイルも作りません。
+設定の確認では、ファイルを作りません。
 
 ### 項目
 
@@ -62,7 +62,7 @@ Copilot CLI は、ビルドしたいプロジェクトのフォルダ（作業�
 | --- | --- | --- | --- |
 | `source_dir` | ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス。空か `"."` なら作業フォルダ | `"firmware/app"` | `"."` |
 | `shell` | コマンドを実行し、`sdk_env` を読み込むシェル。`auto`（Windows は `cmd`、ほかは `bash`）・`cmd`・`powershell`（`pwsh` を使う。なければ `powershell`）・`bash`（Windows では Git for Windows などの bash。WSL の bash は使えない） | `"powershell"` | `"auto"` |
-| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けにビルドするなら、必ず書く（WSL の中の SDK を使うときは空）。`shell` が `cmd`（Windows の `auto` も同じ）なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`（Windows で使う SDK）、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"`（Linux で使う Yocto の SDK） | `""` |
+| `sdk_env` | ビルドの前に読み込む SDK の環境設定ファイル。空なら読み込まない。機器向けなら書く（WSL の中の SDK なら空）。`shell` が `cmd`（Windows の `auto` も同じ）なら `.bat`・`.cmd`、`powershell` なら `.ps1` にする | `'C:\sdk\setenv.bat'`（Windows で使う SDK）、`"/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"`（Linux で使う Yocto の SDK） | `""` |
 | `build_command` | ビルドコマンド。ビルドするフォルダで、`shell` のシェルで実行する。空なら `make` | `"make -j4 all"` | `"make"` |
 | `clean_command` | ビルドの前のクリーンコマンド。空ならクリーンしない | `"make clean"` | `""` |
 | `outputs` | ビルドでできるファイル（必須）。ビルドするフォルダからの相対パス | `["my_app"]`、`["build/my_app.exe"]` | `[]` |
@@ -169,7 +169,7 @@ Windows では、コンソールの文字コード（日本語の Windows では
 | 作業フォルダ … がありません | `--workdir` のフォルダを確認します |
 | 「…」は使えません／… の後ろに、パスを書いてください | スクリプトの引数を「スクリプトを直接実行する」のとおりに直します |
 | スクリプトの中で思わぬエラーが起きました | ログ（`check` では標準エラー出力）を確認します |
-| `/cross-compile` が候補に出てこない | インストール先と、`SKILL.md` の `name:` がフォルダ名と同じかを確認し、`/skills reload` を実行します |
+| `/cross-compile` が出てこない | 置き場所と、`name:` がフォルダの名前と同じかを確認し、`/skills reload` を実行します |
 
 ## スクリプトを直接実行する
 

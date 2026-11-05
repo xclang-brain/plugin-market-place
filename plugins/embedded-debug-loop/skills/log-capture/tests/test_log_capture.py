@@ -1988,9 +1988,8 @@ class SelfContained(unittest.TestCase):
         # Windows を先に書く
         self.assertLess(text.index("COM3"), text.index("/dev/ttyUSB0"))
         self.assertLess(text.index("py -3"), text.index("python3"))
-        self.assertLess(text.index("$env:USERPROFILE\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
-        self.assertIn("Windows では、GitHub Actions でテストを確認しています。"
-                      "Windows の Copilot CLI との組み合わせは、まだ確認していません。", text)
+        self.assertLess(text.index("%USERPROFILE%\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
+        self.assertIn("Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。", text)
         self.assertIn("設定ファイルを作って", text)
         self.assertNotRegex(text, r"\d+ ?分ほど")   # テストの時間は、OS で違うので書かない
 
@@ -2012,8 +2011,8 @@ class SelfContained(unittest.TestCase):
                 self.assertFalse(line.endswith("ます。"), line)
         # うまくいかないときの表の見出し
         self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
-        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
-        self.assertNotIn("%USERPROFILE%", text)
+        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
+        self.assertNotIn("$env:USERPROFILE", text)
         self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
                       "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
                       "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)

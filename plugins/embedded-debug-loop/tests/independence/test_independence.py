@@ -24,7 +24,7 @@
 - 置き換え：スキルを、別の中身・別の設定の形のスキルに置き換えても（作業エージェントごと置き換えても）、
   setup の skills がそれを見つけ、作業エージェント・統括エージェントの定義を変えずに済む。
   setup を作業フォルダに置き換えたときは、設定するスキルも同じ場所に置けば見つかる（置き換えのガイドの決まり）。
-  置き換えのガイドの約束のコメントの言葉（「必須」「必ず」「例：」「選べる値：」）で書けば、setup が読み分ける。
+  置き換えのガイドの約束は、設定の書き方を設定のスキルの README に任せる。その README の言葉で書けば、setup が読み分ける。
   作業エージェントのコピーは、プラグインを更新したら作り直す（コピーは古いまま残る）。
 - スキルのスクリプトの出力は、設計書 3.8 の文字コード（Windows ではコンソールの文字コード）で読む。
 
@@ -736,15 +736,20 @@ class SkillReplacement(unittest.TestCase):
             self.assertTrue(same_path(entry["path"], project_skills / skill))
             self.assertTrue(same_path(entry["readme"], project_skills / skill / "README.md"))
 
-    def test_guide_comment_words_work_with_setup(self):
-        """置き換えのガイドの約束（設定のコメント）の言葉で書いた、知らないスキルの設定ファイルを、setup が読み分ける"""
+    def test_guide_leaves_comment_words_to_setup_readme(self):
+        """置き換えのガイドの約束は、設定の書き方を設定のスキルの README に任せる（特定の設定のスキルの言葉に頼らない）。
+        その README の言葉で書いた、知らないスキルの設定ファイルを、setup が読み分ける"""
         guide = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
-        row = next((cells for cells in table_rows(guide) if cells and cells[0] == "設定のコメント"), None)
-        self.assertIsNotNone(row, "置き換えのガイドの約束に「設定のコメント」の行がありません")
-        for word in ["「必須」", "「必ず」", "「例：」", "「選べる値：」"]:
-            self.assertIn(word, row[1], f"置き換えのガイドの約束に、コメントの言葉 {word} がありません")
-        # setup は「例：」「選べる値：」を、コメントの行の先頭にあるときだけ読む
-        self.assertIn("行の先頭", row[1], "置き換えのガイドの約束に、「例：」などを行の先頭に書くことがありません")
+        row = next((cells for cells in table_rows(guide) if cells and cells[0] == "設定の書き方"), None)
+        self.assertIsNotNone(row, "置き換えのガイドの約束に「設定の書き方」の行がありません")
+        self.assertIn("設定のスキル", row[1], "置き換えのガイドの約束が、設定のスキルが読める形で書くことを求めていません")
+        self.assertIn("README", row[1], "置き換えのガイドの約束が、書き方を設定のスキルの README に任せていません")
+        words = ["必須", "必ず", "例：", "選べる値："]
+        for word in words:
+            self.assertNotIn(f"「{word}」", guide, f"置き換えのガイドに、設定のスキルのコメントの言葉 {word} があります")
+        readme = (self.setup_dir / "README.md").read_text(encoding="utf-8")
+        for word in words:
+            self.assertIn(word, readme, f"設定のスキルの README に、コメントの言葉 {word} の説明がありません")
         cfg = self.project / ".kettle" / "settings.yaml"
         cfg.parent.mkdir()
         cfg.write_text("# 湯わかし器の設定\n\n# 湯わかし器の名前（必須）\nname: \n\n"

@@ -21,13 +21,15 @@
 - Python 3.8 以上（追加のインストールは要りません）
 - GitHub Copilot CLI
 
-Windows では、GitHub Actions でテストを確認しています。Windows の Copilot CLI との組み合わせは、まだ確認していません。
+Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。
 
 ## インストールする
 
+プラグインと一緒にインストールしたときは、この手順は要りません。
+
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/setup/`
-   - すべての作業フォルダで使う：`$env:USERPROFILE\.copilot\skills\setup\`（Linux では `~/.copilot/skills/setup/`）
+   - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\setup\`（Linux では `~/.copilot/skills/setup/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
 3. `/skills list` に `setup` が出れば完了です。
 
@@ -54,8 +56,8 @@ Copilot CLI で「セットアップしたい」と頼むか、`/setup` に続�
 1. `.github/skills/`
 2. `.agents/skills/`
 3. `.claude/skills/`
-4. `$env:USERPROFILE\.copilot\skills\`（Linux では `~/.copilot/skills/`。環境変数 `COPILOT_HOME` があれば、その中の `skills`）
-5. `$env:USERPROFILE\.agents\skills\`（Linux では `~/.agents/skills/`）
+4. `%USERPROFILE%\.copilot\skills\`（Linux では `~/.copilot/skills/`。環境変数 `COPILOT_HOME` があれば、その中の `skills`）
+5. `%USERPROFILE%\.agents\skills\`（Linux では `~/.agents/skills/`）
 6. このフォルダの隣のフォルダ
 
 1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します。
@@ -113,7 +115,7 @@ YAML の設定ファイルは、次の形で書くと、コメントも説明と
 
 | 症状・メッセージ | 対処 |
 | --- | --- |
-| `/setup` が出てこない | フォルダの場所と、`name:` がフォルダの名前と同じかを確認し、`/skills reload` を実行します |
+| `/setup` が出てこない | 置き場所と、`name:` がフォルダの名前と同じかを確認し、`/skills reload` を実行します |
 | 設定したいスキルが候補に出ない | そのスキルが「スキルの探し方」の場所にあるかを確認します |
 | 「設定ファイルの説明がありません」と出る | そのスキルの README に、設定ファイルの場所と作り方を書きます |
 | 「設定ファイルの作り方が、README と SKILL.md にありません」と出る | そのスキルの README に、作り方（コマンドか、ひな形のコピー）を書きます |
@@ -125,7 +127,7 @@ YAML の設定ファイルは、次の形で書くと、コメントも説明と
 
 ## スクリプトを直接実行する
 
-見つかるスキルは、作業フォルダをカレントディレクトリにして次を実行すると、JSON で確認できます。
+作業フォルダで次を実行すると、見つかるスキルを JSON で確認できます。
 
 ```
 # Windows（PowerShell）

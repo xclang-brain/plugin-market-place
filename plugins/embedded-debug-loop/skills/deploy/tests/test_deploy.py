@@ -1680,7 +1680,7 @@ class SkillFilesTest(unittest.TestCase):
         self.assertLess(text.index("py -3 -m unittest discover -s tests"),
                         text.index("python3 -m unittest discover -s tests"))
         # 個人のフォルダも Windows を先に書く
-        self.assertLess(text.index("`$env:USERPROFILE\\.copilot\\skills\\deploy\\`"),
+        self.assertLess(text.index("`%USERPROFILE%\\.copilot\\skills\\deploy\\`"),
                         text.index("`~/.copilot/skills/deploy/`"))
 
     def test_readme_shares_wording_with_other_skills(self):
@@ -1689,9 +1689,8 @@ class SkillFilesTest(unittest.TestCase):
             text = fh.read()
         needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
         self.assertTrue(needs.rstrip().endswith(
-            "\n\nWindows では、GitHub Actions でテストを確認しています。"
-            "Windows の Copilot CLI との組み合わせは、まだ確認していません。"), needs)
-        self.assertEqual(text.count("Windows の Copilot CLI との組み合わせ"), 1)
+            "\n\nWindows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。"), needs)
+        self.assertEqual(text.count("Copilot CLI との組み合わせ"), 1)
         self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n",
                       text)
         self.assertNotIn("Python 3.14", text)
@@ -1718,8 +1717,8 @@ class SkillFilesTest(unittest.TestCase):
                 self.assertFalse(line.endswith("ます。"), line)
         # うまくいかないときの表の見出し
         self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
-        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
-        self.assertNotIn("%USERPROFILE%", text)
+        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
+        self.assertNotIn("$env:USERPROFILE", text)
         self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
                       "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
                       "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)

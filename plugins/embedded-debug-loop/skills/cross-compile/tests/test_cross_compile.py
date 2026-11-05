@@ -2215,14 +2215,13 @@ class ReadmeTest(unittest.TestCase):
         self.assertLess(needs.index("Windows"), needs.index("Linux"))
         self.assertIn("wsl", self.text)
         # 個人のフォルダの場所も、Windows を先に書く
-        self.assertLess(self.text.index("`$env:USERPROFILE\\.copilot\\skills\\cross-compile\\`"),
+        self.assertLess(self.text.index("`%USERPROFILE%\\.copilot\\skills\\cross-compile\\`"),
                         self.text.index("`~/.copilot/skills/cross-compile/`"))
 
     def test_windows_status_is_at_the_end_of_needs(self):
         needs = self.text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
         self.assertTrue(needs.rstrip().endswith(
-            "Windows では、GitHub Actions でテストを確認しています。"
-            "Windows の Copilot CLI との組み合わせは、まだ確認していません。"), needs)
+            "Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。"), needs)
 
     def test_output_encoding_is_one_sentence(self):
         self.assertIn("Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。",
@@ -2235,7 +2234,7 @@ class ReadmeTest(unittest.TestCase):
 
     def test_check_creates_no_files(self):
         config = self.text.split("## 設定ファイル", 1)[1].split("\n### ", 1)[0]
-        self.assertIn("`check` は、どのファイルも作りません。", config)
+        self.assertIn("設定の確認では、ファイルを作りません。", config)
         self.assertNotIn("を除く", config)
         self.assertIn("| 設定ファイル … がありません（`check`） |", self.text)
         # check は、思わぬエラーでもログを作らない
@@ -2260,8 +2259,8 @@ class ReadmeTest(unittest.TestCase):
                 self.assertFalse(line.endswith("ます。"), line)
         # うまくいかないときの表の見出し
         self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
-        # 個人のフォルダは、ほかの Windows のコマンドと同じ PowerShell の書き方
-        self.assertNotIn("%USERPROFILE%", text)
+        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
+        self.assertNotIn("$env:USERPROFILE", text)
         self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
                       "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
                       "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
