@@ -17,6 +17,8 @@
   3段階目のガイド、置き換えのガイド）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
 - 置き換え：スキルを、別の中身・別の設定の形のスキルに置き換えても（作業エージェントごと置き換えても）、
   setup の skills がそれを見つけ、作業エージェント・統括エージェントの定義を変えずに済む。
+  setup を作業フォルダに置き換えたときは、設定するスキルも同じ場所に置けば見つかる（置き換えのガイドの決まり）。
+- スキルのスクリプトの出力は、設計書 3.8 の文字コード（Windows ではコンソールの文字コード）で読む。
 
   python3 -m unittest discover -s tests/independence -v
 """
@@ -152,9 +154,14 @@ def skill_table(text):
 
 
 def run_tool(script, *args, cwd, env=None, stdin=None):
-    return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, timeout=120,
-                          cwd=str(cwd), input=stdin,
+    """スキルのスクリプトを動かす。出力は、スクリプトが書く文字コード（output_encoding）で読む"""
+    done = subprocess.run([sys.executable, str(script), *args], capture_output=True, timeout=120,
+                          cwd=str(cwd), input=None if stdin is None else stdin.encode("utf-8"),
                           env=env or dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    encoding = output_encoding()
+    done.stdout = done.stdout.decode(encoding, errors="replace")
+    done.stderr = done.stderr.decode(encoding, errors="replace")
+    return done
 
 
 def make_skill(folder, name, description, readme=None, files=None):
@@ -208,15 +215,10 @@ def console_code_page():
         return None
 
 
-# Windows でパイプに書くとき、コンソールの文字コードを使うスキル（設計書 3.8）。ほかは Python の既定
-CONSOLE_ENCODING_SKILLS = {"log-capture"}
-
-
-def output_encoding(skill):
-    """スキルのスクリプトが、標準出力と標準エラーに使う文字コード"""
-    if skill in CONSOLE_ENCODING_SKILLS:
-        return console_code_page() or default_output_encoding()
-    return default_output_encoding()
+def output_encoding():
+    """スキルのスクリプトが、パイプに書く文字コード（設計書 3.8）。
+    Windows ではコンソールの文字コード（PowerShell が読む文字コード）、ほかは Python の既定"""
+    return console_code_page() or default_output_encoding()
 
 
 class SkillIndependence(unittest.TestCase):
@@ -315,7 +317,7 @@ class SkillIndependence(unittest.TestCase):
                     before = sorted(str(p.relative_to(lone)) for p in lone.rglob("*"))
                     work = Path(tmp) / "project"
                     work.mkdir()
-                    encoding = output_encoding(skill)
+                    encoding = output_encoding()
 
                     def run(*args):
                         done = subprocess.run([sys.executable, str(lone / "scripts" / script), *args],
@@ -368,7 +370,8 @@ class SkillIndependence(unittest.TestCase):
                 lone = Path(tmp) / "lone" / skill
                 shutil.copytree(SKILLS_DIR / skill, lone, ignore=shutil.ignore_patterns("__pycache__"))
                 done = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-                                      capture_output=True, text=True, timeout=900, cwd=lone,
+                                      capture_output=True, text=True, encoding=default_output_encoding(),
+                                      errors="replace", timeout=900, cwd=lone,
                                       env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
                 self.assertEqual(done.returncode, 0, f"{skill} のテストが、フォルダだけでは通りません：\n{done.stderr[-2000:]}")
                 self.assertRegex(done.stderr, r"Ran [1-9]\d* tests?")

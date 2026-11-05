@@ -54,7 +54,7 @@ AI が、組み込み機器の C/C++ の不具合を調べて直す。
 - REQ-109：どのスキルも Windows で動く。
   - スクリプトは Python 3.8 以上で動き、利用者は追加のものをインストールしない（log-capture は pyserial 3.5 を同梱する）。
   - SKILL.md のコマンドは、PowerShell（Windows）でも bash でも動く書き方にする。Python は、Windows では `py -3`（なければ `python`）、ほかでは `python3` で呼ぶ。
-  - スクリプトは、標準出力を Python の既定の文字コードで書く。設定ファイルとログは UTF-8 で書く。
+  - スクリプトの結果は、PowerShell で読んでも文字化けしない（くわしくは[設計書](../design/design.md)の 3.8）。設定ファイルとログは UTF-8 で書く。
 
 ### 3.2 cross-compile（ビルド）
 

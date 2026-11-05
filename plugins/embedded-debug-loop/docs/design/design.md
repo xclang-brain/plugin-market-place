@@ -74,7 +74,7 @@ flowchart TB
 - スキルのフォルダには、`SKILL.md`、`scripts/` の Python のスクリプト（setup は `config_tool.py`、cross-compile は `build.py`、deploy は `deploy.py`、log-capture は `capture.py`）、使い方の `README.md`、`tests/` がある。setup のほかは、設定のひな形 `config-template.yaml` も持つ。
 - 作業エージェントの使い方は `agents/README.markdown` に書く。拡張子が `.md` だと、Copilot CLI がエージェントの定義として読み込み、エラーを出す（1.0.105 で確認）。`.markdown` は読み込まれない（1.0.105 で、プロジェクトの `.github/agents/` とプラグインの `com.github.copilot/agents/` の両方で確認）。
 - 使っていない部品：MCP サーバー、プラグインのフックの設定（`hooks.json`。フックはエクステンションで登録する）、LSP、指示ファイル。
-- スキルのスクリプトは、Python 3.8 以上の標準ライブラリだけで書く。log-capture だけは、pyserial 3.5（BSD ライセンス）を `scripts/vendor/serial/` に同梱し、自分のフォルダの `vendor` を読み込みの道の先頭に足して使う。マニフェストは `plugin.json`（Agent Plugins の形式）。
+- スキルのスクリプトは、Python 3.8 以上の標準ライブラリだけで書く。log-capture だけは、pyserial 3.5（BSD ライセンス）を `scripts/vendor/serial/` に同梱し、自分のフォルダの `vendor` を `sys.path` の先頭に足して使う。マニフェストは `plugin.json`（Agent Plugins の形式）。
 
 ## 3. 部品の間の取り決め
 
@@ -204,7 +204,7 @@ setup は、設定ファイルを持たず、特定のスキルの名前・項�
 | 項目 | 決まり |
 | --- | --- |
 | SKILL.md のコマンド | bash だけの書き方（ヒアドキュメント、`source`、`$(...)` など）に頼らない。Python は `<python>` と書き、Windows では `py -3`（なければ `python`）、ほかでは `python3` と決める |
-| 標準出力 | Python の既定の文字コードで、`sys.stdout` に文字列で書く（`errors="backslashreplace"`）。UTF-8 のバイト列を直接書かない（日本語の Windows の PowerShell は cp932 で読むため） |
+| 標準出力 | Windows で出力先がパイプのときは、コンソールの文字コード（`GetConsoleOutputCP`）で書く。PowerShell はこの文字コードで読む（Python 3.15 からの既定の UTF-8 モードのままだと、日本語の Windows では文字化けする）。それ以外は Python の既定の文字コード。JSON は、書けない文字を JSON の `\uXXXX` にしてから書く。経過（標準エラー）は `errors="backslashreplace"` で書く |
 | ファイル | 設定ファイルとログは、いつも UTF-8 で読み書きする |
 | 標準入力（setup の `set --stdin`） | バイト列で読み、UTF-8（BOM は外す）で読めなければ OS の既定の文字コードで読む。最後の改行1つ（`\r\n` か `\n`）を外す。SKILL.md には、PowerShell の here-string をパイプで渡す書き方と、bash のヒアドキュメントを両方書く |
 | パス | `os.path`・`pathlib` で扱い、区切りの `/` を決め打ちしない（機器の中のパスは別。機器は Linux） |
@@ -244,7 +244,7 @@ setup は、設定ファイルを持たず、特定のスキルの名前・項�
 
 記録の置き場所は `<COPILOT_HOME または ~/.copilot>/plugin-data/embedded-debug-loop/`。
 
-- `settings.json`：Web管理画面の設定。`folders` のキーが作業フォルダのパス、値がその設定。
+- `settings.json`：Web管理画面の設定。`folders` のキーが作業フォルダのパス、値がその設定。Windows では、パスの大文字と小文字を区別しない。
   - この作業フォルダは、セッションの作業フォルダ（`/cd` で変わる）。取得できなければ、エクステンションのプロセスの今のフォルダ（`process.cwd()`）。
   - 設定がなければ、`defaults.json` の値を使う。フォルダで分けていない古い形式は読まない。
 - `runs/<実行の番号>/run.json`：実行の記録。
@@ -265,7 +265,10 @@ GitHub Actions（リポジトリの根の `.github/workflows/embedded-debug-loop
 
 | ジョブ | マシン | 動かすもの |
 | --- | --- | --- |
-| スキル | `windows-latest`・`ubuntu-latest` × Python 3.8・3.12 | 各スキルのテスト（スキルのフォルダで `python -m unittest discover -s tests`）。pyftpdlib を入れて、deploy の FTP のテストも動かす |
-| 独立性 | `windows-latest`・`ubuntu-latest` × Python 3.12 | `tests/independence/` |
-| Web管理画面 | `ubuntu-latest`・`windows-latest` × Node 20 | `tests/extension/` |
-| 標準入力と文字コード | `windows-latest` | PowerShell から setup の `set --stdin` に日本語の値を渡し、設定ファイル（UTF-8）と標準出力が正しいかを確かめる |
+| スキル | `windows-latest`・`ubuntu-24.04` × Python 3.8・3.12 | `skills/` の下の、`tests/` があるすべてのスキルのテスト（スキルのフォルダで `python -m unittest discover -s tests`） |
+| 独立性 | `windows-latest`・`ubuntu-24.04` × Python 3.12 | `tests/independence/` |
+| Web管理画面 | `windows-latest`・`ubuntu-24.04` × Node 20 | `tests/extension/` |
+| 標準入力と文字コード | `windows-latest` | PowerShell から setup の `set --stdin` に日本語の値を渡し、設定ファイル（UTF-8）と標準出力が正しいかを確かめる。`$OutputEncoding` を ANSI のコードページにして、UTF-8 でない入力も確かめる |
+
+- スキルと独立性のジョブでは、pyftpdlib と PyYAML を入れる。deploy の FTP のテストと、YAML として読めるかを確かめるテストが、飛ばされずに動く。
+- Linux は `ubuntu-24.04` に固定する。`ubuntu-latest` は 2026年10月から Ubuntu 26 に移り、Python 3.8 を入れられないおそれがある。
