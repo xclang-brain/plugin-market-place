@@ -16,7 +16,9 @@ import ast
 import importlib.util
 import os
 import re
+import shutil
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +52,32 @@ def load_tool_module():
 def read(path):
     with open(path, encoding="utf-8") as f:
         return f.read()
+
+
+def tool_search_order():
+    """道具が探す場所を、Git のリポジトリを模した一時フォルダで調べる。(where, 場所の形) の組。"""
+    tool = load_tool_module()
+    base = tempfile.mkdtemp(prefix="setup-test-order-")
+    try:
+        work = os.path.join(base, "work")
+        os.makedirs(os.path.join(work, ".git"))
+        with open(os.path.join(work, ".git", "HEAD"), "w", encoding="utf-8") as f:
+            f.write("ref: refs/heads/main\n")
+        # このスキルが ~/.copilot/skills/ にあっても同じ結果になるよう、置き場所を一時フォルダにする
+        tool.SKILL_DIR = os.path.join(base, "plugin", "skills", SKILL_NAME)
+        home = os.path.expanduser("~")
+        names = {os.path.join(tool.copilot_home(), "skills"): "<copilot-home>/skills",
+                 os.path.join(home, ".agents", "skills"): "<home>/.agents/skills",
+                 os.path.dirname(tool.SKILL_DIR): "<the folder next to this skill>"}
+        out = []
+        for where, place in tool.skill_places(work):
+            if place in names:
+                out.append((where, names[place]))
+            else:
+                out.append((where, "<work>/" + os.path.relpath(place, work).replace(os.sep, "/")))
+        return out
+    finally:
+        shutil.rmtree(base, True)
 
 
 def front_matter(text):
@@ -108,28 +136,35 @@ class SkillMdTest(unittest.TestCase):
 
     def test_skills_search_order_matches_the_tool(self):
         """SKILL.md と README に書いた探す順が、道具の探す順と同じであること。"""
-        tool = load_tool_module()
-        wheres = [where for where, _ in tool.skill_places(os.getcwd())]
-        self.assertEqual(wheres, ["project", "personal", "sibling"])
         part = self.section("### `skills` の結果", "### `show` の結果")
-        lines = ["1. 作業フォルダの `.github/skills/`（`where` は `project`）",
-                 "2. 環境変数 `COPILOT_HOME`（なければ `~/.copilot`）の `skills/`（`where` は `personal`）",
-                 "3. このスキルのフォルダの隣のフォルダ（`where` は `sibling`）"]
+        lines = ["1. `.github/skills/`（`where` は `project`）",
+                 "2. `.agents/skills/`（`where` は `project`）",
+                 "3. `.claude/skills/`（`where` は `project`）",
+                 "4. 環境変数 `COPILOT_HOME`（なければ `~/.copilot`）の `skills/`（`where` は `personal`）",
+                 "5. `~/.agents/skills/`（`where` は `personal`）",
+                 "6. このスキルのフォルダの隣のフォルダ（`where` は `sibling`）"]
         for line in lines:
             self.assertIn(line, part, line)
-        self.assertLess(part.index(lines[0]), part.index(lines[1]))
-        self.assertLess(part.index(lines[1]), part.index(lines[2]))
+        for a, b in zip(lines, lines[1:]):
+            self.assertLess(part.index(a), part.index(b))
+        self.assertIn("1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します。", part)
+        self.assertEqual(tool_search_order(), [
+            ("project", "<work>/.github/skills"), ("project", "<work>/.agents/skills"),
+            ("project", "<work>/.claude/skills"), ("personal", "<copilot-home>/skills"),
+            ("personal", "<home>/.agents/skills"), ("sibling", "<the folder next to this skill>")])
         self.assertIn("このスキル自身は返しません。", part)
         for name in ("`name`", "`path`", "`where`", "`readme`", "`skill_md`", "`description`",
                      "`hidden`", "`hidden_by`", "`searched`", "`unreadable`"):
             self.assertIn(name, part, name)
 
     def test_readme_is_read_and_nothing_is_guessed(self):
+        """README に設定ファイルの説明がなくても、SKILL.md にあれば設定できる。"""
         part = self.section("### 2. README を読む", "### 3. 設定ファイルを用意する")
-        for word in ("`readme` が null なら、`skill_md` を読みます。",
+        for word in ("`readme` が null か、`readme` に設定ファイルの説明がなければ、`skill_md` も読みます。",
+                     "ここから先の「README」は、読んだ README と SKILL.md のことです。",
                      "設定ファイルの場所", "設定ファイルがないときの作り方", "項目の意味",
                      "書いてないことは、推測しません。",
-                     "「<name> の README には、設定ファイルの説明がありません。」"):
+                     "「<name> の README と SKILL.md には、設定ファイルの説明がありません。」"):
             self.assertIn(word, part, word)
 
     def test_config_file_is_created_the_way_the_readme_says(self):
@@ -144,15 +179,37 @@ class SkillMdTest(unittest.TestCase):
         self.assertIn("ファイルがないとき、`show` の結果には `\"exists\": false` が入ります。", tool)
 
     def test_other_formats_are_filled_from_the_readme(self):
-        part = self.section("### 4. 項目を埋める", "### 5. 終わりの報告")
-        self.assertIn("`\"ok\": true` なら、YAML の設定ファイルです。", part)
-        self.assertIn("`comment` が空の項目の意味は、README から読み取ります。", part)
-        other = self.section("#### 4-6. YAML でないファイル", "### 5. 終わりの報告")
+        """「項目: 値」だけの .conf も show で読めてしまう。YAML かは README と名前で決める。
+        ファイルを読めないときは、手で書き換えずに飛ばす（文字コードを壊さない）。"""
+        part = self.section("### 4. 項目を埋める", "#### 4-1. 聞く順番")
+        for word in ("YAML のファイルとは、README に YAML と書いてあるか、名前が `.yaml`・`.yml` で終わるファイルです。",
+                     "`\"ok\": false` で `\"unsupported\": true` がなければ、ファイルの問題です",
+                     "`error` を利用者に伝えて、次のスキルに進みます。",
+                     "YAML のファイルで `\"ok\": true` なら、4-1〜4-5 のとおりに、`show` と `set` で埋めます。",
+                     "`comment` が空の項目の意味は、README から読み取ります。",
+                     "YAML でないファイルと、`\"unsupported\": true` のファイルです。"):
+            self.assertIn(word, part, word)
+        self.assertNotIn("`\"ok\": true` なら、YAML の設定ファイルです。", self.body)
+        tool = self.section("## 道具", "### `skills` の結果")
+        self.assertIn("`\"unsupported\": true`", tool)
+        other = self.section("#### 4-6. `show` と `set` を使わないファイル", "### 5. 終わりの報告")
         for word in ("README の説明をもとに埋めます。",
                      "ファイルの編集のツールで、その項目の値の部分だけを書き換えます。",
                      "コメント・空行・項目の並びは変えません。",
-                     "パスワードなどは、YAML のときと同じに扱います。"):
+                     "ファイルを書き換えられないときは、エラーを伝えて、次のスキルに進みます。"):
             self.assertIn(word, other, word)
+
+    def test_secrets_in_other_formats_are_not_read_back(self):
+        """show のない形式では、書き換わったかを確かめるには、ファイルの値を読むしかない。読まずに伝える。"""
+        other = self.section("#### 4-6. `show` と `set` を使わないファイル", "### 5. 終わりの報告")
+        for word in ("パスワードなどの項目（名前か README から分かるもの）は、4-4 のとおりに聞きます。",
+                     "値は、チャットにも表にも書きません。",
+                     "ファイルを読み直して確かめません。",
+                     "「<key> が書き換わったかは、確かめていません。」",
+                     "表の値は「（確かめていません）」にします。"):
+            self.assertIn(word, other, word)
+        report = self.section("### 5. 終わりの報告", "## 守ること")
+        self.assertIn("4-6 で書き換わったかを確かめていない値は、「（確かめていません）」にします。", report)
 
     def test_commands_work_on_windows(self):
         """Windows の Copilot CLI はコマンドを PowerShell で動かす。bash だけの書き方に頼らない。"""
@@ -448,12 +505,14 @@ class ReadmeTest(unittest.TestCase):
 
     def test_sections(self):
         for heading in ("## できること", "## 必要なもの", "## インストールする", "## 使い方",
-                        "## スキルの探し方", "## 設定するスキルに要るもの", "## パスワードなどの項目",
+                        "## スキルの探し方", "## 設定されるスキルの書き方", "## パスワードなどの項目",
                         "## うまくいかないとき", "## テストを実行する"):
             self.assertIn(heading, self.text, heading)
         need = self.section("## 必要なもの", "## インストールする")
         self.assertIn("Windows の PC", need)
         self.assertIn("Python 3.8 以上", need)
+        # 確かめていないことは、そう書く
+        self.assertIn("Windows の PC での動作は、まだ確認していません。", need)
         # スキルの名前は書き換えられることがあるので、名前を除いた形で確かめる
         self.assertIn("`.github/skills/", self.text)
         self.assertIn("`~/.copilot/skills/", self.text)
@@ -473,15 +532,21 @@ class ReadmeTest(unittest.TestCase):
         self.assertIn("`-B`", self.text[self.text.index("## テストを実行する"):])
 
     def test_search_rules_match_the_tool(self):
-        part = self.section("## スキルの探し方", "## 設定するスキルに要るもの")
-        places = ["1. 作業フォルダの `.github/skills/`", "2. `~/.copilot/skills/`", "3. このフォルダの隣のフォルダ"]
+        part = self.section("## スキルの探し方", "## 設定されるスキルの書き方")
+        places = ["1. `.github/skills/`", "2. `.agents/skills/`", "3. `.claude/skills/`",
+                  "4. `~/.copilot/skills/`", "5. `~/.agents/skills/`", "6. このフォルダの隣のフォルダ"]
         for line in places:
             self.assertIn(line, part, line)
-        self.assertLess(part.index(places[0]), part.index(places[1]))
-        self.assertLess(part.index(places[1]), part.index(places[2]))
+        for a, b in zip(places, places[1:]):
+            self.assertLess(part.index(a), part.index(b))
+        self.assertEqual(len(tool_search_order()), len(places))
+        self.assertIn("1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します", part)
         self.assertIn("`COPILOT_HOME`", part)
         self.assertIn("名前がドットで始まるフォルダは見ません。", part)
         self.assertIn("先に見つかったほうを設定します。", part)
+        # Copilot CLI と順が違う場合も書く（確かめた版とともに）
+        self.assertIn("Copilot CLI 1.0.105 がスキルを選ぶ順と同じです。", part)
+        self.assertIn("`--plugin-dir`", part)
 
     def test_secret_words_match_the_tool(self):
         """README に書いた「パスワードなどの項目」の言葉を、道具がそのとおりに見分けること。"""
@@ -498,9 +563,13 @@ class ReadmeTest(unittest.TestCase):
     def test_comment_rules_match_the_tool(self):
         """README に書いた説明の書き方を、道具がそのとおりに読むこと。"""
         tool = load_tool_module()
-        part = self.section("## 設定するスキルに要るもの", "## パスワードなどの項目")
+        part = self.section("## 設定されるスキルの書き方", "## パスワードなどの項目")
         for word in ("「必須」", "「必ず」", "`# 例：…`", "`# 選べる値：a / b / c`"):
             self.assertIn(word, part, word)
+        # 道具で読めない形でも、README をもとに埋める（「対応していません」とは書かない）
+        self.assertIn("この形でない YAML（入れ子など）や、ほかの形式（JSON など）は、README の説明をもとに直接書き換えます。",
+                      part)
+        self.assertNotIn("対応していません", self.text)
         doc = tool.Document("x.yaml", (
             "# 見本\n\n"
             "# 名前（必須）。\n# 例：東\nname: \"\"\n\n"
@@ -525,7 +594,7 @@ class FolderTest(unittest.TestCase):
 
     def test_only_stdlib_imports(self):
         tree = ast.parse(read(TOOL))
-        allowed = {"json", "math", "os", "re", "sys", "tempfile", "traceback", "unicodedata", "errno",
+        allowed = {"json", "math", "os", "re", "stat", "sys", "tempfile", "traceback", "unicodedata", "errno",
                    "hashlib", "codecs", "locale", "winreg"}
         names = set()
         for node in ast.walk(tree):

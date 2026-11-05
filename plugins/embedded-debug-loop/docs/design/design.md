@@ -117,13 +117,15 @@ setup は、設定ファイルを持たず、特定のスキルの名前・項�
 
 `config_tool.py skills` は、スキルのフォルダ（`SKILL.md` があるフォルダ）を次の順に探し、名前（`SKILL.md` の `name:`）、場所、どこにあるか、README の場所、説明（`description`）、同じ名前で隠れているかを JSON で返す。setup 自身は返さない。
 
-| 順 | 場所 | どこにあるか |
+| 順 | 場所 | どこにあるか（`where`） |
 | --- | --- | --- |
-| 1 | 作業フォルダの `.github/skills/` | project（Copilot CLI は、これを優先する） |
-| 2 | `<COPILOT_HOME（なければ ~/.copilot）>/skills/` | personal |
-| 3 | setup のフォルダの隣のフォルダ | 隣（プラグインに入っているときは、同じプラグインのスキル） |
+| 1 | `.github/skills/`・`.agents/skills/`・`.claude/skills/`。それぞれ作業フォルダから上へ、Git のリポジトリの一番上まで（リポジトリの外なら、ホームフォルダまで） | `project` |
+| 2 | `<COPILOT_HOME（なければ ~/.copilot）>/skills/` | `personal` |
+| 3 | `~/.agents/skills/` | `personal` |
+| 4 | setup のフォルダの隣のフォルダ（プラグインに入っているときは、同じプラグインのスキル） | `sibling` |
 
-同じ名前のスキルが2つ以上あれば、先に見つかったものを使い、後のものは「隠れている」とする。
+同じ名前のスキルが2つ以上あれば、先に見つかったものを使い、後のものは「隠れている」（`hidden`）とする。
+この順は、Copilot CLI 1.0.105 の `copilot skill list` で確かめた、同じ名前のスキルが選ばれる順に合わせてある。
 
 ### 3.4 スキルのフォルダ
 

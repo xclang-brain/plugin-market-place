@@ -163,9 +163,10 @@ def make_skill(folder, name, description, readme=None, files=None):
     return folder
 
 
-def list_skills(setup_dir, workdir, copilot_home):
-    """setup の skills で見つかるスキルの一覧"""
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", COPILOT_HOME=str(copilot_home))
+def list_skills(setup_dir, workdir, copilot_home, home):
+    """setup の skills で見つかるスキルの一覧（ホームフォルダも COPILOT_HOME も、テスト用の場所にする）"""
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", COPILOT_HOME=str(copilot_home),
+               HOME=str(home), USERPROFILE=str(home))
     done = run_tool(setup_dir / "scripts" / "config_tool.py", "skills", cwd=workdir, env=env)
     if done.returncode != 0:
         raise AssertionError(f"setup の skills が失敗しました：{done.stdout[-500:]}{done.stderr[-500:]}")
@@ -528,13 +529,17 @@ class SkillReplacement(unittest.TestCase):
         for skill in SKILL_NAMES:
             shutil.copytree(SKILLS_DIR / skill, self.plugin_skills / skill, ignore=shutil.ignore_patterns("__pycache__"))
         self.setup_dir = self.plugin_skills / "setup"
+        # 作業フォルダは Git のリポジトリの一番上にする（その上のフォルダのスキルを拾わないため）
         self.project = base / "project"
-        self.project.mkdir()
+        (self.project / ".git").mkdir(parents=True)
+        (self.project / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
         self.copilot_home = base / "copilot-home"
         self.copilot_home.mkdir()
+        self.home = base / "home"
+        self.home.mkdir()
 
     def found(self):
-        return list_skills(self.setup_dir, self.project, self.copilot_home)
+        return list_skills(self.setup_dir, self.project, self.copilot_home, self.home)
 
     def visible(self, entries, name):
         hits_ = [e for e in entries if e["name"] == name and not e["hidden"]]
@@ -550,7 +555,7 @@ class SkillReplacement(unittest.TestCase):
             self.assertEqual(entry["where"], "sibling")
             self.assertTrue(same_path(entry["path"], self.plugin_skills / skill))
             self.assertTrue(same_path(entry["readme"], self.plugin_skills / skill / "README.md"))
-        self.assertEqual(list(self.project.iterdir()), [], "setup の skills が、作業フォルダに何かを作りました")
+        self.assertEqual([p.name for p in self.project.iterdir()], [".git"], "setup の skills が、作業フォルダに何かを作りました")
 
     def test_replaced_skill_with_other_config_format_is_found(self):
         """作業フォルダに同じ名前の別のスキル（INI の設定、別のスクリプト）を置くと、そちらが使われる"""

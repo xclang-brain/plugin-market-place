@@ -4,7 +4,12 @@
 skills は、設定するスキルを探す。どんなスキルでも見つけられなければならない。
 そのため、このテストで作った架空のスキルで試す。Windows でも Linux でも動く。
 
-- 3つの場所（作業フォルダの .github/skills/、COPILOT_HOME の skills/、このスキルの隣）を、この順に探す。
+- 次の場所を、この順に探す（Copilot CLI 1.0.105 が同じ名前のスキルを選ぶ順）。
+  1. .github/skills/、.agents/skills/、.claude/skills/。それぞれ作業フォルダから上へ、Git のリポジトリの一番上まで
+     （リポジトリの外なら、ホームフォルダまで）。
+  2. COPILOT_HOME の skills/
+  3. ~/.agents/skills/
+  4. このスキルの隣
 - 同じ名前のスキルは、先に見つかったものが使われる（後のものは hidden）。
 - このスキル自身は返さない。同じフォルダを2回数えない。
 - README がないスキルも返す（readme は null）。
@@ -47,19 +52,29 @@ def same(a, b):
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
 
+def make_git_root(folder):
+    """folder を、Git のリポジトリの一番上に見せる（.git/HEAD を作る）。"""
+    os.makedirs(os.path.join(folder, ".git"))
+    with open(os.path.join(folder, ".git", "HEAD"), "w", encoding="utf-8") as f:
+        f.write("ref: refs/heads/main\n")
+
+
 class SkillsTestCase(unittest.TestCase):
-    """作業フォルダ・利用者のフォルダ（COPILOT_HOME）・プラグインのスキルの置き場所を、一時フォルダに作る。"""
+    """作業フォルダ（Git のリポジトリ）・ホームフォルダ・COPILOT_HOME・プラグインのスキルの置き場所を、一時フォルダに作る。"""
 
     def setUp(self):
         self.base = tempfile.mkdtemp(prefix="setup-test-skills-")
         self.addCleanup(shutil.rmtree, self.base, True)
         self.work = os.path.join(self.base, "work")
         self.project = os.path.join(self.work, ".github", "skills")
+        self.userhome = os.path.join(self.base, "user-home")
         self.home = os.path.join(self.base, "copilot-home")
         self.personal = os.path.join(self.home, "skills")
+        self.home_agents = os.path.join(self.userhome, ".agents", "skills")
         self.plugin = os.path.join(self.base, "plugin", "skills")
-        for folder in (self.work, self.home, self.plugin):
+        for folder in (self.work, self.userhome, self.home, self.plugin):
             os.makedirs(folder)
+        make_git_root(self.work)
         # このスキルを、プラグインのスキルの置き場所に写す（名前も変える）
         self.own = os.path.join(self.plugin, "my-setup")
         shutil.copytree(SKILL_DIR, self.own, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -85,9 +100,15 @@ class SkillsTestCase(unittest.TestCase):
         return path
 
     def run_skills(self, *args, **kw):
+        """env の値が None の環境変数は、渡さない。"""
         env = dict(os.environ)
-        env.pop("COPILOT_HOME", None)
-        env.update(kw.pop("env", {"COPILOT_HOME": self.home}))
+        extra = {"COPILOT_HOME": self.home, "HOME": self.userhome, "USERPROFILE": self.userhome}
+        extra.update(kw.pop("env", {}))
+        for name, value in extra.items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
         proc = subprocess.run([sys.executable, kw.pop("tool", self.tool), "skills"] + list(args),
                               cwd=kw.pop("cwd", self.work), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               env=env, timeout=60)
@@ -110,17 +131,48 @@ class SkillsTestCase(unittest.TestCase):
     def entry(self, data, path):
         return self.by_path(data)[os.path.normcase(os.path.realpath(path))]
 
+    def searched(self, data):
+        """探した場所。(where, 作業フォルダなどからの場所) の組。"""
+        out = []
+        for s in data["searched"]:
+            for label, root in (("<work>", self.work), ("<base>", self.base)):
+                rel = os.path.relpath(s["dir"], root)
+                if not rel.startswith(os.pardir):
+                    out.append((s["where"], label + "/" + rel.replace(os.sep, "/")))
+                    break
+            else:
+                out.append((s["where"], s["dir"]))
+        return out
+
+    def used(self, data, name):
+        """その名前で使われるスキル（hidden でないもの）のフォルダ。"""
+        found = [s for s in data["skills"] if s["name"] == name and not s["hidden"]]
+        self.assertEqual(len(found), 1, data["skills"])
+        return found[0]["path"]
+
+
+SEARCHED_IN_WORK = [
+    ("project", "<work>/.github/skills"),
+    ("project", "<work>/.agents/skills"),
+    ("project", "<work>/.claude/skills"),
+    ("personal", "<base>/copilot-home/skills"),
+    ("personal", "<base>/user-home/.agents/skills"),
+    ("sibling", "<base>/plugin/skills"),
+]
+
 
 class PlacesTest(SkillsTestCase):
-    def test_three_places_in_order(self):
-        """作業フォルダ（project）→ 利用者のフォルダ（personal）→ 隣（sibling）の順に返す。"""
+    def test_places_in_order(self):
+        """作業フォルダ（project）→ COPILOT_HOME（personal）→ ~/.agents（personal）→ 隣（sibling）の順に返す。"""
         a = self.make_skill(self.project, "build-x", description="ビルドする。設定ファイルを使う。")
         b = self.make_skill(self.personal, "send-y", description="送る")
-        c = self.make_skill(self.plugin, "watch-z", description="見る")
+        c = self.make_skill(self.home_agents, "keep-w", description="残す")
+        d = self.make_skill(self.plugin, "watch-z", description="見る")
         data = self.skills()
         self.assertEqual([(s["name"], s["where"]) for s in data["skills"]],
-                         [("build-x", "project"), ("send-y", "personal"), ("watch-z", "sibling")])
-        for skill, path in zip(data["skills"], (a, b, c)):
+                         [("build-x", "project"), ("send-y", "personal"), ("keep-w", "personal"),
+                          ("watch-z", "sibling")])
+        for skill, path in zip(data["skills"], (a, b, c, d)):
             self.assertEqual(set(skill), SKILL_KEYS)
             self.assertTrue(same(skill["path"], path))
             self.assertTrue(os.path.isabs(skill["path"]))
@@ -128,11 +180,8 @@ class PlacesTest(SkillsTestCase):
             self.assertTrue(same(skill["readme"], os.path.join(path, "README.md")))
             self.assertIs(skill["hidden"], False)
         self.assertEqual(data["skills"][0]["description"], "ビルドする。設定ファイルを使う。")
-        self.assertEqual([(s["where"], s["exists"]) for s in data["searched"]],
-                         [("project", True), ("personal", True), ("sibling", True)])
-        self.assertTrue(same(data["searched"][0]["dir"], self.project))
-        self.assertTrue(same(data["searched"][1]["dir"], self.personal))
-        self.assertTrue(same(data["searched"][2]["dir"], self.plugin))
+        self.assertEqual(self.searched(data), SEARCHED_IN_WORK)
+        self.assertEqual([s["exists"] for s in data["searched"]], [True, False, False, True, True, True])
         self.assertTrue(same(data["workdir"], self.work))
         self.assertEqual(data["unreadable"], [])
 
@@ -147,27 +196,28 @@ class PlacesTest(SkillsTestCase):
         data = self.skills()
         self.assertEqual(data["skills"], [])
         self.assertEqual([(s["where"], s["exists"]) for s in data["searched"]],
-                         [("project", False), ("personal", False), ("sibling", True)])
+                         [("project", False)] * 3 + [("personal", False)] * 2 + [("sibling", True)])
         self.assertFalse(os.path.exists(self.project))
         self.assertFalse(os.path.exists(self.home))
+        self.assertFalse(os.path.exists(os.path.join(self.userhome, ".agents")))
 
     def test_copilot_home_default(self):
         """COPILOT_HOME がなければ、ホームフォルダの .copilot/skills/ を探す。"""
-        fake_home = os.path.join(self.base, "user-home")
-        skill = self.make_skill(os.path.join(fake_home, ".copilot", "skills"), "home-skill")
-        data = self.skills(env={"HOME": fake_home, "USERPROFILE": fake_home})
+        skill = self.make_skill(os.path.join(self.userhome, ".copilot", "skills"), "home-skill")
+        data = self.skills(env={"COPILOT_HOME": None})
         self.assertEqual([s["name"] for s in data["skills"]], ["home-skill"])
         self.assertEqual(data["skills"][0]["where"], "personal")
         self.assertTrue(same(data["skills"][0]["path"], skill))
-        self.assertTrue(same(data["searched"][1]["dir"], os.path.join(fake_home, ".copilot", "skills")))
+        self.assertIn(("personal", "<base>/user-home/.copilot/skills"), self.searched(data))
         # 空の COPILOT_HOME も、ないのと同じ
-        data = self.skills(env={"HOME": fake_home, "USERPROFILE": fake_home, "COPILOT_HOME": ""})
+        data = self.skills(env={"COPILOT_HOME": ""})
         self.assertEqual([s["name"] for s in data["skills"]], ["home-skill"])
 
     def test_workdir_option_and_current_folder(self):
         self.make_skill(self.project, "here")
         other = os.path.join(self.base, "other")
         os.makedirs(other)
+        make_git_root(other)
         for args in (("--workdir", self.work), ("--workdir=" + self.work,)):
             data = self.skills(*args, cwd=other)
             self.assertTrue(same(data["workdir"], self.work))
@@ -181,6 +231,62 @@ class PlacesTest(SkillsTestCase):
         self.skills()
         for folder, snap in before.items():
             self.assertEqual(snapshot(folder), snap, folder)
+
+    def test_parent_folders_up_to_the_git_root(self):
+        """作業フォルダの上のフォルダも、Git のリポジトリの一番上まで探す。その上は探さない。"""
+        sub = os.path.join(self.work, "src", "app")
+        os.makedirs(sub)
+        top = self.make_skill(self.project, "top-skill")
+        near = self.make_skill(os.path.join(self.work, "src", ".claude", "skills"), "near-skill")
+        self.make_skill(os.path.join(self.base, ".github", "skills"), "outside-repo")
+        data = self.skills(cwd=sub)
+        self.assertEqual([(s["name"], s["where"]) for s in data["skills"]],
+                         [("top-skill", "project"), ("near-skill", "project")])
+        self.assertTrue(same(self.entry(data, top)["path"], top))
+        self.assertTrue(same(self.entry(data, near)["path"], near))
+        self.assertEqual(self.searched(data)[:9], [
+            ("project", "<work>/src/app/.github/skills"),
+            ("project", "<work>/src/.github/skills"),
+            ("project", "<work>/.github/skills"),
+            ("project", "<work>/src/app/.agents/skills"),
+            ("project", "<work>/src/.agents/skills"),
+            ("project", "<work>/.agents/skills"),
+            ("project", "<work>/src/app/.claude/skills"),
+            ("project", "<work>/src/.claude/skills"),
+            ("project", "<work>/.claude/skills"),
+        ])
+        self.assertEqual(self.searched(data)[9:], SEARCHED_IN_WORK[3:])
+
+    def test_git_worktree_file_is_a_root(self):
+        """git worktree の作業ツリーは、.git がファイル。そこが一番上になる。"""
+        tree = os.path.join(self.work, "wt")
+        os.makedirs(os.path.join(tree, "sub"))
+        os.makedirs(os.path.join(self.work, ".git", "worktrees", "wt"))
+        with open(os.path.join(tree, ".git"), "w", encoding="utf-8") as f:
+            f.write("gitdir: " + os.path.join(self.work, ".git", "worktrees", "wt") + "\n")
+        self.make_skill(os.path.join(tree, ".github", "skills"), "in-tree")
+        self.make_skill(self.project, "above-tree")
+        data = self.skills(cwd=os.path.join(tree, "sub"))
+        self.assertEqual([s["name"] for s in data["skills"]], ["in-tree"])
+
+    def test_outside_git_stops_at_the_home_folder(self):
+        """Git のリポジトリの外では、ホームフォルダまで探す。その上は探さない。"""
+        home = os.path.join(self.base, "outer", "me")
+        work = os.path.join(home, "projects", "x")
+        os.makedirs(work)
+        probe = self.base
+        while os.path.dirname(probe) != probe:
+            if os.path.exists(os.path.join(probe, ".git")):
+                self.skipTest("一時フォルダが Git のリポジトリの中にある：" + probe)
+            probe = os.path.dirname(probe)
+        self.make_skill(os.path.join(home, ".github", "skills"), "in-home")
+        self.make_skill(os.path.join(work, ".agents", "skills"), "in-work")
+        self.make_skill(os.path.join(self.base, "outer", ".github", "skills"), "above-home")
+        data = self.skills(cwd=work, env={"HOME": home, "USERPROFILE": home})
+        self.assertEqual([s["name"] for s in data["skills"]], ["in-home", "in-work"])
+        dirs = [s["dir"] for s in data["searched"] if s["where"] == "project"]
+        self.assertEqual(len(dirs), 9)  # x・projects・me の3つ × 3種類
+        self.assertTrue(same(dirs[2], os.path.join(home, ".github", "skills")))
 
     def test_extra_arguments_are_refused(self):
         code, data = self.run_skills("extra-arg")
@@ -206,12 +312,31 @@ class HiddenTest(SkillsTestCase):
             self.assertEqual(set(entry), SKILL_KEYS | {"hidden_by"})
 
     def test_personal_wins_over_sibling(self):
+        """COPILOT_HOME → ~/.agents → 隣の順（インストールしたプラグインのスキルは、利用者のスキルに隠れる）。"""
         h = self.make_skill(self.personal, "dup2")
+        a = self.make_skill(self.home_agents, "dup2")
         s = self.make_skill(self.plugin, "dup2")
         data = self.skills()
         self.assertIs(self.entry(data, h)["hidden"], False)
-        self.assertIs(self.entry(data, s)["hidden"], True)
-        self.assertTrue(same(self.entry(data, s)["hidden_by"], h))
+        for path in (a, s):
+            self.assertIs(self.entry(data, path)["hidden"], True)
+            self.assertTrue(same(self.entry(data, path)["hidden_by"], h))
+        shutil.rmtree(h)
+        data = self.skills()
+        self.assertTrue(same(self.used(data, "dup2"), a))
+
+    def test_project_folders_in_copilot_order(self):
+        """作業フォルダの中は .github → .agents → .claude の順。種類ごとに、近いフォルダから上へ。"""
+        sub = os.path.join(self.work, "sub")
+        gh = self.make_skill(self.project, "dup3")
+        agents = self.make_skill(os.path.join(sub, ".agents", "skills"), "dup3")
+        claude = self.make_skill(os.path.join(sub, ".claude", "skills"), "dup3")
+        data = self.skills(cwd=sub)
+        self.assertTrue(same(self.used(data, "dup3"), gh))  # 上のフォルダの .github が、近いフォルダの .agents より先
+        shutil.rmtree(gh)
+        self.assertTrue(same(self.used(self.skills(cwd=sub), "dup3"), agents))
+        shutil.rmtree(agents)
+        self.assertTrue(same(self.used(self.skills(cwd=sub), "dup3"), claude))
 
     def test_name_comes_from_skill_md_not_folder(self):
         """名前は SKILL.md の name:。フォルダの名前が違っても、同じ名前なら隠れる。"""
@@ -243,7 +368,7 @@ class OwnFolderTest(SkillsTestCase):
         self.make_skill(self.project, "partner")
         data = self.skills(tool=os.path.join(own, "scripts", "config_tool.py"))
         self.assertEqual([(s["name"], s["where"]) for s in data["skills"]], [("partner", "project")])
-        self.assertTrue(same(data["searched"][2]["dir"], self.project))
+        self.assertEqual(self.searched(data), SEARCHED_IN_WORK[:5])
 
     def test_same_name_as_self_elsewhere_is_hidden_by_self(self):
         """このスキルと同じ名前のほかのスキルは、このスキルに隠れる（このスキルは返さない）。"""
@@ -354,6 +479,21 @@ class ReplaceableTest(SkillsTestCase):
         self.assertTrue(same(used[0]["path"], replacement))
         self.assertEqual(used[0]["description"], "置き換えたスキル。JSON の設定ファイル。")
         self.assertTrue(same(self.entry(data, original)["hidden_by"], replacement))
+
+    def test_replacement_in_other_project_folders(self):
+        """.claude/skills/ や .agents/skills/ に置いた置き換えも見つかる。作業フォルダの下から動かしても同じ。"""
+        sub = os.path.join(self.work, "sub")
+        os.makedirs(sub)
+        self.make_skill(self.plugin, "deploy", description="元のスキル")
+        for folder in (".claude", ".agents"):
+            replacement = self.make_skill(os.path.join(self.work, folder, "skills"), "deploy",
+                                          description="置き換えたスキル")
+            for cwd in (self.work, sub):
+                data = self.skills(cwd=cwd)
+                self.assertTrue(same(self.used(data, "deploy"), replacement), (folder, cwd))
+                original = [s for s in data["skills"] if s["where"] == "sibling"][0]
+                self.assertIs(original["hidden"], True)
+            shutil.rmtree(replacement)
 
 
 if __name__ == "__main__":

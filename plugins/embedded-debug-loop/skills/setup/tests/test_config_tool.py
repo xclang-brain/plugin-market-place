@@ -182,9 +182,11 @@ class StandaloneTest(unittest.TestCase):
                 shutil.copyfile(os.path.join(FIXTURES, CAMERA), os.path.join(work, "conf", "camera.yaml"))
                 home = os.path.join(base, "copilot-home")
                 os.makedirs(home)
+                # ホームフォルダを base にして、その上や、この PC のスキルを探さないようにする
+                env = {"COPILOT_HOME": home, "HOME": base, "USERPROFILE": base}
 
                 def call(*args, **kw):
-                    code, data, _ = run_tool(args, work, tool=tool, env={"COPILOT_HOME": home}, **kw)
+                    code, data, _ = run_tool(args, work, tool=tool, env=env, **kw)
                     self.assertEqual(code, 0, data)
                     self.assertTrue(data["ok"], data)
                     return data
@@ -719,6 +721,38 @@ class SetTest(ToolTestCase):
         for name in tool.fallback_encodings():
             self.assertNotEqual(name, "utf-8")
 
+    def test_fallback_encoding_comes_from_the_os(self):
+        """UTF-8 で読めないときに試す文字コードは、OS の既定のもの（日本語の Windows なら cp932）。"""
+        from unittest import mock
+        tool = load_tool_module()
+        sjis = "給湯室の１号機\r\n".encode("cp932")
+        with mock.patch.object(tool.locale, "getpreferredencoding", return_value="cp932"), \
+                mock.patch.object(tool.locale, "getencoding", return_value="cp932", create=True):
+            self.assertEqual(tool.fallback_encodings(), ["cp932"])
+            self.assertEqual(tool.decode_input(sjis), "給湯室の１号機")
+        with mock.patch.object(tool.locale, "getpreferredencoding", return_value="UTF-8"), \
+                mock.patch.object(tool.locale, "getencoding", return_value="utf-8", create=True):
+            self.assertEqual(tool.fallback_encodings(), [])
+            with self.assertRaises(tool.ToolError):
+                tool.decode_input(sjis)
+
+    def test_stdin_cp932_through_the_command_on_any_os(self):
+        """OS の既定の文字コードが cp932 の PC を模して、コマンドとして cp932 の値を渡す。ファイルは UTF-8 で書く。"""
+        path = self.copy(COFFEE)
+        code = ("import locale, runpy, sys\n"
+                "locale.getpreferredencoding = lambda do_setlocale=True: 'cp932'\n"
+                "locale.getencoding = lambda: 'cp932'\n"
+                "sys.argv = [sys.argv[1]] + sys.argv[2:]\n"
+                "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+        proc = subprocess.run([sys.executable, "-c", code, TOOL, "set", path, "machine_name", "--stdin"],
+                              input="給湯室の「１号機」\r\n".encode("cp932"), stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=env, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertTrue(json.loads(proc.stdout.decode("utf-8"))["changed"])
+        self.assertEqual(self.value(path, "machine_name"), "給湯室の「１号機」")
+        self.assertIn('machine_name: "給湯室の「１号機」"'.encode("utf-8"), self.read(path))
+
     def test_stdin_not_utf8_through_the_command(self):
         """コマンドとして動かしても、OS の既定の文字コードの値を書ける。ファイルは UTF-8 のまま。"""
         tool = load_tool_module()
@@ -763,36 +797,71 @@ class SetTest(ToolTestCase):
 
     @unittest.skipUnless(shutil.which("pwsh"), "PowerShell 7（pwsh）があるときだけ")
     def test_set_with_stdin_powershell_here_string(self):
-        """SKILL.md に書いた形（@' と '@ の here-string をパイプで渡す）のとおりに、PowerShell で渡す。"""
-        path = self.copy(COFFEE)
+        """SKILL.md に書いた形（@' と '@ の here-string をパイプで渡す）のとおりに、PowerShell で渡す。
+
+        2回動かす。その PC の既定の文字コードのままと、日本語の Windows を模したとき
+        （Python の出力も PowerShell の読み方も cp932 にして、cp932 のバイト列がパイプを通るようにする）。
+        Windows では、道具を SKILL.md のとおり py -3 で呼ぶ（py がなければ、このテストの Python）。
+        """
+        for japanese in (False, True):
+            with self.subTest(japanese_windows=japanese):
+                self.powershell_round_trip(japanese)
+
+    def powershell_round_trip(self, japanese):
+        path = self.copy(COFFEE, dest_name="ps-{}.yaml".format(int(japanese)))
         result = os.path.join(self.tmp, "result.txt")
+        skipped = os.path.join(self.tmp, "skipped.txt")
+        for name in (result, skipped):
+            if os.path.exists(name):
+                os.remove(name)
 
         def ps(text):
             return "'" + text.replace("'", "''") + "'"
 
         value = "給湯室の「1号機」 $HOME `x` 'a' \"q\" C:\\work\\app"
-        script = "\n".join([
+        if japanese:
+            value += " é"  # cp932 にない文字は、\uXXXX で届く
+        call = "& py -3 $tool" if os.name == "nt" and shutil.which("py") else "& $py $tool"
+        lines = [
             "$ErrorActionPreference = 'Stop'",
             "$py = " + ps(sys.executable),
             "$tool = " + ps(TOOL),
             "$file = " + ps(path),
+            "$old = [Console]::OutputEncoding",
+        ]
+        if japanese:
+            lines += [
+                "$env:PYTHONIOENCODING = 'cp932'",
+                "try { [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance) } catch { }",
+                "try { [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(932) }",
+                "catch { [IO.File]::WriteAllText(" + ps(skipped) + ", $_.Exception.Message); exit 0 }",
+            ]
+        lines += [
+            "try {",
             "$r = @'",
             value,
-            "'@ | & $py $tool set $file machine_name --stdin",
+            "'@ | " + call + " set $file machine_name --stdin",
             "$j = ($r -join \"`n\") | ConvertFrom-Json",
             "[IO.File]::WriteAllText(" + ps(result) + ", $j.value, [Text.UTF8Encoding]::new($false))",
             "@'",
             "300",
-            "'@ | & $py $tool set $file cup_size_ml --stdin --json | Out-Null",
+            "'@ | " + call + " set $file cup_size_ml --stdin --json | Out-Null",
             "@'",
-            "'@ | & $py $tool set $file greeting --stdin | Out-Null",
-        ]) + "\n"
+            "'@ | " + call + " set $file greeting --stdin | Out-Null",
+            "} finally { [Console]::OutputEncoding = $old }",
+        ]
         script_path = os.path.join(self.tmp, "set.ps1")
         with open(script_path, "w", encoding="utf-8-sig") as f:
-            f.write(script)
+            f.write("\n".join(lines) + "\n")
+        env = dict(os.environ)
+        for name in ("PYTHONIOENCODING", "PYTHONUTF8"):
+            env.pop(name, None)
         proc = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-File", script_path],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        if os.path.exists(skipped):
+            with open(skipped, encoding="utf-8") as f:
+                self.skipTest("PowerShell の読み方を cp932 にできない：" + f.read())
         self.assertEqual(self.value(path, "machine_name"), value)
         self.assertEqual(self.value(path, "cup_size_ml"), 300)
         self.assertEqual(self.value(path, "greeting"), "")
@@ -1023,6 +1092,11 @@ class RefuseTest(ToolTestCase):
             path = self.write("bad.yaml", text)
             data, _ = self.fail_("show", path)
             self.assertIn(word, data["error"], text)
+            # 道具が読めない書き方には "unsupported": true が付く。同じ項目が2回あるのは、ファイルの誤り。
+            if word == "2回書かれています":
+                self.assertNotIn("unsupported", data, text)
+            else:
+                self.assertIs(data.get("unsupported"), True, text)
             data, _ = self.fail_("set", path, "a", "x")
             self.assertEqual(self.read(path), text.encode("utf-8"))
 
@@ -1030,6 +1104,30 @@ class RefuseTest(ToolTestCase):
         path = self.write("sjis.yaml", "# 説明\nname: 名前\n".encode("cp932"), binary=True)
         data, _ = self.fail_("show", path)
         self.assertIn("UTF-8", data["error"])
+        self.assertNotIn("unsupported", data)  # 書き方ではなく、読めないファイル
+
+    def test_unsupported_is_only_for_the_layout(self):
+        """ファイルがない・フォルダ・読めない、では "unsupported" を付けない。"""
+        data, _ = self.fail_("show", os.path.join(self.tmp, "none.yaml"))
+        self.assertNotIn("unsupported", data)
+        data, _ = self.fail_("show", self.tmp)
+        self.assertNotIn("unsupported", data)
+        data, _ = self.fail_("show", self.write("app.json", '{\n  "host": ""\n}\n'))
+        self.assertIs(data["unsupported"], True)
+        # 「項目: 値」だけのファイルは、YAML でなくても読めてしまう。形式は、README と名前で決める（SKILL.md）。
+        self.assertTrue(self.ok("show", self.write("app.conf", "# host name\nhost: \nport: 21\n"))["items"])
+
+    def test_read_only_file_is_not_written(self):
+        """読み取り専用のファイルには書かない。どの OS でも同じに断り、一時ファイルも残さない。"""
+        path = self.copy(COFFEE)
+        before = self.read(path)
+        os.chmod(path, stat.S_IREAD)
+        self.addCleanup(os.chmod, path, stat.S_IREAD | stat.S_IWRITE)
+        data, _ = self.fail_("set", path, "machine_name", "--stdin", stdin="x\n")
+        self.assertIn("読み取り専用", data["error"])
+        self.assertIn("権限", data["error"])
+        self.assertEqual(self.read(path), before)
+        self.assertEqual([n for n in os.listdir(self.tmp) if n.endswith(".tmp")], [])
 
     def test_bad_arguments_still_json(self):
         path = self.copy(COFFEE)
