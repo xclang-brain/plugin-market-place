@@ -4,14 +4,17 @@
 - サーバーなし：サム値の計算、設定ファイルの読み方と確かめ、サブコマンドの JSON。
 - サーバーあり：試験の中で FTP サーバー（pyftpdlib）を立てて、実際に送る。
   pyftpdlib が読み込めないときは、その試験だけ飛ばす。
-  pyftpdlib の場所は、環境変数 DEPLOY_TEST_PYLIB（: 区切り）で足せる。
+  pyftpdlib の場所は、環境変数 DEPLOY_TEST_PYLIB（Windows は ;、Linux は : 区切り）で足せる。
 - フォルダだけで動くこと：このスキルのフォルダだけを別の場所に写して動かす。
+- Windows でも動くこと：標準出力の文字コード、パスの書き方、改行、権限の確かめ方。
+  権限（st_mode）は、POSIX のときだけ見る。どの OS でも、SITE CHMOD の中身を見る。
 
-実行：python3 -m unittest discover -s tests
+実行：py -3 -m unittest discover -s tests（Linux は python3）
      （このスキルのフォルダで）
 """
 
 import contextlib
+import errno
 import importlib.util
 import json
 import logging
@@ -53,6 +56,25 @@ def _load_module():
 deploy = _load_module()
 
 
+def _child_encoding():
+    """スクリプトが、パイプにつないだ標準出力に使う文字コード（この環境の Python の既定）。"""
+    proc = subprocess.run(
+        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdout.encoding)"],
+        stdout=subprocess.PIPE, check=True)
+    return proc.stdout.decode("ascii").strip()
+
+
+CHILD_ENCODING = _child_encoding()
+
+
+def decode_out(data, encoding=CHILD_ENCODING):
+    return data.decode(encoding)
+
+
+def decode_err(data, encoding=CHILD_ENCODING):
+    return data.decode(encoding, errors="replace")
+
+
 # --- pyftpdlib（試験のときだけ使う。利用者の PC には要らない） ---------------
 
 _PYLIB_CANDIDATES = [p for p in os.environ.get("DEPLOY_TEST_PYLIB", "").split(os.pathsep) if p]
@@ -87,8 +109,9 @@ PASSWORD = "s3cret-Pw"
 
 
 @contextlib.contextmanager
-def ftp_server(root, perm="elradfmwMT", password=PASSWORD, no_size=False):
-    """root を "/" にした FTP サーバーを、別のスレッドで動かす。ポート番号を返す。"""
+def ftp_server(root, perm="elradfmwMT", password=PASSWORD, no_size=False, chmods=None):
+    """root を "/" にした FTP サーバーを、別のスレッドで動かす。ポート番号を返す。
+    chmods にリストを渡すと、受けた SITE CHMOD の (PC のパス, 権限の文字) を足していく。"""
     from pyftpdlib.authorizers import DummyAuthorizer
     from pyftpdlib.handlers import FTPHandler
     from pyftpdlib.ioloop import IOLoop
@@ -107,6 +130,11 @@ def ftp_server(root, perm="elradfmwMT", password=PASSWORD, no_size=False):
         "timeout": 30,
         "on_file_received": on_file_received,
     }
+    if chmods is not None:
+        def ftp_SITE_CHMOD(self, path, mode):
+            chmods.append((path, mode))
+            return FTPHandler.ftp_SITE_CHMOD(self, path, mode)
+        attrs["ftp_SITE_CHMOD"] = ftp_SITE_CHMOD
     if no_size:
         cmds = dict(FTPHandler.proto_cmds)
         del cmds["SIZE"]
@@ -191,8 +219,8 @@ class Workspace(object):
             [sys.executable, SCRIPT] + list(args) + ["--workdir", self.dir],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=full_env, timeout=timeout)
-        out = proc.stdout.decode("utf-8")
-        err = proc.stderr.decode("utf-8")
+        out = decode_out(proc.stdout)
+        err = decode_err(proc.stderr)
         try:
             data = json.loads(out)
         except ValueError:
@@ -500,6 +528,64 @@ class ValidateTest(unittest.TestCase):
         self.assertTrue(any("1つだけ" in p for p in problems), problems)
         self.assertFalse(ready)
 
+    def test_windows_path_read_as_tab_and_newline(self):
+        """「"」で囲んだ C:\\temp\\new_app は、YAML と同じく \\t と \\n がタブと改行になる。それを知らせる。"""
+        ws = Workspace(self)
+        text = render_yaml(base_config(21)).replace(
+            'files: ["sensor_app"]', 'files: ["C:\\temp\\new_app"]')
+        values, raws = deploy.read_config_text(text)
+        self.assertEqual(values["files"], ["C:" + "\t" + "emp" + "\n" + "ew_app"])
+        _s, problems, _n, _r = deploy.validate(values, raws, ws.dir, {})
+        found = [p for p in problems if p.startswith("files の")]
+        self.assertEqual(len(found), 1, problems)
+        self.assertIn("C:\\temp\\new_app", found[0])
+        self.assertIn("タブや改行", found[0])
+        self.assertIn("/ で区切る", found[0])
+        self.assertTrue(found[0].endswith("。"), found[0])
+
+    def test_windows_path_forms_that_work(self):
+        """「'」で囲んだ \\ のパスと、/ で区切ったパスは、そのまま読む。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        text = render_yaml(base_config(21)).replace(
+            'files: ["sensor_app"]', "files: ['C:\\temp\\new_app']")
+        values, _raws = deploy.read_config_text(text)
+        self.assertEqual(values["files"], ["C:\\temp\\new_app"])
+        absolute = os.path.join(ws.dir, "sensor_app").replace(os.sep, "/")
+        s, problems, _n, _r = self.check(ws, **base_config(21, files=[absolute]))
+        self.assertEqual(problems, [])
+        self.assertEqual(s["local_files"][0]["path"], os.path.join(ws.dir, "sensor_app"))
+
+    def test_checksum_suffix_must_be_usable_in_file_names(self):
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        for suffix in ("/sum", "\\sum", ".sum:x", ".s*m", '.s"m', ".s|m", ".s\tm"):
+            with self.subTest(suffix=suffix):
+                _s, problems, _n, _r = self.check(ws, **base_config(21, checksum_suffix=suffix))
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("ファイルの名前に使えない文字", problems[0])
+                self.assertTrue(problems[0].endswith("。"), problems[0])
+        _s, problems, _n, _r = self.check(ws, **base_config(21, checksum_suffix=".crc-32_sum"))
+        self.assertEqual(problems, [])
+
+    def test_remote_dir_with_backslashes(self):
+        """機器のパスを Windows の書き方（\\ で区切る）で書くと、機器に \\ を含む名前のフォルダができる。送る前に止める。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        # 最後は "\tmp\new" と " で囲んだとき（\t と \n がタブと改行になる）
+        for value, shown in (("\\opt\\app", "\\opt\\app"), ("opt\\app", "opt\\app"),
+                             ("\t" + "mp" + "\n" + "ew", "\\tmp\\new")):
+            with self.subTest(value=value):
+                s, problems, _n, _r = self.check(ws, **base_config(21, remote_dir=value))
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("\\ ではなく / で区切ってください", problems[0])
+                self.assertIn("（今の値：%s）" % shown, problems[0])
+                self.assertTrue(problems[0].endswith("。"), problems[0])
+                self.assertEqual(s["remote_dir"], "")
+        s, problems, _n, _r = self.check(ws, **base_config(21, remote_dir="/opt/app/"))
+        self.assertEqual(problems, [])
+        self.assertEqual(s["remote_dir"], "/opt/app")
+
     def test_duplicate_basenames(self):
         ws = Workspace(self)
         ws.file("a/app", b"1")
@@ -545,6 +631,67 @@ def template_without(*keys):
         if key in keys:
             text = text.replace("\n".join(lines) + "\n", "")
     return text.rstrip("\n") + "\n"
+
+
+class OutputTest(unittest.TestCase):
+    """標準出力は Python の既定の文字コードで書き、書けない文字があっても JSON として読めること。"""
+
+    def run_script(self, workdir, encoding, *args):
+        env = dict(os.environ, PYTHONIOENCODING=encoding)
+        proc = subprocess.run(
+            [sys.executable, SCRIPT] + list(args) + ["--workdir", workdir],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=60)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def workdir(self):
+        # 日本語と、BMP の外の文字（絵文字）を入れたフォルダ
+        path = tempfile.mkdtemp(prefix="deploy-出力-\U0001F600-")
+        self.addCleanup(shutil.rmtree, path, True)
+        return path
+
+    def test_json_for_escapes_only_what_cannot_be_written(self):
+        class Stream(object):
+            encoding = "cp1252"
+        obj = {"message": "機器 é \U0001F600", "n": 1}
+        text = deploy.json_for(Stream, obj)
+        text.encode("cp1252")
+        self.assertIn("é", text)
+        self.assertIn("\\u6a5f\\u5668", text)
+        self.assertIn("\\ud83d\\ude00", text)
+        self.assertEqual(json.loads(text), obj)
+        Stream.encoding = "utf-8"
+        self.assertEqual(deploy.json_for(Stream, obj), json.dumps(obj, ensure_ascii=False))
+
+    def test_stdout_in_cp932(self):
+        """日本語の Windows の PowerShell と同じ cp932 で書く（UTF-8 のバイト列を直接書かない）。"""
+        work = self.workdir()
+        code, out, err = self.run_script(work, "cp932")
+        self.assertEqual(code, 2)
+        self.assertIn("ひな形から作りました".encode("cp932"), out)
+        self.assertNotIn("ひな形から作りました".encode("utf-8"), out)
+        data = json.loads(out.decode("cp932"))
+        self.assertIn("ひな形から作りました", data["message"])
+        # cp932 にない絵文字は、JSON の \u の形で届く
+        self.assertEqual(data["config"], os.path.join(work, DATA_DIR, "config.yaml"))
+        self.assertIn("ひな形から作りました".encode("cp932"), err)
+
+    def test_stdout_when_japanese_cannot_be_written(self):
+        """英語の Windows（cp1252 など）のように日本語を書けなくても、JSON として読める。"""
+        work = self.workdir()
+        code, out, err = self.run_script(work, "ascii", "config-path")
+        self.assertEqual(code, 0, out)
+        data = json.loads(out.decode("ascii"))
+        self.assertEqual(data["config"], os.path.join(work, DATA_DIR, "config.yaml"))
+        code, out, err = self.run_script(work, "ascii", "check")
+        self.assertEqual(code, 2)
+        data = json.loads(out.decode("ascii"))
+        self.assertIn("設定に直すところが", data["message"])
+        # 標準エラーは、書けない文字を \ の形で書く（止まらない）
+        lines = [l for l in err.decode("ascii").splitlines() if l]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertTrue(line.startswith("[%s] " % SKILL_NAME), line)
+        self.assertNotIn("Traceback", err.decode("ascii"))
 
 
 class AddMissingKeysTest(unittest.TestCase):
@@ -623,6 +770,22 @@ class AddMissingKeysTest(unittest.TestCase):
         self.assertTrue(tail.startswith(b"\r\n#"), tail)
         self.assertTrue(tail.endswith(b"passive: true\r\n"), tail)
         self.assertNotIn(b"\n", tail.replace(b"\r\n", b""))
+
+    def test_utf8_file_with_bom(self):
+        """BOM 付きの UTF-8（Windows のメモ帳や PowerShell 5.1 の Set-Content -Encoding UTF8）。BOM は残して足す。"""
+        ws = Workspace(self)
+        before = b"\xef\xbb\xbf" + template_without("passive").replace("\n", "\r\n").encode("utf-8")
+        ws.file(os.path.relpath(ws.config, ws.dir), before)
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(code, 0, data)
+        self.assertNotIn("problems", data)
+        self.assertEqual(data["added"], ["passive"])
+        after = read_file(ws.config)
+        self.assertEqual(after[:len(before)], before)
+        self.assertEqual(after.count(b"\xef\xbb\xbf"), 1)
+        self.assertTrue(after.endswith(b"passive: true\r\n"), after[-40:])
+        values, _raws = deploy.read_config_file(ws.config)
+        self.assertIs(values["passive"], True)
 
 
 class CommandWithoutServerTest(unittest.TestCase):
@@ -742,6 +905,63 @@ class CommandWithoutServerTest(unittest.TestCase):
         self.assertEqual(data["config"], ws.config)
         self.assertIn("1 行目", data["problems"][0])
 
+    def test_utf8_file_with_bom_and_key_on_first_line(self):
+        """BOM のすぐ後ろの項目も読める。CRLF でも読める。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        text = "".join(line + "\r\n" for line in render_yaml(base_config(21)).splitlines()
+                       if not line.startswith("#"))
+        self.assertTrue(text.startswith("host:"), text)
+        data = b"\xef\xbb\xbf" + text.encode("utf-8")
+        ws.file(os.path.relpath(ws.config, ws.dir), data)
+        values, raws = deploy.read_config_file(ws.config)
+        self.assertEqual(values["host"], "127.0.0.1")
+        _s, problems, _n, _r = deploy.validate(values, raws, ws.dir, {})
+        self.assertEqual(problems, [])
+        code, out, _o, _e = ws.run("config-path")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("problems", out)
+        self.assertEqual(out["missing"], [])
+        self.assertEqual(out["added"], [])
+        self.assertEqual(read_file(ws.config), data)
+
+    def test_config_not_in_utf8(self):
+        """メモ帳で ANSI（日本語の Windows では cp932）にしたときや、PowerShell 5.1 の > で書いたとき（UTF-16）。"""
+        for name, data in (("cp932", 'host: "機器"\n'.encode("cp932")),
+                           ("utf-16", 'host: "x"\r\n'.encode("utf-16"))):
+            with self.subTest(encoding=name):
+                ws = Workspace(self)
+                ws.file(os.path.relpath(ws.config, ws.dir), data)
+                for sub in ("check", "run"):
+                    code, out, _o, _e = ws.run(sub)
+                    self.assertEqual(code, 2, out)
+                    self.assertFalse(out["ok"])
+                    self.assertEqual(len(out["problems"]), 1, out)
+                    self.assertIn("UTF-8 で読めません", out["message"])
+                    # 設定ファイルの場所は、メッセージに1回だけ出る
+                    self.assertEqual(out["message"].count(ws.config), 1, out["message"])
+                code, out, _o, _e = ws.run("config-path")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(out["config"], ws.config)
+                self.assertIn("UTF-8 で読めません", out["problems"][0])
+                self.assertEqual(out["added"], [])
+                self.assertEqual(read_file(ws.config), data)
+
+    def test_run_stops_on_windows_style_remote_dir(self):
+        """'\\opt\\sensor' と書くと、機器につながずに止まる（送らない）。"""
+        ws = Workspace(self)
+        ws.file("sensor_app", APP)
+        text = render_yaml(base_config(free_port())).replace(
+            'remote_dir: "/opt/sensor"', "remote_dir: '\\opt\\sensor'")
+        self.assertIn("remote_dir: '\\opt\\sensor'", text)
+        ws.file(os.path.relpath(ws.config, ws.dir), text.encode("utf-8"))
+        code, data, _o, _e = ws.run()
+        self.assertEqual(code, 2, data)
+        self.assertEqual(len(data["problems"]), 1, data)
+        self.assertIn("（今の値：\\opt\\sensor）", data["message"])
+        self.assertIn("/ で区切ってください", data["message"])
+        self.assertNotIn("files", data)
+
     def test_bad_command_answers_json(self):
         ws = Workspace(self)
         for args in (["upload"], ["-h"], ["--help"]):
@@ -793,6 +1013,16 @@ class CommandWithoutServerTest(unittest.TestCase):
             or "拒否" in msg, msg)
         self.assertLess(elapsed, 15)
 
+    def test_unreachable_errors_on_each_os(self):
+        """経路がないときのエラーの番号（Windows では WSA の番号）を、経路がないと伝える。"""
+        for name in ("EHOSTUNREACH", "ENETUNREACH", "WSAEHOSTUNREACH", "WSAENETUNREACH"):
+            code = getattr(errno, name, None)
+            if code is None:
+                continue
+            with self.subTest(name=name):
+                msg = deploy.connect_error_message("10.0.0.9", 21, 5, OSError(code, "x"))
+                self.assertIn("機器までの経路がありません", msg)
+
     def test_unknown_host_name(self):
         ws = Workspace(self)
         ws.file("sensor_app", APP)
@@ -818,7 +1048,8 @@ class FtpServerTest(unittest.TestCase):
         ws = Workspace(self)
         ws.file("sensor_app", APP)
         root = self.root()
-        with ftp_server(root) as port:
+        chmods = []
+        with ftp_server(root, chmods=chmods) as port:
             ws.write_config(**base_config(port))
             code, data, out, err = ws.run()
         self.assertEqual(code, 0, data)
@@ -828,7 +1059,12 @@ class FtpServerTest(unittest.TestCase):
         self.assertEqual(data["created_dirs"], ["/opt", "/opt/sensor"])
         on_server = os.path.join(root, "opt", "sensor", "sensor_app")
         self.assertEqual(read_file(on_server), APP)
-        self.assertEqual(os.stat(on_server).st_mode & 0o777, 0o755)
+        # 機器に送った権限の変更（SITE CHMOD）。Windows の FTP サーバーでは、実行の権限は残らない
+        self.assertEqual(len(chmods), 1, chmods)
+        self.assertTrue(os.path.samefile(chmods[0][0], on_server), chmods)
+        self.assertEqual(chmods[0][1], "755")
+        if os.name == "posix":
+            self.assertEqual(os.stat(on_server).st_mode & 0o777, 0o755)
         expected = "%08x\n" % (zlib.crc32(APP) & 0xFFFFFFFF)
         sum_path = on_server + ".sum"
         self.assertEqual(read_file(sum_path).decode("ascii"), expected)
@@ -872,13 +1108,16 @@ class FtpServerTest(unittest.TestCase):
         ws = Workspace(self)
         ws.file("sensor_app", APP)
         root = self.root()
-        with ftp_server(root) as port:
+        chmods = []
+        with ftp_server(root, chmods=chmods) as port:
             ws.write_config(**base_config(port, checksum="none", file_mode=""))
             code, data, _o, _e = ws.run()
         self.assertEqual(code, 0, data)
         on_server = os.path.join(root, "opt", "sensor", "sensor_app")
         self.assertFalse(os.path.exists(on_server + ".sum"))
-        self.assertEqual(os.stat(on_server).st_mode & 0o777, 0o644)
+        self.assertEqual(chmods, [])
+        if os.name == "posix":
+            self.assertEqual(os.stat(on_server).st_mode & 0o777, 0o644)
         entry = data["files"][0]
         self.assertIsNone(entry["mode"])
         self.assertIsNone(entry["checksum"])
@@ -912,6 +1151,20 @@ class FtpServerTest(unittest.TestCase):
             code, data, _o, _e = ws.run()
             self.assertEqual(code, 0, data)
             self.assertEqual(data["created_dirs"], [])
+
+    def test_non_ascii_names(self):
+        """日本語の名前のファイルとフォルダも送れる（Python 3.8 でも）。"""
+        ws = Workspace(self)
+        ws.file("センサー/計測_app", APP)
+        root = self.root()
+        with ftp_server(root) as port:
+            ws.write_config(**base_config(port, files=["センサー/計測_app"], remote_dir="/opt/計測"))
+            code, data, _o, _e = ws.run()
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["files"][0]["remote"], "/opt/計測/計測_app")
+        self.assertEqual(read_file(os.path.join(root, "opt", "計測", "計測_app")), APP)
+        self.assertEqual(read_file(os.path.join(root, "opt", "計測", "計測_app.sum")).decode("ascii"),
+                         "%08x\n" % (zlib.crc32(APP) & 0xFFFFFFFF))
 
     def test_relative_remote_dir(self):
         ws = Workspace(self)
@@ -1109,8 +1362,8 @@ class SelfContainedTest(unittest.TestCase):
             [sys.executable, os.path.join(dest, "scripts", "deploy.py"), command],
             cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, timeout=60)
-        out = proc.stdout.decode("utf-8")
-        err = proc.stderr.decode("utf-8")
+        out = decode_out(proc.stdout)
+        err = decode_err(proc.stderr)
         try:
             data = json.loads(out)
         except ValueError:
@@ -1227,6 +1480,29 @@ class SkillFilesTest(unittest.TestCase):
             text = fh.read()
         self.assertIn("権限の欄に「付けていない」と書きます", text)
         self.assertIn("「変更なし」とは書きません", text)
+
+    def test_commands_follow_the_python_rule(self):
+        """Windows では py -3（なければ python）、それ以外では python3。SKILL.md はそれを <python> と書く。"""
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("`<python>` は、Windows では `py -3`（ない場合は `python`）、"
+                      "それ以外では `python3` です。", text)
+        commands = [l for l in text.splitlines() if "scripts/deploy.py" in l]
+        self.assertEqual(len(commands), 3, commands)
+        for line in commands:
+            self.assertTrue(line.startswith("<python> <このスキルのフォルダ>/scripts/deploy.py "), line)
+        # Windows の PowerShell でも動くように、bash だけの書き方に頼らない
+        for word in ("<<", "$(", "source ", "export "):
+            self.assertNotIn(word, text)
+
+    def test_readme_puts_windows_first(self):
+        with open(os.path.join(SKILL_DIR, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("- Windows の PC（Linux でも動きます）", needs)
+        self.assertNotIn("Linux の PC", text)
+        self.assertLess(text.index("py -3 -m unittest discover -s tests"),
+                        text.index("python3 -m unittest discover -s tests"))
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""

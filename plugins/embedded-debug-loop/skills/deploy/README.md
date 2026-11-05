@@ -12,7 +12,8 @@ PC にあるファイルを、FTP で組み込み機器に送る GitHub Copilot 
 
 ## 必要なもの
 
-- Linux の PC と、Python 3.8 以上（標準ライブラリだけで動きます）
+- Windows の PC（Linux でも動きます）
+- Python 3.8 以上（追加のインストールは要りません）
 - GitHub Copilot CLI
 - 機器の FTP サーバーと、送り先のフォルダに書き込めるユーザー（ユーザー名・パスワード）
 - PC から、機器の IP アドレスかホスト名に接続できること
@@ -42,11 +43,15 @@ PC にあるファイルを、FTP で組み込み機器に送る GitHub Copilot 
 ### スクリプトを直接実行する
 
 スクリプトは、カレントディレクトリを作業フォルダとして使います。
-`~/.copilot/skills/` に置いたときは、パスの `.github` を `~/.copilot` に変えます。
 
-```sh
-python3 .github/skills/deploy/scripts/deploy.py <コマンド>
+```powershell
+py -3 <このフォルダ>/scripts/deploy.py <コマンド>
 ```
+
+`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/deploy`）。
+`py` がないときは `python`、Linux では `python3` にします。
+
+`<コマンド>` は次のどれかです。
 
 - `config-path`：設定ファイルの場所を表示する（なければ作る）
 - `check`：設定を確認する
@@ -65,8 +70,11 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 - `.deploy/` に `.gitignore`（中身は `*`）を作る。パスワードやログを Git にコミットしないため。
 - スキルの更新でひな形に項目が増えたら、その項目を設定ファイルの最後に追加する（値はひな形のまま）。
 
-設定ファイルは、自分で直接編集します。項目の意味は、各項目の上のコメントにもあります。
-1行に「名前: 値」を1つ書きます。入れ子は使えません。リストは `["a", "b"]` と書きます。
+設定ファイルは、自分で編集します。項目の意味は、各項目の上のコメントにもあります。
+
+- 文字コードは UTF-8 で保存します。
+- 1行に「名前: 値」を1つ書きます。入れ子は使えません。リストは `["a", "b"]` と書きます。
+- Windows のパスは、`/` で区切るか（`"C:/work/my_app"`）、`'` で囲みます（`'C:\work\my_app'`）。`"` で囲むと、`\t` や `\n` がタブや改行になります。
 
 ### 項目
 
@@ -79,34 +87,35 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 | `password_env` | パスワードを入れた環境変数の名前（[下記](#パスワードを環境変数で渡す)） | 空 |
 | `passive` | パッシブモードを使うか | `true` |
 | `files` | 送るファイル（必須）。作業フォルダからの相対パスか絶対パス。例：`["build/my_app", "conf/my_app.conf"]` | `[]` |
-| `remote_dir` | 機器の送り先のフォルダ（必須）。なければ作る。例：`"/opt/myapp"` | 空 |
+| `remote_dir` | 機器の送り先のフォルダ（必須）。なければ作る。`/` で区切る。例：`"/opt/myapp"` | 空 |
 | `file_mode` | 送った後に設定する権限（8進数）。空なら設定しない。機器で実行するなら `"755"` などにする | 空 |
 | `checksum` | サム値の種類。`none`（作らない）・`crc32`（CRC-32）・`sum32`（全バイトを足した値の下位32ビット） | `"none"` |
-| `checksum_suffix` | サム値のファイルの名前の末尾に付ける文字（`.sum` なら `my_app.sum`） | `".sum"` |
+| `checksum_suffix` | サム値のファイルの名前の末尾に付ける文字（`.sum` なら `my_app.sum`）。`/`・`\`・`:` などは使えない | `".sum"` |
 | `timeout_seconds` | 機器の応答を待つ最長の秒数 | `30` |
 
-サム値のファイルの中身は、16進数8桁（小文字）と改行です（例：`cbf43926`）。送るファイルと一緒に `remote_dir` に送ります。
+サム値のファイルの中身は、16進数8桁（小文字）と改行（LF）です（例：`cbf43926`）。送るファイルと一緒に `remote_dir` に送ります。
 
 ### パスワードを環境変数で渡す
 
 1. 設定ファイルの `password_env` に、環境変数の名前（例：`DEVICE_FTP_PASSWORD`）を書きます。
 2. Copilot CLI を起動する前に、その環境変数を設定します。
 
-   ```sh
-   export DEVICE_FTP_PASSWORD='機器のパスワード'
+   ```powershell
+   $env:DEVICE_FTP_PASSWORD = '機器のパスワード'
    copilot
    ```
 
-環境変数があれば、`password` より優先します。なければ `password` を使います。
+環境変数があれば `password` より優先し、なければ `password` を使います。
 どちらもなければ、設定の問題として知らせます。
 
 パスワードは、画面にもログにも出しません。
-ただし、設定ファイルの書き方に誤り（閉じていない `"` など）があると、その行がエラーメッセージに出ます。`password` の行なら、パスワードも出ます。
+ただし、`password` の行の書き方に誤り（閉じていない `"` など）があると、パスワードを含むその行がエラーメッセージに出ます。
 
 ## 直接実行したときの結果
 
-スクリプトを直接実行すると、標準出力に結果の JSON が1つ出ます。
+標準出力に、結果の JSON が1つ出ます。
 途中経過は、標準エラー出力に `[deploy]` で始まる行で出ます。
+文字コードは Python の既定のものです（日本語の Windows では、Python 3.14 までは cp932、3.15 からは UTF-8）。書けない文字は、`\uXXXX` などの形で出ます。
 
 `run` と `check` の JSON の主な項目です。
 
@@ -160,7 +169,7 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 | 「機器が断りました」 | `user` に書き込み権限があるか。`remote_dir` が正しいか |
 | 「機器の空き容量が足りません」 | 機器の空き容量 |
 | 「権限を … に変えられません」 | FTP サーバーが `SITE CHMOD` に対応しているか |
-| 送る途中で止まる・「ファイルを送るための接続が拒否されました」 | `passive` を切り替えて試す（`true` ⇔ `false`） |
+| 送る途中で止まる・「ファイルを送るための接続が拒否されました」 | `passive` を切り替えて試す（`true` ⇔ `false`）。`false` のときは PC のファイアウォールも確認する |
 | 「大きさ … が、PC のファイル … と合いません」 | 機器の空き容量とケーブル。そのあと送り直す |
 | 「送るファイル … が見つかりません」 | ファイルができているか。`files` のパス |
 | 「設定に直すところが N 件あります」 | 設定ファイルを直す |
@@ -172,16 +181,17 @@ python3 .github/skills/deploy/scripts/deploy.py <コマンド>
 
 このフォルダで実行します。最後に `OK` と出れば通っています。実機は要りません。
 
-```sh
-python3 -m unittest discover -s tests
+```powershell
+py -3 -m unittest discover -s tests
 ```
 
-FTP サーバーを起動するテストには、`pyftpdlib` が要ります。読み込めなければ、そのテストはスキップされます（`skipped` と出ます）。
-`pyftpdlib` をこのフォルダの外の場所にインストールしたときは、その場所を環境変数 `DEPLOY_TEST_PYLIB` で指定します（`:` 区切りで複数可）。
+Linux では `python3 -m unittest discover -s tests` です。
+`tests/__pycache__` を残したくないときは、`py -3 -B -m unittest discover -s tests` で実行します。
 
-```sh
-python3 -m pip install --target /tmp/pylib pyftpdlib
-DEPLOY_TEST_PYLIB=/tmp/pylib python3 -m unittest discover -s tests
+FTP サーバーを起動するテストには `pyftpdlib` が要ります。なければ、そのテストはスキップされます（`skipped` と出ます）。
+`--target` で別の場所にインストールしたときは、その場所を環境変数 `DEPLOY_TEST_PYLIB` に設定します（複数なら `;` 区切り。Linux では `:`）。
+
+```powershell
+py -3 -m pip install --target "$env:TEMP\pylib" pyftpdlib
+$env:DEPLOY_TEST_PYLIB = "$env:TEMP\pylib"
 ```
-
-テストは `tests/__pycache__` を残します。残したくないときは、`python3 -B -m unittest discover -s tests` で実行します。

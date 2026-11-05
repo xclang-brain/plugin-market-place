@@ -2,14 +2,18 @@
 # -*- coding: utf-8 -*-
 """機器のシリアルコンソールにつないで、コマンドを実行し、出力を記録する。
 
-使い方：
-  python3 capture.py [run] [--workdir D] [--config F] [--command C]... [--listen-only 秒]
-  python3 capture.py config-path [--workdir D] [--config F]
-  python3 capture.py check [--workdir D] [--config F]
+使い方（<python> は、Windows では py -3、それ以外では python3）：
+  <python> capture.py [run] [--workdir D] [--config F] [--command C]... [--listen-only 秒]
+  <python> capture.py config-path [--workdir D] [--config F]
+  <python> capture.py check [--workdir D] [--config F]
 
 結果は、標準出力に JSON を1つだけ出す。進み具合は、標準エラーに出す。
+文字コードは、Windows ではコンソールに合わせ（cp932 など）、それ以外では Python の既定にする。
+書けない文字は \\uXXXX の形にする。
 終わりのコード：0 は成功、1 は作業の失敗、2 は設定の問題。
-Python 3.8 以降の標準ライブラリだけで動く。
+Python 3.8 以降で動く。シリアルポートは、同梱の pyserial 3.5（scripts/vendor/serial/、
+BSD ライセンス）で扱う。port には、COM3（Windows）、/dev/ttyUSB0（Linux）、
+socket://ホスト:ポート（TCP。テスト用）を書ける。
 
 設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く
 （例：.log-capture/config.yaml と .log-capture/logs/）。
@@ -20,21 +24,28 @@ import argparse
 import codecs
 import datetime
 import errno
-import fcntl
-import glob
 import json
 import os
 import re
-import select
 import shutil
-import struct
 import sys
-import termios
 import time
 import traceback
 
 # このスキルのフォルダと、その名前。フォルダの名前を変えて写したら、その名前になる
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 同梱の pyserial を読み込む。自分のフォルダの vendor を、読み込みの道の先頭に足す
+# （ほかに入っている serial より先に見つかるように）。
+# スキルのフォルダに __pycache__ を作らないように、バイトコードは書かない。
+VENDOR_DIR = os.path.join(SCRIPT_DIR, "vendor")
+sys.dont_write_bytecode = True
+if VENDOR_DIR not in sys.path:
+    sys.path.insert(0, VENDOR_DIR)
+import serial  # noqa: E402
+import serial.tools.list_ports  # noqa: E402
+
+IS_WINDOWS = os.name == "nt"
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 SKILL_NAME = os.path.basename(SKILL_DIR)
 SKILL = SKILL_NAME
@@ -55,6 +66,8 @@ QUIET = 0.15           # プロンプトが出た後、続きが来ないこと�
 DRAIN_QUIET = 0.2      # コマンドの前に、残りの出力を読み捨てる静かな時間
 DRAIN_MAX = 1.0
 WRITE_WAIT = 5.0
+POLL = 0.05            # シリアルポートを1回読むときに、文字を待つ秒数
+READ_MAX = 4096        # 1回に読むバイト数の上限
 RC_WAIT = 5.0          # 終了コードを調べるコマンドの返事を待つ秒数
 PROMPT_HEAD_MAX = 3    # 複数の行のプロンプトとして扱う、上の行の数の上限
 OUTPUT_LINES = 60
@@ -88,39 +101,95 @@ ANSI_RE = re.compile(
 )
 CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
-_BAUD_CANDIDATES = (
+# 使えるシリアルの速さ（pyserial の SerialBase.BAUDRATES と同じ）
+BAUDS = (
     50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600,
     19200, 38400, 57600, 115200, 230400, 460800, 500000, 576000, 921600,
     1000000, 1152000, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000,
 )
-BAUDS = {}
-for _n in _BAUD_CANDIDATES:
-    _c = getattr(termios, "B%d" % _n, None)
-    if _c is not None:
-        BAUDS[_n] = _c
 
 
 # ---------------------------------------------------------------------------
 # 出力の道具
 # ---------------------------------------------------------------------------
 
+def console_code_page():
+    """Windows で、コンソールの出力の文字コード（cp932 など）。コンソールがなければ None。"""
+    if not IS_WINDOWS:
+        return None
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except Exception:
+        return None
+    if not cp:
+        return None
+    name = "cp%d" % cp
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
+def setup_streams():
+    """標準出力と標準エラーの文字コードを、読む側に合わせる。書けない文字があっても止まらないようにする。
+
+    Windows で、出力先がコンソールでない（パイプなど）ときは、コンソールの文字コードで書く。
+    PowerShell は、この文字コードで読む（日本語の Windows では cp932 など）。
+    Python の既定は、UTF-8 モード（3.15 からの既定、PYTHONUTF8=1）では UTF-8 になり、
+    PowerShell が読み違えて文字化けする。
+    出力先がコンソールのとき（Python が Unicode のまま書く）と、Windows 以外では、既定のまま。
+    """
+    encoding = console_code_page()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if encoding and not stream.isatty():
+                stream.reconfigure(encoding=encoding, errors="backslashreplace")
+            else:
+                stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def for_stream(text, encoding):
+    """JSON の文字列を、encoding で書けるようにする。書けない文字は \\uXXXX の形にする。
+
+    JSON の決まりどおりの書き方なので、読む側は JSON としてそのまま読める
+    （backslashreplace の \\xNN の形は、JSON では読めない）。
+    """
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+        return text
+    except LookupError:
+        return text
+    except UnicodeEncodeError:
+        pass
+    out = []
+    for ch in text:
+        try:
+            ch.encode(encoding)
+            out.append(ch)
+        except UnicodeEncodeError:
+            out.append(json.dumps(ch)[1:-1])
+    return "".join(out)
+
+
 def say(msg):
     """進み具合を標準エラーに出す。頭に、このスキルのフォルダの名前を付ける。"""
     try:
-        sys.stderr.buffer.write(("[%s] %s\n" % (SKILL, msg)).encode("utf-8", "replace"))
-        sys.stderr.buffer.flush()
+        sys.stderr.write("[%s] %s\n" % (SKILL, msg))
+        sys.stderr.flush()
     except Exception:
         pass
 
 
 def emit(obj):
     data = json.dumps(obj, ensure_ascii=False, indent=2) + "\n"
-    try:
-        sys.stdout.buffer.write(data.encode("utf-8"))
-        sys.stdout.buffer.flush()
-    except AttributeError:  # テストなどで差し替えられたとき
-        sys.stdout.write(data)
-        sys.stdout.flush()
+    sys.stdout.write(for_stream(data, getattr(sys.stdout, "encoding", None)))
+    sys.stdout.flush()
 
 
 class Failure(Exception):
@@ -387,7 +456,8 @@ def ensure_gitignore(path):
     if os.path.lexists(target):
         return
     try:
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        # O_BINARY：Windows で、改行を \r\n に変えずに書く
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
     except OSError:
         return
     try:
@@ -554,9 +624,10 @@ def validate(cfg):
 
     port = _text(cfg.get("port"))
     if port is None:
-        problems.append("port（シリアルポート）は、1つの文字列で書いてください（例：/dev/ttyUSB0）。")
+        problems.append("port（シリアルポート）は、1つの文字列で書いてください（例：COM3）。")
     elif port.strip() == "":
-        problems.append("port（機器につながるシリアルポート）が空です。/dev/ttyUSB0 のように書いてください。")
+        problems.append("port（機器につながるシリアルポート）が空です。"
+                        "COM3（Windows）や /dev/ttyUSB0（Linux）のように書いてください。")
     s.port = (port or "").strip()
 
     baud = _number(cfg.get("baud"))
@@ -818,17 +889,35 @@ def exit_code_notes(commands):
 # シリアルポート
 # ---------------------------------------------------------------------------
 
+def _natural(name):
+    """COM3 が COM10 より先に来るように、数の所は数として並べる。"""
+    return [int(t) if t.isdigit() else t for t in re.split(r"([0-9]+)", name)]
+
+
 def find_ports():
-    found = []
-    for pattern in ("/dev/serial/by-id/*", "/dev/ttyUSB*", "/dev/ttyACM*"):
-        for p in sorted(glob.glob(pattern)):
-            if p not in found:
-                found.append(p)
-    return found
+    """この PC のシリアルポートの名前（COM3、/dev/ttyUSB0 など）。"""
+    try:
+        infos = serial.tools.list_ports.comports()
+    except Exception:
+        return []
+    names = []
+    for info in infos:
+        name = getattr(info, "device", None)
+        if name and name not in names:
+            names.append(name)
+    return sorted(names, key=_natural)
+
+
+def _is_url(path):
+    return "://" in path
 
 
 def _lock_owner(path):
-    """minicom などが作るロックファイルから、使っているプロセスの番号を返す。"""
+    """minicom などが作るロックファイルから、使っているプロセスの番号を返す（Windows 以外）。"""
+    if IS_WINDOWS or _is_url(path):
+        # Windows の os.kill は、プロセスを止めてしまう。調べない
+        return None
+    import struct
     name = os.path.basename(path)
     for folder in ("/var/lock", "/run/lock"):
         lock = os.path.join(folder, "LCK.." + name)
@@ -857,12 +946,19 @@ def _lock_owner(path):
     return None
 
 
+def _terminal_apps():
+    return "Tera Term や PuTTY など" if IS_WINDOWS else "minicom や screen など"
+
+
 def _busy_message(path, pid=None):
     who = "ほかのプログラム（プロセス番号 %d）" % pid if pid else "ほかのプログラム"
     return (
         "シリアルポート %s は、%sが使っています。"
-        "端末ソフト（minicom や screen など）を閉じてから、やり直してください。" % (path, who)
+        "端末ソフト（%s）を閉じてから、やり直してください。" % (path, who, _terminal_apps())
     )
+
+
+_COM_RE = re.compile(r"(?i)^(\\\\\.\\)?COM[0-9]+$")
 
 
 def _not_found_message(path):
@@ -870,95 +966,106 @@ def _not_found_message(path):
         "シリアルポート %s が見つかりません。"
         "USB ケーブルがつながっているかと、設定の port が正しいかを確かめてください。" % path
     )
-    if not os.path.isabs(path):
-        msg += "port は /dev から書いてください（例：/dev/ttyUSB0）。"
+    if not _is_url(path):
+        if IS_WINDOWS:
+            if not _COM_RE.match(path):
+                msg += "port は COM3 のように書いてください。"
+        elif not os.path.isabs(path):
+            msg += "port は /dev から書いてください（例：/dev/ttyUSB0）。"
     ports = find_ports()
     if ports:
         msg += "この PC で見つかったシリアルポートは、%s です。" % "、".join(ports)
     return msg
 
 
-def open_port(path, baud):
-    pid = _lock_owner(path)
-    if pid:
-        raise Failure(_busy_message(path, pid))
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-    except FileNotFoundError:
-        raise Failure(_not_found_message(path), extra={"available_ports": find_ports()})
-    except PermissionError:
-        raise Failure(
+def _not_found(path):
+    return Failure(_not_found_message(path), extra={"available_ports": find_ports()})
+
+
+def open_failure(path, e):
+    """シリアルポートを開けなかったときの Failure を作る。e は pyserial の SerialException など。
+
+    Linux などでは e.errno に OS のエラーの番号が入る。
+    Windows では番号が入らず、文の中に FileNotFoundError(2, …) などの形で入る。
+    """
+    text = str(e)
+    num = getattr(e, "errno", None)
+    if IS_WINDOWS:
+        if "PermissionError(" in text:
+            # Windows では、ほかのプログラムが開いているポートは「アクセスが拒否されました」になる
+            return Failure(_busy_message(path))
+        if "FileNotFoundError(" in text:
+            return _not_found(path)
+    if num == errno.ENOENT:
+        return _not_found(path)
+    if num in (errno.EACCES, errno.EPERM):
+        return Failure(
             "シリアルポート %s を開く権限がありません。"
             "今のユーザーを dialout グループに入れてから"
             "（sudo usermod -aG dialout $USER）、PC にログインし直してください。" % path
         )
-    except IsADirectoryError:
-        raise Failure("%s はフォルダで、シリアルポートではありません。設定の port を確かめてください。" % path)
-    except OSError as e:
-        if e.errno == errno.EBUSY:
-            raise Failure(_busy_message(path))
-        if e.errno in (errno.ENXIO, errno.ENODEV):
-            raise Failure(
-                "シリアルポート %s を開けません（つながる先の機器がありません）。"
-                "USB ケーブルを挿し直してください。" % path
-            )
-        raise Failure("シリアルポート %s を開けません（%s）。"
-                      "USB ケーブルと、設定の port を確かめてください。" % (path, os_reason(e)))
+    if num == errno.EISDIR:
+        return Failure("%s はフォルダで、シリアルポートではありません。設定の port を確かめてください。" % path)
+    if num in (errno.EBUSY, errno.EWOULDBLOCK, errno.EAGAIN) or "exclusively lock" in text:
+        return Failure(_busy_message(path))
+    if num in (errno.ENXIO, errno.ENODEV):
+        return Failure(
+            "シリアルポート %s を開けません（つながる先の機器がありません）。"
+            "USB ケーブルを挿し直してください。" % path
+        )
+    if "Could not configure port" in text:
+        return Failure("%s はシリアルポートではありません。設定の port を確かめてください。" % path)
+    if "Cannot configure port" in text or "baud rate" in text:
+        return Failure("シリアルポート %s の速さなどを設定できません（%s）。"
+                       "設定の port と baud を確かめてください。" % (path, text))
+    if IS_WINDOWS and not _is_url(path) and path.upper() not in [p.upper() for p in find_ports()]:
+        return _not_found(path)
+    reason = os_reason(e) if num is not None else text
+    return Failure("シリアルポート %s を開けません（%s）。"
+                   "USB ケーブルと、設定の port を確かめてください。" % (path, reason))
+
+
+def open_port(path, baud):
+    """シリアルポートを開き、pyserial の Serial を返す。
+
+    path は COM3、/dev/ttyUSB0、socket://ホスト:ポート のどれでもよい。
+    8 ビット、パリティなし、ストップビット 1、フロー制御なし。
+    読むときは、1回に最長 POLL 秒だけ文字を待つ。
+    """
+    pid = _lock_owner(path)
+    if pid:
+        raise Failure(_busy_message(path, pid))
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as e:
-            if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
-                raise Failure(_busy_message(path))
-        try:
-            old = termios.tcgetattr(fd)
-        except termios.error:
-            raise Failure("%s はシリアルポートではありません。設定の port を確かめてください。" % path)
-        new = [list(x) if isinstance(x, list) else x for x in old]
-        iflag, oflag, cflag, lflag = new[0], new[1], new[2], new[3]
-        iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK | termios.ISTRIP
-                   | termios.INLCR | termios.IGNCR | termios.ICRNL | termios.IXON
-                   | termios.IXOFF | getattr(termios, "IXANY", 0))
-        oflag &= ~termios.OPOST
-        lflag &= ~(termios.ECHO | termios.ECHONL | termios.ICANON | termios.ISIG | termios.IEXTEN)
-        cflag &= ~(termios.CSIZE | termios.PARENB | termios.CSTOPB | getattr(termios, "CRTSCTS", 0))
-        cflag |= termios.CS8 | termios.CREAD | termios.CLOCAL
-        new[0], new[1], new[2], new[3] = iflag, oflag, cflag, lflag
-        new[4] = BAUDS[baud]
-        new[5] = BAUDS[baud]
-        new[6][termios.VMIN] = 1
-        new[6][termios.VTIME] = 0
-        try:
-            termios.tcsetattr(fd, termios.TCSANOW, new)
-            termios.tcflush(fd, termios.TCIFLUSH)
-        except termios.error as e:
-            raise Failure("シリアルポート %s の速さなどを設定できません（%s）。"
-                          "設定の port と baud を確かめてください。" % (path, e))
-        return fd, old
-    except BaseException:
-        os.close(fd)
-        raise
+        return serial.serial_for_url(
+            path, baudrate=baud, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE, xonxoff=False, rtscts=False, dsrdtr=False,
+            timeout=POLL, write_timeout=WRITE_WAIT,
+            exclusive=True,  # Linux などで、ほかのプログラムと同時に使わない（Windows はいつも1つだけ）
+        )
+    except (serial.SerialException, OSError) as e:
+        raise open_failure(path, e)
+    except ValueError as e:  # 使えない書き方（知らない socket:// 以外の URL など）
+        raise Failure("シリアルポート %s を開けません（%s）。"
+                      "USB ケーブルと、設定の port を確かめてください。" % (path, e))
 
 
-def close_port(fd, old):
-    if fd is None:
+def close_port(port):
+    if port is None:
         return
     try:
-        if old is not None:
-            termios.tcsetattr(fd, termios.TCSANOW, old)
+        port.close()
     except Exception:
-        pass
-    try:
-        os.close(fd)
-    except OSError:
         pass
 
 
 class Console(object):
-    """シリアルポートとのやりとり。届いた文字は、そのままログにも書く。"""
+    """シリアルポートとのやりとり。届いた文字は、そのままログにも書く。
 
-    def __init__(self, fd, path, log):
-        self.fd = fd
+    port は、open_port が返した pyserial の Serial（読むときは最長 POLL 秒待つ）。
+    """
+
+    def __init__(self, port, path, log):
+        self.port = port
         self.path = path
         self.log = log
         self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -1007,26 +1114,30 @@ class Console(object):
         else:
             self.tail = (self.tail + text)[-4096:]
 
-    def read(self, timeout):
-        """届いた文字を読む。読んだバイト数を返す（届かなければ 0）。"""
+    def _read_some(self):
+        """最長 POLL 秒、文字を待つ。届いたら、そのとき届いている分をまとめて読む。"""
         try:
-            ready, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
-        except InterruptedError:
-            return 0
-        if not ready:
-            return 0
-        try:
-            data = os.read(self.fd, 4096)
-        except (BlockingIOError, InterruptedError):
-            return 0
-        except OSError as e:
-            if e.errno in (errno.EIO, errno.ENXIO, errno.ENODEV, errno.EBADF):
-                raise Disconnected()
-            raise
-        if not data:
+            data = self.port.read(1)
+            while data and len(data) < READ_MAX:
+                n = self.port.in_waiting
+                if not n:
+                    break
+                data += self.port.read(min(n, READ_MAX - len(data)))
+        except OSError:  # pyserial の SerialException も、ここに入る
+            # USB が抜けた、ソケットが閉じたなど
             raise Disconnected()
-        self._feed(data)
-        return len(data)
+        return data
+
+    def read(self, timeout):
+        """届いた文字を読む。最長 timeout 秒待つ。読んだバイト数を返す（届かなければ 0）。"""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            data = self._read_some()
+            if data:
+                self._feed(data)
+                return len(data)
+            if time.monotonic() >= deadline:
+                return 0
 
     def read_for(self, seconds):
         deadline = time.monotonic() + seconds
@@ -1044,30 +1155,16 @@ class Console(object):
                 return
 
     def send(self, text):
-        data = text.encode("utf-8")
-        deadline = time.monotonic() + WRITE_WAIT
-        while data:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise Failure(
-                    "シリアルポート %s に書き込めません。"
-                    "ケーブルと、機器の電源を確かめてください。" % self.path
-                )
-            try:
-                _, ready, _ = select.select([], [self.fd], [], remaining)
-            except InterruptedError:
-                continue
-            if not ready:
-                continue
-            try:
-                n = os.write(self.fd, data)
-            except (BlockingIOError, InterruptedError):
-                continue
-            except OSError as e:
-                if e.errno in (errno.EIO, errno.ENXIO, errno.ENODEV, errno.EBADF):
-                    raise Disconnected()
-                raise
-            data = data[n:]
+        """文字を送る。WRITE_WAIT 秒で送り切れなければ、止める。"""
+        try:
+            self.port.write(text.encode("utf-8"))
+        except serial.SerialTimeoutException:
+            raise Failure(
+                "シリアルポート %s に書き込めません。"
+                "ケーブルと、機器の電源を確かめてください。" % self.path
+            )
+        except OSError:  # pyserial の SerialException も、ここに入る
+            raise Disconnected()
 
     def _match(self, patterns, need_newline):
         if need_newline and not self.seg_has_nl:
@@ -1594,10 +1691,10 @@ SUBCOMMANDS = ("run", "config-path", "check")
 _VALUE_OPTIONS = ("--workdir", "--config", "--command", "--listen-only")
 
 USAGE = (
-    "python3 capture.py [run] [--workdir フォルダ] [--config ファイル] "
+    "capture.py [run] [--workdir フォルダ] [--config ファイル] "
     "[--command \"コマンド\"]... [--listen-only 秒数] / "
-    "python3 capture.py config-path [--workdir フォルダ] [--config ファイル] / "
-    "python3 capture.py check [--workdir フォルダ] [--config ファイル]"
+    "capture.py config-path [--workdir フォルダ] [--config ファイル] / "
+    "capture.py check [--workdir フォルダ] [--config ファイル]"
 )
 
 
@@ -1759,12 +1856,12 @@ def cmd_run(args):
         "config": config,
     }
     code = 1
-    fd = old = None
+    ser = None
     con = None
     try:
         say("シリアルポート %s を開きます（速さ %d）。" % (s.port, s.baud))
-        fd, old = open_port(s.port, s.baud)
-        con = Console(fd, s.port, log)
+        ser = open_port(s.port, s.baud)
+        con = Console(ser, s.port, log)
         timed_out_cmd = None
         stuck = False
         if commands:
@@ -1875,7 +1972,7 @@ def cmd_run(args):
             type(e).__name__, e)
         code = 1
     finally:
-        close_port(fd, old)
+        close_port(ser)
         log_note(log, "\n# ---- ここまで ----\n# 結果：%s\n" % result["message"])
         try:
             log.close()
@@ -1905,12 +2002,12 @@ def cmd_check(args):
     log_note(log, "# シリアルポート：%s（速さ %d）\n" % (s.port, s.baud))
     log_note(log, "# ---- ここから下は、機器から届いた文字そのまま ----\n")
     out["log"] = log_path
-    fd = old = None
+    ser = None
     message = ""
     try:
         say("シリアルポート %s を開きます（速さ %d）。" % (s.port, s.baud))
-        fd, old = open_port(s.port, s.baud)
-        con = Console(fd, s.port, log)
+        ser = open_port(s.port, s.baud)
+        con = Console(ser, s.port, log)
         state = wake(con, s)
         if state == "login":
             login(con, s)
@@ -1939,7 +2036,7 @@ def cmd_check(args):
         message = "思わぬエラーで止まりました（%s: %s）。くわしくはログを見てください。" % (type(e).__name__, e)
         out["problems"].append(message)
     finally:
-        close_port(fd, old)
+        close_port(ser)
         log_note(log, "\n# ---- ここまで ----\n# 結果：%s\n" % message)
         try:
             log.close()
@@ -1952,6 +2049,7 @@ def cmd_check(args):
 
 
 def main(argv=None):
+    setup_streams()
     if argv is None:
         argv = sys.argv[1:]
     try:

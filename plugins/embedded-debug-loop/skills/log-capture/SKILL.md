@@ -5,6 +5,9 @@ description: 機器のシリアルコンソールに PC からつなぎ、必要
 
 # シリアルコンソールの記録
 
+下のコマンドの `<python>` は、Windows では `py -3`（ない場合は `python`）、それ以外では `python3` です。
+`<このスキルのフォルダ>` は、このスキルを読み込んだときに示されるフォルダです。
+
 ## 何をするスキルか
 
 - PC から、機器のシリアルコンソールにつなぎます。
@@ -30,13 +33,16 @@ description: 機器のシリアルコンソールに PC からつなぎ、必要
 
 ## 頼まれ方と、すること
 
-下の `<このスキルのフォルダ>` は、このスキルを読み込んだときに示されるフォルダです。
 コマンドは、作業フォルダで実行します。
+パスに空白があるときと、`--command` の値は、`'…'`（シングルクォート）で囲みます。
+PowerShell でも bash でも、`'…'` の中の `$` は、変数として置き換えられません。
+値の中に `'` があるときは、PowerShell では `''`、bash では `'\''` と書きます。
+PowerShell 7.2 以前では、値の中の `"` は `\"` と書きます。
 
 ### 1. 「ログを取って」「機器で動かして出力を見せて」と頼まれたとき
 
 ```
-python3 <このスキルのフォルダ>/scripts/capture.py run
+<python> <このスキルのフォルダ>/scripts/capture.py run
 ```
 
 - 設定の commands を、機器のシェルで上から順に実行します。
@@ -45,7 +51,7 @@ python3 <このスキルのフォルダ>/scripts/capture.py run
 - ログでは、各コマンドの出力の後に「（終了コード：0）」の行を書きます。
   読めなかったときは「（終了コード：読めませんでした）」です。
 - 今回だけ別のコマンドを実行するときは、`--command` を付けます。
-  何回でも書けます。例：`run --command "/opt/myapp/my_app"`
+  何回でも書けます。例：`run --command '/opt/myapp/my_app'`
 - コマンドを実行せず、出力を記録するだけのときは、`--listen-only 秒数` を付けます。
   例：`run --listen-only 30`
 - 作業フォルダが今のフォルダと違うときは、`--workdir フォルダ` を付けます。
@@ -56,7 +62,7 @@ python3 <このスキルのフォルダ>/scripts/capture.py run
 ### 2. 設定ファイルの場所を聞かれたとき、用意するよう頼まれたとき
 
 ```
-python3 <このスキルのフォルダ>/scripts/capture.py config-path
+<python> <このスキルのフォルダ>/scripts/capture.py config-path
 ```
 
 - 設定ファイルがなければ、ひな形から作ります。
@@ -66,7 +72,7 @@ python3 <このスキルのフォルダ>/scripts/capture.py config-path
 ### 3. 設定を確かめるよう頼まれたとき
 
 ```
-python3 <このスキルのフォルダ>/scripts/capture.py check
+<python> <このスキルのフォルダ>/scripts/capture.py check
 ```
 
 - 設定の書き方を確かめます。

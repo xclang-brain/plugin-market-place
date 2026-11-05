@@ -11,17 +11,18 @@
 
 ## 必要なもの
 
-- Linux の PC と Python 3.8 以上（標準ライブラリだけで動きます。pyserial は不要です）
+- Windows の PC（Linux でも動きます）
+- Python 3.8 以上。追加のインストールは要りません。シリアルポートを扱う pyserial 3.5 を同梱しています（BSD ライセンス。[LICENSE.txt](scripts/vendor/serial/LICENSE.txt)）。
 - GitHub Copilot CLI
 - 機器と PC を接続するシリアルケーブル（USB シリアル変換器など）
-- シリアルポートを開く権限。多くの Linux では、今のユーザーを `dialout` グループに追加し（`sudo usermod -aG dialout $USER`）、PC にログインし直します。
 - 機器のシリアルコンソールで、`$?` が使えるシェル（sh や bash）
+- Linux では、シリアルポートを開く権限。多くの場合、今のユーザーを `dialout` グループに追加し（`sudo usermod -aG dialout $USER`）、PC にログインし直します。
 
 ## インストールする
 
 1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/log-capture/`
-   - すべての作業フォルダで使う：`~/.copilot/skills/log-capture/`
+   - すべての作業フォルダで使う：`C:\Users\<ユーザー名>\.copilot\skills\log-capture\`（Linux では `~/.copilot/skills/log-capture/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
 3. `/skills list` を実行し、一覧に `log-capture` があれば完了です。
 
@@ -31,7 +32,9 @@
 ## 使い方
 
 1. `/log-capture 設定ファイルはどこ？` と入力します。設定ファイルがなければ作られ、場所が表示されます。
-2. 設定ファイルの `port` に、シリアルポート（例：`/dev/ttyUSB0`、`/dev/ttyACM0`）を書きます。ほかの項目も機器に合わせます。
+2. 設定ファイルの `port` に、シリアルポートを書きます。
+   Windows では `COM3` の形です（番号はデバイスマネージャーで確認できます）。Linux では `/dev/ttyUSB0` の形です。
+   ほかの項目も機器に合わせます。
 3. `/log-capture 設定を確認して` と入力します（機器のシェルでコマンドは実行しません）。
    「… でログインできました」と出れば、設定は完了です（ログインが要らない機器では「… シェルのプロンプトを確かめました」）。
 4. `/log-capture 機器で /opt/myapp/my_app を動かして、出力を見せて` のように依頼します。
@@ -46,12 +49,15 @@
 作業フォルダをカレントディレクトリにして、次のように実行します。`~/.copilot/skills/` に置いたときは、パスを変えます。
 
 ```
+# Windows（py がなければ python）
+py -3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オプション]
+# Linux
 python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オプション]
 ```
 
 サブコマンドの `config-path`・`check`・`run` が、上の手順 1・3・4 にあたります。
 
-- `--command "コマンド"`（run のとき）：`commands` の代わりに実行する。複数指定できる
+- `--command 'コマンド'`（run のとき）：`commands` の代わりに実行する。複数指定できる。値の中の `'` は、PowerShell では `''`、bash では `'\''` と書く
 - `--listen-only 秒数`（run のとき）：コマンドを実行せず、その秒数だけ記録する
 - `--workdir フォルダ`：作業フォルダを指定する
 - `--config ファイル`：別の場所の設定ファイルを使う
@@ -70,7 +76,7 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 
 | 項目 | 意味 | 例 |
 | --- | --- | --- |
-| `port` | 機器に接続するシリアルポート（必須） | `"/dev/ttyUSB0"` |
+| `port` | 機器に接続するシリアルポート（必須） | `"COM3"` |
 | `baud` | シリアルの速さ（ボーレート）。機器と同じ値にする | `115200` |
 | `login_user` | ログインするユーザー名。空ならログインしない | `"root"` |
 | `login_password` | ログインのパスワード（なければ空） | `""` |
@@ -86,7 +92,9 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 ### パスワードを環境変数で渡す
 
 1. 設定ファイルの `login_password_env` に、環境変数の名前（例：`"DEVICE_PASSWORD"`）を書きます。`login_password` は空にします。
-2. Copilot CLI を起動する前に、同じシェルで `export DEVICE_PASSWORD='機器のパスワード'` を実行します。
+2. Copilot CLI を起動する前に、同じ端末で環境変数を設定します。
+   - Windows（PowerShell）：`$env:DEVICE_PASSWORD = '機器のパスワード'`
+   - Linux：`export DEVICE_PASSWORD='機器のパスワード'`
 
 環境変数は `login_password` より優先します。
 環境変数がなく、`login_password` も空なら、機器に接続せずに止まります（`login_user` が空なら止まりません）。
@@ -101,7 +109,10 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 
 ### スクリプトの出力
 
-スクリプトは、標準出力に JSON を1つ出します。主な項目は次のとおりです。
+スクリプトは、標準出力に JSON を1つ出します。
+文字コードは、Windows ではコンソールと同じ（日本語の Windows では cp932 など）、Linux では Python の既定です。
+書けない文字は `\uXXXX` の形にします。
+主な項目は次のとおりです。
 
 | 項目 | 意味 |
 | --- | --- |
@@ -116,6 +127,7 @@ python3 .github/skills/log-capture/scripts/capture.py <サブコマンド> [オ�
 | `added` | 設定ファイルに追加した項目 |
 | `created` | 設定ファイルを今回作ったか |
 | `missing` | 値のない必須の項目（config-path のとき） |
+| `available_ports` | PC で見つかったシリアルポート（ポートが見つからないとき） |
 
 config-path は `config`・`created`・`missing`・`added` を出します（項目を追加したときは `message`、問題があるときは `problems` も）。
 
@@ -125,6 +137,7 @@ check は失敗したときも 2、config-path は設定に問題があっても
 ### ログ
 
 - 作業フォルダの `.log-capture/logs/` に、開始日時を名前にして保存します（例：`log-capture-20261105-143000.log`）。同じ秒に2つできたときは、`-2` などが付きます。
+- ファイルは UTF-8 です。
 - 先頭の `#` の行に、開始時刻、シリアルポート、実行するコマンドなどを書きます。
 - その後に、機器から届いた文字をそのまま（色の制御文字も）書き、最後に結果の文を書きます。
 - 各コマンドの出力の後に「（終了コード：0）」のような行を書きます。読み取れなかったときは「（終了コード：読めませんでした）」です。
@@ -135,9 +148,9 @@ check は失敗したときも 2、config-path は設定に問題があっても
 | 出た文・起きたこと | 確認すること |
 | --- | --- |
 | `/log-capture` が使えない | 置き場所と、フォルダの名前が `SKILL.md` の `name:` と同じか。直したら `/skills reload` を実行する |
-| シリアルポート … が見つかりません | ケーブルと `port`。文の最後に、PC で見つかったシリアルポートが出ていれば、その中から選ぶ |
-| シリアルポート … を開く権限がありません | `dialout` グループに追加し、PC にログインし直す |
-| シリアルポート … は、ほかのプログラム…が使っています | minicom や screen などの端末ソフトを閉じる |
+| シリアルポート … が見つかりません | ケーブルと `port`。文の最後に、PC で見つかったシリアルポートが出ていれば、その中から選ぶ。1つも出ないときは、デバイスマネージャーの「ポート (COM と LPT)」に USB シリアル変換器が出ているか。出ていなければ、そのドライバーをインストールする |
+| シリアルポート … は、ほかのプログラム…が使っています | 端末ソフト（Windows では Tera Term や PuTTY、Linux では minicom や screen など）を閉じる |
+| シリアルポート … を開く権限がありません | Linux では、`dialout` グループに追加し、PC にログインし直す |
 | … はシリアルポートではありません | `port` が正しいか |
 | シリアルポート … から応答がありません | ケーブルと、機器の電源 |
 | 文字は届きますが、ログインの求めも、シェルのプロンプトも出ません | `baud` が機器と同じか。`prompt` が一致するか。機器で前のプログラムが動いたままでないか |
@@ -156,10 +169,14 @@ check は失敗したときも 2、config-path は設定に問題があっても
 ## テストを実行する
 
 このフォルダで次のコマンドを実行し、最後に `OK` と出れば成功です。
-機器は不要です（機器を疑似端末でエミュレートします）。Linux で 2 分ほどかかります。
 
 ```
+# Windows（py がなければ python）
+py -3 -m unittest discover -s tests
+# Linux
 python3 -m unittest discover -s tests
 ```
 
-`tests/__pycache__` を残したくないときは、`python3 -B -m unittest discover -s tests` で実行します。
+機器は要りません。TCP で接続する模擬の機器を使います（Linux では、疑似端末で接続するテストも動きます）。
+Linux では 3 分ほどかかります。
+`__pycache__` を残さないときは、`-B` を付けます（例：`py -3 -B -m unittest discover -s tests`）。
