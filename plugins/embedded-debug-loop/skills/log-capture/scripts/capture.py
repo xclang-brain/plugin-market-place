@@ -105,9 +105,9 @@ for _n in _BAUD_CANDIDATES:
 # ---------------------------------------------------------------------------
 
 def say(msg):
-    """進み具合を標準エラーに出す。"""
+    """進み具合を標準エラーに出す。頭に、このスキルのフォルダの名前を付ける。"""
     try:
-        sys.stderr.buffer.write((msg + "\n").encode("utf-8", "replace"))
+        sys.stderr.buffer.write(("[%s] %s\n" % (SKILL, msg)).encode("utf-8", "replace"))
         sys.stderr.buffer.flush()
     except Exception:
         pass
@@ -488,7 +488,7 @@ def ensure_config(path):
         return False
     if not os.path.isfile(TEMPLATE_PATH):
         raise Failure(
-            "設定ファイルのひな形（%s）が見つかりません。スキルを入れ直してください。" % TEMPLATE_PATH,
+            "設定ファイルのひな形（%s）が見つかりません。このスキルのフォルダを、もう一度まるごと写し直してください。" % TEMPLATE_PATH,
             kind="settings", extra={"config": path},
         )
     folder = os.path.dirname(path)

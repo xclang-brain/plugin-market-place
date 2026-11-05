@@ -33,11 +33,12 @@ import time
 import traceback
 import zlib
 
-SKILL = "deploy"
 # このスキルのフォルダ（scripts/ の親）と、その名前。
 # フォルダの名前を変えて写したときは、変えた後の名前になる。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL_NAME = os.path.basename(SKILL_DIR)
+# 結果の JSON の skill、記録のファイルの名前の頭、途中のようすの頭に使う名前。
+SKILL = SKILL_NAME
 # 設定と記録を置くフォルダの名前（作業フォルダの中に作る）。
 DATA_DIR_NAME = "." + SKILL_NAME
 CONFIG_FILE_NAME = "config.yaml"
@@ -97,7 +98,7 @@ def emit(obj):
 def progress(text):
     """途中のようすを標準エラーに出す。"""
     try:
-        _write_text(sys.stderr, "[deploy] " + text + "\n")
+        _write_text(sys.stderr, "[%s] %s\n" % (SKILL, text))
     except Exception:
         pass
 
@@ -173,7 +174,7 @@ def make_dirs(path):
 
 
 def open_log(workdir):
-    """<作業フォルダ>/<データのフォルダ>/logs/deploy-YYYYmmdd-HHMMSS.log を作る。"""
+    """<作業フォルダ>/<データのフォルダ>/logs/<スキルの名前>-YYYYmmdd-HHMMSS.log を作る。"""
     logs_dir = os.path.join(workdir, DATA_DIR_NAME, LOGS_DIR_NAME)
     try:
         make_dirs(logs_dir)
@@ -1261,7 +1262,7 @@ def _load(workdir, config):
 
 def cmd_check(workdir, config):
     log = open_log(workdir)
-    log.write("deploy check を始めます。設定ファイル：%s" % config)
+    log.write("%s check を始めます。設定ファイル：%s" % (SKILL, config))
     created, added, values, raws, problems = _load(workdir, config)
     summary = {}
     login_error = None
@@ -1321,7 +1322,7 @@ def cmd_check(workdir, config):
 
 def cmd_run(workdir, config):
     log = open_log(workdir)
-    log.write("deploy run を始めます。設定ファイル：%s" % config)
+    log.write("%s run を始めます。設定ファイル：%s" % (SKILL, config))
     created, added, values, raws, problems = _load(workdir, config)
     settings = None
     if values is not None:

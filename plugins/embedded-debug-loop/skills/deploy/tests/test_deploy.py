@@ -287,7 +287,9 @@ class YamlReaderTest(unittest.TestCase):
     def test_template_keys_have_comments(self):
         with open(TEMPLATE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
-        self.assertTrue(lines[0].startswith("# ") and "deploy" in lines[0])
+        self.assertTrue(lines[0].startswith("# ") and "スキルの設定ファイルです" in lines[0], lines[0])
+        # 名前を変えて写すと食い違うので、ひな形にはスキルの名前を書かない
+        self.assertNotIn("deploy", "\n".join(lines))
         for i, line in enumerate(lines):
             if line and not line.startswith("#"):
                 key = line.split(":", 1)[0]
@@ -305,7 +307,7 @@ class YamlReaderTest(unittest.TestCase):
         self.assertIn("# 選べる値：none / crc32 / sum32", text)
 
     def test_template_examples_are_generic(self):
-        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        """例が試験で使う名前（sensor_app など）と同じだと、試験が例に頼って通ってしまう。"""
         with open(TEMPLATE, encoding="utf-8") as fh:
             text = fh.read()
         self.assertNotIn("sensor", text)
@@ -313,7 +315,7 @@ class YamlReaderTest(unittest.TestCase):
         self.assertIn("# 例：/opt/myapp", text)
 
     def test_template_comments_do_not_point_by_position(self):
-        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        """コメントは、項目から離れて（チャットなどで）読まれることがある。「下の」などは、離れて読むと通じない。"""
         with open(TEMPLATE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
         for i, line in enumerate(lines):
@@ -561,7 +563,9 @@ class AddMissingKeysTest(unittest.TestCase):
         for key, lines in blocks:
             self.assertTrue(lines[-1].startswith(key + ":"), key)
             self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
-        self.assertNotIn("# deploy スキルの設定ファイルです。", blocks[0][1])
+        with open(TEMPLATE, "r", encoding="utf-8") as fh:
+            head = fh.readline().rstrip("\n")
+        self.assertNotIn(head, blocks[0][1])
 
     def test_missing_keys_are_appended_with_comments(self):
         ws = Workspace(self)
@@ -697,7 +701,7 @@ class CommandWithoutServerTest(unittest.TestCase):
         self.assertIn(ws.config, data["message"])
         self.assertIn("コメント", data["message"])
         self.assertTrue(os.path.isfile(data["log"]))
-        self.assertTrue(data["log"].startswith(os.path.join(ws.data_dir, "logs", "deploy-")),
+        self.assertTrue(data["log"].startswith(os.path.join(ws.data_dir, "logs", SKILL_NAME + "-")),
                         data["log"])
         self.assertNotIn("Traceback", err)
 
@@ -819,7 +823,7 @@ class FtpServerTest(unittest.TestCase):
             code, data, out, err = ws.run()
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["skill"], "deploy")
+        self.assertEqual(data["skill"], SKILL_NAME)
         self.assertEqual(data["remote_dir"], "/opt/sensor")
         self.assertEqual(data["created_dirs"], ["/opt", "/opt/sensor"])
         on_server = os.path.join(root, "opt", "sensor", "sensor_app")
@@ -1098,7 +1102,7 @@ class SelfContainedTest(unittest.TestCase):
         return place, dest
 
     def run_copy(self, dest, command, workdir):
-        """写したスクリプトを、作業フォルダで（--workdir なしで）動かす。"""
+        """写したスクリプトを、作業フォルダで（--workdir なしで）動かす。(終了コード, JSON, 標準エラー) を返す。"""
         env = dict(os.environ)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         proc = subprocess.run(
@@ -1106,12 +1110,13 @@ class SelfContainedTest(unittest.TestCase):
             cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, timeout=60)
         out = proc.stdout.decode("utf-8")
+        err = proc.stderr.decode("utf-8")
         try:
             data = json.loads(out)
         except ValueError:
             raise AssertionError("標準出力が JSON 1つではありません：%r\n標準エラー：%s"
-                                 % (out, proc.stderr.decode("utf-8")))
-        return proc.returncode, data
+                                 % (out, err))
+        return proc.returncode, data, err
 
     def test_copied_folder_keeps_data_in_its_own_dot_folder(self):
         """写したフォルダの名前のとおりに、作業フォルダの「.<名前>」にだけデータができること。"""
@@ -1124,13 +1129,13 @@ class SelfContainedTest(unittest.TestCase):
                 data_dir = os.path.join(workdir, "." + name)
                 config = os.path.join(data_dir, "config.yaml")
 
-                code, data = self.run_copy(dest, "config-path", workdir)
+                code, data, _err = self.run_copy(dest, "config-path", workdir)
                 self.assertEqual(code, 0, data)
                 self.assertEqual(data["config"], config)
                 self.assertTrue(data["created"])
                 self.assertEqual(data["missing"], ["host", "files", "remote_dir"])
 
-                code, data = self.run_copy(dest, "check", workdir)
+                code, data, err = self.run_copy(dest, "check", workdir)
                 self.assertEqual(code, 2, data)
                 self.assertFalse(data["ok"])
                 self.assertEqual(data["config"], config)
@@ -1138,6 +1143,15 @@ class SelfContainedTest(unittest.TestCase):
                 self.assertTrue(data["log"].startswith(os.path.join(data_dir, "logs") + os.sep),
                                 data["log"])
                 self.assertTrue(os.path.isfile(data["log"]))
+                # 結果の skill、記録のファイルの名前の頭、途中のようすの頭は、写したフォルダの名前
+                self.assertEqual(data["skill"], name)
+                self.assertTrue(os.path.basename(data["log"]).startswith(name + "-"), data["log"])
+                lines = [l for l in err.splitlines() if l]
+                self.assertTrue(lines)
+                for line in lines:
+                    self.assertTrue(line.startswith("[%s] " % name), line)
+                with open(data["log"], encoding="utf-8") as fh:
+                    self.assertIn("%s check を始めます" % name, fh.readline())
 
                 # 作業フォルダには「.<写したフォルダの名前>」だけができる
                 self.assertEqual(os.listdir(workdir), ["." + name])
@@ -1171,6 +1185,12 @@ class SkillFilesTest(unittest.TestCase):
         # 名前を変えて写すときは、フォルダの名前と name: を同じにする
         self.assertIn("name: %s\n" % SKILL_NAME, m.group(1) + "\n")
         self.assertRegex(m.group(1), r"(?m)^description: .+")
+        # 名前を変えて写すと食い違うので、description と見出しにはスキルの名前を書かない
+        desc = re.search(r"(?m)^description: (.+)$", m.group(1)).group(1)
+        self.assertNotRegex(desc, r"/[A-Za-z]")
+        self.assertIn("スラッシュコマンドで", desc)
+        heading = re.search(r"(?m)^# (.+)$", text[m.end():]).group(1)
+        self.assertNotIn("deploy", heading)
         for sub in ("run", "config-path", "check"):
             self.assertIn("scripts/deploy.py " + sub, text)
 

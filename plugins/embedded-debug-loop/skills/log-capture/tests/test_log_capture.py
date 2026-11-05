@@ -166,27 +166,31 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_login_then_command_then_logout(self):
         port = self.start_device(login=True)
-        self.write_config(port=port, login_password="root", commands=["run-app /opt/x"])
+        self.write_config(port=port, login_password="root", commands=["start-app /opt/x"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
         self.assertEqual(data["skill"], SKILL_NAME)
+        # 経過の表示（標準エラー）の頭は、このスキルのフォルダの名前
+        self.assertIn("[%s] ログ：" % SKILL_NAME, self.stderr)
+        for line in self.stderr.splitlines():
+            self.assertTrue(line.startswith("[%s] " % SKILL_NAME), line)
         self.assertTrue(data["logged_in"])
         self.assertTrue(data["logged_out"])
         self.assertEqual(len(data["commands"]), 1)
         c = data["commands"][0]
-        self.assertEqual(c["command"], "run-app /opt/x")
-        self.assertEqual(c["output"], "[DBG] AVG=3")
+        self.assertEqual(c["command"], "start-app /opt/x")
+        self.assertEqual(c["output"], "[DBG] VALUE=3")
         self.assertFalse(c["timed_out"])
         self.assertEqual(c["exit_code"], 0)
         self.assertIn("1 個のコマンドを実行し", data["message"])
         self.assertNotIn("終了コード", data["message"])
         self.assertEqual(self.device.login_attempts, [("root", True)])
-        self.assertEqual(self.device.executed, ["run-app /opt/x", MARKER, "exit"])
+        self.assertEqual(self.device.executed, ["start-app /opt/x", MARKER, "exit"])
         self.assertEqual(self.device.state, "login")  # ログアウトして、ログインの求めに戻った
         log = self.read_log(data)
-        self.assertIn("sensor-board login:", log)
-        self.assertIn("[DBG] AVG=3", log)
+        self.assertIn("myboard login:", log)
+        self.assertIn("[DBG] VALUE=3", log)
         self.assertEqual(data["config"], self.config_path)
 
     def test_default_is_run_when_no_subcommand(self):
@@ -198,12 +202,12 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_console_already_at_shell_prompt(self):
         port = self.start_device(login=False)
-        self.write_config(port=port, commands=["run-app /opt/x"])
+        self.write_config(port=port, commands=["start-app /opt/x"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertFalse(data["logged_in"])
         self.assertNotIn("logged_out", data)
-        self.assertEqual(data["commands"][0]["output"], "[DBG] AVG=3")
+        self.assertEqual(data["commands"][0]["output"], "[DBG] VALUE=3")
         self.assertEqual(self.device.exits, 0)  # 自分でログインしていないので exit は送らない
         self.assertEqual(self.device.login_attempts, [])
 
@@ -226,24 +230,24 @@ class RunLoginAndCommands(CaptureTestCase):
     def test_output_without_echoed_command(self):
         port = self.start_device(login=True)
         self.write_config(port=port, login_password="root", commands=[
-            "run-app /opt/sensor/sensor_app", "cat /var/log/messages", "true", "nosuchcmd -x"])
+            "start-app /opt/myapp/my_app", "cat /var/log/messages", "true", "nosuchcmd -x"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         outs = [c["output"] for c in data["commands"]]
-        self.assertEqual(outs[0], "[DBG] start\n[DBG] AVG=3\nsensor_app: done")
+        self.assertEqual(outs[0], "[DBG] start\n[DBG] VALUE=3\nmy_app: done")
         self.assertEqual(outs[1], "line one\nline two\nline three")
         self.assertEqual(outs[2], "")
         self.assertEqual(outs[3], "-sh: nosuchcmd: not found")
         for c in data["commands"]:
             self.assertNotIn(c["command"], c["output"].split("\n")[0] if c["output"] else "")
-            self.assertNotIn("root@sensor-board", c["output"])
+            self.assertNotIn("root@myboard", c["output"])
 
     def test_long_command_echo_wrapped_by_shell(self):
         port = self.start_device(login=False, wrap=12)
-        self.write_config(port=port, commands=["run-app /opt/sensor/sensor_app"])
+        self.write_config(port=port, commands=["start-app /opt/myapp/my_app"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
-        self.assertEqual(data["commands"][0]["output"], "[DBG] start\n[DBG] AVG=3\nsensor_app: done")
+        self.assertEqual(data["commands"][0]["output"], "[DBG] start\n[DBG] VALUE=3\nmy_app: done")
 
     def test_long_command_echo_with_repeated_char_at_wrap(self):
         # 本物の bash は、折り返した行の頭の1文字を「a\ra」と2回出すことがある
@@ -270,7 +274,7 @@ class RunLoginAndCommands(CaptureTestCase):
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         outs = [c["output"] for c in data["commands"]]
-        self.assertEqual(outs, ["[DBG] AVG=3", "hi", "[DBG] AVG=3"])
+        self.assertEqual(outs, ["[DBG] VALUE=3", "hi", "[DBG] VALUE=3"])
         self.assertFalse(any(c["timed_out"] for c in data["commands"]))
         self.assertEqual([c["exit_code"] for c in data["commands"]], [0, 0, 0])
         self.assertTrue(data["logged_out"])
@@ -279,11 +283,11 @@ class RunLoginAndCommands(CaptureTestCase):
     def test_console_with_frequent_messages(self):
         port = self.start_device(login=True, ticker=0.3)
         self.write_config(port=port, login_password="root",
-                          commands=["run-app /opt/x", "echo hi", "cat /var/log/messages"])
+                          commands=["start-app /opt/x", "echo hi", "cat /var/log/messages"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertEqual(self.device.login_attempts, [("root", True)])
-        expected = [["[DBG] AVG=3"], ["hi"], ["line one", "line two", "line three"]]
+        expected = [["[DBG] VALUE=3"], ["hi"], ["line one", "line two", "line three"]]
         for c, want in zip(data["commands"], expected):
             self.assertFalse(c["timed_out"], c)
             got = [line for line in c["output"].split("\n") if line != KERNEL_LINE]
@@ -307,7 +311,7 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_command_option_overrides_config(self):
         port = self.start_device(login=True)
-        self.write_config(port=port, login_password="root", commands=["run-app /opt/x"])
+        self.write_config(port=port, login_password="root", commands=["start-app /opt/x"])
         code, data = self.capture("run", "--command", "echo hi", "--command", "uname -a")
         self.assertEqual(code, 0, data)
         self.assertEqual([c["command"] for c in data["commands"]], ["echo hi", "uname -a"])
@@ -316,7 +320,7 @@ class RunLoginAndCommands(CaptureTestCase):
         self.assertEqual(self.device.executed, ["echo hi", MARKER, "uname -a", MARKER, "exit"])
         # 設定ファイルは書き換えない
         with open(self.config_path, encoding="utf-8") as f:
-            self.assertIn('commands: ["run-app /opt/x"]', f.read())
+            self.assertIn('commands: ["start-app /opt/x"]', f.read())
 
     def test_command_option_works_with_empty_commands_in_config(self):
         port = self.start_device(login=False)
@@ -327,11 +331,11 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_ansi_escapes_are_removed_from_output(self):
         port = self.start_device(login=True, ansi=True)
-        self.write_config(port=port, login_password="root", commands=["color", "run-app /opt/x"])
+        self.write_config(port=port, login_password="root", commands=["color", "start-app /opt/x"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
-        self.assertEqual(data["commands"][0]["output"], "[DBG] AVG=3\nOK")
-        self.assertEqual(data["commands"][1]["output"], "[DBG] AVG=3")
+        self.assertEqual(data["commands"][0]["output"], "[DBG] VALUE=3\nOK")
+        self.assertEqual(data["commands"][1]["output"], "[DBG] VALUE=3")
         for c in data["commands"]:
             self.assertNotIn("\x1b", c["output"])
             self.assertNotIn("\r", c["output"])
@@ -341,7 +345,7 @@ class RunLoginAndCommands(CaptureTestCase):
 
     def test_custom_prompt_regex(self):
         port = self.start_device(login=False)
-        self.write_config(port=port, prompt="sensor-board:~# $", commands=["echo hi"])
+        self.write_config(port=port, prompt="myboard:~# $", commands=["echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertEqual(data["commands"][0]["output"], "hi")
@@ -415,32 +419,32 @@ class RunExitCodes(CaptureTestCase):
     def test_success_is_zero(self):
         port = self.start_device(login=True)
         self.write_config(port=port, login_password="root",
-                          commands=["run-app /opt/sensor/sensor_app", "true"])
+                          commands=["start-app /opt/myapp/my_app", "true"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
         self.assertEqual([c["exit_code"] for c in data["commands"]], [0, 0])
-        self.assertEqual(data["commands"][0]["output"], "[DBG] start\n[DBG] AVG=3\nsensor_app: done")
+        self.assertEqual(data["commands"][0]["output"], "[DBG] start\n[DBG] VALUE=3\nmy_app: done")
         self.assertEqual(data["commands"][1]["output"], "")
         self.assertNotIn("終了コード", data["message"])
         self.assert_no_marker(data)
         # 各コマンドの後に、終了コードを調べるコマンドを1つずつ送った
         self.assertEqual(self.device.executed,
-                         ["run-app /opt/sensor/sensor_app", MARKER, "true", MARKER, "exit"])
+                         ["start-app /opt/myapp/my_app", MARKER, "true", MARKER, "exit"])
 
     def test_failure_is_reported_in_message(self):
         port = self.start_device(login=True)
-        self.write_config(port=port, login_password="root", commands=["run-app /opt/nosum/sensor_app"])
+        self.write_config(port=port, login_password="root", commands=["start-app /opt/noconf/my_app"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)  # 取ること自体はできた
         self.assertTrue(data["ok"])
         c = data["commands"][0]
         self.assertEqual(c["exit_code"], 1)
         self.assertFalse(c["timed_out"])
-        self.assertEqual(c["output"], "run-app: /opt/nosum/sensor_app: checksum file not found")
+        self.assertEqual(c["output"], "start-app: /opt/noconf/my_app: config file not found")
         self.assertIn(
-            "コマンド「run-app /opt/nosum/sensor_app」は終了コード 1 で終わりました"
-            "（最後の行：run-app: /opt/nosum/sensor_app: checksum file not found）。",
+            "コマンド「start-app /opt/noconf/my_app」は終了コード 1 で終わりました"
+            "（最後の行：start-app: /opt/noconf/my_app: config file not found）。",
             data["message"])
         self.assertTrue(data["message"].startswith("シリアルポート %s で 1 個のコマンドを実行し" % port))
         self.assert_no_marker(data)
@@ -448,23 +452,23 @@ class RunExitCodes(CaptureTestCase):
     def test_each_failed_command_is_named(self):
         port = self.start_device(login=False)
         self.write_config(port=port, commands=[
-            "false", "echo hi", "nosuchcmd -x", "run-app /opt/denied/sensor_app"])
+            "false", "echo hi", "nosuchcmd -x", "start-app /opt/denied/my_app"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertEqual([c["exit_code"] for c in data["commands"]], [1, 0, 127, 126])
         msg = data["message"]
         self.assertIn("コマンド「false」は終了コード 1 で終わりました（出力はありませんでした）。", msg)
         self.assertIn("コマンド「nosuchcmd -x」は終了コード 127 で終わりました（最後の行：-sh: nosuchcmd: not found）。", msg)
-        self.assertIn("コマンド「run-app /opt/denied/sensor_app」は終了コード 126 で終わりました"
-                      "（最後の行：run-app: /opt/denied/sensor_app: Permission denied）。", msg)
+        self.assertIn("コマンド「start-app /opt/denied/my_app」は終了コード 126 で終わりました"
+                      "（最後の行：start-app: /opt/denied/my_app: Permission denied）。", msg)
         self.assertNotIn("「echo hi」", msg)
         self.assertEqual(data["commands"][3]["output"],
-                         "[DBG] start\nrun-app: /opt/denied/sensor_app: Permission denied")
+                         "[DBG] start\nstart-app: /opt/denied/my_app: Permission denied")
         self.assert_no_marker(data)
 
     def test_timeout_gives_null(self):
         port = self.start_device(login=False)
-        self.write_config(port=port, command_timeout_seconds=1, commands=["run-app /opt/hang", "false"])
+        self.write_config(port=port, command_timeout_seconds=1, commands=["start-app /opt/hang", "false"])
         code, data = self.capture("run")
         self.assertEqual(code, 1, data)
         first, second = data["commands"]
@@ -473,9 +477,9 @@ class RunExitCodes(CaptureTestCase):
         self.assertEqual(second["exit_code"], 1)  # Ctrl-C の後のコマンドは、ふつうに読む
         self.assertIn("Ctrl-C で止めました", data["message"])
         self.assertIn("コマンド「false」は終了コード 1 で終わりました", data["message"])
-        self.assertNotIn("「run-app /opt/hang」は終了コード", data["message"])
+        self.assertNotIn("「start-app /opt/hang」は終了コード", data["message"])
         # 止めたコマンドの後には、終了コードを調べるコマンドを送らない
-        self.assertEqual(self.device.executed, ["run-app /opt/hang", "false", MARKER])
+        self.assertEqual(self.device.executed, ["start-app /opt/hang", "false", MARKER])
         self.assert_no_marker(data)
 
     def test_marker_lines_are_removed_from_output(self):
@@ -501,24 +505,24 @@ class RunExitCodes(CaptureTestCase):
     def test_log_is_the_transcript_without_marker(self):
         port = self.start_device(login=True)
         self.write_config(port=port, login_password="root",
-                          commands=["run-app /opt/sensor/sensor_app", "false", "nosuchcmd"])
+                          commands=["start-app /opt/myapp/my_app", "false", "nosuchcmd"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assert_no_marker(data)
         lines = self.transcript(data)
-        self.assertIn("sensor-board login: root", lines)
+        self.assertIn("myboard login: root", lines)
         self.assertIn("Last login: Tue Nov  4 12:00:00 on ttyS0", lines)
-        first = lines.index("root@sensor-board:~# run-app /opt/sensor/sensor_app")
+        first = lines.index("root@myboard:~# start-app /opt/myapp/my_app")
         self.assertEqual(lines[first:], [
-            "root@sensor-board:~# run-app /opt/sensor/sensor_app",
-            "[DBG] start", "[DBG] AVG=3", "sensor_app: done",
+            "root@myboard:~# start-app /opt/myapp/my_app",
+            "[DBG] start", "[DBG] VALUE=3", "my_app: done",
             "（終了コード：0）",
-            "root@sensor-board:~# false",
+            "root@myboard:~# false",
             "（終了コード：1）",
-            "root@sensor-board:~# nosuchcmd",
+            "root@myboard:~# nosuchcmd",
             "-sh: nosuchcmd: not found",
             "（終了コード：127）",
-            "root@sensor-board:~# exit", "logout", "", "sensor-board login: ",
+            "root@myboard:~# exit", "logout", "", "myboard login: ",
             "",
         ])
         # 印のコマンドは、機器には送っている（終了コードを読むため）
@@ -532,24 +536,24 @@ class RunExitCodes(CaptureTestCase):
         self.assert_no_marker(data)
         with open(data["log"], encoding="utf-8", newline="") as f:
             log = f.read()
-        self.assertIn("\x1b[1;31m[DBG]\x1b[0m AVG=\x1b[33m3\x1b[0m\r\n\x1b[32mOK\x1b[0m\r\n（終了コード：0）\n", log)
+        self.assertIn("\x1b[1;31m[DBG]\x1b[0m VALUE=\x1b[33m3\x1b[0m\r\n\x1b[32mOK\x1b[0m\r\n（終了コード：0）\n", log)
         # 印を送った行（その前のプロンプトを含む）は、行ごと除く
         self.assertIn("# false\r\n（終了コード：1）\n", log)
         # ほかのプロンプト（color の前、false の前、最後）は残る
         self.assertEqual(log.count("\x1b[?2004h"), 3)
-        self.assertEqual(log.count("\x1b[01;32mroot@sensor-board\x1b[00m:\x1b[01;34m~\x1b[00m# false\r\n"), 1)
+        self.assertEqual(log.count("\x1b[01;32mroot@myboard\x1b[00m:\x1b[01;34m~\x1b[00m# false\r\n"), 1)
 
     def test_ansi_prompt_that_shows_the_status(self):
         # 直前の終了コードをプロンプトに出すシェル（色つき）。コマンドが失敗すると、プロンプトの形が変わる
         port = self.start_device(login=True, ansi=True, status_prompt=True)
         self.write_config(port=port, login_password="root",
-                          commands=["run-app /opt/nosum/sensor_app", "color", "nosuchcmd", "echo hi"])
+                          commands=["start-app /opt/noconf/my_app", "color", "nosuchcmd", "echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertEqual([c["exit_code"] for c in data["commands"]], [1, 0, 127, 0])
         self.assertEqual([c["output"] for c in data["commands"]], [
-            "run-app: /opt/nosum/sensor_app: checksum file not found",
-            "[DBG] AVG=3\nOK",
+            "start-app: /opt/noconf/my_app: config file not found",
+            "[DBG] VALUE=3\nOK",
             "-sh: nosuchcmd: not found",
             "hi",
         ])
@@ -559,27 +563,27 @@ class RunExitCodes(CaptureTestCase):
     def test_prompt_on_two_lines(self):
         # 2行のプロンプト。上の行が出力に混ざらず、「最後の行」も正しく引く
         port = self.start_device(login=True, status_prompt=True,
-                                 prompt_text="\n[root@sensor-board ~]\n# ")
+                                 prompt_text="\n[root@myboard ~]\n# ")
         self.write_config(port=port, login_password="root",
-                          commands=["run-app /opt/nosum/sensor_app", "echo hi", "false", "true"])
+                          commands=["start-app /opt/noconf/my_app", "echo hi", "false", "true"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertEqual([c["exit_code"] for c in data["commands"]], [1, 0, 1, 0])
         self.assertEqual([c["output"] for c in data["commands"]], [
-            "run-app: /opt/nosum/sensor_app: checksum file not found", "hi", "", ""])
-        self.assertIn("（最後の行：run-app: /opt/nosum/sensor_app: checksum file not found）", data["message"])
+            "start-app: /opt/noconf/my_app: config file not found", "hi", "", ""])
+        self.assertIn("（最後の行：start-app: /opt/noconf/my_app: config file not found）", data["message"])
         self.assertIn("コマンド「false」は終了コード 1 で終わりました（出力はありませんでした）。", data["message"])
         self.assert_no_marker(data)
 
     def test_shell_without_exit_status(self):
         # $? が使えないシェル：終了コードは null。待ちすぎず、印の行も出力に混ざらない
         port = self.start_device(login=False, dollar_q=False)
-        self.write_config(port=port, commands=["run-app /opt/nosum/sensor_app", "echo hi"])
+        self.write_config(port=port, commands=["start-app /opt/noconf/my_app", "echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 0, data)
         self.assertEqual([c["exit_code"] for c in data["commands"]], [None, None])
         self.assertEqual([c["output"] for c in data["commands"]],
-                         ["run-app: /opt/nosum/sensor_app: checksum file not found", "hi"])
+                         ["start-app: /opt/noconf/my_app: config file not found", "hi"])
         self.assertNotIn("終了コード", data["message"])
         for c in data["commands"]:
             self.assertNotIn("fish", c["output"])
@@ -611,7 +615,7 @@ class RunFailures(CaptureTestCase):
     def test_command_timeout_then_ctrl_c(self):
         port = self.start_device(login=True)
         self.write_config(port=port, login_password="root", command_timeout_seconds=1,
-                          commands=["run-app /opt/hang", "echo hi"])
+                          commands=["start-app /opt/hang", "echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 1, data)
         self.assertFalse(data["ok"])
@@ -619,27 +623,27 @@ class RunFailures(CaptureTestCase):
         self.assertTrue(first["timed_out"])
         self.assertIsNone(first["exit_code"])  # Ctrl-C で止めたときは読まない
         self.assertIn("[DBG] start", first["output"])
-        self.assertNotIn("run-app /opt/hang", first["output"])
+        self.assertNotIn("start-app /opt/hang", first["output"])
         self.assertFalse(second["timed_out"])
         self.assertEqual(second["output"], "hi")  # Ctrl-C の後も続けられた
         self.assertEqual(second["exit_code"], 0)
-        self.assertEqual(self.device.executed, ["run-app /opt/hang", "echo hi", MARKER, "exit"])
+        self.assertEqual(self.device.executed, ["start-app /opt/hang", "echo hi", MARKER, "exit"])
         self.assertEqual(self.device.interrupts, 1)
-        self.assertIn("run-app /opt/hang", data["message"])
+        self.assertIn("start-app /opt/hang", data["message"])
         self.assertIn("Ctrl-C", data["message"])
         self.assertEqual(self.device.exits, 1)  # ログアウトもした
         # ログ：止めたコマンドの後は「読めませんでした」。印は残らない
         lines = self.transcript(data)
-        first = lines.index("root@sensor-board:~# run-app /opt/hang")
+        first = lines.index("root@myboard:~# start-app /opt/hang")
         self.assertEqual(lines[first:first + 7], [
-            "root@sensor-board:~# run-app /opt/hang", "[DBG] start", "^C",
+            "root@myboard:~# start-app /opt/hang", "[DBG] start", "^C",
             "（終了コード：読めませんでした）",
-            "root@sensor-board:~# echo hi", "hi", "（終了コード：0）"])
+            "root@myboard:~# echo hi", "hi", "（終了コード：0）"])
 
     def test_prompt_never_comes_back(self):
         port = self.start_device(login=True)
         self.write_config(port=port, login_password="root", command_timeout_seconds=1,
-                          commands=["run-app /opt/stuck", "echo hi"])
+                          commands=["start-app /opt/stuck", "echo hi"])
         code, data = self.capture("run")
         self.assertEqual(code, 1, data)
         self.assertEqual(len(data["commands"]), 1)
@@ -735,7 +739,7 @@ class RunListen(CaptureTestCase):
 
     def test_listen_only_option(self):
         port = self.start_device(login=True, ticker=0.2)
-        self.write_config(port=port, login_password="root", commands=["run-app /opt/x"])
+        self.write_config(port=port, login_password="root", commands=["start-app /opt/x"])
         code, data = self.capture("run", "--listen-only", "1.2")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
@@ -870,7 +874,9 @@ class Settings(CaptureTestCase):
         for key, lines in blocks:
             self.assertTrue(lines[-1].startswith(key + ":"), key)
             self.assertTrue(all(l.startswith("#") for l in lines[:-1]), key)
-        self.assertNotIn("# log-capture スキルの設定ファイルです。", blocks[0][1])
+        with open(TEMPLATE, encoding="utf-8") as f:
+            head = f.readline().rstrip("\n")   # ファイルの頭の説明
+        self.assertNotIn(head, blocks[0][1])
 
     def test_missing_keys_are_appended_with_comments(self):
         before = self.old_config("listen_seconds", "logout", port="/dev/ttyUSB9")
@@ -1021,7 +1027,7 @@ class Check(CaptureTestCase):
 
     def test_check_with_login(self):
         port = self.start_device(login=True)
-        self.write_config(port=port, login_password="root", commands=["run-app /opt/x"])
+        self.write_config(port=port, login_password="root", commands=["start-app /opt/x"])
         code, data = self.capture("check")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["ok"])
@@ -1034,7 +1040,7 @@ class Check(CaptureTestCase):
         self.assertEqual(self.device.executed, ["exit"])  # コマンドは実行しない
         self.assertEqual(self.device.state, "login")
         log = self.assert_log_has_no_marker(data)
-        self.assertIn("sensor-board login: root", log)
+        self.assertIn("myboard login: root", log)
         self.assertNotIn("（終了コード", log)
 
     def test_check_shell_without_login(self):
@@ -1092,13 +1098,13 @@ class Parts(unittest.TestCase):
     def test_remove_echo(self):
         f = self.m.remove_echo
         self.assertEqual(f(["ls -l", "a", "b"], "ls -l"), ["a", "b"])
-        self.assertEqual(f(["run-app /opt/sen ", "sor_app", "out"], "run-app /opt/sensor_app"), ["out"])
+        self.assertEqual(f(["start-app /opt/my_ ", "app", "out"], "start-app /opt/my_app"), ["out"])
         self.assertEqual(f(["out"], "ls"), ["out"])  # 折り返しがないときは、そのまま
-        # 折り返しで1文字が2回出たとき（「…sen\rnsor…」の \r を除いたもの）
-        self.assertEqual(f(["run-app /opt/sennsor_app", "out"], "run-app /opt/sensor_app"), ["out"])
+        # 折り返しで1文字が2回出たとき（「…my_a\rapp…」の \r を除いたもの）
+        self.assertEqual(f(["start-app /opt/my_aapp", "out"], "start-app /opt/my_app"), ["out"])
         # コマンドと違う行は、取り除かない
-        error = ["run-app: /opt/sensor/sensor_app: Permission denied"]
-        self.assertEqual(f(error, "run-app /opt/sensor/sensor_app"), error)
+        error = ["start-app: /opt/myapp/my_app: Permission denied"]
+        self.assertEqual(f(error, "start-app /opt/myapp/my_app"), error)
 
     def test_find_exit_code(self):
         f = self.m.find_exit_code
@@ -1113,8 +1119,8 @@ class Parts(unittest.TestCase):
         self.assertIsNone(f(""))
 
     def test_drop_marker_lines(self):
-        lines = ["__LOGCAP_RC=0", "root@b:~#  echo __LOGCAP_RC=$?", "[DBG] AVG=3", "done"]
-        self.assertEqual(self.m.drop_marker_lines(lines), ["[DBG] AVG=3", "done"])
+        lines = ["__LOGCAP_RC=0", "root@b:~#  echo __LOGCAP_RC=$?", "[DBG] VALUE=3", "done"]
+        self.assertEqual(self.m.drop_marker_lines(lines), ["[DBG] VALUE=3", "done"])
 
     def test_strip_marker(self):
         f = self.m.strip_marker
@@ -1124,7 +1130,7 @@ class Parts(unittest.TestCase):
         # 機器のメッセージと同じ行に来たら、メッセージは残す
         self.assertEqual(f("[  1.0] usb 1-1: x__LOGCAP_RC=1\r\n"), ("[  1.0] usb 1-1: x\r\n", True))
         self.assertEqual(f("echo __LOGCAP_RC=$?\n"), ("", False))
-        self.assertEqual(f("[DBG] AVG=3\r\n"), ("[DBG] AVG=3\r\n", False))
+        self.assertEqual(f("[DBG] VALUE=3\r\n"), ("[DBG] VALUE=3\r\n", False))
         self.assertEqual(f("fish: $? is not the exit status.\n"), ("fish: $? is not the exit status.\n", False))
 
     def log_file(self):
@@ -1198,9 +1204,9 @@ class Parts(unittest.TestCase):
         self.assertEqual(f([{"command": "a", "output": "x", "exit_code": 0},
                             {"command": "b", "output": "x", "exit_code": None}]), "")
         self.assertEqual(
-            f([{"command": "run-app /opt/x", "output": "start\nrun-app: /opt/x: checksum file not found\n",
+            f([{"command": "start-app /opt/x", "output": "start\nstart-app: /opt/x: config file not found\n",
                 "exit_code": 1}]),
-            "コマンド「run-app /opt/x」は終了コード 1 で終わりました（最後の行：run-app: /opt/x: checksum file not found）。")
+            "コマンド「start-app /opt/x」は終了コード 1 で終わりました（最後の行：start-app: /opt/x: config file not found）。")
         self.assertEqual(f([{"command": "false", "output": "", "exit_code": 1}]),
                          "コマンド「false」は終了コード 1 で終わりました（出力はありませんでした）。")
         long_line = "x" * 500
@@ -1239,7 +1245,7 @@ class Parts(unittest.TestCase):
                 "prompt: '\\$ $'\n"
                 "login_user: 'it''s'\n"
                 "commands:\n"
-                "  - run-app /opt/x\n"
+                "  - start-app /opt/x\n"
                 "  # 間のコメント\n"
                 "  - \"echo \\\"a\\\"\"\n"
                 "listen_seconds: 1.5\n"
@@ -1252,7 +1258,7 @@ class Parts(unittest.TestCase):
         self.assertEqual(cfg["baud"], 9600)
         self.assertEqual(cfg["prompt"], "\\$ $")
         self.assertEqual(cfg["login_user"], "it's")
-        self.assertEqual(cfg["commands"], ["run-app /opt/x", 'echo "a"'])
+        self.assertEqual(cfg["commands"], ["start-app /opt/x", 'echo "a"'])
         self.assertEqual(cfg["listen_seconds"], 1.5)
         self.assertIs(cfg["logout"], False)
         self.assertIsNone(cfg["login_password"])
@@ -1319,14 +1325,15 @@ class Parts(unittest.TestCase):
         self.assertIn("この PC で見つかったシリアルポートは、/dev/ttyUSB0、/dev/ttyUSB1 です。", msg)
 
     def test_template_examples_are_generic(self):
-        """例が試験のプロジェクトの名前だと、写すだけで埋まってしまう。"""
+        """例は一般の名前にする。特定のプロジェクトの名前だと、写すだけで埋まってしまう。"""
         with open(TEMPLATE, encoding="utf-8") as f:
             text = f.read()
         self.assertNotIn("sensor", text)
         self.assertIn('# 例：["/opt/myapp/my_app"]', text)
 
     def test_template_comments_do_not_point_by_position(self):
-        """コメントは、設定の対話でそのまま質問の文になる。「下の」などはチャットでは通じない。"""
+        """コメントは、ファイルを開けない相手（チャットなど）にも、そのまま読まれることがある。
+        「下の」などの位置の言葉や「このスキル」は、そこでは通じない。"""
         with open(TEMPLATE, encoding="utf-8") as f:
             lines = f.read().splitlines()
         for i, line in enumerate(lines):
@@ -1363,11 +1370,16 @@ OUTSIDE = os.pardir + "/"
 # 写すときに付いてくることがある、ごみ
 JUNK = ("__pycache__", "*.pyc")
 
+# スキルのものではないフォルダ。利用者が git で管理すると .git ができ、
+# スキルのフォルダを作業フォルダにして動かすと、設定とログのフォルダができる
+NOT_OURS = (".git", DATA_DIR_NAME)
+
 
 def skill_files():
-    """スキルのフォルダの中のファイル（__pycache__ などのごみは除く）。"""
+    """スキルのフォルダの中のファイル（__pycache__ などのごみと、NOT_OURS は除く）。"""
     for folder, dirs, files in os.walk(SKILL_DIR):
-        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        dirs[:] = sorted(d for d in dirs
+                         if d != "__pycache__" and not (folder == SKILL_DIR and d in NOT_OURS))
         for name in sorted(files):
             if not name.endswith(".pyc"):
                 yield os.path.join(folder, name)
@@ -1445,7 +1457,7 @@ class SelfContained(unittest.TestCase):
         self.assertIn("`exit_code` という項目名は見せません", section)
 
     def test_skill_md_marks_guesses_as_guesses(self):
-        """結果にない原因を、前のやり取りから推測して事実のように書いた（S1-r3）。"""
+        """結果にない原因を、前のやり取りから推測して、事実のように書かないこと。"""
         with open(SKILL_MD, encoding="utf-8") as f:
             text = f.read()
         section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
@@ -1500,13 +1512,17 @@ class SelfContained(unittest.TestCase):
         for key in TEMPLATE_KEYS:
             self.assertIn("`%s`" % key, text, key)
         for word in ("/skills reload", ".github/skills/", "~/.copilot/skills/", "config.yaml",
-                     "python3 -m unittest discover -s tests", "Python 3.8"):
+                     "python3 -m unittest discover -s tests", "python3 -B -m unittest discover -s tests",
+                     "Python 3.8"):
             self.assertIn(word, text, word)
 
     def test_template_comments(self):
         with open(TEMPLATE, encoding="utf-8") as f:
             lines = f.read().splitlines()
-        self.assertTrue(lines[0].startswith("# log-capture"))
+        # 頭の説明。名前を変えて写しても食い違わないように、スキルの名前は書かない
+        self.assertTrue(lines[0].startswith("# "), lines[0])
+        self.assertIn("スキルの設定ファイルです。", lines[0])
+        self.assertNotIn(SKILL_NAME, lines[0])
         keys = []
         for i, line in enumerate(lines):
             m = re.match(r"^([a-z_]+):", line)
@@ -1541,7 +1557,7 @@ class CopiedFolder(unittest.TestCase):
         for folder in (skills, work, home):
             os.makedirs(folder)
         copy = os.path.join(skills, name)
-        shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns(*JUNK))
+        shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns(*(JUNK + NOT_OURS)))
         copied = sorted(os.path.relpath(os.path.join(d, f), copy)
                         for d, _, fs in os.walk(copy) for f in fs)
         script = os.path.join(copy, "scripts", "capture.py")
@@ -1552,7 +1568,11 @@ class CopiedFolder(unittest.TestCase):
             p = subprocess.run([sys.executable, script] + list(args), cwd=work, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             out = p.stdout.decode("utf-8")
-            self.assertNotIn("Traceback", out + p.stderr.decode("utf-8"))
+            err = p.stderr.decode("utf-8")
+            self.assertNotIn("Traceback", out + err)
+            # 経過の表示の頭は、写したフォルダの名前
+            for line in err.splitlines():
+                self.assertTrue(line.startswith("[%s] " % name), line)
             return p.returncode, json.loads(out)
 
         data_dir = os.path.join(work, "." + name)
