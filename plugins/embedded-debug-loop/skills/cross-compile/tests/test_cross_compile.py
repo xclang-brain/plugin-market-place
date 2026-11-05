@@ -507,6 +507,28 @@ class LinePickTest(unittest.TestCase):
         lines = ["x.c:{}: error: bad".format(i) for i in range(50)]
         self.assertEqual(len(BUILD.error_lines_of(lines)), 20)
 
+    def test_command_not_found_in_cmd(self):
+        """cmd /c は、コマンドが見つからなくても終了コード 1 で終わる。最後の出力の文で見分ける。"""
+        found = BUILD.command_not_found
+        english = ["'tool-xyz' is not recognized as an internal or external command,",
+                   "operable program or batch file."]
+        japanese = ["'tool-xyz' は、内部コマンドまたは外部コマンド、",
+                    "操作可能なプログラムまたはバッチ ファイルとして認識されていません。"]
+        for said in (english, japanese):
+            self.assertTrue(found("cmd", 1, ["building"] + said))
+            self.assertTrue(found("cmd", 9009, said))
+            self.assertFalse(found("cmd", 2, said))  # ほかの終了コードは、ビルドの失敗
+            self.assertFalse(found("cmd", 1, said + ["make: *** [all] Error 1"]))  # 後に続く出力がある
+        self.assertFalse(found("cmd", 1, ["app.c: No such file or directory"]))
+        self.assertTrue(found("bash", 127, []))
+        self.assertTrue(found("powershell", 127, []))
+        self.assertFalse(found("bash", 1, english))
+        s = {"shell": "cmd", "build_command": "tool-xyz all", "clean_command": "",
+             "timeout_seconds": 60}
+        msg = BUILD.failure_message("build", 1, s, [], english)
+        self.assertIn("コマンドが見つかりません", msg)
+        self.assertIn("tool-xyz", msg)
+
     def test_elf_arch(self):
         tmp = tempfile.mkdtemp(prefix="cc-elf-")
         self.addCleanup(shutil.rmtree, tmp, True)

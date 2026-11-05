@@ -1909,6 +1909,21 @@ def last_line_with(lines, words):
 
 NOT_FOUND_WORDS = ("not found", "見つかりません", "No such file", "is not recognized",
                    "認識されていません", "認識されません")
+# cmd の「コマンドが見つからない」の文（英語と日本語の Windows）。2行に分かれて出る
+CMD_NOT_FOUND_WORDS = ("is not recognized as an internal or external command",
+                       "operable program or batch file", "内部コマンドまたは外部コマンド",
+                       "バッチ ファイルとして認識されていません")
+
+
+def command_not_found(shell, rc, said):
+    """コマンドが見つからずに終わったか。said は、空でない出力の行。
+    cmd /c は、コマンドが見つからないとき、%ERRORLEVEL% は 9009 でも、終了コード 1 で終わる。
+    そのため cmd では、終了コード 1 で、最後の出力が「見つからない」の文のときも、見つからないとみなす。"""
+    if rc in NOT_FOUND_CODES.get(shell, ()):
+        return True
+    if shell == "cmd" and rc == 1 and said:
+        return any(w in said[-1] for w in CMD_NOT_FOUND_WORDS)
+    return False
 
 
 def failure_message(step, rc, s, errors, lines):
@@ -1917,7 +1932,7 @@ def failure_message(step, rc, s, errors, lines):
         return load_failure(s, rc, "\n".join(said), s["timeout_seconds"], False)
     what = "片付けのコマンド" if step == "clean" else "ビルドのコマンド"
     command = short(s["clean_command" if step == "clean" else "build_command"], 80)
-    if rc in NOT_FOUND_CODES.get(s["shell"], ()):
+    if command_not_found(s["shell"], rc, said):
         line = last_line_with(lines, NOT_FOUND_WORDS)
         return ("{}（{}）の中で、コマンドが見つかりません。「{}」。"
                 "PC に入っているか、SDK を読み込めているかを確かめてください。").format(
