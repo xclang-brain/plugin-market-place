@@ -5,7 +5,8 @@
   python3 tests/run.py -v     すべての記録を出す
 
 動かすもの：
-- tests/skills/<スキル>/ と tests/independence/ の Python の試験（unittest。フォルダごとに別に動かす）
+- 各スキルのフォルダの中の試験（skills/<スキル>/tests/。スキルのフォルダで動かす。そのフォルダだけで動く形）
+- tests/independence/ の独立性の試験（unittest）
 - tests/extension/*.test.mjs（node --test）
 
 すべて合格なら終了コード 0、1つでも不合格や動かせない試験があれば 1 を返す。
@@ -26,16 +27,17 @@ TAIL_LINES = 80
 
 
 def python_groups():
-    """（名前, フォルダ）の並び。スキルのフォルダごとと、独立性のフォルダ"""
+    """（名前, 動かすフォルダ, 試験のフォルダ）の並び。スキルごとと、独立性"""
     groups = []
-    skills = TESTS / "skills"
+    skills = ROOT / "skills"
     if skills.is_dir():
-        for folder in sorted(p for p in skills.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))):
-            if any(folder.rglob("test_*.py")):
-                groups.append(("スキル {} の試験".format(folder.name), folder))
+        for skill in sorted(p for p in skills.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))):
+            if any((skill / "tests").glob("test_*.py")):
+                # スキルの README に書いた動かし方と同じ（スキルのフォルダで discover -s tests）
+                groups.append(("スキル {} の試験".format(skill.name), skill, "tests"))
     independence = TESTS / "independence"
     if independence.is_dir() and any(independence.rglob("test_*.py")):
-        groups.append(("独立性の試験", independence))
+        groups.append(("独立性の試験", ROOT, str(independence)))
     return groups
 
 
@@ -50,9 +52,8 @@ def run(command, cwd):
         return None, out + "\n{} 秒たっても終わらないため、止めました。".format(TIMEOUT_SECONDS)
 
 
-def run_python(name, folder):
-    code, out = run([sys.executable, "-m", "unittest", "discover", "-s", str(folder), "-t", str(folder),
-                     "-p", "test_*.py", "-v"], ROOT)
+def run_python(name, cwd, start):
+    code, out = run([sys.executable, "-m", "unittest", "discover", "-s", start, "-p", "test_*.py", "-v"], cwd)
     m = re.search(r"^Ran (\d+) tests?", out, re.M)
     total = int(m.group(1)) if m else 0
     bad = 0
@@ -89,13 +90,13 @@ def run_node():
 
 def main(argv):
     verbose = "-v" in argv or "--verbose" in argv
-    results = [run_python(name, folder) for name, folder in python_groups()]
+    results = [run_python(name, cwd, start) for name, cwd, start in python_groups()]
     node = run_node()
     if node is not None:
         results.append(node)
 
     if not results:
-        print("試験が見つかりません。tests/ の下を確かめてください。")
+        print("試験が見つかりません。skills/<スキル>/tests/ と tests/ の下を確かめてください。")
         return 1
 
     for r in results:

@@ -41,7 +41,7 @@ flowchart TB
         SETUP ~~~ CC ~~~ DEP ~~~ LOG
     end
 
-    CFG[("［設定ファイル（データ）］<br/>.embedded-debug-loop/スキル名.yaml<br/>スキルごとの設定（説明のコメントつき）")]
+    CFG[("［設定ファイル（データ）］<br/>.スキル名/config.yaml<br/>スキルごとの設定（説明のコメントつき）")]
     DEV[["［プラグインの外］<br/>組み込み機器（Linux）<br/>FTP サーバー・シリアルコンソール"]]
 
     L3 -- "ふつうの文で頼む（準備の確認 / 1回の試行）<br/>作業エージェントの名前は設定で選ぶ → 差し替えられる" --> L2
@@ -71,11 +71,11 @@ flowchart TB
 | 統括エージェント | カスタムエージェント | `com.github.copilot/agents/orchestrator.agent.md` | `/agent` で選ぶメインのエージェント。`tools`：`agent`（`task` で作業エージェントと検証エージェントを呼ぶ）・`read`・`search`・`ask_user`・エクステンションのツール6つ | PDS の進め方。作業エージェントの名前は設定から受け取る |
 | 検証エージェント | カスタムエージェント | `com.github.copilot/agents/verifier.agent.md` | 統括エージェントから `task` で呼ばれるサブエージェント。`tools`：`read`・`search` | 合格の条件で確かめること |
 | 組み込み機器の作業エージェント | カスタムエージェント | `com.github.copilot/agents/device-worker.agent.md` | `/agent` で選ぶメインのエージェント、または統括エージェントから `task` で呼ばれるサブエージェント。`tools`：`read`・`edit`・`search`・`execute`・`skill`（スキルを読む）・`ask_user` | スキルの名前と役割（「使うスキル」の表） |
-| setup | スキル（`SKILL.md` ＋ Python のスクリプト） | `skills/setup/`（`scripts/config_tool.py`） | スラッシュコマンド `/embedded-debug-loop:setup`、または `skill` ツール。質問は `ask_user` | 自分のことだけ（YAML のコメントだけを頼りにする） |
-| cross-compile | スキル（`SKILL.md` ＋ Python のスクリプト ＋ 設定のひな形） | `skills/cross-compile/`（`scripts/build.py`、`config-template.yaml`） | スラッシュコマンド `/embedded-debug-loop:cross-compile`、または `skill` ツール。スクリプトはシェルのツールで動かす | 自分のことだけ |
-| deploy | スキル（同上） | `skills/deploy/`（`scripts/deploy.py`、`config-template.yaml`） | スラッシュコマンド `/embedded-debug-loop:deploy`、または `skill` ツール | 自分のことだけ |
-| log-capture | スキル（同上） | `skills/log-capture/`（`scripts/capture.py`、`config-template.yaml`） | スラッシュコマンド `/embedded-debug-loop:log-capture`、または `skill` ツール | 自分のことだけ |
-| 設定ファイル | ハーネスの部品ではない（利用者のデータ） | 作業フォルダの `.embedded-debug-loop/<スキル名>.yaml` | — | — |
+| setup | スキル（`SKILL.md` ＋ Python のスクリプト ＋ 使い方の `README.md` ＋ 試験） | `skills/setup/`（`scripts/config_tool.py`、`tests/`） | スラッシュコマンド `/embedded-debug-loop:setup`（フォルダだけを写したときは `/setup`）、または `skill` ツール。質問は `ask_user` | 自分のことだけ（YAML のコメントだけを頼りにする） |
+| cross-compile | スキル（`SKILL.md` ＋ Python のスクリプト ＋ 設定のひな形 ＋ 使い方の `README.md` ＋ 試験） | `skills/cross-compile/`（`scripts/build.py`、`config-template.yaml`、`tests/`） | スラッシュコマンド `/embedded-debug-loop:cross-compile`（フォルダだけを写したときは `/cross-compile`）、または `skill` ツール。スクリプトはシェルのツールで動かす | 自分のことだけ |
+| deploy | スキル（同上） | `skills/deploy/`（`scripts/deploy.py`、`config-template.yaml`、`tests/`） | スラッシュコマンド `/embedded-debug-loop:deploy`（フォルダだけを写したときは `/deploy`）、または `skill` ツール | 自分のことだけ |
+| log-capture | スキル（同上） | `skills/log-capture/`（`scripts/capture.py`、`config-template.yaml`、`tests/`） | スラッシュコマンド `/embedded-debug-loop:log-capture`（フォルダだけを写したときは `/log-capture`）、または `skill` ツール | 自分のことだけ |
+| 設定ファイル | ハーネスの部品ではない（利用者のデータ） | 作業フォルダの `.<スキル名>/config.yaml`（ログは `.<スキル名>/logs/`） | — | — |
 | 組み込み機器 | プラグインの外 | — | — | — |
 
 - 使っていない部品：MCP サーバー（`mcp.json`）、プラグインのフックの設定（`hooks.json`）、LSP、指示ファイル（`copilot-instructions.md` など）。
@@ -102,11 +102,13 @@ flowchart TB
 
 ### 3.2 設定ファイル
 
-- 置き場所：`<作業フォルダ>/.embedded-debug-loop/<スキルの名前>.yaml`。作業フォルダは、スクリプトを動かしたときの今のフォルダ（`--workdir` で変えられる）。ふつうは、Copilot CLI を起動したプロジェクトのフォルダ。ログも、この下の `.embedded-debug-loop/logs/` に置く。
+- 置き場所：`<作業フォルダ>/.<スキルの名前>/config.yaml`。ログは `.<スキルの名前>/logs/` に置く。フォルダには `.gitignore`（中身は `*`）を作る。
+  - スキルの名前は、スクリプトの場所から求めた、スキルのフォルダの名前。名前を変えて写せば、その名前になる。プラグインの名前は使わない（スキルのフォルダだけを写して使う人は、プラグインを入れていないため）。
+  - 作業フォルダは、今のフォルダから上へたどって `.<スキルの名前>/` があるフォルダ。なければ今のフォルダ。ふつうは、Copilot CLI を起動したプロジェクトのフォルダ。`--workdir`・`--config` で変えられる。
 - 形：1段だけの `項目: 値`。値は、文字、数、true/false、null、文字の並び。各項目のすぐ上に `#` で説明を書く。
 - スキルは、自分のフォルダに `config-template.yaml`（ひな形）を持つ。設定ファイルがなければ、ひな形を写して作る。
 - YAML を読むコードは、スキルごとに持つ（共有しない）。追加のパッケージは使わない。
-- 設定のスキル（setup）は、この形のファイルなら、どれでも埋められる。ほかのスキルのことは知らない。
+- 設定のスキル（setup）は、この形のファイルなら、どれでも埋められる。ほかのスキルのことは知らない。ファイルを渡されなければ、作業フォルダの中（深さ3まで。`.git`・`node_modules` などは飛ばし、点で始まるフォルダは見る）から、項目のすぐ上に `#` の説明がある YAML を探して候補にする。
 
 ### 3.3 統括エージェントと作業エージェント
 
@@ -185,8 +187,8 @@ flowchart TB
 
 | 試験 | 置き場所 | 確かめること |
 | --- | --- | --- |
-| スキルの試験 | `tests/skills/<名前>/` | 各スキルのスクリプトの振る舞い（偽の FTP サーバー、偽のシリアルコンソールを使う） |
-| 独立性の試験 | `tests/independence/` | 層をまたいだ依存がないこと。スキルのフォルダ1つだけで動くこと |
+| スキルの試験 | 各スキルのフォルダの `tests/`（`skills/<名前>/tests/`） | 各スキルのスクリプトの振る舞い（偽の FTP サーバー、偽のシリアルコンソールを使う）。スキルのフォルダで `python3 -m unittest discover -s tests` で動く。フォルダだけを写しても動く |
+| 独立性の試験 | `tests/independence/` | 層をまたいだ依存がないこと。スキルのフォルダに、プラグインの名前・ほかの部品・フォルダの外を指す記述がないこと。スキルのフォルダ1つだけを（名前を変えても）写して動き、データが `.<フォルダの名前>/` にだけできること |
 | エクステンションの試験 | `tests/extension/` | 偽のセッションで、ツール・開始・イベント・止める・画面の API |
 
 `python3 tests/run.py` で、すべてを動かす。
