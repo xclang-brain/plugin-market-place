@@ -141,6 +141,8 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     // 設定は作業フォルダごと。フォルダが分かるまでは既定を使う
     folder: null,
     settings: { ...base },
+    // 既定の設定（defaults.json）。保存した名前のエージェントがなくなったときに戻す先
+    defaults: { ...base },
     draft: null,
     run: null,
     runs: persist.listRuns(),

@@ -54,7 +54,13 @@ test('open：worker（作業エージェントの名前）は任意で、説明�
 });
 
 test('open：worker を渡すと、この作業フォルダの設定に保存してから、その名前で返事と準備の確認の頼みを書く', async (t) => {
-  const { fake, app, dataDir } = await startWith(t);
+  const agents = [
+    { id: WORKER, name: 'helper-a' },
+    { id: LEAD, name: 'lead-c' },
+    { id: VERIFIER, name: 'checker-b' },
+    { id: 'host-sim-worker', name: 'host-sim-worker' },
+  ];
+  const { fake, app, dataDir } = await startWith(t, { fake: { agents } });
   const r = await fake.call('open', { request: '表示を直す', criteria: ['完了と出る'], worker: ' host-sim-worker ' });
   assert.ok(r.ok);
   const lines = r.text.split('\n');
@@ -90,6 +96,28 @@ test('open：worker の名前は、エージェントの一覧の名前にそろ
   assert.equal(app.store.snapshot().settings.worker, 'twin');
   await fake.call('open', { request: '作業', worker: 'unknown-agent' }); // 一覧になくても、言われたまま
   assert.equal(app.store.snapshot().settings.worker, 'unknown-agent');
+});
+
+test('open：保存した名前の作業エージェントが一覧にないとき（部品が替わったとき）は、既定に戻して保存し、そのことを伝える', async (t) => {
+  const { fake, app, dataDir } = await startWith(t);
+  await fake.call('open', { request: '作業', worker: 'old-plugin-worker' }); // 前のバージョンで保存した名前の代わり
+  assert.equal(app.store.snapshot().settings.worker, 'old-plugin-worker');
+  const r = await fake.call('open', { request: 'もう一度' });
+  assert.ok(r.text.includes(`保存してあった作業エージェント「old-plugin-worker」は、今はありません。既定の「${WORKER}」にしました。`));
+  assert.ok(r.text.includes(`次に、作業エージェント「${WORKER}」に`));
+  assert.equal(app.store.snapshot().settings.worker, WORKER);
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
+  assert.equal(saved.folders[CWD].worker, WORKER);
+  const quiet = await fake.call('open', { request: 'さらにもう一度' });
+  assert.ok(!quiet.text.includes('今はありません'), '一覧にある名前なら、何も言わない');
+});
+
+test('open：エージェントの一覧が読めないときは、保存した名前をそのまま使う', async (t) => {
+  const { fake, app } = await startWith(t, { fake: { agents: [] } });
+  await fake.call('open', { request: '作業', worker: 'some-worker' });
+  const r = await fake.call('open', { request: 'もう一度' });
+  assert.ok(!r.text.includes('今はありません'));
+  assert.equal(app.store.snapshot().settings.worker, 'some-worker');
 });
 
 test('listedAgentName：同じ名前 → そのまま、1つだけ当たる → 一覧の名前、ほかは言われたまま', () => {

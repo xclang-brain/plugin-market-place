@@ -169,8 +169,9 @@ def template_keys(skill):
 
 
 def all_template_keys():
-    """すべてのスキルの、設定の項目の名前（4文字以上。短い名前は、ふつうの言葉と見分けにくい）"""
-    return sorted({k for skill in skill_names() for k in template_keys(skill) if len(k) > 3})
+    """すべてのスキルの、設定の項目の名前のうち、_ を含むもの（sdk_env など）。
+    _ のない名前（model、list など）は、ほかの部品のふつうの言葉と重なり、新しいスキルの項目の名前を縛ってしまうので数えない"""
+    return sorted({k for skill in skill_names() for k in template_keys(skill) if "_" in k})
 
 
 def internal_patterns(compound_keys_only=False):

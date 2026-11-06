@@ -7,11 +7,19 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createPersist } from '../../com.github.copilot/extensions/embedded-debug-loop/core/persist.mjs';
-import { CWD, EXT_DIR, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
+import { CWD, EXT_DIR, LEAD, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
 
 // 作業フォルダ。エクステンションと同じく path.resolve で作る（Windows ではドライブ名が付く）
 const A = path.resolve('/w/a');
 const B = path.resolve('/w/b');
+
+// エージェントの一覧（既定の3つに、保存する名前を足す）。保存した名前が一覧にないと、open が既定に戻すため
+const agentsWith = (...names) => [
+  { id: WORKER, name: 'helper-a' },
+  { id: LEAD, name: 'lead-c' },
+  { id: VERIFIER, name: 'checker-b' },
+  ...names.map((id) => ({ id, name: id.slice(id.lastIndexOf(':') + 1) })),
+];
 
 async function opened(t, options) {
   const ctx = await startWith(t, options);
@@ -93,7 +101,8 @@ test('状態：エージェントの一覧が読めなくても、前の一覧�
 
 test('設定の保存：ファイルに残り、起動し直しても読み直す。誤りは 400', async (t) => {
   const dataDir = path.join(tempDir(t), 'data');
-  const a = await opened(t, { dataDir });
+  const agents = agentsWith('x-plugin:other');
+  const a = await opened(t, { dataDir, fake: { agents } });
   const body = { worker: 'x-plugin:other', verifier: VERIFIER, maxIterations: 7, workerModel: 'model-y', workerEffort: 'high', verifierModel: '', verifierEffort: '既定', request: '書き直した作業', criteria: '条件1\n\n条件2\n' };
   const r = await http(a.api('/api/settings'), { method: 'POST', body });
   assert.equal(r.status, 200);
@@ -108,7 +117,7 @@ test('設定の保存：ファイルに残り、起動し直しても読み直�
   assert.equal(bad.status, 400);
   assert.match(bad.data.error, /繰り返しの上限/);
 
-  const b = await opened(t, { dataDir });
+  const b = await opened(t, { dataDir, fake: { agents } });
   assert.equal(b.app.store.settings.worker, 'x-plugin:other');
   assert.equal(b.app.store.settings.maxIterations, 7);
 });
@@ -260,11 +269,12 @@ test('同梱の画面のファイル（index.html）は、直接書いたスク�
 test('設定は作業フォルダごとに保存し、ほかの作業フォルダには持ち越さない', async (t) => {
   const dataDir = path.join(tempDir(t), 'data');
   const file = path.join(dataDir, 'settings.json');
-  const a = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  const agents = agentsWith('only-a:helper');
+  const a = await opened(t, { dataDir, fake: { cwd: '/w/a', agents } });
   await http(a.api('/api/settings'), { method: 'POST', body: { worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4 } });
   assert.equal(a.app.store.snapshot().folder, A);
 
-  const b = await opened(t, { dataDir, fake: { cwd: '/w/b' } });
+  const b = await opened(t, { dataDir, fake: { cwd: '/w/b', agents } });
   let state = (await http(b.api('/api/state'))).data;
   assert.equal(state.folder, B);
   assert.equal(state.settings.worker, WORKER, 'ほかのフォルダでは、既定（defaults.json）のまま');
@@ -273,7 +283,7 @@ test('設定は作業フォルダごとに保存し、ほかの作業フォル�
   assert.ok(r.text.includes(`作業エージェント「${WORKER}」`), 'open も、その作業フォルダの設定を伝える');
   await http(b.api('/api/settings'), { method: 'POST', body: { worker: WORKER, verifier: VERIFIER, maxIterations: 6 } });
 
-  const c = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  const c = await opened(t, { dataDir, fake: { cwd: '/w/a', agents } });
   state = (await http(c.api('/api/state'))).data;
   assert.equal(state.settings.worker, 'only-a:helper');
   assert.equal(state.settings.maxIterations, 4);
