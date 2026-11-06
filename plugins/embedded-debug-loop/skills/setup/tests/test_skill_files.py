@@ -786,7 +786,8 @@ class FolderTest(unittest.TestCase):
         self.assertEqual(rel, ["README.md", "SKILL.md", "scripts/config_tool.py",
                                "tests/__init__.py",
                                "tests/fixtures/coffee-machine.yaml", "tests/fixtures/network-camera.yaml",
-                               "tests/test_config_tool.py", "tests/test_skill_files.py",
+                               "tests/requirements.txt",
+                               "tests/test_config_tool.py", "tests/test_powershell.py", "tests/test_skill_files.py",
                                "tests/test_skills_command.py"])
 
 

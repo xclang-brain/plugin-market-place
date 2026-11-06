@@ -399,6 +399,20 @@ class OwnFolderTest(SkillsTestCase):
         self.assertEqual([(s["name"], s["where"]) for s in data["skills"]], [("partner", "project")])
         self.assertEqual(self.searched(data), SEARCHED_IN_WORK[:5])
 
+    def test_copy_in_project_does_not_find_the_old_neighbors(self):
+        """このスキルだけを作業フォルダの .github/skills/ に写すと、元の置き場所の隣のスキルは見つからない。
+        同じ場所（作業フォルダの .github/skills/）に置いたスキルは見つかる。"""
+        self.make_skill(self.plugin, "left-behind")
+        own = os.path.join(self.project, "my-setup")
+        shutil.copytree(SKILL_DIR, own, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        tool = os.path.join(own, "scripts", "config_tool.py")
+        self.assertEqual(self.skills(tool=tool)["skills"], [])
+        beside = self.make_skill(self.project, "left-behind")
+        data = self.skills(tool=tool)
+        self.assertEqual([(s["name"], s["where"]) for s in data["skills"]], [("left-behind", "project")])
+        self.assertTrue(same(data["skills"][0]["path"], beside))
+        self.assertTrue(same(data["skills"][0]["readme"], os.path.join(beside, "README.md")))
+
     def test_same_name_as_self_elsewhere_is_hidden_by_self(self):
         """このスキルと同じ名前のほかのスキルは、このスキルに隠れる（このスキルは返さない）。"""
         own_name = "my-setup-renamed"
