@@ -251,11 +251,11 @@ def worker_table(text):
 
 
 def setup_skill(rows):
-    """設定のスキル（「使うとき」が「設定」の行）の名前"""
+    """設定のスキル（「使うとき」が「設定」の行）の名前。なければ None（設定のスキルは、なくてもよい）"""
     found = [skill for _, skill, when in rows if when == SETUP_WHEN]
-    if len(found) != 1:
-        raise AssertionError(f"「使うとき」が「{SETUP_WHEN}」の行（設定のスキル）が、1つではありません：{found}")
-    return found[0]
+    if len(found) > 1:
+        raise AssertionError(f"「使うとき」が「{SETUP_WHEN}」の行（設定のスキル）が、2つ以上あります：{found}")
+    return found[0] if found else None
 
 
 def work_skills(rows):
@@ -694,7 +694,9 @@ class SkillReplacement(unittest.TestCase):
         new_rows = worker_table(new_definition)
         self.assertEqual([(role, when) for role, _, when in new_rows], [(role, when) for role, _, when in self.rows],
                          "役割と使うときは変わりません")
-        self.assertEqual(setup_skill(new_rows), renames[setup_skill(self.rows)], "設定のスキルは、表の「使うとき」で決まります")
+        old_setup = setup_skill(self.rows)
+        self.assertEqual(setup_skill(new_rows), renames[old_setup] if old_setup else None,
+                         "設定のスキルは、表の「使うとき」で決まります")
         for word in list(renames) + [old_worker]:
             self.assertIsNone(token(word).search(new_definition), f"表の行の名前を替えても、定義に {word} が残ります")
         for path in stage3_files():
