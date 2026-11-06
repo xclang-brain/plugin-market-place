@@ -452,7 +452,7 @@ class WorkerIndependence(unittest.TestCase):
         self.label = f"{self.path.relative_to(ROOT)}（「使うスキル」の表の外）"
 
     def test_table_lists_the_skills(self):
-        """表の列は、役割・スキル・使うとき。表のスキルは、skills/ の下のスキルと同じ。設定のスキルは1つ。
+        """表の列は、役割・スキル・使うとき。表のスキルは、skills/ の下のスキルと同じ。設定のスキルは、ないか1つ。
         どの行にも役割と使うときがある"""
         header = [c.strip() for c in self.table.splitlines()[0].strip().strip("|").split("|")]
         self.assertEqual(header, ["役割", "スキル", "使うとき"], "「使うスキル」の表の見出しが違います")
