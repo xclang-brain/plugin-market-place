@@ -36,22 +36,3 @@
 1. `com.github.copilot/agents/device-worker.agent.md` を消し、`com.github.copilot/agents/host-worker.agent.md` を置きます。
 2. `com.github.copilot/agents/README.markdown` を、`host-worker` の README に替えます。
 3. `com.github.copilot/extensions/embedded-debug-loop/defaults.json` の `"worker": "embedded-debug-loop:device-worker"` を `"worker": "embedded-debug-loop:host-worker"` にします。
-
-## 新しいスキルを作るとき
-
-作業エージェントが使えるように、`SKILL.md` に次の2つのやり方を書きます。
-
-1. 役割の作業のやり方（例：転送のスキルなら、機器にファイルを送る）。
-2. 設定を確かめるやり方。
-
-どちらも、最後に「できたか」「何が起きたか」「ログの場所」を返すように書きます。
-ほかのスキルや作業エージェントの名前は、書きません。
-
-## 新しい作業エージェントを作るとき
-
-統括エージェントとやり取りできるように、定義に次の2つを書きます。
-
-1. 「これは準備の確認です」で始まる依頼が来たら、作業はせずに、1行目に「準備：できている」か「準備：できていない」と返す。
-2. 「あなたは作業役です」で始まる依頼が来たら、1回だけ試して、結果を返す。
-
-使うスキルは、「## 使うスキル」の表（役割・スキル・使うとき）に書きます。
