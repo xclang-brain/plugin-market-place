@@ -1,7 +1,6 @@
 # embedded-debug-loop
 
 組み込み機器の C/C++ の不具合を、AI が調べて直す GitHub Copilot CLI のプラグインです。
-スキルや作業エージェントを置き換えても、ほかの部品はそのまま使えます。
 
 ## 3つの段階
 
@@ -29,10 +28,6 @@ Copilot CLI を起動し、次の2つを入力します。
 /plugin install embedded-debug-loop@plugin-market-place
 ```
 
-## 部品を置き換える
-
-作業の方法や機器が違うときは、スキルか作業エージェントを置き換えます（[置き換えのガイド](docs/guide/replace.md)）。
-
 ## 開発者向けの文書
 
-[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[憲章](docs/constitution.md)
+[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[部品の変え方](docs/replace.md)・[憲章](docs/constitution.md)

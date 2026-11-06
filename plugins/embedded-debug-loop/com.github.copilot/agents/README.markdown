@@ -52,8 +52,6 @@ sensor_app を機器で動かすと、AVG=3 と出ます。正しくは AVG=25 �
 | 機器のログ取得 | [`log-capture`](../../skills/log-capture/README.md) |
 | 設定（セットアップ） | [`setup`](../../skills/setup/README.md) |
 
-スキルを置き換える方法は、[スキルと作業エージェントを置き換える](../../docs/guide/replace.md) にあります。
-
 ## うまくいかないとき
 
 | 起きること | すること |

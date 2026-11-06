@@ -18,14 +18,13 @@
   定義の例に、具体の値（答えになりうる数字）を書いていない。利用者への質問の例や選択肢にも、
   頼みに書かれていない値を作って入れない。
 - 文書：上の段の文書（プラグインの README、作業エージェントの README の統括・検証の部分、
-  3段階目のガイド、置き換えのガイド）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
-  3段階目のガイドは、作業エージェントが機器のものだと前提にしない。置き換えた作業エージェントは、
-  最初の依頼に名前を書いて選ぶ。
+  3段階目のガイド、部品を変える手順書）に、スキルの名前と、転送・ログ取得の具体の言葉がない。
+  3段階目のガイドは、作業エージェントが機器のものだと前提にしない。作業エージェントは、
+  最初の依頼に名前を書いて選ぶ。部品を変える手順書は開発者向けで、利用者向けのガイドの中にない。
 - 置き換え：スキルを、別の中身・別の設定の形のスキルに置き換えても（作業エージェントごと置き換えても）、
   setup の skills がそれを見つけ、作業エージェント・統括エージェントの定義を変えずに済む。
-  setup を作業フォルダに置き換えたときは、設定するスキルも同じ場所に置けば見つかる（置き換えのガイドの決まり）。
-  置き換えのガイドの約束は、設定の書き方を設定のスキルの README に任せる。その README の言葉で書けば、setup が読み分ける。
-  作業エージェントのコピーは、プラグインを更新したら作り直す（コピーは古いまま残る）。
+  setup を単体で作業フォルダに置いたときは、プラグインの中のスキルは見つからず、同じ場所に置いたスキルが見つかる。
+  部品を変える手順書の約束は、設定の書き方を設定のスキルの README に任せる。その README の言葉で書けば、setup が読み分ける。
 - スキルのスクリプトの出力は、設計書 3.8 の文字コード（Windows ではコンソールの文字コード）で読む。
 
   python3 -m unittest discover -s tests/independence -v
@@ -48,6 +47,7 @@ SKILLS_DIR = ROOT / "skills"
 AGENTS_DIR = ROOT / "com.github.copilot" / "agents"
 EXT_DIR = ROOT / "com.github.copilot" / "extensions" / "embedded-debug-loop"
 GUIDE_DIR = ROOT / "docs" / "guide"
+REPLACE_DOC = ROOT / "docs" / "replace.md"  # 部品を変える手順書（開発者向け）
 WORKER_README = AGENTS_DIR / "README.markdown"
 SKILL_NAMES = ["setup", "cross-compile", "deploy", "log-capture"]
 WORK_SKILLS = {"cross-compile": "build.py", "deploy": "deploy.py", "log-capture": "capture.py"}
@@ -523,7 +523,7 @@ class DocumentIndependence(unittest.TestCase):
     def upper_documents(self):
         """（表示の名前, 本文）。上の段の文書"""
         docs = []
-        for path in [ROOT / "README.md", GUIDE_DIR / "3-orchestrator.md", GUIDE_DIR / "replace.md"]:
+        for path in [ROOT / "README.md", GUIDE_DIR / "3-orchestrator.md", REPLACE_DOC]:
             docs.append((str(path.relative_to(ROOT)), path.read_text(encoding="utf-8")))
         text = WORKER_README.read_text(encoding="utf-8")
         part = section(text, "統括エージェントと検証エージェント")
@@ -554,32 +554,15 @@ class DocumentIndependence(unittest.TestCase):
         self.assertNotIn("機器", text, "3段階目のガイドが、機器を前提にしています")
         self.assertNotIn(WORKER_README.name, text, "3段階目のガイドが、特定の作業エージェントの README を案内しています")
 
-    def test_guides_choose_worker_in_first_request(self):
-        """置き換えた作業エージェントは、最初の依頼に名前を書いて選ぶ（画面で選ぶ前に、既定の作業エージェントが動かないように）"""
-        for name in ["3-orchestrator.md", "replace.md"]:
-            text = (GUIDE_DIR / name).read_text(encoding="utf-8")
-            request = re.search(r"「作業エージェントは <[^>]+> で」", text)
-            self.assertIsNotNone(request, f"{name} に、依頼で作業エージェントを選ぶ書き方がありません")
-            # 画面で選ぶのは、2回目からの切り替え。依頼の書き方より後に書く
-            screen = re.search(r"でも替えられ", text)
-            self.assertIsNotNone(screen, f"{name} に、Web管理画面で替えられることが書かれていません")
-            self.assertLess(request.start(), screen.start(), f"{name} で、Web管理画面で選ぶ方法が、依頼の書き方より先にあります")
-        replace = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
-        self.assertRegex(replace, r"最初の依頼に「作業エージェントは <[^>]+> で」",
-                         "置き換えのガイドに、最初の依頼で作業エージェントを選ぶ手順がありません")
-        self.assertNotIn("Web管理画面の「設定」で、作業エージェントに新しい名前を選びます", replace,
-                         "置き換えのガイドが、Web管理画面で選ぶ方法を主にしています")
-
-    def test_worker_copy_is_renewed_after_update(self):
-        """作業エージェントのコピーは、インストールしたプラグインから作り、プラグインを更新したら作り直す。
-        コピーは古いまま残り、設定のスキルへの頼み方などが、プラグインの部品と食い違うため"""
-        text = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
-        part = section(text, "作業エージェントを置き換える")
-        self.assertIsNotNone(part, "置き換えのガイドに「## 作業エージェントを置き換える」の節がありません")
-        self.assertIn("インストールしたプラグインの", part, "コピー元が、インストールしたプラグインではありません")
-        self.assertRegex(part, r"プラグインを更新したら、コピーし直して、手順 2〜3 をやり直",
-                         "プラグインを更新したら、コピーし直して書き換え直す手順がありません")
-        self.assertNotIn("GitHub", part, "コピー元に、バージョンを見分けられない GitHub が残っています")
+    def test_guide_chooses_worker_in_first_request(self):
+        """作業エージェントは、最初の依頼に名前を書いて選ぶ（画面で選ぶ前に、既定の作業エージェントが動かないように）"""
+        text = (GUIDE_DIR / "3-orchestrator.md").read_text(encoding="utf-8")
+        request = re.search(r"「作業エージェントは <[^>]+> で」", text)
+        self.assertIsNotNone(request, "3段階目のガイドに、依頼で作業エージェントを選ぶ書き方がありません")
+        # 画面で選ぶのは、2回目からの切り替え。依頼の書き方より後に書く
+        screen = re.search(r"でも替えられ", text)
+        self.assertIsNotNone(screen, "3段階目のガイドに、Web管理画面で替えられることが書かれていません")
+        self.assertLess(request.start(), screen.start(), "3段階目のガイドで、Web管理画面で選ぶ方法が、依頼の書き方より先にあります")
 
     def test_worker_readme_knows_only_names_and_roles(self):
         """作業エージェントの README は、作業エージェントの定義と同じく、スキルの名前と役割だけを書く"""
@@ -610,6 +593,9 @@ class DocumentIndependence(unittest.TestCase):
     def test_old_guides_are_gone(self):
         for name in ["1-skills.md", "2-device-worker.md"]:
             self.assertFalse((GUIDE_DIR / name).exists(), f"docs/guide/{name} は消しました（中身は各部品の README にある）")
+        # 部品の置き換えはプラグインの設計変更。利用者向けのガイドに置かない
+        self.assertFalse((GUIDE_DIR / "replace.md").exists(), "部品を変える手順書が、利用者向けのガイドの中にあります")
+        self.assertTrue(REPLACE_DOC.is_file(), "部品を変える手順書（docs/replace.md）がありません")
 
     def test_links_resolve(self):
         """プラグインの文書の相対リンクが、あるファイルと見出しを指す"""
@@ -718,15 +704,15 @@ class SkillReplacement(unittest.TestCase):
                 self.visible(entries, name)
 
     def test_replaced_setup_needs_the_skills_beside_it(self):
-        """設定のスキルを作業フォルダに置き換えたら、設定するスキルも同じ場所に置く（置き換えのガイドの決まり）"""
+        """設定のスキルを単体で作業フォルダに置くと、プラグインの中のスキルは見つからない。同じ場所に置いたスキルは見つかる"""
         project_skills = self.project / ".github" / "skills"
         project_setup = project_skills / "setup"
         shutil.copytree(SKILLS_DIR / "setup", project_setup, ignore=shutil.ignore_patterns("__pycache__"))
         found = lambda: list_skills(project_setup, self.project, self.copilot_home, self.home)
         names = sorted(e["name"] for e in found())
         for skill in WORK_SKILLS:
-            self.assertNotIn(skill, names, "プラグインの中のスキルが、プラグインの外の設定のスキルから見つかりました。"
-                                           "置き換えのガイドの決まりを見直してください")
+            self.assertNotIn(skill, names, "プラグインの中のスキルが、プラグインの外の設定のスキルから見つかりました"
+                                           "（設定のスキルが、プラグインのフォルダを探しています）")
         for skill in WORK_SKILLS:
             shutil.copytree(self.plugin_skills / skill, project_skills / skill, ignore=shutil.ignore_patterns("__pycache__"))
         entries = found()
@@ -737,16 +723,16 @@ class SkillReplacement(unittest.TestCase):
             self.assertTrue(same_path(entry["readme"], project_skills / skill / "README.md"))
 
     def test_guide_leaves_comment_words_to_setup_readme(self):
-        """置き換えのガイドの約束は、設定の書き方を設定のスキルの README に任せる（特定の設定のスキルの言葉に頼らない）。
+        """部品を変える手順書の約束は、設定の書き方を設定のスキルの README に任せる（特定の設定のスキルの言葉に頼らない）。
         その README の言葉で書いた、知らないスキルの設定ファイルを、setup が読み分ける"""
-        guide = (GUIDE_DIR / "replace.md").read_text(encoding="utf-8")
+        guide = REPLACE_DOC.read_text(encoding="utf-8")
         row = next((cells for cells in table_rows(guide) if cells and cells[0] == "設定の書き方"), None)
-        self.assertIsNotNone(row, "置き換えのガイドの約束に「設定の書き方」の行がありません")
-        self.assertIn("設定のスキル", row[1], "置き換えのガイドの約束が、設定のスキルが読める形で書くことを求めていません")
-        self.assertIn("README", row[1], "置き換えのガイドの約束が、書き方を設定のスキルの README に任せていません")
+        self.assertIsNotNone(row, "部品を変える手順書の約束に「設定の書き方」の行がありません")
+        self.assertIn("設定のスキル", row[1], "部品を変える手順書の約束が、設定のスキルが読める形で書くことを求めていません")
+        self.assertIn("README", row[1], "部品を変える手順書の約束が、書き方を設定のスキルの README に任せていません")
         words = ["必須", "必ず", "例：", "選べる値："]
         for word in words:
-            self.assertNotIn(f"「{word}」", guide, f"置き換えのガイドに、設定のスキルのコメントの言葉 {word} があります")
+            self.assertNotIn(f"「{word}」", guide, f"部品を変える手順書に、設定のスキルのコメントの言葉 {word} があります")
         readme = (self.setup_dir / "README.md").read_text(encoding="utf-8")
         for word in words:
             self.assertIn(word, readme, f"設定のスキルの README に、コメントの言葉 {word} の説明がありません")
