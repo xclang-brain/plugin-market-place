@@ -34,21 +34,17 @@
 
 例：`device-worker` を `host-worker` に置き換える。
 
-1. `com.github.copilot/agents/device-worker.agent.md` を消し、`com.github.copilot/agents/host-worker.agent.md` を置きます。「## 使うスキル」の表は、同じ形（役割・スキル・使うとき）にします。
-2. `com.github.copilot/agents/README.markdown` の次の行を直します。
-   - 1行目：`# 作業エージェント（device-worker）` → `# 作業エージェント（host-worker）`
-   - 3行目：「作業エージェント（`device-worker`）は、…」→ `host-worker` の説明
-   - 「## 始め方」の 2：`device-worker · plugin` → `host-worker · plugin`
-   - 「## 使うスキル」：`device-worker.agent.md#使うスキル` → `host-worker.agent.md#使うスキル`
-   - 「## うまくいかないとき」の1行目：`device-worker · plugin` → `host-worker · plugin`
+1. `com.github.copilot/agents/device-worker.agent.md` を消し、`com.github.copilot/agents/host-worker.agent.md` を置きます。
+2. `com.github.copilot/agents/README.markdown` を、`host-worker` の README に替えます。
 3. `com.github.copilot/extensions/embedded-debug-loop/defaults.json` の `"worker": "embedded-debug-loop:device-worker"` を `"worker": "embedded-debug-loop:host-worker"` にします。
 
-## 新しい部品が守ること
+## 新しいスキルを作るときの決まり
 
-| 部品 | 守ること |
-| --- | --- |
-| スキル | 頼まれたら、役割の作業と設定の確認をし、成否・起きたこと・ログの場所を返す |
-| スキル | 要るファイルとテストを、自分のフォルダに置く。ほかの部品の名前を書かない |
-| 作業エージェント | 統括エージェントの依頼の書き出し（「これは準備の確認です」「あなたは作業役です」）と、返事の1行目（「準備：できている」か「準備：できていない」）を、この文字のまま使う |
-| 作業エージェント | スキルの名前と、役割を2つ以上並べた文は、「## 使うスキル」の表にだけ書く。定義に自分の名前を書かない |
-| 作業エージェント | セットアップでは、設定のスキルを読む前に、渡すスキルの名前をチャットに書く（「設定のスキルを読む前に、チャットに「<スキルの名前>…」の文を、定義に書く） |
+- 作業エージェントから「作業して」と頼まれたら作業し、「設定を確かめて」と頼まれたら設定を確かめる。どちらも、できたか・何が起きたか・ログの場所を返す。
+- 要るファイルとテストは、スキルのフォルダの中に置く。ほかのスキルや作業エージェントの名前は書かない。
+
+## 新しい作業エージェントを作るときの決まり
+
+- 「## 使うスキル」の表（役割・スキル・使うとき）を持つ。スキルの名前は、この表にだけ書く。
+- 統括エージェントから「これは準備の確認です」で始まる依頼が来たら、作業はせず、1行目に「準備：できている」か「準備：できていない」と書いて返す。
+- 「あなたは作業役です」で始まる依頼が来たら、1回だけ試して、結果を返す。合否は決めない。

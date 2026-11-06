@@ -498,9 +498,6 @@ class WorkerIndependence(unittest.TestCase):
         """セットアップでは、設定のスキルにスキルの名前を渡す。設定ファイルの場所を集めて渡さない"""
         self.assertNotRegex(self.text, r"設定ファイルの場所(の一覧)?を(返|渡して)", "設定ファイルの場所を集めて渡しています")
         self.assertNotRegex(self.text, r"設定ファイルの場所を返す", "スキルに、設定ファイルの場所を返すよう頼んでいます")
-        # skill ツールは名前しか受け取らない。渡す名前は、設定のスキルを読む前にチャットに書く（利用者にも見える）
-        self.assertRegex(self.text, r"設定のスキルを読む前に、チャットに「<スキルの名前>",
-                         "セットアップで、渡すスキルの名前をチャットに書いていません")
 
     def test_no_upper_layer(self):
         words = ["Web管理画面", "統括", "検証エージェント", "orchestrator", "verifier", PLUGIN_NAME + "_"]
@@ -564,10 +561,6 @@ class DocumentIndependence(unittest.TestCase):
         docs = []
         for path in [ROOT / "README.md", GUIDE_DIR / "3-orchestrator.md"]:
             docs.append((str(path.relative_to(ROOT)), path.read_text(encoding="utf-8")))
-        text = WORKER_README.read_text(encoding="utf-8")
-        part = section(text, "統括エージェントと検証エージェント")
-        self.assertIsNotNone(part, "作業エージェントの README に「## 統括エージェントと検証エージェント」の節がありません")
-        docs.append((f"{WORKER_README.relative_to(ROOT)}（統括エージェントと検証エージェント）", part))
         return docs
 
     def test_upper_documents_name_no_skill(self):
