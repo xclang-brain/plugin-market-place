@@ -195,7 +195,8 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       const next = w
         ? `次に、作業エージェント「${w}」に、準備の確認だけを頼んでください（作業はさせない）。返事を ${TOOL.prepare} で記録してください。`
         : '作業エージェントが決まっていません。利用者に URL を伝え、Web管理画面で作業エージェントを選んで「開始」を押すよう頼んで、手番を終えてください。';
-      return [`Web管理画面を開きました。URL：${url}`, ...restored, ...(chosen ? [chosen] : []), '今の設定：', ...settingsLines(store.settings), next].join('\n');
+      const told = restored.length ? [...restored, 'このことを、利用者にもそのまま伝えてください。'] : [];
+      return [`Web管理画面を開きました。URL：${url}`, ...told, ...(chosen ? [chosen] : []), '今の設定：', ...settingsLines(store.settings), next].join('\n');
     },
 
     async prepare(args) {
@@ -210,12 +211,12 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
         store.changed();
         return prepared.ready
           ? `記録しました。試行 ${run.iteration + 1} の計画を立て、${TOOL.plan} で記録してください。`
-          : '記録しました。準備ができていません。作業エージェントの返事の「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。';
+          : `記録しました。準備ができていません。作業エージェントの返事の「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。返事に「この作業エージェント」とあれば、「${worker}」のことだと添えてください。`;
       }
       if (!store.draft) return fail(`先に ${TOOL.open} を呼んでください。`);
       store.draft.prepared = prepared;
       store.changed();
-      return preparedNext(prepared.ready, store.url);
+      return preparedNext(prepared.ready, store.url, worker);
     },
 
     async plan(args) {

@@ -103,7 +103,7 @@ test('open：保存した名前の作業エージェントが一覧にないと�
   await fake.call('open', { request: '作業', worker: 'old-plugin-worker' }); // 前のバージョンで保存した名前の代わり
   assert.equal(app.store.snapshot().settings.worker, 'old-plugin-worker');
   const r = await fake.call('open', { request: 'もう一度' });
-  assert.ok(r.text.includes(`保存してあった作業エージェント「old-plugin-worker」は、今はありません。既定の「${WORKER}」にしました。`));
+  assert.ok(r.text.includes(`保存してあった作業エージェント「old-plugin-worker」は、今はありません。既定の「${WORKER}」にしました。\nこのことを、利用者にもそのまま伝えてください。`));
   assert.ok(r.text.includes(`次に、作業エージェント「${WORKER}」に`));
   assert.equal(app.store.snapshot().settings.worker, WORKER);
   const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
@@ -176,6 +176,7 @@ test('prepare：返事を下書きに残し、開始を押してもらうよう�
   assert.match(ng.text, /直してから、Web管理画面（http:\/\/127\.0\.0\.1:\d+\/\?k=[^）]+）で『開始』を押すこと。開始すると、統括エージェントが準備を確かめ直すこと。/);
   assert.match(ng.text, /いますぐ『開始』を押すようには頼まないでください。/);
   assert.ok(!ng.text.includes('『開始』を押すよう頼んで'), '準備ができていないのに、すぐ開始を押すよう頼ませない');
+  assert.ok(ng.text.includes(`準備を確かめた作業エージェントの名前「${WORKER}」`), '作業エージェントは自分の名前を書かないので、名前はこちらで添えさせる');
 });
 
 test('prepare（実行中）：準備ができていなければ、足りないものをそのまま引用して伝え、ask_user で聞くよう伝える', async (t) => {
@@ -184,6 +185,7 @@ test('prepare（実行中）：準備ができていなければ、足りない�
   assert.match(ok.text, /試行 1 の計画を立て/);
   const ng = await fake.call('prepare', { worker: WORKER, ready: false, report: '準備：できていない' });
   assert.match(ng.text, /「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。/);
+  assert.ok(ng.text.includes(`「${WORKER}」のことだと添えてください`));
   assert.ok(!ng.text.includes('開始'));
 });
 
