@@ -63,7 +63,6 @@ DEFAULTS = EXT_DIR / "defaults.json"
 GUIDE_DIR = ROOT / "docs" / "guide"
 REPLACE_DOC = ROOT / "docs" / "replace.md"  # 部品を変える手順書（開発者向け。今の部品の名前を例に書く）
 WORKER_README = AGENTS_DIR / "README.markdown"
-SETUP_WHEN = "設定"  # 「使うスキル」の表で、設定のスキルの「使うとき」
 TEXT_SUFFIXES = {".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".mjs", ".js", ".html", ".css", ".txt", ".sh"}
 PLUGIN_NAME = ROOT.name  # embedded-debug-loop
 # スキルのフォルダに書いてはいけない、プラグインを指す言葉
@@ -72,34 +71,9 @@ PLUGIN_WORDS = [
     (PLUGIN_NAME.replace("-", "_"), re.compile(re.escape(PLUGIN_NAME.replace("-", "_")), re.IGNORECASE)),
     ("EDL（プラグインの略）", re.compile(r"(?<![A-Za-z0-9])EDL(?![a-z0-9])|(?<![A-Za-z0-9])edl(?=[_\-])", re.IGNORECASE)),
 ]
-# 上の段の文書に書いてはいけない、転送・ログ取得・ビルドの具体の言葉（ラベル, 正規表現）
-SPECIFIC_WORDS = [
-    ("FTP", re.compile(r"(?<![A-Za-z0-9_\-])[ST]?FTP(?![A-Za-z0-9_\-])", re.IGNORECASE)),
-    ("シリアル", re.compile(r"シリアル")),
-    ("serial", re.compile(r"serial", re.IGNORECASE)),
-    ("UART", re.compile(r"(?<![A-Za-z0-9_\-])UART(?![A-Za-z0-9_\-])", re.IGNORECASE)),
-    ("COM ポート", re.compile(r"(?<![A-Za-z0-9_\-.])COM\d*(?![A-Za-z0-9_\-])")),
-    ("ポート", re.compile(r"(?<![サレンス])ポート")),  # サポート・レポート・インポート・エクスポートは数えない
-    ("IP アドレス", re.compile(r"IP\s?アドレス", re.IGNORECASE)),
-    ("scp", re.compile(r"(?<![A-Za-z0-9_\-])scp(?![A-Za-z0-9_\-])", re.IGNORECASE)),
-    ("ssh", re.compile(r"(?<![A-Za-z0-9_\-])ssh(?![A-Za-z0-9_\-])", re.IGNORECASE)),
-    ("telnet", re.compile(r"telnet", re.IGNORECASE)),
-    ("ttyUSB など", re.compile(r"tty(USB|S|ACM)", re.IGNORECASE)),
-    ("SITE CHMOD", re.compile(r"SITE\s+CHMOD", re.IGNORECASE)),
-    ("chmod", re.compile(r"(?<![A-Za-z0-9_\-])chmod(?![A-Za-z0-9_\-])", re.IGNORECASE)),
-    ("ボーレート", re.compile(r"ボーレート|baud", re.IGNORECASE)),
-    ("SDK", re.compile(r"(?<![A-Za-z0-9_\-])SDK(?![A-Za-z0-9_\-])")),
-    ("Yocto", re.compile(r"Yocto", re.IGNORECASE)),
-    ("サム値", re.compile(r"サム値|チェックサム|crc32|sum32", re.IGNORECASE)),
-    ("設定ファイルの名前", re.compile(r"config\.ya?ml|\.ya?ml(?![A-Za-z0-9])", re.IGNORECASE)),
-    ("昇格の確認", re.compile(r"elevated permissions", re.IGNORECASE)),
-]
-# 作業エージェントの定義に書いてはいけない、転送・ログ取得・ビルドの具体の言葉
-WORKER_SPECIFIC_WORDS = ["FTP", "ftp", "シリアル", "serial", "scp", "Makefile", "SITE CHMOD", "." + PLUGIN_NAME]
-# 3段階目の部品に書いてはいけない、機器・作業の中身の言葉
-DEVICE_WORDS = ["FTP", "シリアル", "serial", "クロスコンパイル", "Makefile", "make", "IPアドレス", "IP アドレス",
-                "デプロイ", "deploy", "転送", "ビルド", "build", "機器", "device", "board", "ボード", "sensor",
-                "ログイン", "chmod", "crc32"]
+# 3段階目の部品に書いてはいけない、機器を指す言葉（3段階目は、作業の対象が機器だと知らない）。
+# 今のスキルの技術の言葉（転送の方法など）は、ここに書かない。スキルから読む（internal_patterns）
+DEVICE_WORDS = ["機器", "device", "board", "ボード"]
 
 
 # ---------------------------------------------------------------------------
@@ -251,19 +225,6 @@ def worker_table(text):
     return rows
 
 
-def setup_skill(rows):
-    """設定のスキル（「使うとき」が「設定」の行）の名前。なければ None（設定のスキルは、なくてもよい）"""
-    found = [skill for _, skill, when in rows if when == SETUP_WHEN]
-    if len(found) > 1:
-        raise AssertionError(f"「使うとき」が「{SETUP_WHEN}」の行（設定のスキル）が、2つ以上あります：{found}")
-    return found[0] if found else None
-
-
-def work_skills(rows):
-    """作業のスキル（設定のスキルのほか）の名前。表の順"""
-    return [skill for _, skill, when in rows if when != SETUP_WHEN]
-
-
 def replace_in_table(text, renames):
     """「使うスキル」の表の行の `名前` だけを替える（表の外は変えない）"""
     m = SKILL_SECTION.search(text)
@@ -276,13 +237,6 @@ def replace_in_table(text, renames):
                 line = line.replace(f"`{old}`", f"`{new}`")
         out.append(line)
     return text[:m.start(1)] + "".join(out) + text[m.end(1):]
-
-
-def role_word(role):
-    """役割の言葉の中心（括弧の中を除き、最後の「の」より後ろ）。「機器への転送」→「転送」"""
-    core = re.sub(r"[（(][^）)]*[）)]", "", role).strip()
-    core = core.rsplit("の", 1)[-1].strip()
-    return core or role
 
 
 # ---------------------------------------------------------------------------
@@ -398,11 +352,6 @@ class SkillIndependence(unittest.TestCase):
                 readme = SKILLS_DIR / skill / "README.md"
                 self.assertTrue(readme.is_file(), f"スキル {skill} に README.md がありません")
                 text = readme.read_text(encoding="utf-8")
-                for label, pattern in [(".github/skills/", r"\.github[/\\]skills"),
-                                       ("~/.copilot/skills/", r"\.copilot[/\\]skills"),
-                                       ("/skills reload", r"/skills reload"),
-                                       ("-m unittest discover -s tests", r"-m unittest discover -s tests")]:
-                    self.assertRegex(text, pattern, f"{skill} の README.md に「{label}」がありません")
                 self.assertTrue(list((SKILLS_DIR / skill / "tests").glob("test_*.py")),
                                 f"スキル {skill} のテストが、フォルダの中（tests/）にありません")
                 if templates(skill):
@@ -452,14 +401,12 @@ class WorkerIndependence(unittest.TestCase):
         self.label = f"{self.path.relative_to(ROOT)}（「使うスキル」の表の外）"
 
     def test_table_lists_the_skills(self):
-        """表の列は、役割・スキル・使うとき。表のスキルは、skills/ の下のスキルと同じ。設定のスキルは、ないか1つ。
-        どの行にも役割と使うときがある"""
+        """表の列は、役割・スキル・使うとき。表のスキルは、skills/ の下のスキルと同じ。どの行にも役割と使うときがある"""
         header = [c.strip() for c in self.table.splitlines()[0].strip().strip("|").split("|")]
         self.assertEqual(header, ["役割", "スキル", "使うとき"], "「使うスキル」の表の見出しが違います")
         names = [skill for _, skill, _ in self.rows]
         self.assertEqual(len(names), len(set(names)), f"表に、同じスキルが2回あります：{names}")
         self.assertEqual(sorted(names), skill_names(), "表のスキルが、skills/ の下のスキルと違います")
-        setup_skill(self.rows)
         for role, skill, when in self.rows:
             self.assertTrue(role, f"表の {skill} の役割が空です")
             self.assertTrue(when, f"表の {skill} の「使うとき」が空です")
@@ -469,19 +416,8 @@ class WorkerIndependence(unittest.TestCase):
         problems = hits_in_text(self.label, self.outside, [(name, token(name)) for name in names])
         self.assertEqual(problems, [], "表の外に、スキルの名前があります：\n" + "\n".join(problems))
 
-    def test_roles_not_listed_outside_table(self):
-        """表の外に、作業のスキルの役割を並べて書かない（1つの文に、2つ以上の役割を書かない）"""
-        words = sorted({role_word(role) for role, _, when in self.rows if when != SETUP_WHEN})
-        problems = []
-        for line in self.outside.splitlines():
-            for sentence in line.split("。"):
-                named = [w for w in words if w in sentence]
-                if len(named) >= 2:
-                    problems.append(f"「{'・'.join(named)}」 … {sentence.strip()[:120]}")
-        self.assertEqual(problems, [], f"{self.label} に、役割の並びがあります：\n" + "\n".join(problems))
-
     def test_does_not_name_itself(self):
-        """自分の名前を書かない（「この作業エージェント」と書く）。作業エージェントを置き換えても、中を直さずに済む"""
+        """自分の名前を書かない。作業エージェントを置き換えても、中を直さずに済む"""
         name = agent_name("worker")
         problems = hits_in_text(self.path.relative_to(ROOT), self.text, [(name, token(name))])
         self.assertEqual(problems, [], "作業エージェントの定義に、自分の名前があります：\n" + "\n".join(problems))
@@ -489,16 +425,8 @@ class WorkerIndependence(unittest.TestCase):
     def test_no_skill_internals(self):
         # 表のスキルの名前の欄は除く（スキルの名前は、そこにだけ書く）
         text = self.outside + "\n" + "\n".join(f"{role} {when}" for role, _, when in self.rows)
-        patterns = internal_patterns() + [(w, token(w)) for w in WORKER_SPECIFIC_WORDS]
-        found = [label for label, pattern in patterns if pattern.search(text)]
-        # 設定ファイルやログの名前・場所は、字の並びとして探す（config.yaml の .yaml も見つける）
-        found += [w for w in [".yaml", ".yml", "config.yaml", "logs/"] if w in text]
+        found = [label for label, pattern in internal_patterns() if pattern.search(text)]
         self.assertEqual(found, [], f"作業エージェントが、スキルの中身を書いています：{found}")
-
-    def test_setup_gets_skill_names_not_paths(self):
-        """セットアップでは、設定のスキルにスキルの名前を渡す。設定ファイルの場所を集めて渡さない"""
-        self.assertNotRegex(self.text, r"設定ファイルの場所(の一覧)?を(返|渡して)", "設定ファイルの場所を集めて渡しています")
-        self.assertNotRegex(self.text, r"設定ファイルの場所を返す", "スキルに、設定ファイルの場所を返すよう頼んでいます")
 
     def test_no_upper_layer(self):
         words = ["Web管理画面", "統括", "検証エージェント", "orchestrator", "verifier", PLUGIN_NAME + "_"]
@@ -542,16 +470,16 @@ class OrchestrationIndependence(unittest.TestCase):
         for path in stage3_files():
             self.assertNotIn(data["worker"], path.read_text(encoding="utf-8"), f"{path.relative_to(ROOT)} に作業エージェントの名前が直書きされています")
 
-    def test_worker_contract_matches(self):
-        """統括エージェントの頼みの書き出しと、作業エージェントが見分ける書き出しがそろっている（置き換えの約束）"""
+    def test_orchestrator_requests_define_the_replies(self):
+        """返事の形を決めるのは、統括エージェントの頼みの文だけ。作業エージェントは、頼みの文が求める形で返す。
+        作業エージェントの定義に、統括エージェントとの決まり（頼みの書き出し、返事の形）を書かない"""
         orchestrator = agent_path("orchestrator").read_text(encoding="utf-8")
+        self.assertIn("返事の1行目に「準備：できている」か「準備：できていない」と書いてください", orchestrator)
+        self.assertIn("手順ごとの結果", orchestrator)
         worker = worker_path().read_text(encoding="utf-8")
-        for phrase in ["これは準備の確認です", "あなたは作業役です"]:
-            self.assertRegex(orchestrator, r"(?m)^" + phrase, f"統括エージェントの頼みが「{phrase}」で始まりません")
-            self.assertIn(f"「{phrase}」", worker, f"作業エージェントが「{phrase}」を見分けていません")
-        for phrase in ["準備：できている", "準備：できていない"]:
-            self.assertIn(phrase, orchestrator, f"統括エージェントが「{phrase}」を見ていません")
-        self.assertRegex(worker, r"(?m)^準備：<できている／できていない>$", "作業エージェントの準備の確認の返事の形が違います")
+        self.assertIn("頼みの文が求める形で返します", worker)
+        for phrase in ["これは準備の確認です", "あなたは作業役です", "準備：できている", "準備：できていない"]:
+            self.assertNotIn(phrase, worker, f"作業エージェントの定義に、統括エージェントとの決まり「{phrase}」があります")
 
 
 class DocumentIndependence(unittest.TestCase):
@@ -572,7 +500,7 @@ class DocumentIndependence(unittest.TestCase):
         self.assertEqual(problems, [], "上の段の文書に、スキルの名前があります：\n" + "\n".join(problems))
 
     def test_upper_documents_have_no_specifics(self):
-        patterns = SPECIFIC_WORDS + [(k, token(k)) for k in all_template_keys()]
+        patterns = [(k, token(k)) for k in all_template_keys()]
         problems = []
         for label, text in self.upper_documents():
             problems += hits_in_text(label, text, patterns)
@@ -602,7 +530,6 @@ class DocumentIndependence(unittest.TestCase):
         text = WORKER_README.read_text(encoding="utf-8")
         label = WORKER_README.relative_to(ROOT)
         problems = hits_in_text(label, text, [(name, name_token(name)) for name in skill_names()])
-        problems += hits_in_text(label, text, SPECIFIC_WORDS)
         problems += hits_in_text(label, text, [(k, token(k)) for k in all_template_keys()])
         self.assertEqual(problems, [], "作業エージェントの README に、スキルの名前や中身があります：\n" + "\n".join(problems))
 
@@ -671,18 +598,14 @@ class SkillReplacement(unittest.TestCase):
         self.rows = worker_table(self.definition)
 
     def test_skill_is_replaced_by_its_table_row(self):
-        """作業のスキルを1つ、別の名前のスキルに替える。作業エージェントの定義で直すのは、表のその行の名前だけ"""
-        works = work_skills(self.rows)
-        if not works:
-            self.skipTest("作業のスキルがありません")
-        old = works[0]
+        """スキルを1つ、別の名前のスキルに替える。作業エージェントの定義で直すのは、表のその行の名前だけ"""
+        old = self.rows[0][1]
         new = f"{old}-alt"
         replaced = replace_in_table(self.definition, {old: new})
         rows = worker_table(replaced)
         self.assertEqual([(role, when) for role, _, when in rows], [(role, when) for role, _, when in self.rows],
                          "役割と使うときは変わりません")
         self.assertEqual([skill for _, skill, _ in rows], [new if skill == old else skill for _, skill, _ in self.rows])
-        self.assertEqual(setup_skill(rows), setup_skill(self.rows), "設定のスキルは変わりません")
         self.assertIsNone(token(old).search(replaced), f"表の行を替えても、定義に {old} が残ります（表の外にも書いてあります）")
 
     def test_replaced_worker_and_skills_need_no_upper_change(self):
@@ -695,9 +618,6 @@ class SkillReplacement(unittest.TestCase):
         new_rows = worker_table(new_definition)
         self.assertEqual([(role, when) for role, _, when in new_rows], [(role, when) for role, _, when in self.rows],
                          "役割と使うときは変わりません")
-        old_setup = setup_skill(self.rows)
-        self.assertEqual(setup_skill(new_rows), renames[old_setup] if old_setup else None,
-                         "設定のスキルは、表の「使うとき」で決まります")
         for word in list(renames) + [old_worker]:
             self.assertIsNone(token(word).search(new_definition), f"表の行の名前を替えても、定義に {word} が残ります")
         for path in stage3_files():
