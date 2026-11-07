@@ -7,8 +7,8 @@
   （<python> は、Windows では py -3 か python、それ以外では python3）
 
   run          ビルドする（何も書かないときも run）
-  config-path  設定ファイルの場所を出す。無ければひな形から作る
-  check        設定を確かめる（ビルドはしない。ファイルを作らない。設定ファイルが無ければ、そう返す）
+  config-path  設定ファイルの場所を出す。無ければひな形から作る。足りない項目があれば足す
+  check        設定を確かめる（ビルドはしない。ファイルを作らず、書き換えない。設定ファイルが無ければ、そう返す）
 
 結果は、標準出力に JSON を1つだけ出す。途中の様子は標準エラー出力に出す。
 Windows では、コンソールの文字コードで書く（ほかは Python の既定）。その文字コードにない文字は、JSON では \\uXXXX にする。
@@ -25,7 +25,8 @@ Windows では、コンソールの文字コードで書く（ほかは Python �
 Windows の bash は、Git for Windows などの bash を使う（WSL を起動する bash.exe は使わない）。
 
 設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
-  config.yaml  設定ファイル（無ければ、run と config-path が config-template.yaml から作る）
+  config.yaml  設定ファイル（無ければ、run と config-path が config-template.yaml から作る。
+               ひな形にある項目が足りなければ、config-path だけが足す。run と check は notes で知らせる）
   logs/        ログ（いつも UTF-8。ビルドの出力が UTF-8 でなければ、OS の既定の文字コードとして読む）
   .gitignore   中身は *（設定やログを git に入れないため。run と config-path が作る）
 作業フォルダは、今のフォルダ（--workdir で変えられる）。
@@ -405,19 +406,37 @@ def template_blocks(text):
     return blocks
 
 
+def missing_blocks(have):
+    """ひな形の項目のうち、have（設定ファイルの名前と値）に無いものの (名前, 行の並び)。
+    ひな形が読めなければ、空。"""
+    try:
+        with open(TEMPLATE, encoding="utf-8") as f:
+            blocks = template_blocks(f.read())
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [(key, lines) for key, lines in blocks if key not in have]
+
+
+def absent_notes(raw):
+    """ひな形にあって、設定ファイルに無い項目を知らせる注意（run と check 用。設定ファイルは変えない）。"""
+    absent = [key for key, _ in missing_blocks(raw)]
+    if not absent:
+        return []
+    return ["設定ファイルに、項目 {} がありません。config-path で、ひな形から足せます。".format(
+        "、".join(absent))]
+
+
 def add_missing_keys(path):
-    """設定ファイルに、ひな形にある項目が無ければ、説明のコメントと一緒にファイルの最後に足す。
-    すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
+    """config-path 用。設定ファイルに、ひな形にある項目が無ければ、説明のコメントと一緒に
+    ファイルの最後に足す。すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
     ファイルが読めないときや、書き方の誤りがあるときは、何も足さない。"""
     try:
         with open(path, "rb") as f:
             data = f.read()
         have = parse_yaml(data.decode("utf-8"))
-        with open(TEMPLATE, encoding="utf-8") as f:
-            blocks = template_blocks(f.read())
     except (OSError, UnicodeDecodeError, YamlError):
         return []
-    missing = [(key, lines) for key, lines in blocks if key not in have]
+    missing = missing_blocks(have)
     if not missing:
         return []
     eol = "\r\n" if b"\r\n" in data else "\n"
@@ -441,26 +460,13 @@ def added_sentence(added):
     return "設定ファイルに、新しい項目 {} を足しました（今の値はひな形のまま）。".format("、".join(added))
 
 
-def open_config(opts, workdir, config):
-    """設定ファイルを用意する。無ければひな形から作り、項目が足りなければ足す。
-    設定とログのフォルダに .gitignore が無ければ作る。作ったら True。
-    足した項目の名前は opts["added"] に入れる。"""
+def open_config(workdir, config):
+    """run と config-path 用。設定ファイルが無ければ、ひな形から作る（項目は足さない）。
+    設定とログのフォルダに .gitignore が無ければ作る。作ったら True。"""
     ensure_gitignore(os.path.join(workdir, DATA_DIR_NAME))
     created = ensure_config(config)
     ensure_gitignore(config)
-    opts["added"] = [] if created else add_missing_keys(config)
     return created
-
-
-def open_existing_config(opts, config):
-    """check 用。設定ファイルも .gitignore も作らない。設定ファイルがあれば、足りない項目を足して True。
-    無ければ False。"""
-    if os.path.isdir(config):
-        raise SettingsProblem(["設定ファイルの場所 {} は、フォルダです。".format(config)], config)
-    if not os.path.exists(config):
-        return False
-    opts["added"] = add_missing_keys(config)
-    return True
 
 
 def ensure_config(path):
@@ -776,7 +782,7 @@ def normalize(raw, workdir):
 def load(opts):
     """作業フォルダ、設定ファイル、作ったか、設定、問題のリスト を返す。"""
     workdir, config = resolve_paths(opts)
-    created = open_config(opts, workdir, config)
+    created = open_config(workdir, config)
     raw, problems = read_config(config)
     settings = None
     if not problems:
@@ -1491,7 +1497,8 @@ def first_word(command, shell="bash"):
 
 def cmd_config_path(opts):
     workdir, config = resolve_paths(opts)
-    created = open_config(opts, workdir, config)
+    created = open_config(workdir, config)
+    added = [] if created else add_missing_keys(config)
     raw, problems = read_config(config)
     missing = missing_required(raw) if not problems else []
     recommended = empty_recommended(raw) if not problems else []
@@ -1500,6 +1507,7 @@ def cmd_config_path(opts):
         "skill": SKILL,
         "config": config,
         "created": created,
+        "added": added,
         "missing": missing,
         "empty_recommended": recommended,
     }
@@ -1507,6 +1515,8 @@ def cmd_config_path(opts):
         msg = "設定ファイルをひな形から作りました：{}。".format(config)
     else:
         msg = "設定ファイルはここにあります：{}。".format(config)
+    if added:
+        msg += added_sentence(added)
     if missing:
         msg += "まだ空の必須の項目があります：{}。".format("、".join(label(k) for k in missing))
     if recommended:
@@ -1524,9 +1534,12 @@ def cmd_config_path(opts):
 # ---------------------------------------------------------------------------
 
 def cmd_check(opts):
-    """設定を確かめる。作業フォルダには、ファイルを作らない（設定ファイル・.gitignore・ログ）。"""
+    """設定を確かめる。作業フォルダには、何も書かない（設定ファイル・.gitignore・ログ）。
+    設定ファイルに足りない項目があっても足さずに、notes で知らせる。"""
     workdir, config = resolve_paths(opts)
-    if not open_existing_config(opts, config):
+    if os.path.isdir(config):
+        raise SettingsProblem(["設定ファイルの場所 {} は、フォルダです。".format(config)], config)
+    if not os.path.exists(config):
         problem = "設定ファイル {} がありません。".format(config)
         return 2, {"ok": False, "skill": SKILL, "config": config, "created": False,
                    "problems": [problem], "summary": {}, "notes": [],
@@ -1567,6 +1580,8 @@ def cmd_check(opts):
     notes = []
     if settings is not None and not settings["sdk_env"]:
         notes.append(sdk_note(cc_shown(cc), cc_from_env=bool(cc and cc["from_env"])))
+    if settings is not None:
+        notes += absent_notes(raw)
     result["notes"] = notes
 
     result["ok"] = not problems
@@ -1769,6 +1784,8 @@ def cmd_run(opts):
         else:
             msg = "設定に問題があるため、ビルドしませんでした。" + problems_message(problems)
         notes = [sdk_note()] if settings is not None and not settings["sdk_env"] else []
+        if settings is not None:
+            notes += absent_notes(raw)
         return 2, {"ok": False, "skill": SKILL, "message": msg, "problems": problems,
                    "notes": notes, "config": config, "created": created, "log": None}
 
@@ -1829,7 +1846,7 @@ def cmd_run(opts):
         "outputs": [],
         "error_lines": errors,
         "warning_lines": warnings,
-        "notes": [],
+        "notes": absent_notes(raw),
     }
 
     failed_step = state["failed_step"]
@@ -2000,11 +2017,6 @@ def dispatch(argv):
                   "problems": e.problems}
         if e.config:
             result["config"] = e.config
-    if "added" in opts:
-        # 設定ファイルを開いた後は、足した項目を必ず知らせる
-        result["added"] = opts["added"]
-        if opts["added"]:
-            result["message"] = (result.get("message") or "") + added_sentence(opts["added"])
     return code, result
 
 

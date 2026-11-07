@@ -987,7 +987,7 @@ class Settings(CaptureTestCase):
         self.capture("config-path", "--config", os.path.join(self.tmp, "sub", "my.yaml"))
         self.assertTrue(os.path.isfile(os.path.join(self.tmp, DATA_DIR_NAME, ".gitignore")))
 
-    # --- ひな形に増えた項目を、古い設定ファイルに足す ---
+    # --- ひな形に増えた項目を、古い設定ファイルに足す（足すのは config-path だけ） ---
 
     def template_blocks(self):
         with open(TEMPLATE, encoding="utf-8") as f:
@@ -1047,19 +1047,58 @@ class Settings(CaptureTestCase):
         self.assertTrue(data["created"])
         self.assertEqual(data["added"], [])
 
-    def test_run_and_check_report_added(self):
-        self.old_config("command_timeout_seconds")
+    def test_check_and_run_do_not_add(self):
+        """check と run は、足りない項目を足さずに、notes で知らせる。"""
+        before = self.old_config("command_timeout_seconds")
         code, data = self.capture("check")
         self.assertEqual(code, 2, data)
-        self.assertEqual(data["added"], ["command_timeout_seconds"])
-        self.assertTrue(data["message"].endswith(
-            "設定ファイルに、新しい項目 command_timeout_seconds を足しました（今の値はひな形のまま）。"),
-            data["message"])
-        self.old_config("prompt")
+        self.assertNotIn("added", data)
+        self.assertIn("設定ファイルに、項目 command_timeout_seconds がありません。"
+                      "config-path で、ひな形から足せます。", data["notes"])
+        self.assertEqual(self.read_config_bytes(), before)
+        self.assertEqual(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME)), ["config.yaml"])
+
+        before = self.old_config("prompt")
+        note = "設定ファイルに、項目 prompt がありません。config-path で、ひな形から足せます。"
         code, data = self.capture("run")
         self.assertEqual(code, 2, data)
+        self.assertNotIn("added", data)
+        self.assertEqual(data["notes"], [note])
+        self.assertEqual(self.read_config_bytes(), before)
+
+        # config-path が足す。その後は、check も知らせない
+        code, data = self.capture("config-path")
         self.assertEqual(data["added"], ["prompt"])
-        self.assertIn("新しい項目 prompt を足しました", data["message"])
+        self.assertEqual(self.read_config_bytes()[:len(before)], before)
+        code, data = self.capture("check")
+        self.assertNotIn(note, data["notes"])
+
+    def test_check_reports_missing_keys_without_writing(self):
+        """機器につながって問題がないときも、足りない項目は「ただし、」で知らせる。ファイルは変えない。"""
+        port = self.start_device(login=False)
+        before = self.old_config("listen_seconds", "logout", port=port, commands=["echo hi"])
+        code, data = self.capture("check")
+        self.assertEqual(code, 0, data)
+        note = "設定ファイルに、項目 listen_seconds、logout がありません。config-path で、ひな形から足せます。"
+        self.assertEqual(data["notes"], [note])
+        self.assertTrue(data["message"].endswith("ただし、" + note), data["message"])
+        self.assertNotIn("added", data)
+        self.assertEqual(self.read_config_bytes(), before)
+        self.assertEqual(os.listdir(os.path.join(self.tmp, DATA_DIR_NAME)), ["config.yaml"])
+
+    def test_check_reports_a_missing_required_key_without_writing(self):
+        before = self.old_config("port")
+        code, data = self.capture("check")
+        self.assertEqual(code, 2, data)
+        self.assertTrue(any(p.startswith("port（機器につながるシリアルポート）が空です。")
+                            for p in data["problems"]), data)
+        self.assertIn("設定ファイルに、項目 port がありません。config-path で、ひな形から足せます。",
+                      data["notes"])
+        self.assertEqual(self.read_config_bytes(), before)
+
+        code, data = self.capture("config-path")
+        self.assertEqual(data["added"], ["port"])
+        self.assertEqual(data["missing"], ["port"])
 
     def test_broken_file_is_not_touched(self):
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
@@ -1908,6 +1947,9 @@ class SelfContained(unittest.TestCase):
         self.assertIn("足りない項目", text)
         self.assertIn("ほかの所は変えません", text)
         self.assertIn("`added`", text.split("## 結果の伝え方", 1)[1])
+        # 足りない項目を足すのは config-path だけ（check は設定ファイルを書き換えない）
+        self.assertIn("run と check は足さずに、`notes` で知らせます。", text)
+        self.assertNotIn("自分で足します", text)
 
     def test_skill_md_hides_json_names(self):
         with open(SKILL_MD, encoding="utf-8") as f:

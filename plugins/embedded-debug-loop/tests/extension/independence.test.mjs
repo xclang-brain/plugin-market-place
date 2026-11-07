@@ -1,5 +1,7 @@
 // 3段階目の独立性：統括・検証・エクステンションは、作業の中身（機器・ビルド・転送・ログの取り方・スキルの名前）を知らない。
 // 作業エージェントの名前は defaults.json（データ）にだけあり、別の名前に差し替えても、そのまま動く。
+// テストに部品の名前を書かない。スキルの名前は skills/ の下のフォルダから、エージェントの名前は defaults.json から読む
+// （スキルを足す・消す・置き換えても、作業エージェントを置き換えても、このテストは直さずに済む）。
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,10 +10,23 @@ import test from 'node:test';
 
 import { EXT_DIR, PLUGIN_ROOT, startWith } from './helpers.mjs';
 
+const SKILLS_DIR = path.join(PLUGIN_ROOT, 'skills');
+const AGENTS_DIR = path.join(PLUGIN_ROOT, 'com.github.copilot', 'agents');
+const DEFAULTS = JSON.parse(fs.readFileSync(path.join(EXT_DIR, 'defaults.json'), 'utf8'));
+const agentName = (id) => id.split(':').pop(); // 「<プラグイン>:<名前>」の <名前>
+
+// スキル（skills/ の下の、SKILL.md があるフォルダ）の名前
+const SKILL_NAMES = fs.existsSync(SKILLS_DIR)
+  ? fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(SKILLS_DIR, e.name, 'SKILL.md')))
+    .map((e) => e.name)
+    .sort()
+  : [];
+// 作業の中身を表す言葉
+const DEVICE_WORDS = ['FTP', 'シリアル', 'serial', 'クロスコンパイル', 'Makefile', 'make', 'IPアドレス', 'IP アドレス', 'デプロイ', 'deploy',
+  '転送', 'ビルド', 'build', '機器', 'device', 'board', 'ボード', 'sensor', 'ログイン', 'chmod', 'crc32'];
 // 単語として出てはいけないもの（前後が英数字・_・- でないとき）
-const FORBIDDEN = ['FTP', 'シリアル', 'serial', 'クロスコンパイル', 'Makefile', 'make', 'IPアドレス', 'IP アドレス', 'デプロイ', 'deploy',
-  '転送', 'ビルド', 'build', '機器', 'device', 'board', 'ボード', 'sensor', 'ログイン', 'chmod', 'crc32',
-  'setup', 'cross-compile', 'log-capture', 'device-worker'];
+const FORBIDDEN = [...new Set([...DEVICE_WORDS, ...SKILL_NAMES, agentName(DEFAULTS.worker)])];
 const TEXT = new Set(['.mjs', '.js', '.json', '.html', '.css', '.md']);
 
 function layer3Files() {
@@ -24,14 +39,22 @@ function layer3Files() {
     }
   };
   walk(EXT_DIR);
-  for (const name of ['orchestrator.agent.md', 'verifier.agent.md']) {
-    const p = path.join(PLUGIN_ROOT, 'com.github.copilot', 'agents', name);
+  for (const id of [DEFAULTS.orchestrator, DEFAULTS.verifier]) {
+    const p = path.join(AGENTS_DIR, `${agentName(id)}.agent.md`);
     if (fs.existsSync(p)) out.push(p);
   }
   return out;
 }
 
 const word = (w) => new RegExp(`(?<![A-Za-z0-9_\\-])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_\\-])`, 'i');
+
+test('スキルの名前と作業エージェントの名前を、skills/ と defaults.json から読める', () => {
+  assert.ok(SKILL_NAMES.length > 0, 'skills/ の下に、スキル（SKILL.md があるフォルダ）がありません');
+  assert.ok(DEFAULTS.worker, 'defaults.json に作業エージェントの名前がありません');
+  for (const id of [DEFAULTS.orchestrator, DEFAULTS.verifier]) {
+    assert.ok(fs.existsSync(path.join(AGENTS_DIR, `${agentName(id)}.agent.md`)), `${agentName(id)}.agent.md がありません`);
+  }
+});
 
 test('3段階目のファイルに、作業の中身の言葉がない', () => {
   const problems = [];
@@ -64,12 +87,13 @@ test('同梱の defaults.json を読み、名前をそのまま使う（統括�
   assert.ok(r.text.includes(`作業エージェント「${defaults.worker}」`));
   assert.ok(r.text.includes(`検証エージェント：${defaults.verifier}`));
   const state = await app.control.state();
-  assert.deepEqual(state.options.agents.map((a) => a.name), [defaults.worker, defaults.verifier]);
+  assert.deepEqual(state.options.agents.map((a) => a.id), [defaults.worker, defaults.verifier]);
 });
 
 test('作業エージェントを、まったく別の名前のエージェントに差し替えても、開始から終わりまで動く', async (t) => {
   const defaults = { worker: 'kitchen:cook', verifier: 'kitchen:taster', maxIterations: 2 };
-  const { fake, app } = await startWith(t, { defaults });
+  const agents = [{ id: 'kitchen:cook', name: 'cook' }, { id: 'kitchen:taster', name: 'taster' }];
+  const { fake, app } = await startWith(t, { defaults, fake: { agents } });
   await fake.call('open', { request: 'スープを作る', criteria: ['塩味がちょうどよい'] });
   await fake.call('prepare', { worker: 'kitchen:cook', ready: true, report: '準備：できている' });
   await app.control.start({});

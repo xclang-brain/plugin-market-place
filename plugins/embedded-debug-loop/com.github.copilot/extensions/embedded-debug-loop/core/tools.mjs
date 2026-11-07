@@ -3,12 +3,11 @@
 
 import { execFile } from 'node:child_process';
 
-import { CHANGED_FILES_HEAD, MSG, TOOL, changedFilesLines, manualIssue, preparedNext, settingsLines } from './messages.mjs';
-import { OUTCOMES, matchCriterion, readCriteria, sameAgent, text } from './store.mjs';
+import { CHANGED_FILES_HEAD, MSG, TOOL, agentRef, changedFilesLines, manualIssue, preparedNext, settingsLines } from './messages.mjs';
+import { OUTCOMES, agentOf, matchCriterion, readCriteria, text } from './store.mjs';
 
 const VERDICTS = ['pass', 'fail', 'unknown'];
 const ISSUE_TIMEOUT_MS = 30_000;
-const OPTIONS_WAIT_MS = 1_500;
 
 const fail = (message) => ({ textResultForLlm: message, resultType: 'failure' });
 // モデルが数や真偽を文字で渡すこともあるので、受け入れる
@@ -31,37 +30,16 @@ export function runCommand(command, args, timeoutMs) {
 
 const S = (description) => ({ type: 'string', description });
 
-/** 待つのは、長くても ms まで（待ちきれなくても先に進む） */
-async function waitAtMost(promise, ms) {
-  let timer;
-  try {
-    await Promise.race([Promise.resolve(promise).catch(() => {}), new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * チャットで言われた作業エージェントの名前を、エージェントの一覧の名前にそろえる。
- * 一覧に同じ名前があれば、そのまま。プラグインの名前を付ける・付けないだけの違いで1つだけ当たれば、一覧の名前にする
- */
-export function listedAgentName(name, agents = []) {
-  const names = agents.map((a) => text(a?.name)).filter(Boolean);
-  if (names.includes(name)) return name;
-  const hits = names.filter((n) => sameAgent(n, name));
-  return hits.length === 1 ? hits[0] : name;
-}
-
 const DEFINITIONS = {
   open: {
     description:
-      '統括エージェントが最初に呼ぶ。頼む作業と合格の条件を記録し、Web管理画面を開いて、URL と今の設定を返す。作業エージェントの名前を渡すと、その名前を設定にする。',
+      '統括エージェントが最初に呼ぶ。頼む作業と合格の条件を記録し、Web管理画面を開いて、URL と今の設定を返す。',
     parameters: {
       type: 'object',
       properties: {
         request: S('頼む作業。利用者の頼みを短くまとめた文'),
         criteria: { type: 'array', items: { type: 'string' }, description: '合格の条件。1つずつ、結果を見て確かめられる文で。番号（C1 など）は付けない' },
-        worker: S('使う作業エージェントの名前。利用者がチャットで名前を言ったときだけ入れる。入れると、この作業フォルダの設定として保存する'),
+        worker: S('使う作業エージェントの名前。利用者がチャットで名前を言ったときだけ入れる。入れると、この会話のあいだ、その作業エージェントを使う。使えるエージェントにない名前は断る'),
       },
       required: ['request'],
     },
@@ -154,16 +132,20 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
         return fail(`Web管理画面を開けませんでした（${error?.message ?? error}）。利用者に伝えてください。`);
       }
       await refreshFolder(); // 作業フォルダの設定を読んでから、設定を伝える
-      // 利用者がチャットで作業エージェントを名指ししたときは、この作業フォルダの設定にする
+      // 利用者がチャットで作業エージェントを名指ししたときは、この会話のあいだ、それを使う
       const named = text(args?.worker);
       let chosen = '';
       if (named) {
-        await waitAtMost(refreshOptions(), OPTIONS_WAIT_MS);
-        const worker = listedAgentName(named, store.options.agents);
-        const saved = store.setSettings({ ...store.settings, worker });
-        chosen = saved
-          ? `作業エージェントを「${worker}」にしました（この作業フォルダの設定として保存しました）。`
-          : `作業エージェントを「${worker}」にしました。ただし、設定をファイルに保存できませんでした（Copilot CLI を閉じるまでは、この設定で動きます）。`;
+        await refreshOptions();
+        let worker;
+        try {
+          worker = agentOf(named, store.options.agents, '作業エージェント').id;
+        } catch (error) {
+          return fail(`${error.message}\nどれを使うかを ask_user で利用者に聞いてから、もう一度 ${TOOL.open} を呼んでください。`);
+        }
+        store.settings = { ...store.settings, worker };
+        store.changed();
+        chosen = `作業エージェントを「${worker}」にしました（この会話のあいだ使います）。`;
       }
       store.draft = { request, criteria: readCriteria(args?.criteria), prepared: null };
       store.changed();
@@ -176,10 +158,17 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
     },
 
     async prepare(args) {
-      const worker = text(args?.worker);
+      const named = text(args?.worker);
       const report = typeof args?.report === 'string' ? args.report.trim() : '';
-      if (!worker || !report) return fail('worker（作業エージェントの名前）と report（返事の全文）を入れてください。');
-      const prepared = { worker, ready: args?.ready === true || args?.ready === 'true', report, at: store.iso() };
+      if (!named || !report) return fail('worker（作業エージェントの名前）と report（返事の全文）を入れてください。');
+      await refreshOptions();
+      let worker;
+      try {
+        worker = agentOf(named, store.options.agents, '作業エージェント');
+      } catch (error) {
+        return fail(`${error.message}\nworker には、準備の確認を task で頼んだ作業エージェントの名前を入れてください。`);
+      }
+      const prepared = { worker: worker.id, ready: args?.ready === true || args?.ready === 'true', report, at: store.iso() };
       const run = store.activeRun();
       if (run) {
         run.prepared = prepared;
@@ -187,12 +176,12 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
         store.changed();
         return prepared.ready
           ? `記録しました。試行 ${run.iteration + 1} の計画を立て、${TOOL.plan} で記録してください。`
-          : '記録しました。準備ができていません。作業エージェントの返事の「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。';
+          : `記録しました。準備ができていません。作業エージェントの返事の「足りないもの」の部分を、書き換えずにそのまま引用し、準備を確かめた作業エージェント${agentRef(worker)}と合わせて利用者に伝え、どうするかを ask_user で聞いてください。`;
       }
       if (!store.draft) return fail(`先に ${TOOL.open} を呼んでください。`);
       store.draft.prepared = prepared;
       store.changed();
-      return preparedNext(prepared.ready, store.url);
+      return preparedNext(prepared.ready, store.url, worker);
     },
 
     async plan(args) {

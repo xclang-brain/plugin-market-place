@@ -1,5 +1,5 @@
 // 記録のファイルの読み書き。置き場所は <COPILOT_HOME または ~/.copilot>/plugin-data/embedded-debug-loop/。
-// - settings.json：Web管理画面の設定。作業フォルダごとに分けて持つ（{ "folders": { "<作業フォルダ>": { 設定 } } }）。
+// - settings.json：Web管理画面の設定。作業フォルダごとに分けて持つ（{ "folders": { "<作業フォルダ>": { "maxIterations": 5 } } }）。
 //   Windows では、作業フォルダの大文字と小文字を区別しない（C:\Work と c:\work は同じフォルダ）
 // - runs/<実行の番号>/run.json：実行の記録（変わるたびに書き直す）
 // - runs/<実行の番号>/events.jsonl：あとで振り返るための出来事の記録（1行に1件、足していく）
@@ -33,7 +33,7 @@ export function createPersist(baseDir, { platform = process.platform } = {}) {
   const report = (what, error) => console.error(`[Web管理画面] ${what}：${error?.message ?? error}`);
 
   const settingsFile = path.join(baseDir, 'settings.json');
-  // 作業フォルダごとの設定の表。古い形（フォルダで分けていないもの）は読まない
+  // 作業フォルダごとの設定の表（folders のほかの項目は読まない）
   const folders = () => {
     const all = readJson(settingsFile)?.folders;
     return all && typeof all === 'object' && !Array.isArray(all) ? all : {};

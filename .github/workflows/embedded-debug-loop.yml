@@ -1,6 +1,9 @@
 # embedded-debug-loop のテストを、Windows と Linux のマシンで動かす。
 # 利用者の PC は Windows なので、スキルのテストは windows-latest でも動かす。
 # Linux は ubuntu-24.04 に固定する（ubuntu-latest は Ubuntu 26 に移り、Python 3.8 を入れられないおそれがある）。
+# 部品（スキルとエージェント）の名前と、テストに要るパッケージの名前は書かない。
+# スキルは skills/ の下のフォルダから、パッケージは各スキルの tests/requirements.txt から読む。
+# そのため、スキルを足す・消す・置き換えても、作業エージェントを置き換えても、この定義は直さずに済む。
 name: embedded-debug-loop
 
 on:
@@ -37,12 +40,25 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      # pyftpdlib：FTP のテスト。PyYAML：書いた設定ファイルが YAML として読めるかのテスト（ないと飛ばされる）
+      # 各スキルの tests/requirements.txt にあるパッケージ（ないと、それを使うテストは飛ばされる）
       - name: テストに使うパッケージを入れる
+        shell: pwsh
         run: |
-          python -m pip install --disable-pip-version-check pyftpdlib pyyaml
-          python -c "import pyftpdlib, yaml; print('pyftpdlib', pyftpdlib.__ver__, '/ PyYAML', yaml.__version__)"
-      # スキルの名前は書かない。tests/ があるフォルダを、すべて動かす
+          $files = @(Get-ChildItem -Directory | ForEach-Object { Join-Path $_.FullName 'tests/requirements.txt' } | Where-Object { Test-Path $_ -PathType Leaf })
+          if ($files.Count -eq 0) {
+            Write-Host 'テストに要るパッケージを書いたスキルはありません。'
+            exit 0
+          }
+          $options = @()
+          foreach ($file in $files) {
+            Write-Host $file
+            $options += @('-r', $file)
+          }
+          python -m pip install --disable-pip-version-check @options
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python -m pip list --disable-pip-version-check
+      # tests/ があるフォルダを、すべて動かす。
+      # Windows では、設定のスキルを PowerShell から使うテスト（標準入力と文字コード）も、ここで動く
       - name: 各スキルのテスト
         shell: pwsh
         run: |
@@ -75,8 +91,24 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      # 独立性のテストは、スキルのフォルダだけをコピーして、そのテストも動かす。スキルのジョブと同じパッケージを入れる
       - name: テストに使うパッケージを入れる
-        run: python -m pip install --disable-pip-version-check pyftpdlib pyyaml
+        shell: pwsh
+        working-directory: plugins/embedded-debug-loop/skills
+        run: |
+          $files = @(Get-ChildItem -Directory | ForEach-Object { Join-Path $_.FullName 'tests/requirements.txt' } | Where-Object { Test-Path $_ -PathType Leaf })
+          if ($files.Count -eq 0) {
+            Write-Host 'テストに要るパッケージを書いたスキルはありません。'
+            exit 0
+          }
+          $options = @()
+          foreach ($file in $files) {
+            Write-Host $file
+            $options += @('-r', $file)
+          }
+          python -m pip install --disable-pip-version-check @options
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python -m pip list --disable-pip-version-check
       - name: 独立性のテスト
         run: python -m unittest discover -s tests/independence -v
 
@@ -98,89 +130,3 @@ jobs:
       - name: Web管理画面のテスト
         shell: bash
         run: node --test tests/extension/*.test.mjs
-
-  setup-stdin-windows:
-    name: setup の標準入力と文字コード（Windows の PowerShell、Python ${{ matrix.python }}）
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ['3.8', '3.12']
-    defaults:
-      run:
-        shell: pwsh
-        working-directory: plugins/embedded-debug-loop/skills/setup
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python }}
-      - name: here-string をパイプで渡し、ファイルと標準出力を確かめる
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tool = Join-Path $PWD 'scripts/config_tool.py'
-          $work = Join-Path $env:RUNNER_TEMP 'setup-stdin'
-          New-Item -ItemType Directory -Force -Path $work | Out-Null
-          $cfg = Join-Path $work 'kettle.yaml'
-          # 期待する値は、文字の番号から作る（このファイルの文字コードに頼らない）
-          $place = -join ([char[]](0x4E8C, 0x968E, 0x306E, 0x53F0, 0x6240))
-          $yaml = "# " + (-join ([char[]](0x7F6E, 0x304D, 0x5834, 0x6240))) + "`n# e.g. kitchen`nplace: `n"
-          [IO.File]::WriteAllText($cfg, $yaml, [Text.UTF8Encoding]::new($false))
-
-          Write-Host "PowerShell $($PSVersionTable.PSVersion) / OutputEncoding $($OutputEncoding.WebName) / Console $([Console]::OutputEncoding.WebName)"
-
-          # 1. SKILL.md と同じ書き方（@' と '@ の here-string をパイプで渡す）
-          $out = @'
-          二階の台所
-          '@ | python $tool set $cfg place --stdin
-          if ($LASTEXITCODE -ne 0) { throw "set が失敗しました: $out" }
-          $text = [IO.File]::ReadAllText($cfg, [Text.UTF8Encoding]::new($false))
-          Write-Host $text
-          if ($text -notmatch ('(?m)^place: "' + [regex]::Escape($place) + '"$')) { throw "設定ファイルの値が違います: $text" }
-          if ($text.Contains("`r")) { throw "設定ファイルに CR が入りました" }
-          if (($out | Out-String | ConvertFrom-Json).value -ne $place) { throw "set の標準出力の値が違います: $out" }
-
-          # 2. 標準出力（コンソールの文字コード。PowerShell も同じ文字コードで読む）
-          $got = python $tool get $cfg place
-          if ($LASTEXITCODE -ne 0) { throw "get が失敗しました: $got" }
-          if (($got | Out-String | ConvertFrom-Json).value -ne $place) { throw "get の標準出力の値が違います: $got" }
-
-          # 3. 日本語の Windows と同じ組み合わせ（Python も PowerShell も cp932）
-          [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance)
-          $env:PYTHONIOENCODING = 'cp932'
-          [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(932)
-          $got = python $tool get $cfg place
-          if ($LASTEXITCODE -ne 0) { throw "get（cp932）が失敗しました: $got" }
-          $joined = $got | Out-String
-          if (-not $joined.Contains($place)) { throw "cp932 の標準出力に、日本語の値がそのまま出ていません: $joined" }
-          if (($joined | ConvertFrom-Json).value -ne $place) { throw "cp932 の標準出力の値が違います: $joined" }
-          Write-Host "ok"
-
-      # 利用者のプロファイルが $OutputEncoding を ANSI のコードページにしているとき。
-      # パイプで渡すバイト列は UTF-8 として読めないので、OS の既定の文字コードで読む道を通る
-      - name: UTF-8 でない入力を渡し、ファイルと標準出力を確かめる
-        if: ${{ !cancelled() }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance)
-          $tool = Join-Path $PWD 'scripts/config_tool.py'
-          $work = Join-Path $env:RUNNER_TEMP 'setup-stdin-ansi'
-          New-Item -ItemType Directory -Force -Path $work | Out-Null
-          $cfg = Join-Path $work 'kettle.yaml'
-          [IO.File]::WriteAllText($cfg, "# place`n# e.g. kitchen`nplace: `n", [Text.UTF8Encoding]::new($false))
-
-          $ansi = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage)
-          $value = 'caf' + [char]0xE9
-          if ($ansi.GetString($ansi.GetBytes($value)) -ne $value) { throw "ANSI のコードページ $($ansi.CodePage) では、試す値を書けません" }
-          Write-Host "ANSI $($ansi.CodePage) / Python $(python -c 'import locale; print(locale.getpreferredencoding(False))')"
-
-          $OutputEncoding = $ansi
-          [Console]::OutputEncoding = $ansi
-          $out = $value | python $tool set $cfg place --stdin
-          if ($LASTEXITCODE -ne 0) { throw "set が失敗しました: $out" }
-          $text = [IO.File]::ReadAllText($cfg, [Text.UTF8Encoding]::new($false))
-          Write-Host $text
-          if ($text -notmatch ('(?m)^place: "' + [regex]::Escape($value) + '"$')) { throw "設定ファイルの値が違います: $text" }
-          if ($text.Contains("`r")) { throw "設定ファイルに CR が入りました" }
-          if (($out | Out-String | ConvertFrom-Json).value -ne $value) { throw "set の標準出力の値が違います: $out" }
-          Write-Host "ok"

@@ -68,8 +68,22 @@ export function stoppedChatNotice(conclusion, url) {
   return [conclusion, ...(url ? [`結果の画面：${url}#result`] : [])].join('\n');
 }
 
-/** prepare の結果の文。ready でなければ、すぐに「開始」を押すよう頼ませない */
-export function preparedNext(ready, url) {
+/**
+ * エージェントを、利用者が /agent の一覧で見分けられる形で示す：「<id>」（/agent では「<表示名> · <どこから>」）。
+ * a はエージェントの一覧の要素（id・displayName・source。Copilot CLI の値のまま）
+ */
+export function agentRef(a) {
+  const shown = [a.displayName, a.source].filter(Boolean).join(' · ');
+  return shown ? `「${a.id}」（/agent では「${shown}」）` : `「${a.id}」`;
+}
+
+/** 名前がエージェントに当たらないときに添える、使えるエージェントの一覧 */
+export function agentChoices(agents) {
+  return `使えるエージェント：${agents.map(agentRef).join('、') || 'なし'}`;
+}
+
+/** prepare の結果の文。ready でなければ、すぐに「開始」を押すよう頼ませない。worker は準備を確かめた作業エージェント（一覧の要素） */
+export function preparedNext(ready, url, worker) {
   if (ready) {
     return `記録しました。利用者に Web管理画面の URL（${url}）を伝え、設定と作業エージェントの準備の内容を確かめて『開始』を押すよう頼んで、手番を終えてください。開始が押されると、このチャットに開始の知らせが届きます。`;
   }
@@ -77,6 +91,7 @@ export function preparedNext(ready, url) {
     '記録しました。作業エージェントの準備ができていません。',
     '利用者に次のことを伝えて、手番を終えてください。いますぐ『開始』を押すようには頼まないでください。',
     '- 作業エージェントの返事の「足りないもの」の部分。書き換えずに、そのまま引用します。',
+    `- 準備を確かめた作業エージェント：${agentRef(worker)}。`,
     '- 直し方。返事に書かれた手順を、省かずにそのまま伝えます。',
     `- 直してから、Web管理画面（${url}）で『開始』を押すこと。開始すると、統括エージェントが準備を確かめ直すこと。`,
   ].join('\n');

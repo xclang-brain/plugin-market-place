@@ -5,7 +5,7 @@
 //   （実行の前・下書きのときの準備の確認や、試行 1 の計画の前の準備の確認は拒まない）
 
 import { MSG, TOOL, workReportedDeny } from './messages.mjs';
-import { sameAgent, text } from './store.mjs';
+import { text } from './store.mjs';
 
 export const MAIN_DENIED = Object.freeze(new Set([
   'edit', 'create', 'apply_patch',
@@ -37,7 +37,8 @@ export function createGuard({ store, mainSessionId = () => undefined }) {
     if (input.agentId) return false;
     const main = mainSessionId();
     if (input.sessionId && main && input.sessionId !== main) return false;
-    return !(sameAgent(input.agentType, run.worker) || sameAgent(input.agentType, run.verifier));
+    const name = text(input.agentType);
+    return name !== run.worker && name !== run.verifier;
   }
 
   return function onPreToolUse(input) {
@@ -51,7 +52,7 @@ export function createGuard({ store, mainSessionId = () => undefined }) {
       if (tool === 'task' && fromMain(input, run)) {
         const args = argsOf(input.toolArgs ?? input.arguments);
         const it = run.iteration > 0 ? run.iterations[run.iteration - 1] : null;
-        if (it?.do && sameAgent(text(args.agent_type) || text(args.agentType), run.worker)) return deny(workReportedDeny(it.n));
+        if (it?.do && (text(args.agent_type) || text(args.agentType)) === run.worker) return deny(workReportedDeny(it.n));
       }
       return undefined;
     } catch (error) {

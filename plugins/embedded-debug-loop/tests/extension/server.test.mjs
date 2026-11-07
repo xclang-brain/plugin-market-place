@@ -7,11 +7,19 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createPersist } from '../../com.github.copilot/extensions/embedded-debug-loop/core/persist.mjs';
-import { CWD, EXT_DIR, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
+import { CWD, EXT_DIR, LEAD, VERIFIER, WORKER, http, startRun, startWith, tempDir } from './helpers.mjs';
 
 // 作業フォルダ。エクステンションと同じく path.resolve で作る（Windows ではドライブ名が付く）
 const A = path.resolve('/w/a');
 const B = path.resolve('/w/b');
+
+// エージェントの一覧（既定の3つに、テストで選ぶ名前を足す）
+const agentsWith = (...names) => [
+  { id: WORKER, name: 'helper-a' },
+  { id: LEAD, name: 'lead-c' },
+  { id: VERIFIER, name: 'checker-b' },
+  ...names.map((id) => ({ id, name: id.slice(id.lastIndexOf(':') + 1) })),
+];
 
 async function opened(t, options) {
   const ctx = await startWith(t, options);
@@ -71,7 +79,10 @@ test('状態：設定・選べるエージェントとモデル・下書き・�
   const { data } = await http(api('/api/state'));
   assert.equal(typeof data.version, 'number');
   assert.deepEqual(data.settings, { worker: WORKER, verifier: VERIFIER, maxIterations: 3, workerModel: '', workerEffort: '', verifierModel: '', verifierEffort: '' });
-  assert.deepEqual(data.options.agents, [{ name: WORKER, description: '手伝う' }, { name: VERIFIER, description: '確かめる' }]);
+  assert.deepEqual(data.options.agents, [
+    { id: WORKER, name: 'helper-a', displayName: 'helper-a', source: 'plugin', description: '手伝う' },
+    { id: VERIFIER, name: 'checker-b', displayName: 'checker-b', source: 'plugin', description: '確かめる' },
+  ]);
   assert.deepEqual(data.options.models, [{ id: 'model-x', name: 'モデル X' }, { id: 'model-y', name: 'model-y' }]);
   assert.deepEqual(data.options.efforts, ['low', 'medium', 'high', 'xhigh']);
   assert.deepEqual(data.draft, { request: '表示を直す', criteria: ['完了と出る'], prepared: null });
@@ -93,13 +104,17 @@ test('状態：エージェントの一覧が読めなくても、前の一覧�
 
 test('設定の保存：ファイルに残り、起動し直しても読み直す。誤りは 400', async (t) => {
   const dataDir = path.join(tempDir(t), 'data');
-  const a = await opened(t, { dataDir });
+  const agents = agentsWith('x-plugin:other');
+  const a = await opened(t, { dataDir, fake: { agents } });
   const body = { worker: 'x-plugin:other', verifier: VERIFIER, maxIterations: 7, workerModel: 'model-y', workerEffort: 'high', verifierModel: '', verifierEffort: '既定', request: '書き直した作業', criteria: '条件1\n\n条件2\n' };
   const r = await http(a.api('/api/settings'), { method: 'POST', body });
   assert.equal(r.status, 200);
   assert.equal(r.data.ok, true);
   const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
-  assert.deepEqual(saved, { folders: { [CWD]: { worker: 'x-plugin:other', verifier: VERIFIER, maxIterations: 7, workerModel: 'model-y', workerEffort: 'high', verifierModel: '', verifierEffort: '' } } });
+  // ファイルに保存するのは、繰り返しの上限だけ（使うエージェント・モデル・考える深さは、部品によって変わるので保存しない）
+  assert.deepEqual(saved, { folders: { [CWD]: { maxIterations: 7 } } });
+  assert.equal(a.app.store.settings.worker, 'x-plugin:other', 'この会話のあいだは、選んだ名前を使う');
+  assert.equal(a.app.store.settings.workerModel, 'model-y', 'この会話のあいだは、選んだモデルを使う');
   const state = (await http(a.api('/api/state'))).data;
   assert.deepEqual(state.draft.criteria, ['条件1', '条件2']);
   assert.equal(state.draft.request, '書き直した作業');
@@ -108,9 +123,36 @@ test('設定の保存：ファイルに残り、起動し直しても読み直�
   assert.equal(bad.status, 400);
   assert.match(bad.data.error, /繰り返しの上限/);
 
-  const b = await opened(t, { dataDir });
-  assert.equal(b.app.store.settings.worker, 'x-plugin:other');
+  const b = await opened(t, { dataDir, fake: { agents } });
+  assert.equal(b.app.store.settings.worker, WORKER, '起動し直すと、既定（defaults.json）の名前から始める');
+  assert.equal(b.app.store.settings.workerModel, '', '起動し直すと、モデルは既定から始める');
+  assert.equal(b.app.store.settings.workerEffort, '');
   assert.equal(b.app.store.settings.maxIterations, 7);
+});
+
+test('設定の保存・開始：使えるエージェントにない名前と、2つ以上に当たる名前は 400 で断り、使えるエージェントを示す。表示名は id にそろえる', async (t) => {
+  const agents = [
+    ...agentsWith(),
+    { id: 'p1:twin', name: 'twin', displayName: 'twin', source: 'plugin' },
+    { id: 'p2:twin', name: 'twin', displayName: 'twin', source: 'plugin' },
+  ];
+  const { app, api } = await opened(t, { fake: { agents } });
+  for (const [body, re] of [
+    [{ worker: 'gone:worker' }, /^作業エージェント「gone:worker」に当たるエージェントがありません。使えるエージェント：/],
+    [{ worker: 'twin' }, /^作業エージェント「twin」に当たるエージェントが2つ以上あります。使えるエージェント：/],
+    [{ verifier: 'gone:checker' }, /^検証エージェント「gone:checker」に当たるエージェントがありません。/],
+  ]) {
+    for (const p of ['/api/settings', '/api/start']) {
+      const r = await http(api(p), { method: 'POST', body: { criteria: ['c'], ...body } });
+      assert.equal(r.status, 400, `${p} ${JSON.stringify(body)}`);
+      assert.match(r.data.error, re);
+      assert.ok(r.data.error.includes('「p1:twin」（/agent では「twin · plugin」）'), r.data.error);
+    }
+  }
+  assert.equal(app.store.settings.worker, WORKER, '断ったときは変えない');
+  assert.equal(app.store.run, null);
+  await http(api('/api/settings'), { method: 'POST', body: { worker: 'checker-b', verifier: 'p1:twin' } });
+  assert.deepEqual([app.store.settings.worker, app.store.settings.verifier], [VERIFIER, 'p1:twin']);
 });
 
 test('設定の保存：下書きがなく、頼む作業も条件も空なら、下書きを作らない', async (t) => {
@@ -260,11 +302,12 @@ test('同梱の画面のファイル（index.html）は、直接書いたスク�
 test('設定は作業フォルダごとに保存し、ほかの作業フォルダには持ち越さない', async (t) => {
   const dataDir = path.join(tempDir(t), 'data');
   const file = path.join(dataDir, 'settings.json');
-  const a = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  const agents = agentsWith('only-a:helper');
+  const a = await opened(t, { dataDir, fake: { cwd: '/w/a', agents } });
   await http(a.api('/api/settings'), { method: 'POST', body: { worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4 } });
   assert.equal(a.app.store.snapshot().folder, A);
 
-  const b = await opened(t, { dataDir, fake: { cwd: '/w/b' } });
+  const b = await opened(t, { dataDir, fake: { cwd: '/w/b', agents } });
   let state = (await http(b.api('/api/state'))).data;
   assert.equal(state.folder, B);
   assert.equal(state.settings.worker, WORKER, 'ほかのフォルダでは、既定（defaults.json）のまま');
@@ -273,9 +316,9 @@ test('設定は作業フォルダごとに保存し、ほかの作業フォル�
   assert.ok(r.text.includes(`作業エージェント「${WORKER}」`), 'open も、その作業フォルダの設定を伝える');
   await http(b.api('/api/settings'), { method: 'POST', body: { worker: WORKER, verifier: VERIFIER, maxIterations: 6 } });
 
-  const c = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
+  const c = await opened(t, { dataDir, fake: { cwd: '/w/a', agents } });
   state = (await http(c.api('/api/state'))).data;
-  assert.equal(state.settings.worker, 'only-a:helper');
+  assert.equal(state.settings.worker, WORKER, '使うエージェントは保存しない');
   assert.equal(state.settings.maxIterations, 4);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(Object.keys(saved.folders).sort(), [A, B].sort());
@@ -298,22 +341,29 @@ test('設定：Windows では、作業フォルダの大文字と小文字を区
   assert.deepEqual(linux.readSettings('/w/App'), { worker: 'a' });
 });
 
-test('設定：フォルダで分けていない古い設定のファイルは読まず、既定を使う', async (t) => {
+test('設定：ファイルからは、作業フォルダの繰り返しの上限だけを読む（ほかの項目は読まない）', async (t) => {
   const dataDir = path.join(tempDir(t), 'data');
   fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ worker: 'leaked:worker', verifier: VERIFIER, maxIterations: 9 }));
-  const { app, api } = await opened(t, { dataDir });
-  const state = (await http(api('/api/state'))).data;
-  assert.equal(state.settings.worker, WORKER);
-  assert.equal(app.store.settings.maxIterations, 3);
+  const file = path.join(dataDir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ worker: 'leaked:worker', maxIterations: 9 }));
+  const a = await opened(t, { dataDir });
+  assert.equal(a.app.store.settings.worker, WORKER);
+  assert.equal(a.app.store.settings.maxIterations, 3);
+  await a.app.shutdown();
+
+  const old = { worker: 'leaked:worker', verifier: 'leaked:checker', maxIterations: 8, workerModel: 'model-x', workerEffort: 'high', verifierModel: 'model-y', verifierEffort: 'low' };
+  fs.writeFileSync(file, JSON.stringify({ folders: { [CWD]: old } }));
+  const b = await opened(t, { dataDir });
+  const { settings } = (await http(b.api('/api/state'))).data;
+  assert.deepEqual(settings, { worker: WORKER, verifier: VERIFIER, maxIterations: 8, workerModel: '', workerEffort: '', verifierModel: '', verifierEffort: '' });
 });
 
 test('設定：セッションの作業フォルダを読む RPC がなければ、このプロセスの今のフォルダを使う', async (t) => {
   const { app, dataDir } = await startWith(t, { fake: { missing: ['metadata'] } });
-  await app.control.saveSettings({ worker: 'here:helper', verifier: VERIFIER, maxIterations: 2 });
+  await app.control.saveSettings({ worker: WORKER, verifier: VERIFIER, maxIterations: 2 });
   assert.equal(app.store.folder, process.cwd());
   const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
-  assert.equal(saved.folders[process.cwd()].worker, 'here:helper');
+  assert.deepEqual(saved.folders[process.cwd()], { maxIterations: 2 });
 });
 
 test('作業・検証の選択肢から、統括エージェント（defaults.json の名前）と、チャットで選ばれているエージェントを除く', async (t) => {
@@ -324,7 +374,7 @@ test('作業・検証の選択肢から、統括エージェント（defaults.js
     { name: 'checker-b', id: VERIFIER, description: '確かめる' },
   ];
   const { api } = await opened(t, { fake: { agents, current: { name: 'boss', id: 'team:boss' } } });
-  const names = (await http(api('/api/state'))).data.options.agents.map((a) => a.name);
+  const names = (await http(api('/api/state'))).data.options.agents.map((a) => a.id);
   assert.deepEqual(names, [WORKER, VERIFIER]);
 });
 
@@ -337,7 +387,7 @@ test('選択肢：チャットで選ばれているのが、いま選んでい�
   ];
   const names = async (fake) => {
     const { api } = await opened(t, { fake: { agents, ...fake } });
-    return (await http(api('/api/state'))).data.options.agents.map((x) => x.name);
+    return (await http(api('/api/state'))).data.options.agents.map((x) => x.id);
   };
   assert.deepEqual(await names({ current: { name: 'helper-a', id: WORKER } }), [WORKER, 'team:boss', VERIFIER], 'いまの作業エージェントは残す');
   assert.deepEqual(await names({ current: new Error('読めない') }), [WORKER, 'team:boss', VERIFIER]);
@@ -345,13 +395,16 @@ test('選択肢：チャットで選ばれているのが、いま選んでい�
   assert.deepEqual(await names({ current: null }), [WORKER, 'team:boss', VERIFIER], '既定のエージェントで話しているとき');
 });
 
-test('設定：作業フォルダが変わったら（/cd）、そのフォルダの設定を読み直す', async (t) => {
+test('設定：作業フォルダが変わったら（/cd）、そのフォルダの繰り返しの上限を読み直す。ほかの設定は、この会話のあいだそのまま', async (t) => {
   const dataDir = path.join(tempDir(t), 'data');
-  const a = await opened(t, { dataDir, fake: { cwd: '/w/a' } });
-  await a.app.control.saveSettings({ worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4 });
+  const a = await opened(t, { dataDir, fake: { cwd: '/w/a', agents: agentsWith('only-a:helper') } });
+  await a.app.control.saveSettings({ worker: 'only-a:helper', verifier: VERIFIER, maxIterations: 4, workerModel: 'model-x' });
   a.app.store.useFolder('/w/b');
-  assert.equal(a.app.store.settings.worker, WORKER);
+  assert.equal(a.app.store.settings.maxIterations, 3, '保存のないフォルダでは既定');
+  assert.equal(a.app.store.settings.worker, 'only-a:helper');
+  assert.equal(a.app.store.settings.workerModel, 'model-x');
   a.app.store.useFolder('/w/a/');
   assert.equal(a.app.store.folder, A, '末尾の / は同じフォルダとみなす');
+  assert.equal(a.app.store.settings.maxIterations, 4);
   assert.equal(a.app.store.settings.worker, 'only-a:helper');
 });

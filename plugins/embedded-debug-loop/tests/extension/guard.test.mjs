@@ -31,7 +31,7 @@ test('実行中：子のエージェント（agentId あり、または作業・
   const { fake } = await startRun(t);
   assert.equal(fake.pre({ toolName: 'bash', toolArgs: {}, agentId: 'w1', agentType: WORKER }), undefined);
   assert.equal(fake.pre({ toolName: 'edit', toolArgs: {}, agentId: 'x1', agentType: 'general-purpose' }), undefined);
-  assert.equal(fake.pre({ toolName: 'bash', toolArgs: {}, agentType: 'helper-a' }), undefined, 'agentId がない古い版でも、名前で見分ける');
+  assert.equal(fake.pre({ toolName: 'bash', toolArgs: {}, agentType: WORKER }), undefined, 'agentId がない古い版でも、名前で見分ける');
   assert.equal(fake.pre({ toolName: 'skill', toolArgs: {}, agentType: VERIFIER }), undefined);
   assert.equal(fake.pre({ toolName: 'bash', toolArgs: {}, sessionId: 'child-1' }), undefined, '子のセッションの番号なら子とみなす');
   assert.equal(fake.pre({ toolName: 'bash', toolArgs: {}, sessionId: 's1' })?.permissionDecision, 'deny', '親のセッションの番号なら統括');
@@ -76,7 +76,6 @@ test('実行中：今の試行に作業の報告があり、新しい計画が�
   fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告：できなかった' });
   for (const input of [
     task(WORKER),
-    task('helper-a'), // プラグインの名前がなくても同じエージェント
     { toolName: 'task', toolArgs: JSON.stringify({ agent_type: WORKER, prompt: '…' }) }, // 引数が JSON の文でも読む
     task(WORKER, { sessionId: 's1' }),
   ]) {

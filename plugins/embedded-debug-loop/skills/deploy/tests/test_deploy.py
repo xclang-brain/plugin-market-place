@@ -735,7 +735,8 @@ class OutputTest(unittest.TestCase):
 
 
 class AddMissingKeysTest(unittest.TestCase):
-    """スキルを新しくして、ひな形に項目が増えたとき、古い設定ファイルに足す。"""
+    """スキルを新しくして、ひな形に項目が増えたとき、config-path だけが古い設定ファイルに足す。
+    check と run は足さずに、notes で知らせる。"""
 
     def old_config(self, ws, text):
         data = text.encode("utf-8")
@@ -778,17 +779,46 @@ class AddMissingKeysTest(unittest.TestCase):
         self.assertNotIn("message", data)
         self.assertEqual(read_file(ws.config), after)
 
-    def test_check_and_run_report_added(self):
+    def test_check_and_run_do_not_add(self):
         ws = Workspace(self)
-        self.old_config(ws, template_without("timeout_seconds"))
+        before = self.old_config(ws, template_without("timeout_seconds"))
+        note = "設定ファイルに、項目 timeout_seconds がありません。config-path で、ひな形から足せます。"
         code, data, _o, _e = ws.run("check")
         self.assertEqual(code, 2, data)
-        self.assertEqual(data["added"], ["timeout_seconds"])
-        self.assertTrue(data["message"].endswith(
-            "設定ファイルに、新しい項目 timeout_seconds を足しました（今の値はひな形のまま）。"), data["message"])
+        self.assertNotIn("added", data)
+        self.assertIn(note, data["notes"])
+        self.assertEqual(read_file(ws.config), before)
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
+
         code, data, _o, _e = ws.run("run")
         self.assertEqual(code, 2, data)
-        self.assertEqual(data["added"], [])
+        self.assertNotIn("added", data)
+        self.assertEqual(data["notes"], [note])
+        self.assertEqual(read_file(ws.config), before)
+
+        # config-path が足す。その後は、check も知らせない
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(data["added"], ["timeout_seconds"])
+        self.assertEqual(read_file(ws.config)[:len(before)], before)
+        code, data, _o, _e = ws.run("check")
+        self.assertNotIn(note, data["notes"])
+
+    def test_check_reports_a_missing_required_key_without_writing(self):
+        ws = Workspace(self)
+        before = self.old_config(ws, template_without("host"))
+        code, data, _o, _e = ws.run("check")
+        self.assertEqual(code, 2, data)
+        self.assertIn("host（機器の IP アドレスかホスト名）が空です。", data["problems"])
+        self.assertIn("設定ファイルに、項目 host がありません。config-path で、ひな形から足せます。",
+                      data["notes"])
+        self.assertEqual(read_file(ws.config), before)
+        self.assertEqual(os.listdir(ws.data_dir), ["config.yaml"])
+
+        code, data, _o, _e = ws.run("config-path")
+        self.assertEqual(data["added"], ["host"])
+        self.assertIn("host", data["missing"])
+        values, _raws = deploy.read_config_file(ws.config)
+        self.assertEqual(values["host"], "")
 
     def test_broken_file_is_not_touched(self):
         ws = Workspace(self)
@@ -945,13 +975,17 @@ class CommandWithoutServerTest(unittest.TestCase):
                 self.assertEqual(data["notes"], expected)
                 self.assertEqual(len(data["problems"]), 1, data)
                 self.assertNotIn("file_mode", data["problems"][0])
-        # 項目そのものがないとき（古い設定ファイル）も、空と同じ
+        # 項目そのものがないとき（古い設定ファイル）も、空と同じ。ないことも知らせる（足さない）
         cfg = base_config(free_port())
         del cfg["file_mode"]
-        ws.file(os.path.relpath(ws.config, ws.dir), render_yaml(cfg).encode("utf-8"))
+        before = render_yaml(cfg).encode("utf-8")
+        ws.file(os.path.relpath(ws.config, ws.dir), before)
         code, data, _o, _e = ws.run("check")
-        self.assertEqual(data["added"], ["file_mode"])
-        self.assertEqual(data["notes"], [deploy.NO_MODE_NOTE])
+        self.assertNotIn("added", data)
+        self.assertEqual(data["notes"], [
+            deploy.NO_MODE_NOTE,
+            "設定ファイルに、項目 file_mode がありません。config-path で、ひな形から足せます。"])
+        self.assertEqual(read_file(ws.config), before)
 
     def test_check_unexpected_error_makes_no_files(self):
         ws = Workspace(self)
@@ -1629,6 +1663,9 @@ class SkillFilesTest(unittest.TestCase):
         self.assertIn("足りない項目", text)
         self.assertIn("ほかの所は変えません", text)
         self.assertIn("`added`", text.split("## 結果の伝え方", 1)[1])
+        # 足りない項目を足すのは config-path だけ（check は設定ファイルを書き換えない）
+        self.assertIn("run と check は足さずに、`notes` で知らせます。", text)
+        self.assertNotIn("自分で足します", text)
 
     def test_skill_md_does_not_make_config_unasked(self):
         """check で設定ファイルがないとき、config-path の名前を見せず、頼まれるまで作らない。"""

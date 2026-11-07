@@ -5,8 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { matchCriterion } from '../../com.github.copilot/extensions/embedded-debug-loop/core/store.mjs';
-import { listedAgentName } from '../../com.github.copilot/extensions/embedded-debug-loop/core/tools.mjs';
+import { agentOf, matchCriterion } from '../../com.github.copilot/extensions/embedded-debug-loop/core/store.mjs';
 import { CWD, LEAD, VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
 
 test('ツールは6つで、ツール検索の裏に回さず、確認なしで動く', async (t) => {
@@ -49,67 +48,78 @@ test('open：worker（作業エージェントの名前）は任意で、説明�
   const { parameters } = fake.tool('open');
   assert.equal(parameters.properties.worker.type, 'string');
   assert.match(parameters.properties.worker.description, /作業エージェントの名前/);
-  assert.match(parameters.properties.worker.description, /この作業フォルダの設定として保存する/);
+  assert.match(parameters.properties.worker.description, /この会話のあいだ/);
   assert.ok(!parameters.required.includes('worker'));
 });
 
-test('open：worker を渡すと、この作業フォルダの設定に保存してから、その名前で返事と準備の確認の頼みを書く', async (t) => {
-  const { fake, app, dataDir } = await startWith(t);
+test('open：worker を渡すと、この会話のあいだ、その名前で返事と準備の確認の頼みを書く（名前は保存しない）', async (t) => {
+  const agents = [
+    { id: WORKER, name: 'helper-a' },
+    { id: LEAD, name: 'lead-c' },
+    { id: VERIFIER, name: 'checker-b' },
+    { id: 'host-sim-worker', name: 'host-sim-worker' },
+  ];
+  const { fake, app, dataDir } = await startWith(t, { fake: { agents } });
   const r = await fake.call('open', { request: '表示を直す', criteria: ['完了と出る'], worker: ' host-sim-worker ' });
   assert.ok(r.ok);
   const lines = r.text.split('\n');
   assert.match(lines[0], /^Web管理画面を開きました。URL：/);
-  assert.equal(lines[1], '作業エージェントを「host-sim-worker」にしました（この作業フォルダの設定として保存しました）。');
+  assert.equal(lines[1], '作業エージェントを「host-sim-worker」にしました（この会話のあいだ使います）。');
   assert.ok(lines.includes('- 作業エージェント：host-sim-worker'));
   assert.ok(lines.includes(`- 検証エージェント：${VERIFIER}`), 'ほかの設定は変えない');
   assert.equal(lines[lines.length - 1], '次に、作業エージェント「host-sim-worker」に、準備の確認だけを頼んでください（作業はさせない）。返事を embedded-debug-loop_prepare で記録してください。');
   assert.ok(!r.text.includes(WORKER), '既定の作業エージェントの名前は出さない');
   assert.equal(app.store.snapshot().settings.worker, 'host-sim-worker');
-  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
-  assert.equal(saved.folders[CWD].worker, 'host-sim-worker');
-  assert.equal(saved.folders[CWD].verifier, VERIFIER);
+  // 部品を替えたとき前の名前が残らないように、使うエージェントの名前はファイルに保存しない
+  const file = path.join(dataDir, 'settings.json');
+  const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { folders: {} };
+  assert.equal(saved.folders[CWD]?.worker, undefined);
+  assert.equal(saved.folders[CWD]?.verifier, undefined);
 
-  // 次に開くときは、保存した名前を使う（worker を渡さなくても）
+  // 同じ会話で次に開くときは、同じ名前を使う（worker を渡さなくても）
   const again = await fake.call('open', { request: 'もう一度' });
   assert.ok(again.text.includes('次に、作業エージェント「host-sim-worker」に'));
   assert.ok(!again.text.includes('にしました'));
 });
 
-test('open：worker の名前は、エージェントの一覧の名前にそろえる（プラグインの名前の有無だけの違いのとき）', async (t) => {
+test('open：worker の名前は、エージェントの一覧の id にする。一覧にない名前・2つ以上に当たる名前は、使えるエージェントを示して断る', async (t) => {
   const agents = [
-    { id: WORKER, name: 'helper-a' },
-    { id: VERIFIER, name: 'checker-b' },
-    { id: 'p1:twin', name: 'twin' },
-    { id: 'p2:twin', name: 'twin' },
+    { id: WORKER, name: 'helper-a', displayName: 'helper-a', source: 'plugin' },
+    { id: VERIFIER, name: 'checker-b', displayName: 'checker-b', source: 'plugin' },
+    { id: 'p1:twin', name: 'twin', displayName: 'twin', source: 'plugin' },
+    { id: 'p2:twin', name: 'twin', displayName: 'twin', source: 'plugin' },
   ];
   const { fake, app } = await startWith(t, { fake: { agents } });
   const r = await fake.call('open', { request: '作業', worker: 'helper-a' });
   assert.ok(r.text.includes(`作業エージェントを「${WORKER}」にしました`));
   assert.equal(app.store.snapshot().settings.worker, WORKER);
-  await fake.call('open', { request: '作業', worker: 'twin' }); // 2つ当たるときは、言われたまま
-  assert.equal(app.store.snapshot().settings.worker, 'twin');
-  await fake.call('open', { request: '作業', worker: 'unknown-agent' }); // 一覧になくても、言われたまま
-  assert.equal(app.store.snapshot().settings.worker, 'unknown-agent');
+  const draft = app.store.snapshot().draft;
+  for (const [named, head] of [
+    ['twin', '作業エージェント「twin」に当たるエージェントが2つ以上あります。'],
+    ['unknown-agent', '作業エージェント「unknown-agent」に当たるエージェントがありません。'],
+  ]) {
+    const ng = await fake.call('open', { request: '別の作業', worker: named });
+    assert.equal(ng.ok, false, named);
+    assert.ok(ng.text.startsWith(head), ng.text);
+    assert.ok(ng.text.includes(`使えるエージェント：「${WORKER}」（/agent では「helper-a · plugin」）、「${VERIFIER}」（/agent では「checker-b · plugin」）、「p1:twin」（/agent では「twin · plugin」）、「p2:twin」`), ng.text);
+    assert.ok(ng.text.includes('ask_user で利用者に聞いてから、もう一度 embedded-debug-loop_open を呼んでください'));
+    assert.equal(app.store.snapshot().settings.worker, WORKER, '断ったときは変えない');
+    assert.deepEqual(app.store.snapshot().draft, draft, '断ったときは下書きを変えない');
+  }
 });
 
-test('listedAgentName：同じ名前 → そのまま、1つだけ当たる → 一覧の名前、ほかは言われたまま', () => {
-  const list = [{ name: 'a:x' }, { name: 'y' }, { name: 'b:z' }, { name: 'c:z' }];
-  assert.equal(listedAgentName('a:x', list), 'a:x');
-  assert.equal(listedAgentName('x', list), 'a:x');
-  assert.equal(listedAgentName('q:y', list), 'y');
-  assert.equal(listedAgentName('z', list), 'z');
-  assert.equal(listedAgentName('w', list), 'w');
-  assert.equal(listedAgentName('x', []), 'x');
-});
-
-test('open：worker を保存できなくても、その名前で進め、保存できなかったことを伝える', async (t) => {
-  const { fake, app, dataDir } = await startWith(t);
-  fs.mkdirSync(path.join(dataDir, 'settings.json'), { recursive: true }); // ファイルの場所にフォルダがあって書けない
-  const r = await fake.call('open', { request: '作業', worker: 'host-sim-worker' });
-  assert.ok(r.ok);
-  assert.ok(r.text.includes('作業エージェントを「host-sim-worker」にしました。ただし、設定をファイルに保存できませんでした'));
-  assert.ok(r.text.includes('次に、作業エージェント「host-sim-worker」に'));
-  assert.equal(app.store.snapshot().settings.worker, 'host-sim-worker');
+test('agentOf：id が同じものを先に選ぶ。なければ name か displayName が同じものが1つだけのとき', () => {
+  const list = [
+    { id: 'solo', name: 'solo', displayName: 'solo', source: 'project' },
+    { id: 'p:solo', name: 'solo', displayName: 'solo', source: 'plugin' },
+    { id: 'p:x', name: 'x', displayName: 'エックス', source: 'plugin' },
+  ];
+  assert.equal(agentOf('solo', list, 'A').id, 'solo', 'id と同じものがあれば、それ');
+  assert.equal(agentOf('p:solo', list, 'A').id, 'p:solo');
+  assert.equal(agentOf('x', list, 'A').id, 'p:x');
+  assert.equal(agentOf('エックス', list, 'A').id, 'p:x');
+  assert.throws(() => agentOf('q:x', list, 'A'), (e) => e.status === 400 && /^A「q:x」に当たるエージェントがありません。/.test(e.message));
+  assert.throws(() => agentOf('x', [], 'A'), (e) => e.message.endsWith('使えるエージェント：なし'));
 });
 
 test('open：実行中は worker を渡しても、設定を変えずに断る', async (t) => {
@@ -148,6 +158,8 @@ test('prepare：返事を下書きに残し、開始を押してもらうよう�
   assert.match(ng.text, /直してから、Web管理画面（http:\/\/127\.0\.0\.1:\d+\/\?k=[^）]+）で『開始』を押すこと。開始すると、統括エージェントが準備を確かめ直すこと。/);
   assert.match(ng.text, /いますぐ『開始』を押すようには頼まないでください。/);
   assert.ok(!ng.text.includes('『開始』を押すよう頼んで'), '準備ができていないのに、すぐ開始を押すよう頼ませない');
+  assert.ok(ng.text.includes(`- 準備を確かめた作業エージェント：「${WORKER}」（/agent では「helper-a · plugin」）。`), '作業エージェントは自分の名前を書かないので、名前と /agent での見え方は、こちらで添えさせる');
+  assert.ok(!ng.text.includes('この作業エージェント'), '作業エージェントの返事の言い回しに頼らない');
 });
 
 test('prepare（実行中）：準備ができていなければ、足りないものをそのまま引用して伝え、ask_user で聞くよう伝える', async (t) => {
@@ -155,7 +167,8 @@ test('prepare（実行中）：準備ができていなければ、足りない�
   const ok = await fake.call('prepare', { worker: WORKER, ready: true, report: '準備：できている' });
   assert.match(ok.text, /試行 1 の計画を立て/);
   const ng = await fake.call('prepare', { worker: WORKER, ready: false, report: '準備：できていない' });
-  assert.match(ng.text, /「足りないもの」の部分を、書き換えずにそのまま引用して利用者に伝え、どうするかを ask_user で聞いてください。/);
+  assert.equal(ng.text, `記録しました。準備ができていません。作業エージェントの返事の「足りないもの」の部分を、書き換えずにそのまま引用し、準備を確かめた作業エージェント「${WORKER}」（/agent では「helper-a · plugin」）と合わせて利用者に伝え、どうするかを ask_user で聞いてください。`);
+  assert.ok(!ng.text.includes('この作業エージェント'));
   assert.ok(!ng.text.includes('開始'));
 });
 
@@ -204,7 +217,8 @@ test('開始：準備していない・作業エージェントを変えたと�
   const a = await startRun(t, { prepare: false });
   assert.ok(a.fake.sent[0].includes('作業エージェントの準備の確認がまだです。最初に準備の確認を頼んでから、試行を始めてください。'));
 
-  const b = await startWith(t);
+  const agents = [{ id: WORKER, name: 'helper-a' }, { id: VERIFIER, name: 'checker-b' }, { id: 'other-plugin:another', name: 'another' }];
+  const b = await startWith(t, { fake: { agents } });
   await b.fake.call('open', { request: '作業', criteria: ['条件'] });
   await b.fake.call('prepare', { worker: WORKER, ready: true, report: '準備：できている' });
   await b.app.control.start({ worker: 'other-plugin:another' });
@@ -221,10 +235,15 @@ test('開始：前の準備の確認が「できていない」なら、頼み�
   assert.ok(!fake.sent[0].includes('準備の確認がまだ'));
 });
 
-test('開始：プラグインの名前の付け方が違っても、同じ作業エージェントなら準備ずみとみなす', async (t) => {
+test('prepare：worker は一覧の id にして記録する（開始のとき、同じ作業エージェントなら準備ずみ）。一覧にない名前は断る', async (t) => {
   const { fake, app } = await startWith(t);
   await fake.call('open', { request: '作業', criteria: ['条件'] });
+  const ng = await fake.call('prepare', { worker: 'gone:worker', ready: true, report: '準備：できている' });
+  assert.equal(ng.ok, false);
+  assert.match(ng.text, /^作業エージェント「gone:worker」に当たるエージェントがありません。使えるエージェント：/);
+  assert.equal(app.store.snapshot().draft.prepared, null);
   await fake.call('prepare', { worker: 'helper-a', ready: true, report: '準備：できている' });
+  assert.equal(app.store.snapshot().draft.prepared.worker, WORKER);
   await app.control.start({});
   assert.ok(!fake.sent[0].includes('準備の確認がまだ'));
 });
@@ -248,23 +267,28 @@ test('開始：入力の誤りは 400 で、画面に出す日本語の理由を
   assert.equal(app.store.run, null);
 });
 
-test('開始：モデルと考える深さを、子のエージェントの設定に書く（既定なら書かない・消す）', async (t) => {
+test('開始：モデルと考える深さを、セッションの子のエージェントの設定に書く。毎回、利用者の設定から作り直し、前の実行の分は残さない', async (t) => {
   const keep = { 'someone-else': { model: 'm' } };
-  const { fake, app } = await startWith(t, { fake: { subagents: { maxDepth: 2, agents: { ...keep } } } });
-  await fake.call('open', { request: '作業', criteria: ['条件'] });
-  await app.control.start({ workerModel: 'model-x', workerEffort: 'high', verifierEffort: 'low' });
-  assert.equal(fake.updates.length, 1);
-  assert.deepEqual(fake.updates[0], {
-    maxDepth: 2,
-    agents: { ...keep, [WORKER]: { model: 'model-x', effortLevel: 'high' }, [VERIFIER]: { effortLevel: 'low' } },
-  });
-  await fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
-  await app.control.start({ request: '次', criteria: ['c'], workerModel: '', workerEffort: '既定', verifierEffort: '' });
-  assert.equal(fake.updates.length, 2);
-  assert.deepEqual(fake.updates[1], { maxDepth: 2, agents: { ...keep } });
-  await fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
-  await app.control.start({ request: '次の次', criteria: ['c'] });
-  assert.equal(fake.updates.length, 2, '変わらないときは書かない');
+  const agents = [{ id: WORKER }, { id: VERIFIER }, { id: 'other:w2' }];
+  const { fake, app } = await startWith(t, { fake: { agents, subagents: { maxDepth: 2, agents: { ...keep, [VERIFIER]: { model: 'mine' } } } } });
+  const runWith = async (body) => {
+    fake.updates.length = 0;
+    await fake.call('open', { request: '作業', criteria: ['条件'] });
+    await app.control.start(body);
+    await fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+  };
+  await runWith({ workerModel: 'model-x', workerEffort: 'high', verifierEffort: 'low' });
+  assert.deepEqual(fake.updates, [null, { maxDepth: 2, agents: { ...keep, [WORKER]: { model: 'model-x', effortLevel: 'high' }, [VERIFIER]: { effortLevel: 'low' } } }]);
+
+  // 作業エージェントを替えた：前の作業エージェントの分は残さない。「既定」の検証エージェントは、利用者の設定にあっても外す
+  await runWith({ worker: 'other:w2', workerModel: 'model-y', workerEffort: '', verifierEffort: '既定' });
+  assert.deepEqual(fake.updates, [null, { maxDepth: 2, agents: { ...keep, 'other:w2': { model: 'model-y' } } }]);
+
+  // 上書きが要らなければ、消したままにする（利用者の設定がそのまま効く）
+  fake.subagents = { maxDepth: 2, agents: { ...keep } };
+  await runWith({ workerModel: '' });
+  assert.deepEqual(fake.updates, [null]);
+  assert.equal(fake.override, null);
 });
 
 test('開始：知らせを送れなければ 500 を返し、下書きに戻す', async (t) => {

@@ -831,7 +831,8 @@ class AddMissingKeysTest(unittest.TestCase):
         self.assertEqual(data["missing"], ["outputs"])
         self.assertEqual(self.read(p)[:len(before)], before)
 
-    def test_check_and_run_also_add(self):
+    def test_check_and_run_do_not_add(self):
+        """check と run は、足りない項目を足さずに、notes で知らせる。足すのは config-path だけ。"""
         p = Project(self)
         p.fake()
         text = template_without("clean_command")
@@ -841,21 +842,50 @@ class AddMissingKeysTest(unittest.TestCase):
         text = re.sub(r"(?m)^build_command: .*$", lambda m: build_line, text)
         text = text.replace('outputs: []', 'outputs: ["app"]')
         text = text.replace('shell: "auto"', 'shell: "{}"'.format(DEFAULT_SHELL))
-        self.old_config(p, text)
+        before = self.old_config(p, text)
+        note = "設定ファイルに、項目 clean_command がありません。config-path で、ひな形から足せます。"
         code, data, _ = p.run("check")
-        self.assertEqual(data["added"], ["clean_command"])
-        self.assertIn("新しい項目 clean_command を足しました", data["message"])
-        # 項目を足しても、check は .gitignore を作らない
-        self.assertFalse(os.path.exists(p.path(DATA_DIR, ".gitignore")))
+        self.assertEqual(code, 0, data)
+        self.assertNotIn("added", data)
+        self.assertIn(note, data["notes"])
+        self.assertIn(note, data["message"])
+        self.assertEqual(self.read(p), before)
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), ["config.yaml"])
 
         p2 = Project(self)
-        self.old_config(p2, text)
+        before = self.old_config(p2, text)
         code, data, _ = p2.run("run")
         self.assertEqual(code, 0, data)
+        self.assertNotIn("added", data)
+        self.assertIn(note, data["notes"])
+        self.assertEqual(self.read(p2), before)
+
+        # config-path が足す。その後は、check も run も知らせない
+        code, data, _ = p2.run("config-path")
         self.assertEqual(data["added"], ["clean_command"])
-        self.assertIn("新しい項目 clean_command を足しました", data["message"])
-        code, data, _ = p2.run("run")
-        self.assertEqual(data["added"], [])
+        self.assertEqual(self.read(p2)[:len(before)], before)
+        code, data, _ = p2.run("check")
+        self.assertEqual(code, 0, data)
+        self.assertNotIn(note, data["notes"])
+
+    def test_check_reports_a_missing_required_key_without_writing(self):
+        p = Project(self)
+        before = self.old_config(p, template_without("outputs", "timeout_seconds"))
+        code, data, _ = p.run("check")
+        self.assertEqual(code, 2, data)
+        self.assertTrue(any("outputs（ビルドでできるファイル）が空です（必須）" in x
+                            for x in data["problems"]), data)
+        self.assertIn("設定ファイルに、項目 outputs、timeout_seconds がありません。"
+                      "config-path で、ひな形から足せます。", data["notes"])
+        self.assertEqual(self.read(p), before)
+        self.assertEqual(os.listdir(p.path(DATA_DIR)), ["config.yaml"])
+
+        code, data, _ = p.run("config-path")
+        self.assertEqual(data["added"], ["outputs", "timeout_seconds"])
+        self.assertEqual(data["missing"], ["outputs"])
+        values = BUILD.parse_yaml(self.read(p).decode("utf-8"))
+        self.assertEqual(values["outputs"], [])
+        self.assertEqual(values["timeout_seconds"], 600)
 
     def test_broken_file_is_not_touched(self):
         p = Project(self)
@@ -2183,6 +2213,9 @@ class SkillDocTest(unittest.TestCase):
         self.assertIn("`.gitignore` が無ければ", self.text)
         self.assertIn("足りない項目", self.text)
         self.assertIn("ほかの所は変えません", self.text)
+        # 足りない項目を足すのは config-path だけ（check は設定ファイルを書き換えない）
+        self.assertIn("run と check は足さずに、`notes` で知らせます。", self.text)
+        self.assertNotIn("自分で足します", self.text)
 
     def test_check_creates_no_files(self):
         section = self.text.split("### 設定を確かめるよう頼まれたとき", 1)[1].split("\n## ", 1)[0]
