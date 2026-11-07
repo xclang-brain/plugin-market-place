@@ -113,6 +113,9 @@ export function runIdOf(date) {
   return `R-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+/** 保存する設定から、使うエージェントの名前を除く */
+const withoutAgents = (s) => Object.fromEntries(Object.entries(s ?? {}).filter(([key]) => key !== 'worker' && key !== 'verifier'));
+
 export function createStore({ defaults, persist, now = () => new Date() }) {
   const base = {
     worker: text(defaults.worker),
@@ -123,11 +126,12 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     verifierModel: '',
     verifierEffort: '',
   };
-  // 作業フォルダの設定。保存がなければ既定（defaults.json）。保存が壊れていても既定に戻す
+  // 作業フォルダの設定。保存がなければ既定（defaults.json）。保存が壊れていても既定に戻す。
+  // 使うエージェントの名前は保存しない。いつも既定（defaults.json）から始める（部品を替えたとき、前の名前が残らないように）
   function settingsOf(folder) {
     try {
       const saved = persist.readSettings(folder);
-      return saved ? readSettingsInput(saved, base) : { ...base };
+      return saved ? readSettingsInput(withoutAgents(saved), base) : { ...base };
     } catch {
       return { ...base };
     }
@@ -141,8 +145,6 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     // 設定は作業フォルダごと。フォルダが分かるまでは既定を使う
     folder: null,
     settings: { ...base },
-    // 既定の設定（defaults.json）。保存した名前のエージェントがなくなったときに戻す先
-    defaults: { ...base },
     draft: null,
     run: null,
     runs: persist.listRuns(),
@@ -192,7 +194,7 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     setSettings(next) {
       store.settings = next;
       store.changed();
-      return persist.writeSettings(store.folder ?? path.resolve('.'), next);
+      return persist.writeSettings(store.folder ?? path.resolve('.'), withoutAgents(next));
     },
     /** チャットで待っていること。新しい求めを足すか（value あり）、答えが出た求めを消す（value が null） */
     setWaiting(requestId, value) {

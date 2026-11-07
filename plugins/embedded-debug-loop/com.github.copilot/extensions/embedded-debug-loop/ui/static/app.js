@@ -594,7 +594,7 @@
 
     // 設定は作業フォルダごとに保存する
     const folder = $('settings-folder');
-    folder.textContent = snap.folder ? `設定は、作業フォルダごとに保存します（いまの作業フォルダ：${str(snap.folder)}）。` : '';
+    folder.textContent = snap.folder ? `設定は、作業フォルダごとに保存します。使うエージェントは保存せず、毎回、既定から始まります（いまの作業フォルダ：${str(snap.folder)}）。` : '';
     folder.hidden = !snap.folder;
 
     drawPrepared(locked);

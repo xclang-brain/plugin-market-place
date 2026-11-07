@@ -49,11 +49,11 @@ test('open：worker（作業エージェントの名前）は任意で、説明�
   const { parameters } = fake.tool('open');
   assert.equal(parameters.properties.worker.type, 'string');
   assert.match(parameters.properties.worker.description, /作業エージェントの名前/);
-  assert.match(parameters.properties.worker.description, /この作業フォルダの設定として保存する/);
+  assert.match(parameters.properties.worker.description, /この会話のあいだ/);
   assert.ok(!parameters.required.includes('worker'));
 });
 
-test('open：worker を渡すと、この作業フォルダの設定に保存してから、その名前で返事と準備の確認の頼みを書く', async (t) => {
+test('open：worker を渡すと、この会話のあいだ、その名前で返事と準備の確認の頼みを書く（名前は保存しない）', async (t) => {
   const agents = [
     { id: WORKER, name: 'helper-a' },
     { id: LEAD, name: 'lead-c' },
@@ -65,17 +65,19 @@ test('open：worker を渡すと、この作業フォルダの設定に保存し
   assert.ok(r.ok);
   const lines = r.text.split('\n');
   assert.match(lines[0], /^Web管理画面を開きました。URL：/);
-  assert.equal(lines[1], '作業エージェントを「host-sim-worker」にしました（この作業フォルダの設定として保存しました）。');
+  assert.equal(lines[1], '作業エージェントを「host-sim-worker」にしました（この会話のあいだ使います）。');
   assert.ok(lines.includes('- 作業エージェント：host-sim-worker'));
   assert.ok(lines.includes(`- 検証エージェント：${VERIFIER}`), 'ほかの設定は変えない');
   assert.equal(lines[lines.length - 1], '次に、作業エージェント「host-sim-worker」に、準備の確認だけを頼んでください（作業はさせない）。返事を embedded-debug-loop_prepare で記録してください。');
   assert.ok(!r.text.includes(WORKER), '既定の作業エージェントの名前は出さない');
   assert.equal(app.store.snapshot().settings.worker, 'host-sim-worker');
-  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
-  assert.equal(saved.folders[CWD].worker, 'host-sim-worker');
-  assert.equal(saved.folders[CWD].verifier, VERIFIER);
+  // 部品を替えたとき前の名前が残らないように、使うエージェントの名前はファイルに保存しない
+  const file = path.join(dataDir, 'settings.json');
+  const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { folders: {} };
+  assert.equal(saved.folders[CWD]?.worker, undefined);
+  assert.equal(saved.folders[CWD]?.verifier, undefined);
 
-  // 次に開くときは、保存した名前を使う（worker を渡さなくても）
+  // 同じ会話で次に開くときは、同じ名前を使う（worker を渡さなくても）
   const again = await fake.call('open', { request: 'もう一度' });
   assert.ok(again.text.includes('次に、作業エージェント「host-sim-worker」に'));
   assert.ok(!again.text.includes('にしました'));
@@ -98,28 +100,6 @@ test('open：worker の名前は、エージェントの一覧の名前にそろ
   assert.equal(app.store.snapshot().settings.worker, 'unknown-agent');
 });
 
-test('open：保存した名前の作業エージェントが一覧にないとき（部品が替わったとき）は、既定に戻して保存し、そのことを伝える', async (t) => {
-  const { fake, app, dataDir } = await startWith(t);
-  await fake.call('open', { request: '作業', worker: 'old-plugin-worker' }); // 前のバージョンで保存した名前の代わり
-  assert.equal(app.store.snapshot().settings.worker, 'old-plugin-worker');
-  const r = await fake.call('open', { request: 'もう一度' });
-  assert.ok(r.text.includes(`保存してあった作業エージェント「old-plugin-worker」は、今はありません。既定の「${WORKER}」にしました。\nこのことを、利用者にもそのまま伝えてください。`));
-  assert.ok(r.text.includes(`次に、作業エージェント「${WORKER}」に`));
-  assert.equal(app.store.snapshot().settings.worker, WORKER);
-  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'));
-  assert.equal(saved.folders[CWD].worker, WORKER);
-  const quiet = await fake.call('open', { request: 'さらにもう一度' });
-  assert.ok(!quiet.text.includes('今はありません'), '一覧にある名前なら、何も言わない');
-});
-
-test('open：エージェントの一覧が読めないときは、保存した名前をそのまま使う', async (t) => {
-  const { fake, app } = await startWith(t, { fake: { agents: [] } });
-  await fake.call('open', { request: '作業', worker: 'some-worker' });
-  const r = await fake.call('open', { request: 'もう一度' });
-  assert.ok(!r.text.includes('今はありません'));
-  assert.equal(app.store.snapshot().settings.worker, 'some-worker');
-});
-
 test('listedAgentName：同じ名前 → そのまま、1つだけ当たる → 一覧の名前、ほかは言われたまま', () => {
   const list = [{ name: 'a:x' }, { name: 'y' }, { name: 'b:z' }, { name: 'c:z' }];
   assert.equal(listedAgentName('a:x', list), 'a:x');
@@ -130,12 +110,13 @@ test('listedAgentName：同じ名前 → そのまま、1つだけ当たる → 
   assert.equal(listedAgentName('x', []), 'x');
 });
 
-test('open：worker を保存できなくても、その名前で進め、保存できなかったことを伝える', async (t) => {
+test('open：設定のファイルに書けなくても、worker の名前で進める（名前は保存しないので、何も言わない）', async (t) => {
   const { fake, app, dataDir } = await startWith(t);
   fs.mkdirSync(path.join(dataDir, 'settings.json'), { recursive: true }); // ファイルの場所にフォルダがあって書けない
   const r = await fake.call('open', { request: '作業', worker: 'host-sim-worker' });
   assert.ok(r.ok);
-  assert.ok(r.text.includes('作業エージェントを「host-sim-worker」にしました。ただし、設定をファイルに保存できませんでした'));
+  assert.ok(r.text.includes('作業エージェントを「host-sim-worker」にしました（この会話のあいだ使います）。'));
+  assert.ok(!r.text.includes('保存できませんでした'));
   assert.ok(r.text.includes('次に、作業エージェント「host-sim-worker」に'));
   assert.equal(app.store.snapshot().settings.worker, 'host-sim-worker');
 });

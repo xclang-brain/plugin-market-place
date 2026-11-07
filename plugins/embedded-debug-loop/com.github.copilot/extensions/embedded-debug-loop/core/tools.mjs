@@ -61,7 +61,7 @@ const DEFINITIONS = {
       properties: {
         request: S('頼む作業。利用者の頼みを短くまとめた文'),
         criteria: { type: 'array', items: { type: 'string' }, description: '合格の条件。1つずつ、結果を見て確かめられる文で。番号（C1 など）は付けない' },
-        worker: S('使う作業エージェントの名前。利用者がチャットで名前を言ったときだけ入れる。入れると、この作業フォルダの設定として保存する'),
+        worker: S('使う作業エージェントの名前。利用者がチャットで名前を言ったときだけ入れる。入れると、この会話のあいだ、その作業エージェントを使う（名前は保存しない）'),
       },
       required: ['request'],
     },
@@ -140,28 +140,6 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
     return { run: r };
   };
 
-  /**
-   * 保存した名前の作業エージェント・検証エージェントが、エージェントの一覧にないとき
-   * （新しいバージョンで部品が替わったときなど）は、既定（defaults.json）に戻して保存する。戻したことを伝える文を返す。
-   * 一覧が読めないときは、何もしない
-   */
-  function restoreMissingAgents() {
-    const names = store.options.agents.map((a) => text(a?.name)).filter(Boolean);
-    if (names.length === 0) return [];
-    let next = null;
-    const lines = [];
-    for (const [role, label] of [['worker', '作業エージェント'], ['verifier', '検証エージェント']]) {
-      const saved = text(store.settings[role]);
-      const fallback = text(store.defaults?.[role]);
-      if (!saved || !fallback || saved === fallback) continue;
-      if (names.some((n) => sameAgent(n, saved))) continue;
-      next = { ...(next ?? store.settings), [role]: fallback };
-      lines.push(`保存してあった${label}「${saved}」は、今はありません。既定の「${fallback}」にしました。`);
-    }
-    if (next) store.setSettings(next);
-    return lines;
-  }
-
   const handlers = {
     async open(args) {
       const request = text(args?.request);
@@ -176,17 +154,15 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
         return fail(`Web管理画面を開けませんでした（${error?.message ?? error}）。利用者に伝えてください。`);
       }
       await refreshFolder(); // 作業フォルダの設定を読んでから、設定を伝える
-      await waitAtMost(refreshOptions(), OPTIONS_WAIT_MS);
-      const restored = restoreMissingAgents();
-      // 利用者がチャットで作業エージェントを名指ししたときは、この作業フォルダの設定にする
+      // 利用者がチャットで作業エージェントを名指ししたときは、この会話のあいだ、それを使う（名前は保存しない）
       const named = text(args?.worker);
       let chosen = '';
       if (named) {
+        await waitAtMost(refreshOptions(), OPTIONS_WAIT_MS);
         const worker = listedAgentName(named, store.options.agents);
-        const saved = store.setSettings({ ...store.settings, worker });
-        chosen = saved
-          ? `作業エージェントを「${worker}」にしました（この作業フォルダの設定として保存しました）。`
-          : `作業エージェントを「${worker}」にしました。ただし、設定をファイルに保存できませんでした（Copilot CLI を閉じるまでは、この設定で動きます）。`;
+        store.settings = { ...store.settings, worker };
+        store.changed();
+        chosen = `作業エージェントを「${worker}」にしました（この会話のあいだ使います）。`;
       }
       store.draft = { request, criteria: readCriteria(args?.criteria), prepared: null };
       store.changed();
@@ -195,8 +171,7 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       const next = w
         ? `次に、作業エージェント「${w}」に、準備の確認だけを頼んでください（作業はさせない）。返事を ${TOOL.prepare} で記録してください。`
         : '作業エージェントが決まっていません。利用者に URL を伝え、Web管理画面で作業エージェントを選んで「開始」を押すよう頼んで、手番を終えてください。';
-      const told = restored.length ? [...restored, 'このことを、利用者にもそのまま伝えてください。'] : [];
-      return [`Web管理画面を開きました。URL：${url}`, ...told, ...(chosen ? [chosen] : []), '今の設定：', ...settingsLines(store.settings), next].join('\n');
+      return [`Web管理画面を開きました。URL：${url}`, ...(chosen ? [chosen] : []), '今の設定：', ...settingsLines(store.settings), next].join('\n');
     },
 
     async prepare(args) {
