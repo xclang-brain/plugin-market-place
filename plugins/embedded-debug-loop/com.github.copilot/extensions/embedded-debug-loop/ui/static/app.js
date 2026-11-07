@@ -156,11 +156,6 @@
     const latest = ui.snap && ui.snap.run;
     return !!run && run.status === 'running' && !!latest && latest.id === run.id && !!waitingOf(ui.snap);
   }
-  // 「<プラグイン>:<名前>」と「<名前>」を同じエージェントとみなす
-  function sameAgent(a, b) {
-    const bare = (x) => str(x).trim().slice(str(x).trim().lastIndexOf(':') + 1);
-    return !!str(a).trim() && !!str(b).trim() && (str(a).trim() === str(b).trim() || bare(a) === bare(b));
-  }
   // 評価の条件の、番号と文。記録に番号と文がない（古い記録の）ときは、「C1」を実行の条件の文に引き当てる
   function criterionOf(run, v) {
     const raw = str(v.criterion).trim();
@@ -483,12 +478,12 @@
 
   const optionsKeyOf = (opts) => JSON.stringify([opts.agents, opts.models, opts.efforts]);
 
-  // エージェントの選択肢。もう一方の欄で選んでいるエージェントは出さない（own は、この欄の今の値）
+  // エージェントの選択肢（値はエージェントの id）。もう一方の欄で選んでいるエージェントは出さない（own は、この欄の今の値）
   function agentItems(opts, other, own) {
     return arr(opts.agents)
-      .map((a) => str(a.name))
-      .filter((name) => name && (!other || !sameAgent(name, other) || (own && sameAgent(name, own))))
-      .map((name) => ({ value: name, label: name }));
+      .map((a) => str(a.id))
+      .filter((id) => id && (id !== other || id === own))
+      .map((id) => ({ value: id, label: id }));
   }
 
   // 作業エージェントの欄には、選んでいる検証エージェントを出さない。検証エージェントの欄も同じ
@@ -558,7 +553,7 @@
     const opts = (ui.snap && ui.snap.options) || {};
     const name = $('f-worker').value;
     const agents = arr(opts.agents);
-    const found = agents.find((a) => str(a.name) === name);
+    const found = agents.find((a) => str(a.id) === name);
     let text = '';
     if (found) text = str(found.description);
     else if (name && agents.length) text = 'このエージェントは、いま使えるエージェントの一覧にありません。入っているかを確かめるか、ほかを選んでください。';
@@ -592,9 +587,9 @@
     drawWorkerDesc();
     drawNote(locked);
 
-    // 設定は作業フォルダごとに保存する
+    // 繰り返しの上限は、作業フォルダごとに保存する
     const folder = $('settings-folder');
-    folder.textContent = snap.folder ? `設定は、作業フォルダごとに保存します。使うエージェントは保存せず、毎回、既定から始まります（いまの作業フォルダ：${str(snap.folder)}）。` : '';
+    folder.textContent = snap.folder ? `繰り返しの上限は、作業フォルダごとに保存します（いまの作業フォルダ：${str(snap.folder)}）。` : '';
     folder.hidden = !snap.folder;
 
     drawPrepared(locked);
@@ -605,7 +600,7 @@
     const prep = !locked && ui.snap.draft && ui.snap.draft.prepared;
     if (!prep || prep.ready === true) return false;
     const selected = $('f-worker').value;
-    return !(selected && str(prep.worker) && !sameAgent(selected, prep.worker));
+    return !(selected && str(prep.worker) && selected !== str(prep.worker));
   }
 
   // 上の案内と、開始のボタンの横の注意
@@ -658,7 +653,7 @@
     const ready = prep.ready === true;
     // 準備を確かめたのとは別の作業エージェントを選んだときは、その返事で「できている・できていない」と言わない
     const selected = locked ? str(snap.run.worker) : $('f-worker').value;
-    const changedWorker = !!(selected && str(prep.worker) && !sameAgent(selected, prep.worker));
+    const changedWorker = !!(selected && str(prep.worker) && selected !== str(prep.worker));
     if (changedWorker) {
       badge.className = 'badge badge-unk';
       badge.textContent = 'まだ確かめていない（開始すると確かめます）';

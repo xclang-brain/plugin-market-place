@@ -7,18 +7,19 @@
 import { WHO } from './events.mjs';
 import { startNotice, stoppedChatNotice } from './messages.mjs';
 import { RUN_ID } from './persist.mjs';
-import { UserError, publicRun, readCriteria, readSettingsInput, sameAgent, stopPlace, text } from './store.mjs';
+import { UserError, publicRun, readCriteria, readSettingsInput, stopPlace, text } from './store.mjs';
 
 const OPTIONS_TTL_MS = 10_000;
 const OPTIONS_WAIT_MS = 1_500;
 
-// エージェントの一覧の要素から、選ぶときの名前と説明を取り出す。hidden の名前（id か name）に当たるものは除く
+// エージェントの一覧の要素から、id（選ぶときの値）・名前・表示名・どこから（/agent に出る形）・説明を取り出す。
+// hidden の id のものは除く
 function readAgents(listed, hidden = []) {
   const out = [];
   for (const a of Array.isArray(listed?.agents) ? listed.agents : []) {
-    const name = text(a?.id) || text(a?.name);
-    if (hidden.includes(text(a?.id)) || hidden.includes(text(a?.name))) continue;
-    if (name && !out.some((x) => x.name === name)) out.push({ name, description: text(a?.description) });
+    const id = text(a?.id);
+    if (!id || hidden.includes(id) || out.some((x) => x.id === id)) continue;
+    out.push({ id, name: text(a?.name), displayName: text(a?.displayName), source: text(a?.source), description: text(a?.description) });
   }
   return out;
 }
@@ -33,10 +34,15 @@ function readModels(listed) {
   return out;
 }
 
-/** 作業エージェントと検証エージェントのモデル・考える深さを、このセッションの子のエージェントの設定に書く */
+/**
+ * 作業エージェントと検証エージェントのモデル・考える深さを、このセッションの子のエージェントの設定に書く。
+ * Copilot CLI は、これをセッションの中だけの上書きとして持ち、利用者の設定（ファイル）には書かない。
+ * 毎回、上書きを消して利用者の設定を読み、その上に今の2つのエージェントの分だけを書く（前の実行で書いたものを残さない）。
+ * 「既定」の欄のエージェントは、利用者の設定にあっても外す（エージェントの定義のまま）。上書きが要らなければ書かない
+ */
 export async function applyModelSettings(port, s) {
-  const current = await port.getSubagentSettings();
-  const sub = current?.subagents && typeof current.subagents === 'object' ? current.subagents : {};
+  await port.updateSubagentSettings({ subagents: null });
+  const sub = (await port.getSubagentSettings())?.subagents ?? {};
   const agents = { ...(sub.agents ?? {}) };
   const before = JSON.stringify(agents);
   for (const [name, model, effort] of [
@@ -61,14 +67,13 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
   async function ensureOrchestratorSelected() {
     const name = text(orchestrator);
     if (!name || typeof port.currentAgent !== 'function') return;
-    let current = null;
+    let current = '';
     try {
-      const got = await port.currentAgent();
-      current = text(got?.agent?.name ?? got?.name ?? '');
+      current = text((await port.currentAgent())?.agent?.id);
     } catch {
       return; // 今のエージェントが分からないときは、そのまま送る
     }
-    if (current && sameAgent(current, name)) return;
+    if (current === name) return;
     let selected = false;
     try {
       selected = typeof port.selectAgent === 'function' ? await port.selectAgent(name) : false;
@@ -84,15 +89,13 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
   let folderAt = 0;
   let folderReading = null;
 
-  // 作業・検証の選択肢から除く名前：統括エージェントと、いまチャットで選ばれているエージェント
+  // 作業・検証の選択肢から除く id：統括エージェントと、いまチャットで選ばれているエージェント
   // （いま作業・検証に選んでいるエージェントがチャットで選ばれているときは、それは除かない）
   async function hiddenAgents() {
     const hidden = [text(orchestrator)];
     try {
-      const current = (await port.currentAgent?.())?.agent;
-      const s = store.settings;
-      const chosen = [current?.id, current?.name].some((n) => sameAgent(n, s.worker) || sameAgent(n, s.verifier));
-      if (current && !chosen) hidden.push(text(current.id), text(current.name));
+      const current = text((await port.currentAgent?.())?.agent?.id);
+      if (current !== store.settings.worker && current !== store.settings.verifier) hidden.push(current);
     } catch {
       // 読めなければ、統括エージェントの名前だけで除く
     }
@@ -165,21 +168,21 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
   async function saveSettings(body) {
     const busy = busyError();
     if (busy) throw new UserError(409, '実行中は設定を変えられません。');
-    await refreshFolder();
-    const next = readSettingsInput(body, store.settings);
+    await Promise.all([refreshFolder(), refreshOptions()]);
+    const next = readSettingsInput(body, store.settings, store.options.agents);
     keepDraft(body);
     const saved = store.setSettings(next);
     const warning = saved
       ? null
-      : `設定をファイルに保存できませんでした。${persist.baseDir} に書き込めるかを確かめてください。Copilot CLI を閉じるまでは、今の設定で動きます。`;
+      : `繰り返しの上限をファイルに保存できませんでした。${persist.baseDir} に書き込めるかを確かめてください。Copilot CLI を閉じるまでは、今の設定で動きます。`;
     return { ok: true, settings: { ...next }, ...(warning ? { warning } : {}) };
   }
 
   async function start(body) {
     const busy = busyError();
     if (busy) throw busy;
-    await refreshFolder();
-    const settings = readSettingsInput(body, store.settings);
+    await Promise.all([refreshFolder(), refreshOptions()]);
+    const settings = readSettingsInput(body, store.settings, store.options.agents);
     const request = text(body?.request ?? store.draft?.request);
     const criteria = readCriteria(body?.criteria ?? store.draft?.criteria);
     if (!request) throw new UserError(400, '頼む作業を書いてください。');
@@ -195,7 +198,7 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
 
     const draft = store.draft;
     const previous = store.run;
-    const prepared = draft?.prepared && sameAgent(draft.prepared.worker, settings.worker) ? draft.prepared : null;
+    const prepared = draft?.prepared?.worker === settings.worker ? draft.prepared : null;
     const run = store.newRun({ request, criteria, prepared });
     store.run = run;
     store.draft = null;

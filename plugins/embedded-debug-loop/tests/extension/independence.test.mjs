@@ -87,12 +87,13 @@ test('同梱の defaults.json を読み、名前をそのまま使う（統括�
   assert.ok(r.text.includes(`作業エージェント「${defaults.worker}」`));
   assert.ok(r.text.includes(`検証エージェント：${defaults.verifier}`));
   const state = await app.control.state();
-  assert.deepEqual(state.options.agents.map((a) => a.name), [defaults.worker, defaults.verifier]);
+  assert.deepEqual(state.options.agents.map((a) => a.id), [defaults.worker, defaults.verifier]);
 });
 
 test('作業エージェントを、まったく別の名前のエージェントに差し替えても、開始から終わりまで動く', async (t) => {
   const defaults = { worker: 'kitchen:cook', verifier: 'kitchen:taster', maxIterations: 2 };
-  const { fake, app } = await startWith(t, { defaults });
+  const agents = [{ id: 'kitchen:cook', name: 'cook' }, { id: 'kitchen:taster', name: 'taster' }];
+  const { fake, app } = await startWith(t, { defaults, fake: { agents } });
   await fake.call('open', { request: 'スープを作る', criteria: ['塩味がちょうどよい'] });
   await fake.call('prepare', { worker: 'kitchen:cook', ready: true, report: '準備：できている' });
   await app.control.start({});

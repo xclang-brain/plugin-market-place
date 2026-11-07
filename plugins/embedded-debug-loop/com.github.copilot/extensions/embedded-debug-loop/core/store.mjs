@@ -1,9 +1,9 @@
 // 状態の置き場。設定・下書き・実行・過去の実行の一覧を持ち、Web管理画面に渡す形（スナップショット）を作る。
-// 作業エージェントと検証エージェントの名前は、ただの文字として扱う（中身は知らない）。
+// 作業エージェントと検証エージェントの名前は、エージェントの一覧の id として扱う（中身は知らない）。
 
 import path from 'node:path';
 
-import { stoppedConclusion } from './messages.mjs';
+import { agentChoices, stoppedConclusion } from './messages.mjs';
 
 export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 export const OUTCOMES = Object.freeze(['success', 'failure', 'stopped', 'needs-human']);
@@ -22,13 +22,18 @@ export class UserError extends Error {
 
 export const text = (value) => (typeof value === 'string' ? value.trim() : '');
 
-/** '<プラグイン>:<名前>' と '<名前>' を同じものとみなして比べる */
-export function sameAgent(a, b) {
-  const x = text(a);
-  const y = text(b);
-  if (!x || !y) return false;
-  const bare = (s) => s.slice(s.lastIndexOf(':') + 1);
-  return x === y || bare(x) === bare(y);
+/**
+ * 名前を、エージェントの一覧（Copilot CLI の id・name・displayName を持つもの）の1つにする。
+ * id と同じものがあれば、それ。なければ name か displayName が同じものが1つだけのとき、それ。
+ * 当たらないとき・2つ以上に当たるときは UserError(400)（使えるエージェントを添える）。what は「作業エージェント」など
+ */
+export function agentOf(name, agents, what) {
+  const want = text(name);
+  const exact = agents.find((a) => a.id === want);
+  if (exact) return exact;
+  const hits = agents.filter((a) => a.name === want || a.displayName === want);
+  if (hits.length === 1) return hits[0];
+  throw new UserError(400, `${what}「${want}」に当たるエージェントが${hits.length ? '2つ以上あります' : 'ありません'}。${agentChoices(agents)}`);
 }
 
 // 合格の条件の頭に付いた番号（「C1：」「- C2:」など）。番号は、記録するときにこちらで付ける
@@ -81,11 +86,14 @@ const effortOf = (value) => {
   return v === '既定' || v === 'default' ? '' : v;
 };
 
+const isMaxIterations = (n) => Number.isInteger(n) && n >= 1 && n <= MAX_ITERATIONS_LIMIT;
+
 /**
  * 設定の入力を確かめて、新しい設定を返す。誤りがあれば UserError(400)。
  * 入力は、項目が平らに並んだものでも、settings の中に入ったものでも受ける。
+ * 作業エージェントと検証エージェントは、agents（エージェントの一覧）の id にする（agentOf）。
  */
-export function readSettingsInput(body, base) {
+export function readSettingsInput(body, base, agents) {
   const src = body && typeof body === 'object' ? { ...body, ...(body.settings && typeof body.settings === 'object' ? body.settings : {}) } : {};
   const out = { ...base };
   for (const key of SETTING_TEXT_KEYS) if (key in src) out[key] = key.endsWith('Effort') ? effortOf(src[key]) : text(src[key]);
@@ -93,13 +101,13 @@ export function readSettingsInput(body, base) {
   const problems = [];
   if (!out.worker) problems.push('作業エージェントを選んでください。');
   if (!out.verifier) problems.push('検証エージェントを選んでください。');
-  if (!Number.isInteger(out.maxIterations) || out.maxIterations < 1 || out.maxIterations > MAX_ITERATIONS_LIMIT) {
-    problems.push(`繰り返しの上限は、1 から ${MAX_ITERATIONS_LIMIT} までの整数にしてください。`);
-  }
+  if (!isMaxIterations(out.maxIterations)) problems.push(`繰り返しの上限は、1 から ${MAX_ITERATIONS_LIMIT} までの整数にしてください。`);
   for (const key of ['workerEffort', 'verifierEffort']) {
     if (out[key] && !EFFORTS.includes(out[key])) problems.push(`考える深さは、既定・${EFFORTS.join('・')} から選んでください。`);
   }
   if (problems.length > 0) throw new UserError(400, [...new Set(problems)].join(''));
+  out.worker = agentOf(out.worker, agents, '作業エージェント').id;
+  out.verifier = agentOf(out.verifier, agents, '検証エージェント').id;
   return out;
 }
 
@@ -113,9 +121,6 @@ export function runIdOf(date) {
   return `R-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-/** 保存する設定から、使うエージェントの名前を除く */
-const withoutAgents = (s) => Object.fromEntries(Object.entries(s ?? {}).filter(([key]) => key !== 'worker' && key !== 'verifier'));
-
 export function createStore({ defaults, persist, now = () => new Date() }) {
   const base = {
     worker: text(defaults.worker),
@@ -126,15 +131,11 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     verifierModel: '',
     verifierEffort: '',
   };
-  // 作業フォルダの設定。保存がなければ既定（defaults.json）。保存が壊れていても既定に戻す。
-  // 使うエージェントの名前は保存しない。いつも既定（defaults.json）から始める（部品を替えたとき、前の名前が残らないように）
-  function settingsOf(folder) {
-    try {
-      const saved = persist.readSettings(folder);
-      return saved ? readSettingsInput(withoutAgents(saved), base) : { ...base };
-    } catch {
-      return { ...base };
-    }
+  // 作業フォルダごとに保存するのは、繰り返しの上限だけ（部品によらないもの）。保存がないか、使えない値なら既定（defaults.json）。
+  // 使うエージェント・モデル・考える深さは、この会話のあいだだけ持つ
+  function savedMaxIterations(folder) {
+    const saved = persist.readSettings(folder)?.maxIterations;
+    return isMaxIterations(saved) ? saved : base.maxIterations;
   }
 
   let saveTimer = null;
@@ -182,19 +183,19 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       const run = store.activeRun();
       return run && run.iteration > 0 ? run.iterations[run.iteration - 1] : null;
     },
-    /** 作業フォルダが分かったとき・変わったときに、そのフォルダの設定を読む */
+    /** 作業フォルダが分かったとき・変わったときに、そのフォルダの繰り返しの上限を読む */
     useFolder(dir) {
       const folder = text(dir) ? path.resolve(text(dir)) : '';
       if (!folder || folder === store.folder) return;
       store.folder = folder;
-      store.settings = settingsOf(folder);
+      store.settings = { ...store.settings, maxIterations: savedMaxIterations(folder) };
       store.changed();
     },
-    /** 設定を変えて、作業フォルダの設定としてファイルに書く。書けなければ false */
+    /** 設定を変え、繰り返しの上限を、作業フォルダの設定としてファイルに書く。書けなければ false */
     setSettings(next) {
       store.settings = next;
       store.changed();
-      return persist.writeSettings(store.folder ?? path.resolve('.'), withoutAgents(next));
+      return persist.writeSettings(store.folder ?? path.resolve('.'), { maxIterations: next.maxIterations });
     },
     /** チャットで待っていること。新しい求めを足すか（value あり）、答えが出た求めを消す（value が null） */
     setWaiting(requestId, value) {

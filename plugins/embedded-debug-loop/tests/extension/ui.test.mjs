@@ -15,7 +15,7 @@ function snap(over = {}) {
     version: 1,
     settings: { worker: W, verifier: V, maxIterations: 3, workerModel: '', workerEffort: '', verifierModel: '', verifierEffort: '' },
     options: {
-      agents: [{ name: W, description: '手伝う' }, { name: 'demo-plugin:helper-z', description: '別の手伝い' }, { name: V, description: '確かめる' }],
+      agents: [{ id: W, description: '手伝う' }, { id: 'demo-plugin:helper-z', description: '別の手伝い' }, { id: V, description: '確かめる' }],
       models: [],
       efforts: ['low', 'medium', 'high', 'xhigh'],
     },
@@ -29,7 +29,7 @@ function snap(over = {}) {
 }
 
 const draftWith = (prepared) => ({ request: '表示を直す', criteria: ['完了と出る'], prepared });
-const prep = (ready, worker = W) => ({ worker, ready, report: ready ? '準備：できている' : '準備：できていない\n足りないもの：\n- 設定', at: new Date().toISOString() });
+const prep = (ready) => ({ worker: W, ready, report: ready ? '準備：できている' : '準備：できていない\n足りないもの：\n- 設定', at: new Date().toISOString() });
 
 async function screen(state) {
   const box = { state, posts: [] };
@@ -77,10 +77,6 @@ test('設定：準備を確かめたのと別の作業エージェントを選�
   select.dispatch('change');
   assert.equal(textOf($('settings-note')), NOT_READY);
   assert.equal($('start-note').hidden, false);
-
-  // 別の名前の付け方（プラグインの名前なし）でも、同じエージェントとみなす
-  const other = await screen(snap({ draft: draftWith(prep(false, 'helper-a')) }));
-  assert.equal(textOf(other.$('settings-note')), NOT_READY);
 });
 
 test('設定：準備ができていなくても「開始」は送れる', async () => {
@@ -185,13 +181,6 @@ test('設定：作業エージェントの欄には選んでいる検証エー�
   await settle();
   const sent = box.posts.find((p) => p.path === '/api/settings').body;
   assert.deepEqual([sent.worker, sent.verifier], [Z, W]);
-});
-
-test('設定：名前の付け方（プラグインの名前の有無）が違っても、同じエージェントとみなして除く', async () => {
-  const { $ } = await screen(snap({ settings: { ...snap().settings, worker: 'helper-a', verifier: 'checker-b' } }));
-  // 今の値（一覧にない書き方）は最後に足して残す
-  assert.deepEqual(choices($('f-worker')), [W, 'demo-plugin:helper-z', 'helper-a']);
-  assert.deepEqual(choices($('f-verifier')), ['demo-plugin:helper-z', V, 'checker-b']);
 });
 
 // ---------- チャットで答えを待っているあいだ（質問・許可） ----------

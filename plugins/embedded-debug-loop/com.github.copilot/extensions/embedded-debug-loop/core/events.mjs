@@ -2,10 +2,10 @@
 // - だれが動いているか（統括・作業・検証・その他）と、待っていること（質問・許可。実行の前や後でも示す）
 // - くわしい記録の行（ツールの呼び出しを、ふつうの言葉にしたもの）
 // - 作業エージェントと検証エージェントの返事（フック onSubagentStop で届く）。試行の記録に入れない返事も、理由を付けて events.jsonl に残す
-// エージェントの役は、名前が設定の作業エージェント・検証エージェントと同じかどうかだけで決める。
+// エージェントの役は、名前（Copilot CLI の agentType。エージェントの一覧の id と同じ）が、設定の作業エージェント・検証エージェントと同じかどうかだけで決める。
 
 import { IGNORED, TOOL_PREFIX } from './messages.mjs';
-import { sameAgent, text } from './store.mjs';
+import { text } from './store.mjs';
 
 export const WHO = Object.freeze({ orchestrator: '統括', worker: '作業', verifier: '検証', other: 'その他', user: '利用者' });
 const ROLE_NAME = { orchestrator: '統括エージェント', worker: '作業エージェント', verifier: '検証エージェント' };
@@ -69,8 +69,9 @@ export function createEventSink({ store, onStopped = () => {} }) {
 
   // s は、作業・検証エージェントの名前を持つもの（実行か設定）
   function roleOf(agentType, s = store.activeRun() ?? store.settings) {
-    if (sameAgent(agentType, s.worker)) return 'worker';
-    if (sameAgent(agentType, s.verifier)) return 'verifier';
+    const name = text(agentType);
+    if (name === s.worker) return 'worker';
+    if (name === s.verifier) return 'verifier';
     return 'other';
   }
   const roleOfEvent = (event) => (event.agentId ? store.live.agents.get(event.agentId)?.role ?? 'other' : 'orchestrator');

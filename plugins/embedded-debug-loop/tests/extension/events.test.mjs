@@ -21,10 +21,10 @@ test('作業エージェントの返事は、計画があって作業の報告�
   fake.subagentStop({ agentType: WORKER, agentId: 'w0', response: '計画の前の返事' });
   assert.equal(app.store.snapshot().run.iterations.length, 0, '計画の前は記録しない');
   await fake.call('plan', { iteration: 1, plan: 'p1' });
-  fake.subagentStop({ agentType: 'helper-a', agentId: 'w1', response: '報告：変えたこと…' });
+  fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告：変えたこと…' });
   fake.subagentStop({ agentType: WORKER, agentId: 'w2', response: '2つ目の返事' });
   const it = app.store.snapshot().run.iterations[0];
-  assert.equal(it.do.report, '報告：変えたこと…', '最初の返事を使う（名前の頭のプラグイン名は見ない）');
+  assert.equal(it.do.report, '報告：変えたこと…', '最初の返事を使う');
   assert.ok(it.do.at);
 });
 
@@ -154,7 +154,7 @@ test('図で光らせるエージェント：動いている子 → 統括 → �
   assert.ok(active().since);
   fake.emit('subagent.completed', {}, 'w1');
   assert.equal(active().role, 'orchestrator');
-  fake.emit('subagent.started', { agentType: 'checker-b', agentName: 'checker-b', toolCallId: 't2' }, 'v1');
+  fake.emit('subagent.started', { agentType: VERIFIER, agentName: VERIFIER, toolCallId: 't2' }, 'v1');
   assert.equal(active().role, 'verifier');
   fake.emit('session.idle', {}, 'v1'); // 子のエージェントだけの idle は、セッション全体の終わりではない
   assert.equal(active().role, 'verifier');
@@ -280,7 +280,7 @@ test('試行の記録に入れない作業・検証の返事も、events.jsonl �
   fake.subagentStop({ agentType: VERIFIER, agentId: 'v0', response: '計画の前の評価' });
   await fake.call('plan', { iteration: 1, plan: 'p1' });
   fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告 1' });
-  fake.subagentStop({ agentType: 'helper-a', agentId: 'w2', response: '同じ試行での 2 回目の報告' });
+  fake.subagentStop({ agentType: WORKER, agentId: 'w2', response: '同じ試行での 2 回目の報告' });
   fake.subagentStop({ agentType: VERIFIER, agentId: 'v1', response: 'C1：合格' });
   fake.subagentStop({ agentType: 'general-purpose', agentId: 'g1', response: 'ほかのエージェントの返事' });
   fake.subagentStop({ agentType: WORKER, agentId: 'w3', response: '' });

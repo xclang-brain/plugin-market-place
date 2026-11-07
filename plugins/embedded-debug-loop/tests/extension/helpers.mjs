@@ -24,6 +24,7 @@ export function tempDir(t) {
 
 /**
  * 偽物のセッション。登録されたツール・フックと、送った知らせ・止めた回数・子の設定の書き換えを残す。
+ * subagents は、利用者の子のエージェントの設定（ファイルに保存されたもの）。書き換えは、セッションの中だけの上書き（override）になり、null で消える。
  * cwd はセッションの作業フォルダ、current はチャットで選ばれているエージェント（Error なら読めない）。
  * logFails が true なら、チャットへの知らせ（session.log）は失敗する。
  * missing に書いた RPC（'agent.getCurrent'、'metadata' など）は、ない版の Copilot CLI のように消しておく。
@@ -37,6 +38,7 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
     logs: [], // チャットに出した知らせ：{ message, options }
     updates: [],
     subagents,
+    override: null,
     cwd,
     current,
     tool(name) {
@@ -84,9 +86,9 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
       agent: {
         list: async () => ({
           agents: agents ?? [
-            { name: 'helper-a', id: WORKER, displayName: 'A', description: '手伝う' },
-            { name: 'lead-c', id: LEAD, displayName: 'C', description: 'まとめる' },
-            { name: 'checker-b', id: VERIFIER, displayName: 'B', description: '確かめる' },
+            { name: 'helper-a', id: WORKER, displayName: 'helper-a', source: 'plugin', description: '手伝う' },
+            { name: 'lead-c', id: LEAD, displayName: 'lead-c', source: 'plugin', description: 'まとめる' },
+            { name: 'checker-b', id: VERIFIER, displayName: 'checker-b', source: 'plugin', description: '確かめる' },
           ],
         }),
         getCurrent: async () => {
@@ -102,10 +104,10 @@ export function fakeCopilot({ agents, models, subagents = null, sendFails = fals
       metadata: { snapshot: async () => ({ sessionId: 's1', workingDirectory: fake.cwd }) },
       model: { list: async () => ({ list: models ?? [{ id: 'model-x', name: 'モデル X' }, { id: 'model-y' }] }) },
       tools: {
-        getSubagentSettings: async () => ({ subagents: fake.subagents }),
+        getSubagentSettings: async () => ({ subagents: fake.override ?? fake.subagents }),
         updateSubagentSettings: async ({ subagents: value }) => {
           fake.updates.push(value);
-          fake.subagents = value;
+          fake.override = value;
           return {};
         },
       },
