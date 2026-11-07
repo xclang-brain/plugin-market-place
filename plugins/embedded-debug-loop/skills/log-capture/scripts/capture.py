@@ -18,7 +18,8 @@ socket://ホスト:ポート（TCP。テスト用）を書ける。
 設定とログは、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く
 （例：.log-capture/config.yaml と .log-capture/logs/）。
 フォルダの名前は、このスクリプトの場所（scripts/ の親のフォルダ）から求める。
-設定ファイルと .gitignore は、run と config-path が作る。check は、ファイルを作らない（ログも）。
+設定ファイルと .gitignore は、run と config-path が作る。check は、ファイルを作らず、書き換えない（ログも）。
+ひな形にある項目が設定ファイルに足りなければ、config-path だけが足す。run と check は notes で知らせる。
 """
 
 import argparse
@@ -499,19 +500,36 @@ def template_blocks(text):
     return blocks
 
 
+def missing_blocks(have):
+    """ひな形の項目のうち、have（設定ファイルの名前と値）にないものの (名前, 行の並び)。
+    ひな形が読めなければ、空。"""
+    try:
+        with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+            blocks = template_blocks(f.read())
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [(key, lines) for key, lines in blocks if key not in have]
+
+
+def absent_notes(cfg):
+    """ひな形にあって、設定ファイルにない項目を知らせる注意（run と check 用。設定ファイルは変えない）。"""
+    absent = [key for key, _lines in missing_blocks(cfg)]
+    if not absent:
+        return []
+    return ["設定ファイルに、項目 %s がありません。config-path で、ひな形から足せます。" % "、".join(absent)]
+
+
 def add_missing_keys(path):
-    """設定ファイルに、ひな形にある項目がなければ、説明のコメントと一緒にファイルの最後に足す。
-    すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
+    """config-path 用。設定ファイルに、ひな形にある項目がなければ、説明のコメントと一緒に
+    ファイルの最後に足す。すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
     ファイルが読めないときや、書き方の誤りがあるときは、何も足さない。"""
     try:
         with open(path, "rb") as f:
             data = f.read()
         have = read_yaml(path)
-        with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
-            blocks = template_blocks(f.read())
     except (OSError, UnicodeDecodeError, ConfigSyntaxError):
         return []
-    missing = [(key, lines) for key, lines in blocks if key not in have]
+    missing = missing_blocks(have)
     if not missing:
         return []
     eol = "\r\n" if b"\r\n" in data else "\n"
@@ -544,13 +562,12 @@ def with_added(out, added):
 
 
 def open_config(workdir, config):
-    """設定ファイルを用意する。なければひな形から作り、項目が足りなければ足す。
-    設定とログのフォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
+    """run と config-path 用。設定ファイルがなければ、ひな形から作る（項目は足さない）。
+    設定とログのフォルダに .gitignore がなければ作る。作ったら True。"""
     ensure_gitignore(os.path.join(workdir, DATA_DIR_NAME))
     created = ensure_config(config)
     ensure_gitignore(config)
-    added = [] if created else add_missing_keys(config)
-    return created, added
+    return created
 
 
 def ensure_config(path):
@@ -1773,11 +1790,12 @@ def _load(config):
 def cmd_config_path(args):
     workdir, config = _paths(args)
     try:
-        created, added = open_config(workdir, config)
+        created = open_config(workdir, config)
     except Failure as f:
         emit({"config": config, "created": False, "missing": list(REQUIRED_KEYS), "problems": [f.message],
               "added": []})
         return 0
+    added = [] if created else add_missing_keys(config)
     cfg, problems = _load(config)
     out = {"config": config, "created": created, "missing": missing_keys(cfg) if not problems else list(REQUIRED_KEYS)}
     if problems:
@@ -1804,27 +1822,29 @@ def problems_message(problems, config, created):
             % (head, len(problems), config))
 
 
-def _settings_problem(config, created, problems, added):
-    emit(with_added({
+def _settings_problem(config, created, problems, notes):
+    emit({
         "ok": False,
         "skill": SKILL,
         "message": problems_message(problems, config, created),
         "problems": problems,
+        "notes": notes,
         "config": config,
         "created": created,
-    }, added))
+    })
     return 2
 
 
 def cmd_run(args):
     workdir, config = _paths(args)
-    created, added = open_config(workdir, config)
+    created = open_config(workdir, config)
     cfg, problems = _load(config)
     if problems:
-        return _settings_problem(config, created, problems, added)
+        return _settings_problem(config, created, problems, [])
+    notes = absent_notes(cfg)
     s, problems = validate(cfg)
     if problems:
-        return _settings_problem(config, created, problems, added)
+        return _settings_problem(config, created, problems, notes)
     s.config = config
 
     commands = list(s.commands)
@@ -1837,7 +1857,7 @@ def cmd_run(args):
     elif args.command:
         commands = list(args.command)
     if not commands and not listen_seconds:
-        return _settings_problem(config, created, [NOTHING_TO_RUN + "どちらかを設定してください。"], added)
+        return _settings_problem(config, created, [NOTHING_TO_RUN + "どちらかを設定してください。"], notes)
     if not commands:
         listen_only = True
 
@@ -1861,6 +1881,7 @@ def cmd_run(args):
         "logged_in": False,
         "commands": [],
         "listen": None,
+        "notes": notes,
         "log": log_path,
         "config": config,
     }
@@ -1988,31 +2009,30 @@ def cmd_run(args):
         except Exception:
             pass
     say("ログ：%s" % log_path)
-    emit(with_added(result, added))
+    emit(result)
     return code
 
 
 def cmd_check(args):
-    """設定を確かめる。ファイルは作らない（設定ファイル、.gitignore、ログ）。
-    足りない項目は、ほかのサブコマンドと同じく、設定ファイルに足す。"""
+    """設定を確かめる。ファイルは作らず、書き換えない（設定ファイル、.gitignore、ログ）。
+    設定ファイルに足りない項目があっても足さずに、notes で知らせる。"""
     workdir, config = _paths(args)
     if not os.path.exists(config):
         message = "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config
         emit({"ok": False, "skill": SKILL, "message": message, "problems": [message], "notes": [],
-              "summary": {}, "config": config, "created": False, "added": []})
+              "summary": {}, "config": config, "created": False})
         return 2
-    added = add_missing_keys(config)
     cfg, problems = _load(config)
     out = {"ok": False, "skill": SKILL, "problems": [], "notes": [], "summary": summary_of(cfg),
            "config": config, "created": False}
     if not problems:
         s, problems = validate(cfg)
         s.config = config
-        out["notes"] = check_notes(cfg)
+        out["notes"] = check_notes(cfg) + absent_notes(cfg)
     if problems:
         out["problems"] = problems
         out["message"] = problems_message(problems, config, False)
-        emit(with_added(out, added))
+        emit(out)
         return 2
 
     ser = None
@@ -2058,7 +2078,7 @@ def cmd_check(args):
     finally:
         close_port(ser)
     out["message"] = message
-    emit(with_added(out, added))
+    emit(out)
     return 0 if out["ok"] else 2
 
 

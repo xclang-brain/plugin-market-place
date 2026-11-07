@@ -7,12 +7,13 @@
   （Windows では py -3 deploy.py …、それ以外では python3 deploy.py …）
 
   run          設定ファイルのとおりに、ファイルを機器に送る（省略したときもこれ）
-  config-path  設定ファイルの場所を出す。なければ、ひな形から作る
-  check        設定を確かめ、機器に FTP でログインできるかを試す。ファイルは作らない
+  config-path  設定ファイルの場所を出す。なければ、ひな形から作る。足りない項目があれば足す
+  check        設定を確かめ、機器に FTP でログインできるかを試す。ファイルは作らず、書き換えない
                （設定ファイルがなければ、作らずに、ないと答える。記録のファイルも作らない）
 
 設定と記録は、作業フォルダの「.<このスキルのフォルダの名前>」フォルダに置く。
-  config.yaml  設定ファイル（config-path と run は、なければ、ひな形 config-template.yaml から作る）
+  config.yaml  設定ファイル（config-path と run は、なければ、ひな形 config-template.yaml から作る。
+               ひな形にある項目が足りなければ、config-path だけが足す。run と check は notes で知らせる）
   logs/        記録のファイル（run のとき）
   .gitignore   中身は * の1行（設定や記録を git に入れないため。config-path と run が作る）
 
@@ -526,19 +527,36 @@ def template_blocks(text):
     return blocks
 
 
+def missing_blocks(have):
+    """ひな形の項目のうち、have（設定ファイルの名前と値）にないものの (名前, 行の並び)。
+    ひな形が読めなければ、空。"""
+    try:
+        with open(TEMPLATE_PATH, "r", encoding="utf-8") as fh:
+            blocks = template_blocks(fh.read())
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [(key, lines) for key, lines in blocks if key not in have]
+
+
+def absent_notes(values):
+    """ひな形にあって、設定ファイルにない項目を知らせる注意（run と check 用。設定ファイルは変えない）。"""
+    absent = [key for key, _lines in missing_blocks(values)]
+    if not absent:
+        return []
+    return ["設定ファイルに、項目 %s がありません。config-path で、ひな形から足せます。" % "、".join(absent)]
+
+
 def add_missing_keys(path):
-    """設定ファイルに、ひな形にある項目がなければ、説明のコメントと一緒にファイルの最後に足す。
-    すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
+    """config-path 用。設定ファイルに、ひな形にある項目がなければ、説明のコメントと一緒に
+    ファイルの最後に足す。すでにある所は1バイトも変えない。足した項目の名前の並びを返す。
     ファイルが読めないときや、書き方の誤りがあるときは、何も足さない。"""
     try:
         with open(path, "rb") as fh:
             data = fh.read()
         have, _raws = read_config_text(data.decode("utf-8"))
-        with open(TEMPLATE_PATH, "r", encoding="utf-8") as fh:
-            blocks = template_blocks(fh.read())
     except (OSError, UnicodeDecodeError, ConfigError):
         return []
-    missing = [(key, lines) for key, lines in blocks if key not in have]
+    missing = missing_blocks(have)
     if not missing:
         return []
     eol = "\r\n" if b"\r\n" in data else "\n"
@@ -571,13 +589,12 @@ def with_added(out, added):
 
 
 def open_config(workdir, config):
-    """設定ファイルを用意する。なければひな形から作り、項目が足りなければ足す。
-    データのフォルダに .gitignore がなければ作る。(作ったか, 足した項目) を返す。"""
+    """run と config-path 用。設定ファイルがなければ、ひな形から作る（項目は足さない）。
+    データのフォルダに .gitignore がなければ作る。作ったら True を返す。"""
     ensure_gitignore(os.path.join(workdir, DATA_DIR_NAME))
     created = ensure_config(config)
     ensure_gitignore(config)
-    added = [] if created else add_missing_keys(config)
-    return created, added
+    return created
 
 
 # ---------------------------------------------------------------------------
@@ -1326,7 +1343,8 @@ def resolve_paths(args):
 def cmd_config_path(workdir, config):
     created, added = False, []
     try:
-        created, added = open_config(workdir, config)
+        created = open_config(workdir, config)
+        added = [] if created else add_missing_keys(config)
         values, _raws = read_config_file(config)
     except ConfigError as e:
         emit(with_added({"config": config, "created": created, "missing": [], "problems": [str(e)]},
@@ -1357,27 +1375,25 @@ def problems_message(problems, config, created):
 
 
 def _load(workdir, config):
-    """(created, added, values, raws, problems) を返す。"""
-    created, added = False, []
+    """(created, values, raws, problems) を返す。"""
+    created = False
     try:
-        created, added = open_config(workdir, config)
+        created = open_config(workdir, config)
         values, raws = read_config_file(config)
     except ConfigError as e:
-        return created, added, None, None, [str(e)]
-    return created, added, values, raws, []
+        return created, None, None, [str(e)]
+    return created, values, raws, []
 
 
 def _load_existing(config):
-    """check 用。ファイルを作らずに、今ある設定ファイルを読む。(added, values, raws, problems) を返す。
-    足りない項目は、ほかのコマンドと同じく、設定ファイルに足す。"""
+    """check 用。ファイルを作らず、書き換えずに、今ある設定ファイルを読む。(values, raws, problems) を返す。"""
     if not os.path.isfile(config):
-        return [], None, None, ["設定ファイルの場所 %s は、ファイルではありません。" % config]
-    added = add_missing_keys(config)
+        return None, None, ["設定ファイルの場所 %s は、ファイルではありません。" % config]
     try:
         values, raws = read_config_file(config)
     except ConfigError as e:
-        return added, None, None, [str(e)]
-    return added, values, raws, []
+        return None, None, [str(e)]
+    return values, raws, []
 
 
 # file_mode が空のとき、check で伝える注意（問題ではない）。
@@ -1387,15 +1403,16 @@ NO_MODE_NOTE = ("file_mode が空なので、送った後に権限を付けま�
 
 
 def cmd_check(workdir, config):
-    """設定を確かめる。作業フォルダには、ファイルを作らない（設定ファイル・.gitignore・記録のファイル）。"""
+    """設定を確かめる。作業フォルダには、何も書かない（設定ファイル・.gitignore・記録のファイル）。
+    設定ファイルに足りない項目があっても足さずに、notes で知らせる。"""
     log = StderrLog()
     if not os.path.exists(config):
         message = "設定ファイルがありません（%s）。config-path で、ひな形から作れます。" % config
         progress(message)
         emit({"ok": False, "skill": SKILL, "problems": [message], "notes": [], "summary": {},
-              "message": message, "config": config, "created": False, "added": []})
+              "message": message, "config": config, "created": False})
         return 2
-    added, values, raws, problems = _load_existing(config)
+    values, raws, problems = _load_existing(config)
     summary = {}
     notes = []
     login_error = None
@@ -1405,6 +1422,7 @@ def cmd_check(workdir, config):
         summary = summary_of(settings)
         if _is_empty(_as_text("file_mode", values, raws)):
             notes.append(NO_MODE_NOTE)
+        notes += absent_notes(values)
         for n in notes:
             log.say(n)
         if connect_ready:
@@ -1444,7 +1462,7 @@ def cmd_check(workdir, config):
         problems.append(login_error)
     ok = not problems
     log.say(message)
-    emit(with_added({
+    emit({
         "ok": ok,
         "skill": SKILL,
         "problems": problems,
@@ -1453,19 +1471,21 @@ def cmd_check(workdir, config):
         "message": message,
         "config": config,
         "created": False,
-    }, added))
+    })
     return 0 if ok else 2
 
 
 def cmd_run(workdir, config):
     log = open_log(workdir)
     log.write("%s run を始めます。設定ファイル：%s" % (SKILL, config))
-    created, added, values, raws, problems = _load(workdir, config)
+    created, values, raws, problems = _load(workdir, config)
     settings = None
+    absent = []
     if values is not None:
         settings, problems, notes, _ready = validate(values, raws, workdir)
         settings["config_path"] = config
-        for n in notes:
+        absent = absent_notes(values)
+        for n in notes + absent:
             log.say(n)
     if problems:
         for p in problems:
@@ -1473,15 +1493,16 @@ def cmd_run(workdir, config):
         message = problems_message(problems, config, created)
         log.say(message)
         log.close()
-        emit(with_added({
+        emit({
             "ok": False,
             "skill": SKILL,
             "message": message,
             "problems": problems,
+            "notes": absent,
             "config": config,
             "created": created,
             "log": log.path,
-        }, added))
+        })
         return 2
 
     base = {
@@ -1508,9 +1529,9 @@ def cmd_run(workdir, config):
             "remote_dir": state["remote_dir"],
             "created_dirs": state["created_dirs"],
             "files": state["results"],
-            "notes": state["notes"],
+            "notes": state["notes"] + absent,
         })
-        emit(with_added(out, added))
+        emit(out)
         return 1
     message = success_message(settings, state)
     log.say(message)
@@ -1522,9 +1543,9 @@ def cmd_run(workdir, config):
         "remote_dir": state["remote_dir"],
         "created_dirs": state["created_dirs"],
         "files": state["results"],
-        "notes": state["notes"],
+        "notes": state["notes"] + absent,
     })
-    emit(with_added(out, added))
+    emit(out)
     return 0
 
 
