@@ -2,7 +2,7 @@
 """このスキルのフォルダそのもののテスト。
 
 - SKILL.md の先頭の情報（name・description）があること。
-- 対話の進め方に要ることが書いてあること（スキルを探す → README を読む → 設定ファイルを用意する → 埋める）。
+- 対話の進め方に要ることが書いてあること（設定するスキルを決める → README を読む → 設定ファイルを用意する → 埋める）。
 - コマンドが Windows（PowerShell）でも動く書き方であること。
 - README.md に、人向けの使い方が書いてあること。
 - フォルダの外を指さないこと。
@@ -16,9 +16,7 @@ import ast
 import importlib.util
 import os
 import re
-import shutil
 import sys
-import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,32 +50,6 @@ def load_tool_module():
 def read(path):
     with open(path, encoding="utf-8") as f:
         return f.read()
-
-
-def tool_search_order():
-    """道具が探す場所を、Git のリポジトリを模した一時フォルダで調べる。(where, 場所の形) の組。"""
-    tool = load_tool_module()
-    base = tempfile.mkdtemp(prefix="setup-test-order-")
-    try:
-        work = os.path.join(base, "work")
-        os.makedirs(os.path.join(work, ".git"))
-        with open(os.path.join(work, ".git", "HEAD"), "w", encoding="utf-8") as f:
-            f.write("ref: refs/heads/main\n")
-        # このスキルが ~/.copilot/skills/ にあっても同じ結果になるよう、置き場所を一時フォルダにする
-        tool.SKILL_DIR = os.path.join(base, "plugin", "skills", SKILL_NAME)
-        home = os.path.expanduser("~")
-        names = {os.path.join(tool.copilot_home(), "skills"): "<copilot-home>/skills",
-                 os.path.join(home, ".agents", "skills"): "<home>/.agents/skills",
-                 os.path.dirname(tool.SKILL_DIR): "<the folder next to this skill>"}
-        out = []
-        for where, place in tool.skill_places(work):
-            if place in names:
-                out.append((where, names[place]))
-            else:
-                out.append((where, "<work>/" + os.path.relpath(place, work).replace(os.sep, "/")))
-        return out
-    finally:
-        shutil.rmtree(base, True)
 
 
 def front_matter(text):
@@ -116,16 +88,12 @@ class SkillMdTest(unittest.TestCase):
         self.assertNotRegex(self.text, r"/[\w.-]+:[\w.-]+")
 
     def test_skills_are_chosen(self):
-        """名前が渡されればそのスキル、なければ skills で探して、利用者に選んでもらう。"""
+        """名前が渡されればそのスキル、なければ使えるスキルの一覧から、利用者に選んでもらう。"""
         part = self.section("### 1. 設定するスキルを決める", "### 2. README を読む")
-        for word in ("まず `skills` を実行します。",
-                     "頼みにスキルの名前があれば、その名前のスキルを、示された順に設定します。",
-                     "`hidden` が false のものを設定します。",
-                     "「<名前> というスキルが見つかりませんでした。」",
+        for word in ("頼みにスキルの名前があれば、その名前のスキルを、示された順に設定します。",
                      "候補が1つでも聞きます。",
                      "「どのスキルを設定しますか。」",
-                     "「<name>：<description の1文目>」",
-                     "`hidden` が true のスキルは、選択肢に入れません。",
+                     "「<スキルの名前>：<説明の1文目>」",
                      "候補が2つ以上なら、最後に「全部」を加えます。",
                      "「設定できるスキルが見つかりませんでした。」"):
             self.assertIn(word, part, word)
@@ -134,33 +102,36 @@ class SkillMdTest(unittest.TestCase):
         rules = self.section("## 守ること", "質問のツール（ask_user）が使えないとき")
         self.assertIn("設定ファイルの場所は、README から知ります。利用者や呼び出し元に、場所を聞きません。", rules)
 
-    def test_skills_search_order_matches_the_tool(self):
-        """SKILL.md と README に書いた探す順が、道具の探す順と同じであること。"""
-        part = self.section("### `skills` の結果", "### `show` の結果")
-        lines = ["1. `.github/skills/`（`where` は `project`）",
-                 "2. `.agents/skills/`（`where` は `project`）",
-                 "3. `.claude/skills/`（`where` は `project`）",
-                 "4. 環境変数 `COPILOT_HOME`（なければ `~/.copilot`）の `skills/`（`where` は `personal`）",
-                 "5. `~/.agents/skills/`（`where` は `personal`）",
-                 "6. このスキルのフォルダの隣のフォルダ（`where` は `sibling`）"]
-        for line in lines:
-            self.assertIn(line, part, line)
-        for a, b in zip(lines, lines[1:]):
-            self.assertLess(part.index(a), part.index(b))
-        self.assertIn("1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します。", part)
-        self.assertEqual(tool_search_order(), [
-            ("project", "<work>/.github/skills"), ("project", "<work>/.agents/skills"),
-            ("project", "<work>/.claude/skills"), ("personal", "<copilot-home>/skills"),
-            ("personal", "<home>/.agents/skills"), ("sibling", "<the folder next to this skill>")])
-        self.assertIn("このスキル自身は返しません。", part)
-        for name in ("`name`", "`path`", "`where`", "`readme`", "`skill_md`", "`description`",
-                     "`hidden`", "`hidden_by`", "`searched`", "`unreadable`"):
-            self.assertIn(name, part, name)
+    def test_skills_are_the_ones_copilot_cli_uses(self):
+        """スキルを探す場所と順を、自分で持たない。Copilot CLI の決まりを写すと、Copilot CLI が使うのとは
+        違うスキルを設定しうる（同じ名前のスキルがあるときなど）。設定するスキルは skill ツールで読み、
+        Copilot CLI が示したフォルダを使う。名前がなければ、使えるスキルの一覧から選んでもらう。"""
+        choose = self.section("### 1. 設定するスキルを決める", "### 2. README を読む")
+        for word in ("候補は、あなたが使えるスキルの一覧（Copilot CLI が示す、スキルの名前と説明）にあるスキルです。",
+                     "このスキル自身は、候補に入れません。",
+                     "スキルを探して、フォルダを見て回ることはしません。"):
+            self.assertIn(word, choose, word)
+        read = self.section("### 2. README を読む", "### 3. 設定ファイルを用意する")
+        for word in ("まず、スキルのツール（skill）に、そのスキルの名前を渡して読みます。",
+                     "示された場所から、そのスキルのフォルダ（SKILL.md があるフォルダ）を知ります。",
+                     "「<name> というスキルが見つかりませんでした。」",
+                     "「<name> のフォルダが分かりませんでした。」",
+                     "フォルダの場所を推測したり、探したりしません。",
+                     # 読んだスキルの説明は、設定を知るためだけに使う（そのスキルの作業を始めない）
+                     "読んだ SKILL.md の手順は、実行しません。設定のことを知るためだけに読みます。"):
+            self.assertIn(word, read, word)
+        self.assertLess(read.index("スキルのツール（skill）"), read.index("README.md を読みます。"))
+        # 探す場所と順、同じ名前のスキルの扱いは書かない（Copilot CLI が決める）
+        for word in ("`skills`", "COPILOT_HOME", "~/.agents", "hidden", "sibling", "Git のリポジトリの一番上"):
+            self.assertNotIn(word, self.body, word)
+        # 道具にも、スキルを探すサブコマンドがない
+        self.assertEqual(sorted(load_tool_module().COMMANDS), ["get", "help", "set", "show"])
 
     def test_readme_is_read_and_nothing_is_guessed(self):
         """README に設定ファイルの説明がなくても、SKILL.md にあれば設定できる。"""
         part = self.section("### 2. README を読む", "### 3. 設定ファイルを用意する")
-        for word in ("`readme` が null か、`readme` に設定ファイルの説明がなければ、`skill_md` も読みます。",
+        for word in ("次に、そのスキルのフォルダの README.md を読みます。",
+                     "README.md がないか、README.md に設定ファイルの説明がなければ、SKILL.md も読みます。",
                      "ここから先の「README」は、読んだ README と SKILL.md のことです。",
                      "設定ファイルの場所", "設定ファイルがないときの作り方", "項目の意味",
                      "書いてないことは、推測しません。",
@@ -170,14 +141,14 @@ class SkillMdTest(unittest.TestCase):
     def test_config_file_is_created_the_way_the_readme_says(self):
         part = self.section("### 3. 設定ファイルを用意する", "### 4. 項目を埋める")
         for word in ("`\"exists\": false` なら、README に書かれた作り方で作ります。",
-                     "そのスキルの `path` に置き換えます。",
+                     "2 で知った、そのスキルのフォルダに置き換えます。",
                      "Python の呼び方（`python3` など）は、`<python>` に合わせます。",
                      "作り方が書いてなければ、作りません。",
                      "YAML のファイルを作ったら、もう一度 `show` を実行します。",
                      # コマンドが成功してもファイルがないときは、伝えるエラーがない。言う文を決める
                      "まだ `\"exists\": false` なら、「<name> の設定ファイルを作れませんでした。」と伝えて、次のスキルに進みます。"):
             self.assertIn(word, part, word)
-        tool = self.section("## 道具", "### `skills` の結果")
+        tool = self.section("## 道具", "### `show` の結果")
         # ないことは失敗ではない（道具も "ok": true を返す。test_config_tool.py）
         self.assertIn("ファイルがないとき、`show` は `\"ok\": true` と `\"exists\": false` を返します。", tool)
         self.assertIn("| `exists` | ファイルがあれば true。", self.section("### `show` の結果", "`items` の1つ1つには"))
@@ -198,7 +169,7 @@ class SkillMdTest(unittest.TestCase):
                      "YAML でないファイルと、`\"unsupported\": true` のファイルです。"):
             self.assertIn(word, part, word)
         self.assertNotIn("`\"ok\": true` なら、YAML の設定ファイルです。", self.body)
-        tool = self.section("## 道具", "### `skills` の結果")
+        tool = self.section("## 道具", "### `show` の結果")
         self.assertIn("`\"unsupported\": true`", tool)
         other = self.section("#### 4-6. `show` と `set` を使わないファイル", "### 5. 終わりの報告")
         for word in ("項目のすぐ上のコメントと README の説明をもとに埋めます。",
@@ -219,7 +190,7 @@ class SkillMdTest(unittest.TestCase):
         self.assertLess(prepare.index("ファイルの形式を"), prepare.index("`show <設定ファイル>`"))
         self.assertIn("設定ファイルの形式", self.section("### 2. README を読む", "### 3. 設定ファイルを用意する"))
         self.assertIn("YAML の設定ファイルを読み書きするとき（`show`・`get`・`set`）は、このスキルの道具を使います。",
-                      self.section("## 道具", "### `skills` の結果"))
+                      self.section("## 道具", "### `show` の結果"))
         # 道具の事情（読めない書き方など）は、利用者に話さない
         self.assertIn("道具の事情（読めない書き方、形式による扱いの違いなど）は話しません。",
                       self.section("## 利用者に見せる言葉", "## 質問のしかた"))
@@ -268,8 +239,8 @@ class SkillMdTest(unittest.TestCase):
 
     def test_dialogue_is_described(self):
         body = self.body
-        for word in ("ask_user", "`choices`",
-                     "config_tool.py", "skills", "show", "set", "--json", "--stdin",
+        for word in ("ask_user", "`choices`", "スキルのツール（skill）",
+                     "config_tool.py", "show", "set", "--json", "--stdin",
                      "必須で空の項目", "今の値のまま", "空のまま", "例：", "あとで決める",
                      "secret", "env_alternative", "＊＊＊", "（空）",
                      "終わりの報告", "項目のすぐ上のコメント",
@@ -543,15 +514,6 @@ class SkillMdTest(unittest.TestCase):
                      "このスキルの報告で、呼び出し元の手番を終えることはしません。"):
             self.assertIn(word, section, word)
 
-    def test_hidden_skills_are_not_reported(self):
-        """使われないスキル（同じ名前で隠れたもの）のことを、聞かれていないのに伝えた。
-        終わりの報告の後（設定の確認、最後のまとめ）にも出たので、報告だけでなく、いつも話さない決まりにする。"""
-        words = self.section("## 利用者に見せる言葉", "## 質問のしかた")
-        self.assertIn("`hidden` が true のスキル（同じ名前で使われないもの）のことは話しません。"
-                      "終わりの報告の 6 にも入れません。", words)
-        # 同じ名前は3つの場所にあることもある。「2つ」と書かない
-        self.assertNotIn("同じ名前のスキルが2つ", self.body)
-
     def test_table_cut_is_described(self):
         section = self.section("### 5. 終わりの報告", "## 守ること")
         self.assertIn("真ん中を「…」で省いて、60 文字ほどにしてあります。", section)
@@ -622,7 +584,7 @@ class ReadmeTest(unittest.TestCase):
 
     def test_sections(self):
         for heading in ("## できること", "## 必要なもの", "## インストールする", "## 使い方",
-                        "## スキルの探し方", "## 設定されるスキルの書き方", "## パスワードなどの項目",
+                        "## 設定されるスキルの書き方", "## パスワードなどの項目",
                         "## うまくいかないとき", "## テストを実行する"):
             self.assertIn(heading, self.text, heading)
         need = self.section("## 必要なもの", "## インストールする")
@@ -639,7 +601,7 @@ class ReadmeTest(unittest.TestCase):
         self.assertIn("`/skills reload`", self.text)
         self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。",
                       self.text)
-        usage = self.section("## 使い方", "## スキルの探し方")
+        usage = self.section("## 使い方", "## 設定されるスキルの書き方")
         self.assertIn("「セットアップしたい」", usage)
         self.assertIn("`/setup`", usage)
         self.assertIn("を直したい` | その項目だけを質問します |", usage)
@@ -650,7 +612,7 @@ class ReadmeTest(unittest.TestCase):
         text = self.text
         headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
         self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方",
-                                    "スキルの探し方", "設定されるスキルの書き方", "パスワードなどの項目",
+                                    "設定されるスキルの書き方", "パスワードなどの項目",
                                     "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
         # README に書いた名前で確かめる。名前を変えたコピーでも README は書き換えないので、
         # フォルダの名前（SKILL_NAME）とは比べない（test_config_tool.py の名前を変えたコピーのテスト）
@@ -669,8 +631,8 @@ class ReadmeTest(unittest.TestCase):
         # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
         self.assertNotIn("$env:USERPROFILE", text)
         # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
-        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/config_tool.py skills\n"
-                      "# Linux（bash）\npython3 <このフォルダ>/scripts/config_tool.py skills\n```", text)
+        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/config_tool.py show <設定ファイル>\n"
+                      "# Linux（bash）\npython3 <このフォルダ>/scripts/config_tool.py show <設定ファイル>\n```", text)
         self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
                       "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
         for line in text.splitlines():
@@ -691,27 +653,15 @@ class ReadmeTest(unittest.TestCase):
         # テストで、このフォルダに __pycache__ を残さない動かし方も示す
         self.assertIn("`-B`", self.text[self.text.index("## テストを実行する"):])
 
-    def test_search_rules_match_the_tool(self):
-        part = self.section("## スキルの探し方", "## 設定されるスキルの書き方")
-        # 個人のフォルダは、Windows の場所を先に書く
-        places = ["1. `.github/skills/`", "2. `.agents/skills/`", "3. `.claude/skills/`",
-                  "4. `%USERPROFILE%\\.copilot\\skills\\`（Linux では `~/.copilot/skills/`",
-                  "5. `%USERPROFILE%\\.agents\\skills\\`（Linux では `~/.agents/skills/`）",
-                  "6. このフォルダの隣のフォルダ"]
-        for line in places:
-            self.assertIn(line, part, line)
-        for a, b in zip(places, places[1:]):
-            self.assertLess(part.index(a), part.index(b))
-        self.assertEqual(len(tool_search_order()), len(places))
-        self.assertIn("1〜3 は、作業フォルダから上のフォルダへ、Git のリポジトリの一番上まで探します", part)
-        self.assertIn("`COPILOT_HOME`", part)
-        # 探す場所の中の、ドットで始まるフォルダを除く（道具の _skill_folders）。
-        # 探す場所（.github/skills/ など）の名前もドットで始まるので、「どの」フォルダかを書く
-        self.assertIn("探す場所の中で、名前がドットで始まるフォルダ（例：`.old`）は、スキルとして扱いません。", part)
-        self.assertNotIn("名前がドットで始まるフォルダは見ません。", part)
-        self.assertIn("先に見つかったほうを設定します。", part)
-        # Copilot CLI と順が違う場合も書く（確かめた版とともに）
-        self.assertIn("Copilot CLI 1.0.105 がスキルを選ぶ順と同じです。", part)
+    def test_skills_are_the_ones_copilot_cli_uses(self):
+        """設定できるのは、Copilot CLI が使うスキル。探す場所と順は書かない（Copilot CLI が決める）。"""
+        usage = self.section("## 使い方", "## 設定されるスキルの書き方")
+        self.assertIn("設定するのは、Copilot CLI が使うスキル（`/skills list` に出るもの）です。", usage)
+        self.assertIn("同じ名前のスキルがいくつかあるときも、Copilot CLI が使うほうを設定します。", usage)
+        trouble = self.section("## うまくいかないとき", "## スクリプトを直接実行する")
+        self.assertIn("`/skills list` に、そのスキルが出るかを確認します。", trouble)
+        for word in ("スキルの探し方", "探す場所", "COPILOT_HOME", "COPILOT_SKILLS_DIRS", "隣のフォルダ", "1.0.105"):
+            self.assertNotIn(word, self.text, word)
 
     def test_secret_words_match_the_tool(self):
         """README に書いた「パスワードなどの項目」の言葉を、道具がそのとおりに見分けること。"""
@@ -756,7 +706,7 @@ class ReadmeTest(unittest.TestCase):
                 self.assertEqual(lines[i - 1], "# Linux（bash）", line)
                 self.assertEqual(lines[i - 2], "py -3 " + line[len("python3 "):], line)
                 self.assertEqual(lines[i - 3], "# Windows（PowerShell）", line)
-        self.assertIn("py -3 <このフォルダ>/scripts/config_tool.py skills", self.text)
+        self.assertIn("py -3 <このフォルダ>/scripts/config_tool.py show <設定ファイル>", self.text)
 
 
 class FolderTest(unittest.TestCase):
@@ -787,8 +737,7 @@ class FolderTest(unittest.TestCase):
                                "tests/__init__.py",
                                "tests/fixtures/coffee-machine.yaml", "tests/fixtures/network-camera.yaml",
                                "tests/requirements.txt",
-                               "tests/test_config_tool.py", "tests/test_powershell.py", "tests/test_skill_files.py",
-                               "tests/test_skills_command.py"])
+                               "tests/test_config_tool.py", "tests/test_powershell.py", "tests/test_skill_files.py"])
 
 
 if __name__ == "__main__":

@@ -1,25 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""スキルを探す道具と、YAML の設定ファイルをコメントと項目の並びを残したまま読み書きする道具。
+"""YAML の設定ファイルを、コメントと項目の並びを残したまま読み書きする道具。
 
 使い方:
-  config_tool.py skills [--workdir フォルダ]
   config_tool.py show ファイル [--workdir フォルダ]
   config_tool.py get ファイル 項目 [--workdir フォルダ]
   config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]
 
 - --workdir・--json・--stdin は、サブコマンドの前に書いても後に書いてもよい。
-- skills は、スキルのフォルダ（SKILL.md があるフォルダ）を、次の順に探して返す。何も作らない。
-  1. .github/skills/、.agents/skills/、.claude/skills/（project）。この順に、それぞれ作業フォルダ
-     （今のフォルダか --workdir）から上へ探す。上は Git のリポジトリの一番上まで。リポジトリの外なら、
-     ホームフォルダまで（ホームフォルダの外なら、いちばん上まで）。
-  2. COPILOT_HOME（なければ ~/.copilot）の skills/（personal）
-  3. ~/.agents/skills/（personal）
-  4. このスキルのフォルダの隣のフォルダ（sibling）
-  この順は、Copilot CLI 1.0.105 の copilot skill list で確かめた、同じ名前のスキルが選ばれる順と同じ
-  （--plugin-dir で読み込んだプラグインのスキルは、2 と 3 より先に選ばれる）。
-  名前（SKILL.md の name:。なければフォルダの名前）が同じスキルは、先に見つかったものだけが使われる。
-  後のものは hidden を true にする。このスキル自身は返さない。点で始まるフォルダは見ない。
 - set の値は、--stdin で標準入力から渡す。値がコマンドの行に出ない。
   （テストのために、値を「set ファイル 項目 値」と引数で渡すこともできる。）
   標準入力はバイト列で読み、UTF-8（BOM があれば外す）で読めなければ、OS の既定の文字コードで読む。
@@ -61,12 +49,7 @@ import unicodedata
 
 MASK = "＊＊＊"
 
-# このスキルのフォルダ（scripts/ の親）。skills の結果から除き、隣のフォルダを探すのに使う。
-SKILL_FILE = "SKILL.md"
-SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 USAGE = [
-    "config_tool.py skills [--workdir フォルダ]",
     "config_tool.py show ファイル [--workdir フォルダ]",
     "config_tool.py get ファイル 項目 [--workdir フォルダ]",
     "config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]",
@@ -978,238 +961,13 @@ def convert_input(item, raw, use_json):
 # サブコマンド
 # ---------------------------------------------------------------------------
 
-def _place_key(path):
-    """同じ場所かを比べるための形（Windows では大文字と小文字を区別しない）。"""
-    return os.path.normcase(os.path.realpath(path))
-
-
-def copilot_home():
-    """利用者のスキルを置く場所の親。環境変数 COPILOT_HOME、なければ ~/.copilot。"""
-    home = os.environ.get("COPILOT_HOME", "").strip()
-    if home:
-        return os.path.abspath(os.path.expanduser(home))
-    return os.path.join(os.path.expanduser("~"), ".copilot")
-
-
-# 作業フォルダとその上のフォルダで、スキルを置くフォルダ。Copilot CLI 1.0.105 が選ぶ順。
-PROJECT_SKILL_PARENTS = (".github", ".agents", ".claude")
-
-
-def _is_git_root(folder):
-    """folder が Git のリポジトリ（作業ツリー）の一番上か。"""
-    dot_git = os.path.join(folder, ".git")
-    if os.path.isdir(dot_git):
-        return os.path.isfile(os.path.join(dot_git, "HEAD"))
-    if os.path.isfile(dot_git):  # git worktree などは、.git がファイル（gitdir: <場所>）
-        try:
-            with open(dot_git, "rb") as f:
-                text = f.read(4096).decode("utf-8", "replace").strip()
-        except OSError:
-            return False
-        if text.startswith("gitdir:"):
-            return os.path.isdir(os.path.join(folder, text[len("gitdir:"):].strip()))
-    return False
-
-
-def project_folders(workdir):
-    """作業フォルダと、その上のフォルダ（近い順）。
-
-    Git のリポジトリの中なら、その一番上まで。外なら、ホームフォルダまで（ホームフォルダの外なら、いちばん上まで）。
-    """
-    chain = []
-    folder = os.path.abspath(workdir)
-    while True:
-        chain.append(folder)
-        if _is_git_root(folder):
-            return chain
-        parent = os.path.dirname(folder)
-        if parent == folder:
-            break
-        folder = parent
-    home = _place_key(os.path.expanduser("~"))
-    for i, folder in enumerate(chain):
-        if _place_key(folder) == home:
-            return chain[:i + 1]
-    return chain
-
-
-def skill_places(workdir):
-    """スキルを探す場所を、使われる順に返す。(どこ, フォルダ) の組。同じ場所は1回だけ。"""
-    places = []
-    for name in PROJECT_SKILL_PARENTS:
-        for folder in project_folders(workdir):
-            places.append(("project", os.path.join(folder, name, "skills")))
-    places.append(("personal", os.path.join(copilot_home(), "skills")))
-    places.append(("personal", os.path.join(os.path.expanduser("~"), ".agents", "skills")))
-    places.append(("sibling", os.path.dirname(SKILL_DIR)))
-    out = []
-    seen = set()
-    for where, place in places:
-        key = _place_key(place)
-        if key not in seen:
-            seen.add(key)
-            out.append((where, place))
-    return out
-
-
-FRONT_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*?))?[ \t]*$")
-BLOCK_HEAD_RE = re.compile(r"^([|>])[-+0-9]*[ \t]*(?:#.*)?$")
-
-
-def _front_value(raw, more):
-    """SKILL.md の先頭の情報の、1つの項目の値（文字）。more は、続きの行（字下げした行と空行）。"""
-    m = BLOCK_HEAD_RE.match(raw)
-    if m:
-        body = [line.strip() for line in more]
-        while body and not body[-1]:
-            body.pop()
-        if m.group(1) == "|":
-            return "\n".join(body)
-        out = []
-        for line in body:
-            if not line:
-                out.append("\n")
-            elif out and out[-1] != "\n":
-                out.append(" " + line)
-            else:
-                out.append(line)
-        return "".join(out)
-    text = " ".join([raw] + [line.strip() for line in more if line.strip()]).strip()
-    if text[:1] in ("\"", "'"):
-        try:
-            value, end = _scan_quoted(text, 0, 0)
-            _rest_is_comment(text[end:], 0)
-            return value
-        except ToolError:
-            return text
-    body, _ = _split_inline_comment(text)
-    return body
-
-
-def read_front_matter(path):
-    """SKILL.md の先頭の、--- で囲んだ情報を読む。{項目: 値（文字）} を返す。"""
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        raise ToolError("SKILL.md を読めません（{}）。".format(_os_reason(e)))
-    if data.startswith(b"\xef\xbb\xbf"):
-        data = data[3:]
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ToolError("SKILL.md を UTF-8 の文字として読めません。")
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    if lines[0].rstrip() != "---":
-        raise ToolError("SKILL.md の1行目が --- ではありません（name と description を --- で囲んで先頭に書きます）。")
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].rstrip() == "---":
-            end = i
-            break
-    if end is None:
-        raise ToolError("SKILL.md の先頭の情報が、--- で閉じていません。")
-    fields = {}
-    i = 1
-    while i < end:
-        line = lines[i]
-        m = FRONT_KEY_RE.match(line)
-        i += 1
-        if not m:
-            continue
-        more = []
-        while i < end and (lines[i].strip() == "" or lines[i][0] in " \t"):
-            more.append(lines[i])
-            i += 1
-        fields[m.group(1)] = _front_value(m.group(2) or "", more)
-    return fields
-
-
-def find_readme(folder):
-    """スキルのフォルダの README.md の場所。名前の大文字と小文字は問わない。なければ None。"""
-    exact = os.path.join(folder, "README.md")
-    if os.path.isfile(exact):
-        return exact
-    try:
-        names = sorted(os.listdir(folder))
-    except OSError:
-        return None
-    for name in names:
-        path = os.path.join(folder, name)
-        if name.lower() == "readme.md" and os.path.isfile(path):
-            return path
-    return None
-
-
-def _skill_folders(place):
-    """場所の中の、SKILL.md があるフォルダ（名前の順）。点で始まるフォルダは見ない。"""
-    try:
-        names = sorted(os.listdir(place))
-    except OSError:
-        return []
-    out = []
-    for name in names:
-        folder = os.path.join(place, name)
-        if name.startswith(".") or not os.path.isdir(folder):
-            continue
-        if os.path.isfile(os.path.join(folder, SKILL_FILE)):
-            out.append(folder)
-    return out
-
-
-def find_skills(workdir):
-    """使えるスキルを、使われる順に探す。同じ名前は、先に見つかったものが使われる。"""
-    result = {"ok": True, "workdir": workdir, "searched": [], "skills": [], "unreadable": []}
-    own_key = _place_key(SKILL_DIR)
-    seen = set()     # 見つけたフォルダ（同じ場所を2回数えない）
-    winner = {}      # 名前 → 使われるスキルのフォルダ
-    for where, place in skill_places(workdir):
-        result["searched"].append({"where": where, "dir": place, "exists": os.path.isdir(place)})
-        for folder in _skill_folders(place):
-            key = _place_key(folder)
-            if key in seen:
-                continue
-            seen.add(key)
-            skill_md = os.path.join(folder, SKILL_FILE)
-            try:
-                fields = read_front_matter(skill_md)
-            except ToolError as e:
-                result["unreadable"].append({"path": folder, "where": where, "error": e.message})
-                continue
-            name = fields.get("name", "").strip() or os.path.basename(folder)
-            own = key == own_key
-            entry = {
-                "name": name,
-                "path": folder,
-                "where": where,
-                "skill_md": skill_md,
-                "readme": find_readme(folder),
-                "description": fields.get("description", "").strip(),
-                "hidden": name in winner,
-            }
-            if entry["hidden"]:
-                entry["hidden_by"] = winner[name]
-            else:
-                winner[name] = folder
-            if not own:
-                result["skills"].append(entry)
-    return result
-
-
-def cmd_skills(opts, pos):
-    if pos:
-        raise ToolError("skills には、ほかの引数を付けません。作業フォルダを変えるときは --workdir を使います。")
-    workdir = os.path.abspath(os.path.expanduser(opts["workdir"])) if opts["workdir"] else os.getcwd()
-    return find_skills(workdir)
-
-
 def _need(pos, count, usage):
     if len(pos) != count:
         raise ToolError("引数の数が合いません。使い方：{}".format(usage), usage=USAGE)
 
 
 def cmd_show(opts, pos):
-    _need(pos, 1, USAGE[1])
+    _need(pos, 1, USAGE[0])
     path = resolve_path(pos[0], opts["workdir"])
     if not os.path.exists(path):
         # ないことは失敗ではない（作る前に、ファイルがあるかを確かめるために使う）。
@@ -1228,7 +986,7 @@ def cmd_show(opts, pos):
 
 
 def cmd_get(opts, pos):
-    _need(pos, 2, USAGE[2])
+    _need(pos, 2, USAGE[1])
     path = resolve_path(pos[0], opts["workdir"])
     doc = load(path)
     item = doc.get(pos[1])
@@ -1309,11 +1067,11 @@ def _read_stdin():
 
 def cmd_set(opts, pos):
     if opts["stdin"]:
-        _need(pos, 2, USAGE[3])
+        _need(pos, 2, USAGE[2])
         raw = _read_stdin()
     else:
         # 値を引数で渡す形（テスト用）。使い方には --stdin の形だけを示す。
-        _need(pos, 3, USAGE[3])
+        _need(pos, 3, USAGE[2])
         raw = pos[2]
     path = resolve_path(pos[0], opts["workdir"])
     doc = load(path)
@@ -1371,7 +1129,6 @@ def cmd_help(opts, pos):
 
 
 COMMANDS = {
-    "skills": cmd_skills,
     "show": cmd_show,
     "get": cmd_get,
     "set": cmd_set,
@@ -1413,12 +1170,12 @@ def run(argv):
     # --workdir などは、サブコマンドの前でも後でもよい。最初の引数（オプションでないもの）がサブコマンド。
     opts, pos = parse_args(argv)
     if not pos:
-        raise ToolError("サブコマンドがありません。使えるのは skills / show / get / set です。", usage=USAGE)
+        raise ToolError("サブコマンドがありません。使えるのは show / get / set です。", usage=USAGE)
     cmd = pos.pop(0)
     if cmd in ("-h", "--help"):
         return cmd_help(None, None)
     if cmd not in COMMANDS:
-        raise ToolError("知らないサブコマンドです：{}。使えるのは skills / show / get / set です。".format(cmd), usage=USAGE)
+        raise ToolError("知らないサブコマンドです：{}。使えるのは show / get / set です。".format(cmd), usage=USAGE)
     return COMMANDS[cmd](opts, pos)
 
 

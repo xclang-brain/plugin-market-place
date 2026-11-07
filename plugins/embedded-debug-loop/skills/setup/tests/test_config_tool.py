@@ -211,19 +211,13 @@ class StandaloneTest(unittest.TestCase):
                 coffee = os.path.join(work, "coffee.yaml")
                 shutil.copyfile(os.path.join(FIXTURES, COFFEE), coffee)
                 shutil.copyfile(os.path.join(FIXTURES, CAMERA), os.path.join(work, "conf", "camera.yaml"))
-                home = os.path.join(base, "copilot-home")
-                os.makedirs(home)
-                # ホームフォルダを base にして、その上や、この PC のスキルを探さないようにする
-                env = {"COPILOT_HOME": home, "HOME": base, "USERPROFILE": base}
 
                 def call(*args, **kw):
-                    code, data, _ = run_tool(args, work, tool=tool, env=env, **kw)
+                    code, data, _ = run_tool(args, work, tool=tool, **kw)
                     self.assertEqual(code, 0, data)
                     self.assertTrue(data["ok"], data)
                     return data
 
-                # 隣にスキルがない場所に写したので、見つかるスキルはない（自分は数えない）
-                self.assertEqual(call("skills")["skills"], [])
                 self.assertEqual(call("show", "coffee.yaml")["missing"], ["machine_name"])
                 self.assertTrue(call("set", "coffee.yaml", "machine_name", "--stdin", stdin="1号機\n")["changed"])
                 self.assertTrue(call("set", "conf/camera.yaml", "rtsp_port", "--stdin", "--json",
@@ -528,9 +522,11 @@ class ShowTest(ToolTestCase):
         usage = self.ok("help")["usage"]
         sets = [line for line in usage if " set " in line]
         self.assertEqual(sets, ["config_tool.py set ファイル 項目 --stdin [--json] [--workdir フォルダ]"])
-        for name in ("skills", "show", "get", "set"):
+        for name in ("show", "get", "set"):
             line = [x for x in usage if x.startswith("config_tool.py " + name + " ")][0]
             self.assertIn("[--workdir フォルダ]", line)
+        # スキルを探すことは、Copilot CLI に任せる。道具にはスキルを探すサブコマンドがない
+        self.assertEqual([line.split()[1] for line in usage], ["show", "get", "set"])
         data, _ = self.fail_("set", COFFEE, "machine_name")
         self.assertIn("--stdin", data["error"])
 
@@ -1202,7 +1198,7 @@ class RefuseTest(ToolTestCase):
     def test_bad_arguments_still_json(self):
         path = self.copy(COFFEE)
         for args in (("frobnicate",), ("show",), ("get", path), ("set", path, "machine_name"),
-                     ("skills", "extra"), ("skills", "--workdir"), ("list",)):
+                     ("show", "--workdir"), ("skills",), ("list",)):
             data, out = self.fail_(*args)
             json.loads(out)
         data = self.ok()
