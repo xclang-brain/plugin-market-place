@@ -230,8 +230,8 @@ class StandaloneTest(unittest.TestCase):
                 self.assertEqual(snapshot(copy), skill_before)
 
     def test_renamed_copy_passes_its_own_file_tests(self):
-        """フォルダの名前と SKILL.md の name: を変えて写しても、
-        写した先のフォルダの試験（SKILL.md の試験）が通ること。"""
+        """README のとおり、フォルダの名前と SKILL.md の name: を変えて写しても、
+        写した先のフォルダの試験（SKILL.md・README.md の試験）が通ること。"""
         base = tempfile.mkdtemp(prefix="setup-test-rename-")
         self.addCleanup(shutil.rmtree, base, True)
         # 今の名前とは違う名前にする（この試験を、名前を変えた写しで動かしたときも）
@@ -1180,7 +1180,7 @@ class RefuseTest(ToolTestCase):
         self.assertNotIn("unsupported", data)
         data, _ = self.fail_("show", self.write("app.json", '{\n  "host": ""\n}\n'))
         self.assertIs(data["unsupported"], True)
-        # 「項目: 値」だけのファイルは、YAML でなくても読めてしまう。形式は、SKILL.md と名前で決める。
+        # 「項目: 値」だけのファイルは、YAML でなくても読めてしまう。形式は、README と名前で決める（SKILL.md）。
         self.assertTrue(self.ok("show", self.write("app.conf", "# host name\nhost: \nport: 21\n"))["items"])
 
     def test_read_only_file_is_not_written(self):

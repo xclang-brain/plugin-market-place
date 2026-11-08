@@ -1,6 +1,6 @@
 # log-capture：シリアルコンソールの記録
 
-機器のシリアルコンソールで、コマンドを実行して出力を記録する GitHub Copilot CLI のスキルです。スキルのフォルダだけで動きます。
+機器のシリアルコンソールで、コマンドを実行して出力を記録する GitHub Copilot CLI のスキルです。このフォルダだけで動きます。
 
 ## できること
 
@@ -11,7 +11,7 @@
 ## 必要なもの
 
 - Windows の PC（Linux でも動きます）
-- Python 3.8 以上。追加のインストールは要りません。シリアルポートを扱う pyserial 3.5 を同梱しています（BSD ライセンス。[LICENSE.txt](../../skills/log-capture/scripts/vendor/serial/LICENSE.txt)）。
+- Python 3.8 以上。追加のインストールは要りません。シリアルポートを扱う pyserial 3.5 を同梱しています（BSD ライセンス。[LICENSE.txt](scripts/vendor/serial/LICENSE.txt)）。
 - GitHub Copilot CLI
 - 機器と PC を接続するシリアルケーブル（USB シリアル変換器など）
 - 機器のシリアルコンソールで、`$?` が使えるシェル（sh や bash）
@@ -23,7 +23,7 @@ Windows では GitHub Actions でテストしています（Copilot CLI との�
 
 プラグインと一緒にインストールしたときは、この手順は要りません。
 
-1. スキルのフォルダ（`skills/log-capture/`）を、次のどちらかにコピーします。
+1. このフォルダを、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/log-capture/`
    - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\log-capture\`（Linux では `~/.copilot/skills/log-capture/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
@@ -54,7 +54,7 @@ Windows では GitHub Actions でテストしています（Copilot CLI との�
 各項目の説明は、ファイルの中のコメントにもあります。
 
 - 設定は作業フォルダごとです。サブフォルダで使っても、そこに別の設定ができます。
-- 設定ファイルがなければ、スキルのフォルダのひな形 `config-template.yaml` をコピーして作ります。
+- 設定ファイルがなければ、このフォルダのひな形 `config-template.yaml` をコピーして作ります。
 - `.log-capture/` に `.gitignore`（中身は `*`）がなければ作り、設定とログを Git から外します。
 - 設定の確認では、ファイルを作りません。設定ファイルも変更しません。
 - スキルの更新でひな形に項目が増えたら、ログを取るときと設定の確認で、足りない項目を注意として知らせます。`/log-capture 足りない項目を足して` と入力すると、足りない項目をひな形の値で設定ファイルの最後に追加します。
@@ -160,12 +160,12 @@ check は失敗したときも 2、config-path は設定に問題があっても
 
 ```
 # Windows（PowerShell）
-py -3 <スキルのフォルダ>/scripts/capture.py <サブコマンド> [オプション]
+py -3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]
 # Linux（bash）
-python3 <スキルのフォルダ>/scripts/capture.py <サブコマンド> [オプション]
+python3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]
 ```
 
-`<スキルのフォルダ>` は、スキルのフォルダのパスです（例：`.github/skills/log-capture`）。`py` がないときは `python` を使います。
+`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/log-capture`）。`py` がないときは `python` を使います。
 
 `<サブコマンド>` は次のどれかです。
 
@@ -182,7 +182,7 @@ python3 <スキルのフォルダ>/scripts/capture.py <サブコマンド> [オ�
 
 ## テストを実行する
 
-スキルのフォルダで、次を実行します。
+このフォルダで、次を実行します。
 
 ```
 # Windows（PowerShell）
