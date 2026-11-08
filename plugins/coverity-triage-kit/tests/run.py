@@ -13,7 +13,8 @@
        uv run --native-tls --frozen --quiet --directory <フォルダ> python -m unittest discover -s tests -v
      なければ
        python -m unittest discover -s tests -v
-  2. tests/structure、tests/contracts、tests/independence、tests/integration、tests/docs、tests/eval（Python の unittest）
+  2. tests/structure、tests/contracts、tests/independence、tests/integration、tests/ui、tests/docs、tests/eval（Python の unittest。
+     ui は結果と設定の画面を Playwright のブラウザーで確かめる。Node.js か Playwright がなければ、理由を書いて飛ばす）
   3. tests/extension（node --test）
 
 結果は tests/results/latest.json にも書く（git に入れない）。終了コード：0 すべて合格（飛ばしたものはあってよい）、
@@ -48,8 +49,8 @@ MIN_NODE = 22
 TAIL_LINES = 80
 TIMEOUTS = {"part": 900, "independence": 3600}
 DEFAULT_TIMEOUT = 900
-PLUGIN_SUITES = ["structure", "contracts", "independence", "integration", "docs", "eval"]
-SLOW_SUITES = {"integration"}
+PLUGIN_SUITES = ["structure", "contracts", "independence", "integration", "ui", "docs", "eval"]
+SLOW_SUITES = {"integration", "ui"}
 # 試験が作るが、リポジトリに残してよいもの（.gitignore にある結果の置き場所）
 ALLOWED_LEFTOVERS = ("tests/results/",)
 
@@ -250,6 +251,8 @@ def plugin_suite(name):
     if not folder.is_dir() or not any(folder.rglob("test*.py")):
         return None
     needs = {"python"} if name in ("structure", "docs", "eval") else {"python", "uv", "git"}
+    if name == "ui":
+        needs |= {"browser"}  # Node.js and Playwright: optional (the suite skips without them)
     return Suite(name, "plugin", ROOT, [sys.executable, "-m", "unittest", "discover", "-s", str(folder), "-t", str(folder), "-v"],
                  folder, needs=needs)
 
@@ -355,7 +358,7 @@ def check_prerequisites(needs):
         optional.append({"name": name, "found": exe is not None, "path": exe,
                          "version": ".".join(map(str, version)) if version else None,
                          "note": "なければ、それを使う試験は飛ばされます"})
-    if "node" in needs:
+    if needs & {"node", "browser"}:
         optional.append({"name": "playwright", "found": playwright_available(),
                          "note": "なければ、画面をブラウザーで確かめる試験は飛ばされます"})
     return {"ok": not missing, "required": required, "optional": optional, "missing": missing}
@@ -489,7 +492,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="coverity-triage-kit の、モデルを使わない試験をすべて動かす")
     parser.add_argument("--only", action="append", default=[], metavar="名前",
                         help="動かす試験（parts、skills/<名前>、<部品の名前>、structure、contracts、independence、"
-                             "integration、docs、eval、extension）。何回でも付けられる")
+                             "integration、ui、docs、eval、extension）。何回でも付けられる")
     parser.add_argument("--skip-slow", action="store_true", help="時間のかかる試験を飛ばす")
     parser.add_argument("--list", action="store_true", help="試験の名前を出して終わる")
     parser.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),

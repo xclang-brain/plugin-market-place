@@ -151,6 +151,17 @@ class GuiScreenTest(unittest.TestCase):
 
     # ---- the screen ------------------------------------------------------------------------------
 
+    def test_0_the_page_checks_find_problems(self) -> None:
+        """The checks of gui_screen.mjs find a page wider than the screen, low contrast and a light page in dark mode,
+        and pass a table that scrolls in its own box and a readable dark page"""
+        done = subprocess.run([NODE, str(SCRIPT), "--selftest"], cwd=str(HERE), capture_output=True, timeout=180)
+        found = json.loads(done.stdout.decode("utf-8") or "{}")
+        self.assertTrue(found.get("overflow"), found)
+        self.assertTrue(found.get("lowContrast"), found)
+        self.assertTrue(any("背景が明るい" in p for p in found.get("lightInDark") or []), found)
+        self.assertEqual(found.get("scrollBoxIsFine"), [], found)
+        self.assertEqual(found.get("goodIsFine"), [], found)
+
     def test_1_open_returns_a_local_url_with_the_run(self) -> None:
         self.assertTrue(self.opened["url"].startswith("http://127.0.0.1:"), self.opened)
         self.assertIn(f"run={self.run_dir.name}", self.opened["url"])

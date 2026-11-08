@@ -227,6 +227,16 @@ def bash_calls(summary: dict) -> list[str]:
     return [str(u["input"].get("command", ""))[:200] for u in summary["tool_uses"] if u["name"] == "Bash"]
 
 
+def every_time_check(table_skills: list[str], summary: dict) -> dict:
+    """The skills the table says to use 毎回 (every time) were loaded (Skill tool or slash command)."""
+    if not table_skills:
+        return ek.check("table_skills_used", None, "表に「毎回」のスキルがありません", "should")
+    missing = [s for s in table_skills if s not in summary["skills_loaded"]]
+    return ek.check("table_skills_used", not missing,
+                    ("読まなかった「毎回」のスキル: " + "、".join(missing)) if missing
+                    else "「毎回」のスキルをすべて読んだ", "should")
+
+
 def finished_check(run: dict, summary: dict) -> dict:
     problems = []
     if run["timed_out"]:
@@ -264,6 +274,7 @@ def user_checks(case: dict, ctx: dict, run: dict, summary: dict) -> tuple[list[d
     checks.append(check_evidence(ctx["repo"], evidence_in(sections.get("根拠", "")) or evidence_in(text)))
     changed = changed_files_of(ctx["repo"])
     moved = ek.head(ctx["repo"]) != ctx["head"]
+    checks.append(every_time_check(ctx["every_time"], summary))
     checks.append(ek.check("files_unchanged", not changed and not moved,
                            ("変わったファイル: " + "、".join(changed) if changed else "") + ("HEAD が変わった" if moved else "")
                            or "作業中のファイルは変わっていない"))
@@ -347,6 +358,7 @@ def brief_checks(case: dict, ctx: dict, run: dict, summary: dict) -> tuple[list[
     outside = [w for w in writes_of(summary) if not any(ek.inside(Path(w), a) for a in allowed)]
     checks.append(ek.check("writes_only_allowed", not outside,
                            ("許されていない場所への書き込み: " + "、".join(outside)) if outside else "直すフォルダと結果・進み具合だけ"))
+    checks.append(every_time_check(ctx["every_time"], summary))
     commands = bash_calls(summary)
     checks.append(ek.check("no_commands", not commands,
                            ("コマンドを使った: " + "；".join(commands[:3])) if commands else "コマンドを使っていない", "should"))
@@ -532,6 +544,8 @@ def prepare_case(case: dict, args: argparse.Namespace, data: dict, root: Path, o
            "check_comment": skill_script(ws, comment_name, "check_comment.py"),
            "check_result": skill_script(ws, report_name, "check_result.py"),
            "impact": str((data["issues"].get(case["cids"][0]) or {}).get("impact") or "Unspecified"),
+           "every_time": [r["part"] for r in ek.ADAPTER.load_agent(worker)["table"]
+                          if r["when"] == "毎回" and r["part"] in build["skills"]],
            "lines": {c: (str((data["issues"].get(c) or {}).get("file")), int((data["issues"].get(c) or {}).get("line") or 0))
                      for c in case["cids"]}}
     prompt = case["prompt"].replace("{repo}", str(repo))

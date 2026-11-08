@@ -611,7 +611,9 @@ def claude_argv(claude_bin: list[str], prompt: str, main: str, agents_json: Path
                                "--setting-sources", "project", "--permission-mode", "acceptEdits"]
     if tools:
         argv += ["--tools", ",".join(tools)]
-    argv += ["--allowedTools", "Bash(uv run:*)"]
+    # Skill: Claude Code asks before it runs a skill whose frontmatter has allowed-tools (the
+    # skills that run scripts have ["shell(uv run:*)"]), and claude -p denies what it would ask.
+    argv += ["--allowedTools", "Bash(uv run:*)", "Skill"]
     argv += [f"mcp__{n}__*" for n in mcp_names]
     if output_dir is not None:
         argv += ["--add-dir", str(output_dir)]

@@ -2,6 +2,7 @@
 // repository, the run folder and the screen's server, and checks the files afterwards.
 //
 //   node gui_screen.mjs --check          {"playwright": true|false}
+//   node gui_screen.mjs --selftest       the problems the page checks find on small pages made to fail (and to pass)
 //   node gui_screen.mjs <config.json>    writes {"checks": [{"name", "problems": [...]}], "fatal": null|"..."} to config.out
 //
 // config: {base: "http://127.0.0.1:<port>/", token, run, rows: [<item id>...], reject: <item id>,
@@ -32,7 +33,7 @@ if (process.argv[2] === '--check') {
   process.stdout.write(JSON.stringify({ playwright: !!playwright }) + '\n');
   process.exit(0);
 }
-const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const config = process.argv[2] === '--selftest' ? {} : JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const report = { checks: [], fatal: null };
 const check = (name, problems) => report.checks.push({ name, problems: problems ?? [] });
 const WAIT = 20000;
@@ -148,6 +149,30 @@ function contrastProblems() {
 
 // ---- the screen -------------------------------------------------------------------------------------------
 
+// --selftest: the checks above find what they look for (on small pages made here)
+if (process.argv[2] === '--selftest') {
+  const browser = await playwright.chromium.launch();
+  const found = {};
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 600 }, colorScheme: 'dark' });
+    const text = '<p>' + '読める文字。'.repeat(3) + '</p>';
+    await page.setContent(`<body style="margin:0;background:#111;color:#eee">${text.repeat(6)}<div style="width:900px">広い</div></body>`);
+    found.overflow = await page.evaluate(overflowProblems);
+    await page.setContent(`<body style="background:#111;color:#333">${text.repeat(6)}</body>`);
+    found.lowContrast = await page.evaluate(contrastProblems);
+    await page.setContent(`<body style="background:#fff;color:#000">${text.repeat(6)}</body>`);
+    found.lightInDark = await page.evaluate(contrastProblems);
+    await page.setContent(`<body style="margin:0;background:#111;color:#eee">${text.repeat(6)}<div style="overflow-x:auto"><table style="width:900px"><tr><td>表</td></tr></table></div></body>`);
+    found.scrollBoxIsFine = await page.evaluate(overflowProblems);
+    await page.setContent(`<body style="background:#111;color:#eee">${text.repeat(6)}</body>`);
+    found.goodIsFine = await page.evaluate(contrastProblems);
+  } finally {
+    await browser.close();
+  }
+  process.stdout.write(JSON.stringify(found) + '\n');
+  process.exit(0);
+}
+
 const url = (hash) => `${config.base}?t=${encodeURIComponent(config.token)}#${hash}`;
 
 async function ready(page, view) {
@@ -158,9 +183,28 @@ async function ready(page, view) {
   await page.waitForTimeout(150); // the last drawing
 }
 
+// The title of an item in the list is its id, for a group with the count: "G1（2 件）"
+const titled = (text, id) => text === id || text.startsWith(`${id}（`) || text.startsWith(`${id} `);
+
 async function rowSelect(page, id) {
-  const rows = page.locator('#resBody tr').filter({ has: page.locator('button.linkish', { hasText: new RegExp(`^${id}$`) }) });
+  const rows = page.locator('#resBody tr').filter({ has: page.locator('button.linkish', { hasText: new RegExp(`^${id}(（| |$)`) }) });
   return rows.first().locator('select');
+}
+
+// A response the page will send; never an unhandled rejection (a timeout comes back as an Error)
+function nextSave(page) {
+  return page.waitForResponse((r) => r.url().includes('/approvals') && r.request().method() === 'POST', { timeout: WAIT })
+    .catch((error) => error);
+}
+
+async function step(name, fn) {
+  const problems = [];
+  try {
+    await fn(problems);
+  } catch (error) {
+    problems.push(`途中で止まった：${String(error).split('\n')[0]}`);
+  }
+  check(name, problems);
 }
 
 const browser = await playwright.chromium.launch();
@@ -185,7 +229,7 @@ try {
         check(`${label}：タブが出る`, await page.evaluate(viewProblems, view));
         if (view === 'summary' && !hash.includes('item=')) {
           const shown = await page.$$eval('#resBody button.linkish', (els) => els.map((e) => e.textContent.trim()));
-          check(`${label}：作業がすべて並ぶ`, config.rows.filter((id) => !shown.includes(id)).map((id) => `${id} がない`));
+          check(`${label}：作業がすべて並ぶ`, config.rows.filter((id) => !shown.some((s) => titled(s, id))).map((id) => `${id} がない`));
         }
         check(`${label}：横にはみ出さない`, await page.evaluate(overflowProblems));
         if (scheme === 'dark') check(`${label}：ダークで読める`, await page.evaluate(contrastProblems));
@@ -199,20 +243,23 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
-    await page.goto(url(`run=${config.run}&view=summary`));
-    await ready(page, 'summary');
-    const select = await rowSelect(page, config.reject);
-    const saved = page.waitForResponse((r) => r.url().includes('/approvals') && r.request().method() === 'POST', { timeout: WAIT });
-    await select.selectOption('reject');
-    const response = await saved;
-    const body = await response.json().catch(() => ({}));
-    const problems = response.ok() && body.ok !== false ? [] : [`保存の応答が失敗：${response.status()} ${JSON.stringify(body).slice(0, 300)}`];
-    await page.waitForFunction(() => /保存しました/.test(document.querySelector('#toast')?.textContent || ''), null, { timeout: WAIT }).catch(() => problems.push('「保存しました」が出ない'));
-    await page.reload();
-    await ready(page, 'summary');
-    const value = await (await rowSelect(page, config.reject)).inputValue();
-    if (value !== 'reject') problems.push(`読み込み直すと、承認が「${value}」に戻っている`);
-    check('承認の選択：一覧で選ぶと保存される', problems);
+    await step('承認の選択：一覧で選ぶと保存される', async (problems) => {
+      await page.goto(url(`run=${config.run}&view=summary`));
+      await ready(page, 'summary');
+      const select = await rowSelect(page, config.reject);
+      const saved = nextSave(page);
+      await select.selectOption('reject', { timeout: WAIT });
+      const response = await saved;
+      if (response instanceof Error) throw response;
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok() || body.ok === false) problems.push(`保存の応答が失敗：${response.status()} ${JSON.stringify(body).slice(0, 300)}`);
+      await page.waitForFunction(() => /保存しました/.test(document.querySelector('#toast')?.textContent || ''), null, { timeout: WAIT })
+        .catch(() => problems.push('「保存しました」が出ない'));
+      await page.reload();
+      await ready(page, 'summary');
+      const value = await (await rowSelect(page, config.reject)).inputValue();
+      if (value !== 'reject') problems.push(`読み込み直すと、承認が「${value}」に戻っている`);
+    });
     await context.close();
   }
 
@@ -220,29 +267,29 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 390, height: 900 } });
     const page = await context.newPage();
-    const hash = `run=${config.run}&view=summary&item=${config.deviation}`;
-    await page.goto(url(hash));
-    await ready(page, 'summary');
-    await page.waitForSelector('#ap-comment', { timeout: WAIT });
-    const problems = [];
-    await page.fill('#ap-comment', config.comment);
-    if (await page.isDisabled('#apSave')) problems.push('直しても「保存」を押せない');
-    const saved = page.waitForResponse((r) => r.url().includes('/approvals') && r.request().method() === 'POST', { timeout: WAIT });
-    await page.click('#apSave');
-    const response = await saved;
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok() || body.ok === false) problems.push(`保存の応答が失敗：${response.status()} ${JSON.stringify(body).slice(0, 300)}`);
-    await page.waitForFunction(() => /保存しました/.test(document.querySelector('#apMsg')?.textContent || ''), null, { timeout: WAIT }).catch(() => problems.push('「保存しました」が出ない'));
-    await page.goto(url(`run=${config.run}&view=summary`));
-    await ready(page, 'summary');
-    await page.goto(url(hash));
-    await page.waitForSelector('#ap-comment', { timeout: WAIT });
-    const value = await page.inputValue('#ap-comment');
-    if (value !== config.comment) problems.push(`読み込み直すと、逸脱コメントが「${value.slice(0, 40)}」になっている`);
-    if (!(await page.isHidden('#ap-comment-mark'))) {
-      // the mark says the comment differs from the AI's: expected after an edit
-    } else problems.push('「AI の案から変更」の印が出ない');
-    check('逸脱コメントの手直し：詳細で直して保存すると残る', problems);
+    await step('逸脱コメントの手直し：詳細で直して保存すると残る', async (problems) => {
+      const hash = `run=${config.run}&view=summary&item=${config.deviation}`;
+      await page.goto(url(hash));
+      await ready(page, 'summary');
+      await page.waitForSelector('#ap-comment', { timeout: WAIT });
+      await page.fill('#ap-comment', config.comment);
+      if (await page.isDisabled('#apSave')) problems.push('直しても「保存」を押せない');
+      if (await page.isHidden('#ap-comment-mark')) problems.push('直しても「AI の案から変更」の印が出ない');
+      const saved = nextSave(page);
+      await page.click('#apSave', { timeout: WAIT });
+      const response = await saved;
+      if (response instanceof Error) throw response;
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok() || body.ok === false) problems.push(`保存の応答が失敗：${response.status()} ${JSON.stringify(body).slice(0, 300)}`);
+      await page.waitForFunction(() => /保存しました/.test(document.querySelector('#apMsg')?.textContent || ''), null, { timeout: WAIT })
+        .catch(() => problems.push('「保存しました」が出ない'));
+      await page.goto(url(`run=${config.run}&view=summary`));
+      await ready(page, 'summary');
+      await page.goto(url(hash));
+      await page.waitForSelector('#ap-comment', { timeout: WAIT });
+      const value = await page.inputValue('#ap-comment');
+      if (value !== config.comment) problems.push(`読み込み直すと、逸脱コメントが「${value.slice(0, 40)}」になっている`);
+    });
     await context.close();
   }
 } catch (error) {

@@ -32,12 +32,6 @@ ORDER = {"low": 0, "medium": 1, "high": 2}
 JA = {"high": "高", "medium": "中", "low": "低"}
 
 
-def lowest(*levels: str | None) -> str:
-    """The lowest of the given levels; values that are not high / medium / low count as low."""
-    known = [level if level in ORDER else "low" for level in levels]
-    return min(known, key=ORDER.get) if known else "low"
-
-
 def review_cap(review) -> str | None:
     """The cap a review puts on the confidence: its confidence_cap; a flag or rework without a cap is low."""
     if not isinstance(review, dict):

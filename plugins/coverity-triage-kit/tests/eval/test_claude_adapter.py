@@ -253,7 +253,8 @@ class FakePluginTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "project")
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
         allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
-        self.assertEqual(allowed, ["Bash(uv run:*)", "mcp__fake-server__*"])
+        self.assertEqual(allowed, ["Bash(uv run:*)", "Skill", "mcp__fake-server__*"],
+                         "Skill: claude -p denies skills with allowed-tools unless the Skill tool is allowed")
         self.assertEqual(argv[argv.index("--add-dir") + 1], str(out.resolve()))
         self.assertEqual(argv[argv.index("--tools") + 1].split(","), ca.BASE_TOOLS,
                          "an agent without tools gets the base set; the union keeps it")
