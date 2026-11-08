@@ -7,7 +7,7 @@ import unittest
 
 from _support import SKILL, clean_bytecode, forbidden_patterns, frontmatter, load_script, skill_text_files
 
-NAME = "deviation-comment"
+NAME = SKILL.name  # the folder name (a renamed copy uses its new name)
 
 
 def tearDownModule() -> None:

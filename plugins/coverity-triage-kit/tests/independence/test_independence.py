@@ -248,26 +248,27 @@ class CopyAlone(unittest.TestCase):
                 continue
             jobs.append((folder, folder.name))
             if folder.parent == pp.SKILLS_DIR:
-                jobs.append((folder, ("copy-of-" + folder.name)[:64].rstrip("-")))
+                jobs.append((folder, ("my-" + folder.name)[:64].rstrip("-")))
         if not jobs:
             self.skipTest("試験を持つ部品がまだありません")
         workers = max(1, int(os.environ.get("TESTS_JOBS") or min(4, os.cpu_count() or 1)))
         timeout = int(os.environ.get("TESTS_PART_TIMEOUT") or 900)
         with tempfile.TemporaryDirectory(prefix="lone-parts-") as tmp:
             def run(job):
-                folder, name = job
-                place = Path(tmp) / f"{folder.parent.name}-{name}" / name
+                index, (folder, name) = job
+                # Windows のパスの長さ（260 文字）に収まるよう、置き場所の名前は短くする
+                place = Path(tmp) / f"p{index}" / name
                 shutil.copytree(folder, place, ignore=pp.copy_ignore)
                 if name != folder.name:
                     skill = place / "SKILL.md"
                     text = pp.read(skill)
                     skill.write_text(re.sub(r"(?m)^name:\s*.*$", f"name: {name}", text, count=1), encoding="utf-8")
-                env = RUNNER.test_env({"UV_PROJECT_ENVIRONMENT": str(Path(tmp) / f"venv-{folder.parent.name}-{name}")})
+                env = RUNNER.test_env({"UV_PROJECT_ENVIRONMENT": str(Path(tmp) / f"v{index}")})
                 code, out, _ = RUNNER.run_command(RUNNER.part_test_command(place), place, env, timeout)
                 return folder, name, code, out
 
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                results = list(pool.map(run, jobs))
+                results = list(pool.map(run, enumerate(jobs)))
         for folder, name, code, out in results:
             label = pp.rel(folder) + ("" if name == folder.name else f"（名前を {name} に変えたコピー）")
             with self.subTest(part=label):

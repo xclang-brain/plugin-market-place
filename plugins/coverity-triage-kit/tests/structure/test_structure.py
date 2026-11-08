@@ -61,9 +61,13 @@ class ManifestTest(unittest.TestCase):
         data = json.loads(pp.read(path))
         self.assertEqual(pp.schema_errors(data, self.schema("mcp.schema.json")), [], "mcp.json が公式の schema に合いません")
         plugin = json.loads(pp.read(pp.ROOT / "plugin.json"))
-        version = lambda url: re.search(r"/schemas/([^/]+)/", url or "")  # noqa: E731
-        self.assertEqual(version(data.get("$schema")).group(1), version(plugin.get("$schema")).group(1),
-                         "mcp.json と plugin.json の $schema の版が違います")
+
+        def version(url):
+            m = re.search(r"/schemas/([^/]+)/", url or "")
+            return m.group(1) if m else None
+
+        self.assertIsNotNone(version(data.get("$schema")), "mcp.json の $schema に版がありません")
+        self.assertEqual(version(data.get("$schema")), version(plugin.get("$schema")), "mcp.json と plugin.json の $schema の版が違います")
 
     def test_mcp_servers_start_from_their_folder(self):
         """stdio の command は1語。--directory（か cwd）は ${PLUGIN_ROOT}/mcp-servers/<フォルダ> を指し、そのフォルダがある"""

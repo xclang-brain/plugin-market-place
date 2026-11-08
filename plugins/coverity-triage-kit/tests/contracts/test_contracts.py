@@ -444,7 +444,15 @@ class McpClient:
                     os.killpg(self.proc.pid, 9)
                 except OSError:
                     pass
-        self.log.close()
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        for stream in (self.proc.stdout, self.log):
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 def find_token(data):
@@ -630,18 +638,23 @@ class WriterReaderTest(unittest.TestCase):
         finally:
             client.close()
 
-    def test_run_accepts_issues_written_by_the_mcp_server(self):
-        """偽の Coverity で MCP サーバーが書いた issues.json と issue-<CID>.json を、一括実行のコマンドが受け付け、作業を始める"""
+    def run_command(self):
+        """一括実行のコマンド（defaults.json の runCommand）。なければ飛ばす"""
         self.need()
         data = pp.defaults()
         if data is None or not (pp.ROOT / data.get("runCommand", "")).is_file():
             self.skipTest("一括実行のコマンド（defaults.json の runCommand）がまだありません")
         if shutil.which("git") is None:
             self.skipTest("git がありません")
-        run_py = pp.ROOT / data["runCommand"]
+        return pp.ROOT / data["runCommand"]
+
+    def flow(self, offline):
+        """MCP サーバー（偽の Coverity）と一括実行のコマンドで、作業（launch）が始まるところまで進める。
+        offline：MCP サーバーが先に書いた issues.json と issue-<CID>.json を new-run --issues-file に渡す。
+        そうでなければ：tick の fetch_issues・fetch_details の指示のとおりに MCP サーバーを呼ぶ（統括エージェントの代わり）"""
+        run_py = self.run_command()
         repo = self.make_repo()
-        fetched = Path(self.tmp) / "fetched"
-        fetched.mkdir(exist_ok=True)
+        fetched = Path(tempfile.mkdtemp(prefix="fetched-", dir=self.tmp))
         uv = shutil.which("uv")
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
 
@@ -656,20 +669,26 @@ class WriterReaderTest(unittest.TestCase):
             return out
 
         client = self.client(repo)
-        run_dir = None
+        run_dir, seen = None, {"fetch_issues": [], "fetch_details": []}
         try:
             filter_file = repo / ".coverity-triage" / "filters" / "all.yaml"
-            client.call("coverity_search_issues", {"repo_root": str(repo), "filter_file": str(filter_file),
-                                                   "output_file": str(fetched / "issues.json")})
-            self.check_issues_file(fetched / "issues.json")
-            created = run("new-run", "--repo", str(repo), "--issues-file", str(fetched / "issues.json"),
-                          "--no-initial", "--no-review", "--no-integration", "--verify", "none")
+            options = ["--no-initial", "--no-review", "--no-integration", "--verify", "none"]
+            if offline:
+                client.call("coverity_search_issues", {"repo_root": str(repo), "filter_file": str(filter_file),
+                                                       "output_file": str(fetched / "issues.json")})
+                self.check_issues_file(fetched / "issues.json")
+                client.call("coverity_get_issue_details", {"repo_root": str(repo), "stream": "app-main", "cids": [20001, 20002],
+                                                           "output_dir": str(fetched)})
+                for cid in (20001, 20002):
+                    self.check_detail_file(fetched / f"issue-{cid}.json")
+                options += ["--issues-file", str(fetched / "issues.json")]
+            created = run("new-run", "--repo", str(repo), "--filter", str(filter_file.name), *options)
             run_dir = Path(created["run_dir"])
             schema = owner_copy("run.schema.json", "一括実行")
             if schema is not None:
                 errors = pp.schema_errors(json.loads((run_dir / "run.json").read_text(encoding="utf-8")), json.loads(pp.read(schema)))
                 self.assertEqual(errors, [], "new-run が書いた run.json が run.schema.json に合いません")
-            pending, launched, details = [], None, []
+            pending, launched = [], None
             for _ in range(40):
                 args = ["tick", "--run", str(run_dir), "--wait", "2"]
                 if pending:
@@ -681,10 +700,11 @@ class WriterReaderTest(unittest.TestCase):
                     if kind == "fetch_issues":
                         client.call("coverity_search_issues", {"repo_root": action["repo_root"], "filter_file": action["filter_file"],
                                                                "output_file": action["output_file"]})
+                        seen[kind].append(Path(action["output_file"]))
                     elif kind == "fetch_details":
                         client.call("coverity_get_issue_details", {"repo_root": action["repo_root"], "stream": action["stream"],
                                                                    "cids": action["cids"], "output_dir": action["output_dir"]})
-                        details += [Path(action["output_dir"]) / f"issue-{cid}.json" for cid in action["cids"]]
+                        seen[kind] += [Path(action["output_dir"]) / f"issue-{cid}.json" for cid in action["cids"]]
                     elif kind == "command":
                         subprocess.run(action["command"], shell=True, cwd=str(repo), env=env, timeout=60,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -695,20 +715,37 @@ class WriterReaderTest(unittest.TestCase):
                         pending.append(action["task"])
                 if launched or (tick.get("done") and not pending):
                     break
-            self.assertTrue(details, "tick が警告経路の取得（fetch_details）を頼みませんでした")
-            for path in details:
-                self.assertTrue(path.is_file(), f"MCP サーバーが {path} を書いていません")
-                self.check_detail_file(path)
             self.assertIsNotNone(launched, "MCP サーバーが書いたファイルで、作業（launch）が始まりません")
             self.assertEqual(launched.get("role"), "worker")
             for key in ("task", "role", "item", "description", "prompt"):
                 self.assertIn(key, launched, f"launch に {key} がありません（設計書 4.12）")
+            # 作業に渡る警告経路が、MCP サーバーの書いたもの（取れなかった印ではない）
+            copies = sorted(run_dir.glob("items/*/issue-*.json"))
+            self.assertTrue(copies, "実行フォルダの items/ に警告経路のファイルがありません")
+            for path in copies:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("error", data, f"{path.name} が、警告経路を取れなかった印になっています：{data.get('error')}")
+                self.check_detail_file(path)
+            return seen
         finally:
             client.close()
             if run_dir is not None:
                 subprocess.run([uv, "run", "--native-tls", "--quiet", str(run_py), "stop", "--run", str(run_dir)], cwd=str(repo),
                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
 
+    def test_offline_run_reads_files_written_by_the_mcp_server(self):
+        """MCP サーバーが書いた issues.json と issue-<CID>.json を、new-run --issues-file が受け付け、作業を始める（設計書 6章の一括実行）"""
+        self.flow(offline=True)
+
+    def test_run_follows_the_mcp_server_through_tick(self):
+        """tick の fetch_issues・fetch_details の指示で MCP サーバーが書いたファイルを、一括実行が読み、作業を始める（設計書 4.3、4.4、4.12）"""
+        seen = self.flow(offline=False)
+        self.assertTrue(seen["fetch_issues"], "tick が警告の取得（fetch_issues）を頼みませんでした")
+        self.assertTrue(seen["fetch_details"], "tick が警告経路の取得（fetch_details）を頼みませんでした")
+        for path in seen["fetch_issues"]:
+            self.check_issues_file(path)
+        for path in seen["fetch_details"]:
+            self.check_detail_file(path)
 
 if __name__ == "__main__":
     unittest.main()

@@ -98,8 +98,9 @@ def text_files(folder: Path):
 
 
 def copy_ignore(directory, names):
-    """shutil.copytree の ignore：作られたものはコピーしない"""
-    return [n for n in names if n in SKIP_DIR_NAMES - {"vendor"} or n.endswith(".pyc") or n == "results"]
+    """shutil.copytree の ignore：作られたもの（__pycache__、.venv、evals/results/ など）はコピーしない"""
+    in_evals = Path(directory).name == "evals"
+    return [n for n in names if n in SKIP_DIR_NAMES - {"vendor"} or n.endswith(".pyc") or (in_evals and n == "results")]
 
 
 # ---------------------------------------------------------------------------

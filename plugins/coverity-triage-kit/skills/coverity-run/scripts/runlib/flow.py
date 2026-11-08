@@ -36,7 +36,7 @@ DETAILS_ROUNDS = 2  # the warning paths are fetched at most twice (the second ti
 DETAILS_BATCH = 50  # CIDs per fetch of warning paths
 STALE_SECONDS = 1800  # a task with no output and no progress for this long failed
 SETTLE_SECONDS = 2  # an output file found without a report counts once it has not changed for this long
-POLL_SECONDS = 0.25
+POLL_SECONDS = 0.5  # the longest pause between two looks at the jobs
 STAGE_JA = {"initial": "初回解析", "fetch": "警告の取得", "details": "警告経路の取得", "items": "警告ごとの作業",
             "integrate": "同じ原因の統合", "review": "結果の確かめ", "verify": "ビルドでの検証", "done": "終わった",
             "stopped": "止めた"}
@@ -72,9 +72,11 @@ def tick(run_dir: str, finished: str | None = None, failed: str | None = None, r
             return _answer(run, Step("stopped", stop=True, error="この実行は止められています"),
                            ["この実行は止められています。続けるときは、再開してから tick を呼びます。"])
         carried: list[dict[str, Any]] = []
-        if finished or failed:
+        reported = bool(finished or failed)
+        if reported:
             _report(run, (finished or failed or "").strip(), failed is not None, reason or "", say, carried)
         deadline = time.monotonic() + wait
+        poll = 0.03
         while True:
             run.reload()
             if run.state.get("stopped"):
@@ -82,9 +84,14 @@ def tick(run_dir: str, finished: str | None = None, failed: str | None = None, r
                 break
             result = _step(run, say, carried)
             carried = []
-            if result.actions or result.stop or result.done or not result.waitable or time.monotonic() >= deadline:
+            if result.actions or result.stop or result.done or time.monotonic() >= deadline:
                 break
-            time.sleep(POLL_SECONDS)
+            # Wait for the jobs; for the agents only when nothing was reported (their output files may appear).
+            # After a report, the agent has other reports to give: answer at once.
+            if not jobs.running(run.dir) and (reported or not run.state.get("tasks")):
+                break
+            time.sleep(poll)
+            poll = min(POLL_SECONDS, poll * 1.5)
         return _answer(run, result, say)
 
 

@@ -59,19 +59,10 @@ def frontmatter(text: str) -> tuple[dict, str]:
     return fields, match.group(2)
 
 
-def other_part_names(own: str) -> list[str]:
-    """Names this folder must not contain (built from pieces so this file does not contain them)."""
-    c, t = "coverity", "triage"
-    names = [f"{c}-{t}-" + "kit", "checker-" + "knowledge", f"{t}-investigation", "code-" + "fix",
-             "deviation-" + "comment", f"{t}-report", f"{t}-review", f"{t}-integration", f"{c}-setup",
-             f"{c}-run", f"{c}-apply", f"{c}-gui", f"{c}-{t}-screen", f"{c}-help", f"{c}-selftest",
-             f"{c}-connect", f"{t}-worker", f"{t}-orches" + "trator", f"{t}-reviewer", f"{t}-integrator"]
-    return [n for n in names if n != own]
-
-
-def forbidden_patterns(own: str) -> list[tuple[str, re.Pattern]]:
-    patterns = [(n, re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])", re.I))
-                for n in other_part_names(own)]
+def forbidden_patterns(own: str = "") -> list[tuple[str, re.Pattern]]:
+    """Words a self-contained skill folder must not contain. Names of other parts are checked by the
+    plugin-level independence tests, so this folder does not need to know them."""
+    patterns = []
     words = ["Web管理" + "画面", "エクステ" + "ンション", "exten" + "sion", "orches" + "trator", "統括エー" + "ジェント",
              "cove" + "rity_", ".." + "/", "${PLUGIN" + "_ROOT}", "PLUGIN" + "_ROOT", "plugin" + ".json",
              "com.github" + ".copilot"]
