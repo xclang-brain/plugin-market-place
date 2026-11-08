@@ -19,12 +19,27 @@ function readJson(file) {
   }
 }
 
+// 記録には、頼んだ作業やログの行が入る。ほかの利用者に読まれないよう、本人だけが読める権限で作る（Windows では効かない）
+const RECORD_DIR_PERMS = 0o700;
+const RECORD_FILE_PERMS = 0o600;
+
 // 途中で切れても壊れたファイルを残さないよう、別名で書いてから置き換える
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: RECORD_DIR_PERMS });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: RECORD_FILE_PERMS });
   fs.renameSync(tmp, file);
+}
+
+/** そのプロセスが、まだ動いているか（記録を書いた Copilot CLI が終わったかを見る） */
+export function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM'; // ほかの利用者のプロセスなら、動いている
+  }
 }
 
 export function createPersist(baseDir, { platform = process.platform } = {}) {
@@ -73,8 +88,8 @@ export function createPersist(baseDir, { platform = process.platform } = {}) {
     },
     appendEvent(id, entry) {
       try {
-        fs.mkdirSync(runDir(id), { recursive: true });
-        fs.appendFileSync(path.join(runDir(id), 'events.jsonl'), `${JSON.stringify(entry)}\n`);
+        fs.mkdirSync(runDir(id), { recursive: true, mode: RECORD_DIR_PERMS });
+        fs.appendFileSync(path.join(runDir(id), 'events.jsonl'), `${JSON.stringify(entry)}\n`, { mode: RECORD_FILE_PERMS });
       } catch (error) {
         report('出来事の記録を書けませんでした', error);
       }
@@ -85,6 +100,34 @@ export function createPersist(baseDir, { platform = process.platform } = {}) {
       } catch (error) {
         report('実行の記録を消せませんでした', error);
       }
+    },
+    /**
+     * 「実行中」か「止めている途中」のまま残った実行（書いた Copilot CLI が、もう動いていないもの）を閉じる。
+     * close(run) は、閉じた後の実行の記録を返す。閉じた実行の番号を返す
+     */
+    closeInterrupted(close, { alive = processAlive } = {}) {
+      const closed = [];
+      let names = [];
+      try {
+        names = fs.readdirSync(runsDir).filter((name) => RUN_ID.test(name)).sort().reverse().slice(0, MAX_LISTED);
+      } catch {
+        return closed;
+      }
+      for (const id of names) {
+        const run = readJson(path.join(runDir(id), 'run.json'));
+        if (!run || (run.status !== 'running' && run.status !== 'stopping') || alive(run.pid)) continue;
+        try {
+          const done = close(run);
+          writeJson(path.join(runDir(id), 'run.json'), done);
+          fs.appendFileSync(path.join(runDir(id), 'events.jsonl'),
+            `${JSON.stringify({ at: done.finishedAt, type: 'finish', outcome: done.finish.outcome, conclusion: done.finish.conclusion, auto: true, interrupted: true })}\n`,
+            { mode: RECORD_FILE_PERMS });
+          closed.push(id);
+        } catch (error) {
+          report(`途中で終わった実行 ${id} を閉じられませんでした`, error);
+        }
+      }
+      return closed;
     },
     // 新しいものから順に、番号・始めた時刻・結果だけを返す
     listRuns() {

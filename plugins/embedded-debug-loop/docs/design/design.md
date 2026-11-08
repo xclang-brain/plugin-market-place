@@ -3,7 +3,7 @@
 内部のしくみと、部品の間の取り決め（インターフェース）を書く。
 利用者から見た振る舞いは [仕様書](../specs/requirements.md) にある。
 
-- バージョン：0.3.0
+- バージョン：0.4.0
 
 ## 1. 基本の考え方
 
@@ -74,6 +74,7 @@ flowchart TB
 - 設計書には、スキルと作業エージェントの名前と中身を書かない。各スキルの中身は、そのスキルの README と SKILL.md にある。
 - 作業エージェントの使い方は `agents/README.markdown` に書く。拡張子が `.md` だと、Copilot CLI がエージェントの定義として読み込み、エラーを出す（1.0.105 で確認）。`.markdown` は読み込まれない（1.0.105 で、プロジェクトの `.github/agents/` とプラグインの `com.github.copilot/agents/` の両方で確認）。
 - 使っていない部品：MCP サーバー、プラグインのフックの設定（`hooks.json`。フックはエクステンションで登録する）、LSP、指示ファイル。
+- エクステンションは、Copilot CLI の試験的な機能である（2026年11月の公式文書。`/experimental on` か `--experimental` で有効にする）。1.0.105 では既定で読み込まれることを確かめた。SDK の API とイベントの形は版で変わりうるので、新しい版では 3段階目を一通り動かして確かめる。
 - スキルのスクリプトは、Python 3.8 以上の標準ライブラリだけで書く。ほかのものが要るスキルは、`scripts/vendor/` に同梱し、自分のフォルダの `vendor` を `sys.path` の先頭に足して使う。マニフェストは `plugin.json`（Agent Plugins の形式）。
 
 ## 3. 部品の間の取り決め
@@ -102,6 +103,11 @@ flowchart TB
 - 置き場所：作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）の `.<スキル名>/`。ログは `.<スキル名>/logs/`。フォルダには `.gitignore`（中身は `*`）を作る。
 - スキル名は、スキルのフォルダの名前（別の名前でコピーすれば、その名前）。プラグインの名前は使わない（3.4）。
 - 形式と項目は、スキルが決め、README に書く。各項目のすぐ上に説明のコメントを書く（設定のスキルが読む）。
+- 設定のスキルは、コメントの次の言葉で項目を見分ける。新しいスキルの設定ファイルも、これに合わせる。
+  - 「必須」：必ず埋める項目。「必ず」：必須ではないが、ふつうは埋める項目。
+  - 「例：」の後の値：書ける値の例。「選べる値：a / b / c」：この中からしか選べない。
+  - 項目名に password・passphrase・secret・token・api_key・パスワード・暗証などを含む項目は、秘密の値として扱い、画面に出さない。
+  - `<項目>_env` の項目には、その値を渡す環境変数の名前を書く。
 
 ### 3.3 設定のスキルとほかのスキル
 
@@ -156,11 +162,20 @@ Web管理画面で替えたときは、替えた作業エージェントの準�
 - `session.send` で開始のメッセージをチャットに送る。統括エージェントは、これを受けて試行を始める。
 - 作業エージェントと検証エージェントのモデルと考える深さを、`tools.updateSubagentSettings` で設定する（定義ファイルは書き換えない）。これはセッションの中だけの上書きで、Copilot CLI の利用者の設定には残らない。開始のたびに上書きを消し、利用者の設定に、今の2つのエージェントの分だけを足して書き直す（前の実行で書いた分は残さない）。
 - 2つのエージェントの応答を、フック `onSubagentStop` で受け取り、試行の記録に入れる。
-- フック `onPreToolUse` で、統括エージェントのファイル編集（edit など）・コマンド（bash など）・スキル（skill）のツールを拒否する。
+- フック `onPreToolUse` で、統括エージェントのファイル編集（edit など）・コマンド（bash など）・スキル（skill）のツールを拒否する。統括エージェントの `task` も、作業エージェントと検証エージェントのほかへの依頼を拒否する。
+  親のセッションで動くエージェントは、すべて統括エージェントとみなす。実行中にチャットでほかのエージェントに替えても、同じく拒否する（ガイドに書く）。
 - 作業の報告がある試行で、新しい計画なしに作業エージェントを呼ぶことも拒否する（報告と評価が食い違うため）。
 
+記録のツールは、モデルの判断をそのまま受けず、次のことを確かめる。
+
+- `study`：すべての合格の条件（C1〜Cn）の評価がそろっていること。合格（pass）は、その試行で検証エージェントを呼んだときだけ受け付ける。
+- `finish`：outcome が success なら、最後の試行の評価がすべて合格であること。
+- `prepare`：準備ができているかは、返事の1行目（「準備：できている」か「準備：できていない」）で決める。1行目にその形がないときだけ、統括エージェントが渡した値を使う。
+- `issue`：このツールだけは Copilot CLI の許可の確認を通す（ほかの記録のツールは確認を省く）。作った Issue は、終わった実行の `events.jsonl` に残す。
+
 「止める」が押されたら、`session.abort()` で今の応答を止める。その後は、`embedded-debug-loop_finish` 以外のツールをすべて拒否する。
-統括エージェントが終わりを記録せずに止まったら、エクステンションが結論を書く。結論には、止めた試行の番号と工程（計画・作業・評価）と、編集のツール（edit・create・apply_patch）で変えたファイルを書く。変えたファイルは元に戻さない。
+統括エージェントが終わりを記録せずに止まったら、エクステンションが結論を書く。結論には、止めた試行の番号と工程（計画・作業・評価）を書く。
+どの終わり方でも、結論に、編集のツール（edit・create・apply_patch）で変えたファイルの一覧を足す。変えたファイルは元に戻さない。
 
 試行の記録に入れなかった作業・検証エージェントの応答（止めた後や、計画の記録の前に届いたものなど）は、理由を付けて `events.jsonl`（4章）にだけ残す。
 
@@ -220,8 +235,8 @@ Web管理画面で替えたときは、替えた作業エージェントの準�
 | `core/events.mjs` | イベントから、試行の記録、動いているエージェント、入力待ち（質問・許可）の通知、画面の「くわしい記録」の行を作る |
 | `core/guard.mjs` | `onPreToolUse` で拒否するかを決める（3.6） |
 | `core/control.mjs` | 画面からの操作（下の API） |
-| `ui/server.mjs` | 画面のサーバー。127.0.0.1 だけで待ち受け、トークン（URL の `k` か、初回に渡すクッキー）が合わない要求を拒否する |
-| `ui/static/` | 画面（`index.html`・`app.js`・`style.css`）。状態を 1.5 秒ごと（隠れているときは 5 秒ごと）に読む |
+| `ui/server.mjs` | 画面のサーバー。127.0.0.1 だけで待ち受け、トークン（URL の `k` か、初回に渡すクッキー）が合わない要求を拒否する。POST は、Origin が同じ画面からの、`Content-Type: application/json` のものだけを受ける（クッキーはポートを区別しないので、同じ PC のほかのポートの画面からの送信を断る） |
+| `ui/static/` | 画面（`index.html`・`app.js`・`style.css`）。状態を 1.5 秒ごと（隠れているときは 5 秒ごと）に読む。開いたら、アドレスバーからトークンを消す |
 
 画面のサーバーの API：
 
@@ -238,7 +253,9 @@ Web管理画面で替えたときは、替えた作業エージェントの準�
 - `settings.json`：作業フォルダごとの繰り返しの上限。`folders` のキーが作業フォルダのパス、値が `{ "maxIterations": … }`。ほかの項目は読まない。Windows では、パスの大文字と小文字を区別しない。
   - この作業フォルダは、セッションの作業フォルダ（`/cd` で変わる）。取得できなければ、エクステンションのプロセスの今のフォルダ（`process.cwd()`）。
   - 保存がなければ、`defaults.json` の値を使う。
-- `runs/<実行の番号>/run.json`：実行の記録。
+- `runs/<実行の番号>/run.json`：実行の記録。書いた Copilot CLI のプロセスの番号（`pid`）と、変えたファイル（`changedFiles`）も入れる。
+  - 起動したとき、「実行中」か「止めている途中」のまま残り、`pid` のプロセスがもう動いていない実行を、「途中で止めた」として閉じる（Copilot CLI が途中で終わったため）。ほかの Copilot CLI が動かしている実行は閉じない。
+- 記録のフォルダとファイルは、本人だけが読める権限（0700・0600）で作る。
 - `runs/<実行の番号>/events.jsonl`：イベントのログ（1行に1件の JSON。拒否したツールなども残す）。振り返りに使う。
 
 ## 5. テスト
@@ -251,15 +268,57 @@ Web管理画面で替えたときは、替えた作業エージェントの準�
 | スキル | `skills/<スキル名>/tests/` | スクリプトの振る舞い。フォルダだけをコピーしても、`python -m unittest discover -s tests` で動く |
 | 独立性 | `tests/independence/` | 段階をまたぐ依存がない。スキルのフォルダが 3.4 の決まりを守る。スキルのフォルダ1つだけをコピーしても、そのスキルのテストが通る（データの置き場所などは、各スキルのテストで確かめる）。上の段の文書に下の段の中身がない（3.7）。スキルの一覧は `skills/` の下のフォルダから、作業エージェントは `defaults.json` から、設定のスキルと作業のスキルは「使うスキル」の表から読む（テストに部品の名前を書かない） |
 | エクステンション | `tests/extension/` | 模擬のセッションで、ツール・開始・イベント・停止・API・`onPreToolUse` の拒否。模擬の DOM で、画面（`app.js`）。3段階目の独立性（作業の中身を参照せず、`defaults.json` の作業エージェントの名前を置き換えても動く） |
+| 文書 | `tests/docs/` | 版の一致（`plugin.json`・仕様書・設計書・変更履歴・マーケットプレイスの一覧）。設計書とテストが挙げる要求の番号が仕様書にあり、仕様書の要求がどれも 6章の表にある |
 
 GitHub Actions（リポジトリの根の `.github/workflows/embedded-debug-loop.yml`）でも、次のテストを自動で動かす。
 
 | ジョブ | マシン | 動かすもの |
 | --- | --- | --- |
-| スキル | `windows-latest`・`ubuntu-24.04` × Python 3.8・3.12 | `skills/` の下の、`tests/` があるすべてのスキルのテスト（スキルのフォルダで `python -m unittest discover -s tests`） |
-| 独立性 | `windows-latest`・`ubuntu-24.04` × Python 3.12 | `tests/independence/` |
-| Web管理画面 | `windows-latest`・`ubuntu-24.04` × Node 20 | `tests/extension/` |
+| スキル | `windows-latest`・`ubuntu-24.04` × Python 3.8・3.12・最新の安定版（`3.x`） | `skills/` の下の、`tests/` があるすべてのスキルのテスト（スキルのフォルダで `python -m unittest discover -s tests`） |
+| 独立性 | `windows-latest`・`ubuntu-24.04` × Python 3.12 | `tests/independence/`、`tests/docs/` |
+| Web管理画面 | `windows-latest`・`ubuntu-24.04` × Node 22・24 | `tests/extension/` |
 
 - スキルと独立性のジョブでは、各スキルの `tests/requirements.txt` にあるパッケージを入れる。CI の定義に、スキルの名前とパッケージの名前を書かない。
 - 設定のスキルを PowerShell から使うテスト（標準入力と文字コード）は、そのスキルの `tests/` に置き、Windows のスキルのジョブで動く。
 - Linux は `ubuntu-24.04` に固定する。`ubuntu-latest` は 2026年10月から Ubuntu 26 に移り、Python 3.8 を入れられないおそれがある。
+
+## 6. 要求の追跡
+
+仕様書の要求を、設計書の節と、確かめ方（自動のテスト、または手動の確認）に対応づける（憲章 第6条3項）。
+スキルのテストは、各スキルの `tests/` にある。
+
+| 要求 | 設計書 | 確かめ方 |
+| --- | --- | --- |
+| REQ-001 | 1、2.1 | `tests/independence/` |
+| REQ-002 | 1、2.1 | `tests/independence/` |
+| REQ-003 | 3.1 | `tests/independence/` |
+| REQ-004 | 2.1、3.4 | `tests/independence/` |
+| REQ-005 | 3.5、3.6 | `tests/extension/tools.test.mjs`・`server.test.mjs` |
+| REQ-006 | 3.8、5 | 各スキルの `tests/`（CI の Windows）。Copilot CLI と組み合わせた Windows での動作は手動の確認（未確認） |
+| REQ-007 | 3.7 | `tests/independence/` |
+| REQ-101 | 3.1 | 各スキルの `tests/` |
+| REQ-102 | 3.2 | 各スキルの `tests/`、`tests/independence/` |
+| REQ-103 | 3.2 | 各スキルの `tests/` |
+| REQ-104 | 3.2 | 各スキルの `tests/` |
+| REQ-105 | 3.1 | 各スキルの `tests/` |
+| REQ-106 | 3.2 | 各スキルの `tests/` |
+| REQ-107 | 3.1 | 各スキルの `tests/` |
+| REQ-108 | 3.4、3.7 | 各スキルの `tests/`、`tests/independence/` |
+| REQ-109 | 2.1、3.8 | 各スキルの `tests/`（CI の Windows・Python 3.8） |
+| REQ-110 | 2.1、3.7 | `tests/independence/` |
+| REQ-111 | 3.3 | 各スキルの `tests/` |
+| REQ-201 | 2.1 | `tests/independence/` |
+| REQ-202〜REQ-206 | 3.1 | 作業エージェントの定義。振る舞いは手動の確認 |
+| REQ-207 | 3.5 | `tests/independence/`（返事の形は統括エージェントの頼みの文で決める） |
+| REQ-208 | 2.1 | 作業エージェントの定義。振る舞いは手動の確認 |
+| REQ-301〜REQ-303 | 3.5、3.6 | `tests/extension/tools.test.mjs` |
+| REQ-304・REQ-305 | 3.6 | `tests/extension/tools.test.mjs`・`events.test.mjs` |
+| REQ-306・REQ-309 | 3.6 | `tests/extension/guard.test.mjs` |
+| REQ-307 | 2.1 | 検証エージェントの定義。振る舞いは手動の確認 |
+| REQ-308 | 3.6 | `tests/extension/tools.test.mjs` |
+| REQ-311 | 4 | `tests/extension/server.test.mjs` |
+| REQ-312〜REQ-314 | 3.5、4 | `tests/extension/server.test.mjs`・`ui.test.mjs` |
+| REQ-315・REQ-316 | 4 | `tests/extension/ui.test.mjs`・`events.test.mjs` |
+| REQ-317 | 3.6 | `tests/extension/stop.test.mjs`・`guard.test.mjs` |
+| REQ-318 | 4 | 手動の確認（幅 390 px、ライトとダーク） |
+| REQ-321 | 4 | `tests/extension/stop.test.mjs`・`tools.test.mjs` |

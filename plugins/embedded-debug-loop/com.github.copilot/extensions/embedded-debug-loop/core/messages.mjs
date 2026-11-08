@@ -28,6 +28,11 @@ export function workReportedDeny(n) {
   return `この試行の作業は、もう報告されています。続けるときは、先に ${TOOL.plan} で試行 ${n + 1} の計画を記録してから頼んでください。`;
 }
 
+/** 実行中に、作業・検証のほかのエージェントへ頼もうとしたときの、断る理由 */
+export function otherAgentDeny(worker, verifier) {
+  return `実行中に task で頼めるのは、作業エージェント「${worker}」と検証エージェント「${verifier}」だけです。`;
+}
+
 // 作業エージェント・検証エージェントの返事を、試行の記録に入れなかった理由（events.jsonl に残す）
 export const IGNORED = Object.freeze({
   afterStop: '利用者が止めた後に届いたため。',
@@ -40,9 +45,19 @@ export const IGNORED = Object.freeze({
 // 一覧は、ファイルを直すツールで変えたものだけ。コマンドで変わったファイルは分からないので、そう書いておく
 export const CHANGED_FILES_HEAD = '途中で変えたファイル（元に戻していません）（コマンドで変わったファイルは含みません）：';
 
-/** 途中で変えたファイルの一覧の行。なければ空の配列 */
-export function changedFilesLines(files) {
-  return files.length ? [CHANGED_FILES_HEAD, ...files.map((f) => `- ${f}`)] : [];
+// 止めずに終えたときの結論に足す、変えたファイルの一覧の見出し
+export const FINISHED_FILES_HEAD = 'この実行で変えたファイル（コマンドで変わったファイルは含みません）：';
+
+/** 変えたファイルの一覧の行。なければ空の配列 */
+export function changedFilesLines(files, head = CHANGED_FILES_HEAD) {
+  return files.length ? [head, ...files.map((f) => `- ${f}`)] : [];
+}
+
+/** Copilot CLI が実行の途中で終わり、次に起動したときに閉じた実行の結論。place は { n, step } */
+export function interruptedConclusion(place, files = []) {
+  const lines = ['Copilot CLI が実行の途中で終わったため、この実行は途中で止まりました。'];
+  if (place && STOP_PLACE[place.step]) lines.push(STOP_PLACE[place.step](place.n));
+  return [...lines, ...changedFilesLines(files)].join('\n');
 }
 
 const STOP_PLACE = {

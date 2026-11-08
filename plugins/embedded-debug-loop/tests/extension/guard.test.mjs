@@ -3,10 +3,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
+import { VERIFIER, WORKER, startRun, startWith, verdictsOf } from './helpers.mjs';
 
 const WRITE_OR_RUN = ['edit', 'create', 'apply_patch', 'bash', 'write_bash', 'read_bash', 'stop_bash', 'list_bash',
-  'powershell', 'write_powershell', 'read_powershell', 'stop_powershell', 'skill'];
+  'powershell', 'write_powershell', 'read_powershell', 'stop_powershell', 'list_powershell', 'skill'];
 
 test('実行がないとき・下書きのときは、何も拒まない', async (t) => {
   const { fake } = await startWith(t);
@@ -52,7 +52,7 @@ test('止めたあと：すべてのエージェントのツールを拒み、�
 
 test('終わったあとは、何も拒まない', async (t) => {
   const { fake } = await startRun(t);
-  await fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+  await fake.call('finish', { outcome: 'needs-human', conclusion: '済み', retro: 'なし' });
   assert.equal(fake.pre({ toolName: 'bash', toolArgs: {} }), undefined);
 });
 
@@ -83,15 +83,14 @@ test('実行中：今の試行に作業の報告があり、新しい計画が�
     assert.equal(r?.permissionDecision, 'deny', JSON.stringify(input));
     assert.equal(r.permissionDecisionReason, REPORTED_1);
   }
-  // 検証エージェントやほかのエージェントへの頼み、子のエージェントの呼び出しは拒まない
+  // 検証エージェントへの頼み、子のエージェントの呼び出しは拒まない
   assert.equal(fake.pre(task(VERIFIER)), undefined);
-  assert.equal(fake.pre(task('general-purpose')), undefined);
   assert.equal(fake.pre(task(WORKER, { agentId: 'x1', agentType: 'general-purpose' })), undefined);
   assert.equal(fake.pre(task(WORKER, { sessionId: 'child-1' })), undefined);
   assert.equal(fake.pre({ toolName: 'read_agent', toolArgs: { agent_id: 'w1' } }), undefined);
 
   // 評価の後でも、新しい計画がなければ拒む
-  await fake.call('study', { iteration: 1, verdicts: [{ criterion: 'C1', result: 'fail', reason: 'r' }], next: 'n' });
+  await fake.call('study', { iteration: 1, verdicts: verdictsOf('fail', 'fail'), next: 'n' });
   assert.equal(fake.pre(task(WORKER))?.permissionDecisionReason, REPORTED_1);
 
   // 試行 2 の計画を記録したら、頼める。報告が届いたら、また拒む（番号は今の試行に合わせる）
@@ -116,8 +115,24 @@ test('準備の確認の頼みは拒まない：実行の前、下書きのと�
   // 終わった後の新しい頼み（下書き）でも拒まない
   await b.fake.call('plan', { iteration: 1, plan: 'p1' });
   b.fake.subagentStop({ agentType: WORKER, agentId: 'w1', response: '報告' });
-  await b.fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+  await b.fake.call('finish', { outcome: 'needs-human', conclusion: '済み', retro: 'なし' });
   assert.equal(b.fake.pre(task(WORKER)), undefined, '終わった後');
   await b.fake.call('open', { request: '次の作業' });
   assert.equal(b.fake.pre(task(WORKER)), undefined, '終わった後の下書き');
+});
+
+test('実行中：統括エージェントが task で頼めるのは、作業エージェントと検証エージェントだけ', async (t) => {
+  const { fake } = await startRun(t);
+  const other = `実行中に task で頼めるのは、作業エージェント「${WORKER}」と検証エージェント「${VERIFIER}」だけです。`;
+  for (const agentType of ['general-purpose', 'explore', 'demo-plugin:someone']) {
+    const r = fake.pre(task(agentType));
+    assert.equal(r?.permissionDecision, 'deny', agentType);
+    assert.equal(r.permissionDecisionReason, other);
+  }
+  // 名前だけ（「<プラグイン>:」なし）でも、設定のエージェントなら通す
+  assert.equal(fake.pre(task(WORKER.split(':').pop())), undefined);
+  assert.equal(fake.pre(task(VERIFIER.split(':').pop())), undefined);
+  // 頼む相手が分からないときと、子のエージェントの呼び出しは拒まない
+  assert.equal(fake.pre({ toolName: 'task', toolArgs: { prompt: '…' } }), undefined);
+  assert.equal(fake.pre(task('general-purpose', { agentId: 'w1', agentType: WORKER })), undefined);
 });

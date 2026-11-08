@@ -7,7 +7,9 @@
   'use strict';
 
   // URL の合言葉。サーバーはクッキーでも確かめるが、問い合わせには念のため付ける。
+  // 読んだら、アドレスバー（と履歴）からは消す。開き直しは、最初に受け取ったクッキーで通る
   const K = new URLSearchParams(location.search).get('k') || '';
+  if (K && typeof history !== 'undefined' && history.replaceState) history.replaceState(null, '', `${location.pathname}${location.hash}`);
   const POLL_MS = 1500;
   const POLL_HIDDEN_MS = 5000;
   const PREVIEW_LINES = 12;
@@ -310,7 +312,7 @@
     }
     if (focus) $(`tab-${name}`).focus();
     try {
-      history.replaceState(null, '', `${location.pathname}${location.search}#${name}`);
+      history.replaceState(null, '', `${location.pathname}#${name}`);
     } catch (_) {
       /* 履歴を書き換えられなくても困らない */
     }
@@ -879,7 +881,8 @@
             h('span', { class: 'step-name' }, name),
             h('span', { class: 'step-who' }, roleWords(who)),
             st === 'cut' ? h('span', { class: 'step-cut' }, '途中で止めた') : null,
-            st === 'now' ? h('span', { class: 'sr-only' }, '（いまここ）') : null);
+            st === 'now' ? h('span', { class: 'sr-only' }, '（いまここ）') : null,
+            st === 'done' ? h('span', { class: 'sr-only' }, '（済み）') : null);
         })),
       h('p', { class: 'cycle-loop' },
         h('span', { class: 'loop-mark', 'aria-hidden': 'true' }, '↻'),
@@ -918,7 +921,7 @@
         : null;
       fill(box, [h('section', { class: 'card now-card', 'aria-labelledby': 'h-now' },
         h('div', { class: 'card-head' },
-          h('h2', { id: 'h-now' }, 'いまのようす'),
+          h('h2', { id: 'h-now', tabindex: '-1' }, 'いまのようす'),
           h('span', { class: 'iter-count' }, count)),
         notice ? h('p', { class: 'warn-line', role: 'note' }, notice) : null,
         h('p', { class: 'now-line' },
@@ -949,7 +952,10 @@
     } catch (err) {
       window.alert(err.message);
     }
-    poll();
+    await poll();
+    // 「止める」のボタンは消えるので、フォーカスを「いまのようす」の見出しに移す
+    const heading = $('h-now');
+    if (heading) heading.focus();
   }
 
   function verdictChip(result) {
@@ -1166,6 +1172,19 @@
     return h('span', { class: `badge badge-${o.cls}${big ? ' badge-big' : ''}` }, h('span', { 'aria-hidden': 'true' }, o.mark), o.label);
   }
 
+  /**
+   * 合格の条件ごとに、最後の評価を並べる。評価のない条件も「評価なし」として出す（条件が画面から消えないように）。
+   * 条件の番号に結び付かない評価（古い記録など）は、後ろに足す
+   */
+  function criteriaWithVerdicts(run, lv) {
+    const verdicts = lv ? arr(lv.verdicts) : [];
+    const rows = arr(run.criteria).map((c, i) => {
+      const found = verdicts.filter((v) => v.no === i + 1).pop();
+      return found || { no: i + 1, text: c, result: null };
+    });
+    return rows.concat(verdicts.filter((v) => !(v.no >= 1 && v.no <= rows.length)));
+  }
+
   function lastVerdicts(run) {
     const its = arr(run.iterations);
     for (let i = its.length - 1; i >= 0; i -= 1) {
@@ -1241,7 +1260,7 @@
         h('h2', { id: 'h-criteria' }, '合格の条件と、最後の評価'),
         lv ? h('p', { class: 'help' }, `試行 ${lv.n} の評価です。`) : null,
         h('ul', { class: 'verdicts' },
-          (lv ? lv.verdicts : arr(run.criteria).map((c, i) => ({ no: i + 1, text: c, result: null }))).map((v) => h('li', null,
+          criteriaWithVerdicts(run, lv).map((v) => h('li', null,
             h('div', { class: 'verdict-head' },
               v.result ? verdictChip(v.result) : h('span', { class: 'chip chip-unk' }, '評価なし'),
               criterionLine(run, v)),

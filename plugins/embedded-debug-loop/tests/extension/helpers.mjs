@@ -152,6 +152,15 @@ export async function startRun(t, options = {}) {
   return ctx;
 }
 
+/** 検証エージェントを呼んで、返事が届いたことにする（合格を記録できるようにする） */
+export function verifierReplied(fake, id = 'v1', response = 'C1：合格。\nC2：合格。') {
+  fake.emit('subagent.started', { agentType: VERIFIER, toolCallId: `t-${id}` }, id);
+  fake.subagentStop({ agentType: VERIFIER, agentId: id, response });
+}
+
+/** startRun の2つの条件の評価。results は C1・C2 の結果 */
+export const verdictsOf = (...results) => results.map((result, i) => ({ criterion: `C${i + 1}`, result, reason: 'r' }));
+
 export async function http(url, { method = 'GET', body, headers = {} } = {}) {
   const res = await fetch(url, {
     method,

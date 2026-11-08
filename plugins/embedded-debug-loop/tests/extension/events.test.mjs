@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
+import { VERIFIER, WORKER, startRun, startWith, verdictsOf } from './helpers.mjs';
 
 const lines = (app) => app.store.snapshot().run.activity.map((a) => `${a.who}|${a.text}`);
 /** その実行の events.jsonl の中身 */
@@ -42,10 +42,10 @@ test('検証エージェントの返事は、評価の記録の前でも後で�
   await fake.call('plan', { iteration: 1, plan: 'p1' });
   fake.subagentStop({ agentType: VERIFIER, agentId: 'v1', response: 'C1：合格。理由' });
   assert.equal(app.store.snapshot().run.iterations[0].study, null, '評価の記録まで study は出さない');
-  await fake.call('study', { iteration: 1, verdicts: [{ criterion: 'C1', result: 'fail', reason: 'r' }], next: 'n' });
+  await fake.call('study', { iteration: 1, verdicts: verdictsOf('fail', 'fail'), next: 'n' });
   assert.equal(app.store.snapshot().run.iterations[0].study.verifierReport, 'C1：合格。理由');
   await fake.call('plan', { iteration: 2, plan: 'p2' });
-  await fake.call('study', { iteration: 2, verdicts: [{ criterion: 'C1', result: 'fail', reason: 'r' }], next: 'n' });
+  await fake.call('study', { iteration: 2, verdicts: verdictsOf('fail', 'fail'), next: 'n' });
   fake.subagentStop({ agentType: VERIFIER, agentId: 'v2', response: '後から届いた返事' });
   assert.equal(app.store.snapshot().run.iterations[1].study.verifierReport, '後から届いた返事');
 });
@@ -213,7 +213,7 @@ test('実行の前（下書き）・実行のないとき・終わった後の�
   assert.equal(a.app.store.snapshot().waiting, null);
 
   const b = await startRun(t);
-  await b.fake.call('finish', { outcome: 'success', conclusion: 'できた', retro: '頼み方を短く' });
+  await b.fake.call('finish', { outcome: 'needs-human', conclusion: 'できた', retro: '頼み方を短く' });
   b.fake.emit('elicitation.requested', { requestId: 'e2', message: '振り返りの改善の案を Issue にしますか？' });
   s = b.app.store.snapshot();
   assert.equal(s.run.status, 'finished');
@@ -248,7 +248,7 @@ test('質問の文は、行の区切りを残し、長いものは切る', async
 test('検証エージェントを呼ばずに評価したときは、その印を残す。呼んだときは付けない', async (t) => {
   const { fake, app } = await startRun(t);
   const study = (n) => app.store.snapshot().run.iterations[n - 1].study;
-  const verdicts = [{ criterion: 'C1', result: 'unknown', reason: '作業が進めなかった' }];
+  const verdicts = verdictsOf('unknown', 'unknown');
 
   await fake.call('plan', { iteration: 1, plan: 'p1' });
   fake.emit('subagent.started', { agentType: WORKER, toolCallId: 't1' }, 'w1');
@@ -309,7 +309,7 @@ test('止めた後の返事と、終わった後の返事も、理由を付け�
 
   const b = await startRun(t);
   const id = b.app.store.snapshot().run.id;
-  await b.fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+  await b.fake.call('finish', { outcome: 'needs-human', conclusion: '済み', retro: 'なし' });
   b.fake.subagentStop({ agentType: VERIFIER, agentId: 'v9', response: '終わった後の返事' });
   await b.fake.call('open', { request: '次の作業' });
   b.fake.subagentStop({ agentType: WORKER, agentId: 'w9', response: '準備：できている（次の作業）' });

@@ -25,8 +25,30 @@ const SKILL_NAMES = fs.existsSync(SKILLS_DIR)
 // 作業の中身を表す言葉
 const DEVICE_WORDS = ['FTP', 'シリアル', 'serial', 'クロスコンパイル', 'Makefile', 'make', 'IPアドレス', 'IP アドレス', 'デプロイ', 'deploy',
   '転送', 'ビルド', 'build', '機器', 'device', 'board', 'ボード', 'sensor', 'ログイン', 'chmod', 'crc32'];
+// 今のスキルの中身を表す言葉は、スキルから読む（スキルを別の方式に替えても、新しい言葉を見逃さない）：
+// スクリプトの名前（_ を含むものは拡張子なしも）、設定のひな形の項目のうち _ を含む名前、データの置き場所 .<スキルの名前>
+function skillWords() {
+  const words = [];
+  for (const skill of SKILL_NAMES) {
+    const dir = path.join(SKILLS_DIR, skill);
+    const scripts = path.join(dir, 'scripts');
+    if (fs.existsSync(scripts)) {
+      for (const name of fs.readdirSync(scripts).filter((n) => n.endsWith('.py'))) {
+        words.push(name);
+        if (name.includes('_')) words.push(name.replace(/\.py$/, ''));
+      }
+    }
+    for (const name of fs.readdirSync(dir).filter((n) => n.includes('template'))) {
+      const keys = fs.readFileSync(path.join(dir, name), 'utf8').match(/^[a-z][a-z0-9_]*(?=:)/gm) ?? [];
+      words.push(...keys.filter((k) => k.includes('_')));
+    }
+    words.push(`.${skill}`);
+  }
+  return words;
+}
+
 // 単語として出てはいけないもの（前後が英数字・_・- でないとき）
-const FORBIDDEN = [...new Set([...DEVICE_WORDS, ...SKILL_NAMES, agentName(DEFAULTS.worker)])];
+const FORBIDDEN = [...new Set([...DEVICE_WORDS, ...SKILL_NAMES, ...skillWords(), agentName(DEFAULTS.worker)])];
 const TEXT = new Set(['.mjs', '.js', '.json', '.html', '.css', '.md']);
 
 function layer3Files() {
@@ -50,6 +72,7 @@ const word = (w) => new RegExp(`(?<![A-Za-z0-9_\\-])${w.replace(/[.*+?^${}()|[\]
 
 test('スキルの名前と作業エージェントの名前を、skills/ と defaults.json から読める', () => {
   assert.ok(SKILL_NAMES.length > 0, 'skills/ の下に、スキル（SKILL.md があるフォルダ）がありません');
+  assert.ok(skillWords().some((w) => w.endsWith('.py')), 'スキルのスクリプトの名前を読めません');
   assert.ok(DEFAULTS.worker, 'defaults.json に作業エージェントの名前がありません');
   for (const id of [DEFAULTS.orchestrator, DEFAULTS.verifier]) {
     assert.ok(fs.existsSync(path.join(AGENTS_DIR, `${agentName(id)}.agent.md`)), `${agentName(id)}.agent.md がありません`);

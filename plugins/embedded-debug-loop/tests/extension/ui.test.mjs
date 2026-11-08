@@ -361,3 +361,15 @@ test('結果：振り返りがないとき、止めて終わった実行・途�
   const running = { ...noRetro('stopped'), status: 'running', finishedAt: null, finish: null };
   assert.equal(await retroOf(running), '振り返りはまだありません。', '実行中は「まだ」');
 });
+
+test('結果：合格の条件ごとに最後の評価を並べ、評価のない条件も「評価なし」として残す', async () => {
+  const run = finishedRun([{ n: 1, plan, do: done, study }], 'failure');
+  run.criteria = ['完了と出る', 'テストが通る'];
+  const { $ } = await screen(snap({ run, runs: [{ id: run.id, startedAt: at, outcome: 'failure' }] }));
+  const items = $('h-criteria').parent.querySelectorAll('ul.verdicts li').map((li) => textOf(li.querySelector('.verdict-head')));
+  assert.equal(items.length, 2);
+  assert.match(items[0], /合格/);
+  assert.match(items[0], /完了と出る/);
+  assert.match(items[1], /評価なし/);
+  assert.match(items[1], /テストが通る/);
+});

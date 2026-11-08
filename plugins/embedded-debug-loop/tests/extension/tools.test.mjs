@@ -6,15 +6,16 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { agentOf, matchCriterion } from '../../com.github.copilot/extensions/embedded-debug-loop/core/store.mjs';
-import { CWD, LEAD, VERIFIER, WORKER, startRun, startWith } from './helpers.mjs';
+import { CWD, LEAD, VERIFIER, WORKER, startRun, startWith, verdictsOf, verifierReplied } from './helpers.mjs';
 
-test('ツールは6つで、ツール検索の裏に回さず、確認なしで動く', async (t) => {
+test('ツールは6つで、ツール検索の裏に回さない。Issue のほかは確認なしで動く', async (t) => {
   const { fake } = await startWith(t);
   const names = fake.config.tools.map((x) => x.name).sort();
   assert.deepEqual(names, ['open', 'prepare', 'plan', 'study', 'finish', 'issue'].map((n) => `embedded-debug-loop_${n}`).sort());
   for (const tool of fake.config.tools) {
     assert.equal(tool.defer, 'never');
-    assert.equal(tool.skipPermission, true);
+    // Issue は公開の場に書くので、Copilot CLI の許可の確認を通す
+    assert.equal(tool.skipPermission, tool.name !== 'embedded-debug-loop_issue', tool.name);
     assert.equal(typeof tool.description, 'string');
     assert.equal(tool.parameters.type, 'object');
   }
@@ -275,7 +276,7 @@ test('開始：モデルと考える深さを、セッションの子のエー�
     fake.updates.length = 0;
     await fake.call('open', { request: '作業', criteria: ['条件'] });
     await app.control.start(body);
-    await fake.call('finish', { outcome: 'success', conclusion: '済み', retro: 'なし' });
+    await fake.call('finish', { outcome: 'needs-human', conclusion: '済み', retro: 'なし' });
   };
   await runWith({ workerModel: 'model-x', workerEffort: 'high', verifierEffort: 'low' });
   assert.deepEqual(fake.updates, [null, { maxDepth: 2, agents: { ...keep, [WORKER]: { model: 'model-x', effortLevel: 'high' }, [VERIFIER]: { effortLevel: 'low' } } }]);
@@ -337,7 +338,18 @@ test('評価：合否を記録し、次にすることを返す', async (t) => {
   await fake.call('plan', { iteration: 1, plan: 'p1' });
   const bad = await fake.call('study', { iteration: 1, verdicts: [{ criterion: 'C1', result: 'ok', reason: 'r' }], next: 'n' });
   assert.equal(bad.ok, false);
-  assert.equal((await fake.call('study', { iteration: 2, verdicts: [{ criterion: 'C1', result: 'pass', reason: 'r' }], next: 'n' })).ok, false);
+  assert.equal((await fake.call('study', { iteration: 2, verdicts: verdictsOf('pass', 'pass'), next: 'n' })).ok, false);
+  // 条件の評価が足りない・条件にない評価があるときは断る
+  const short = await fake.call('study', { iteration: 1, verdicts: [{ criterion: 'C1', result: 'fail', reason: 'r' }], next: 'n' });
+  assert.equal(short.text, '評価のない条件があります：C2。すべての条件の合否を記録してください（判断できなければ unknown）。');
+  const extra = await fake.call('study', { iteration: 1, verdicts: [...verdictsOf('fail', 'fail'), { criterion: 'C3', result: 'fail', reason: 'r' }], next: 'n' });
+  assert.match(extra.text, /^合格の条件にない評価があります（C3）。criterion には C1〜C2 を入れてください。$/);
+  // 検証エージェントの評価がなければ、合格は記録できない
+  const noVerifier = await fake.call('study', { iteration: 1, verdicts: verdictsOf('pass', 'fail'), next: 'n' });
+  assert.equal(noVerifier.ok, false);
+  assert.match(noVerifier.text, /検証エージェントの評価がないので、合格（pass）は記録できません/);
+  assert.equal(app.store.snapshot().run.iterations[0].study, null);
+  verifierReplied(fake);
   const mixed = await fake.call('study', {
     iteration: 1,
     verdicts: [{ criterion: 'C1', result: 'pass', reason: '出た' }, { criterion: 'C2', result: 'fail', reason: '1件落ちた' }],
@@ -349,11 +361,13 @@ test('評価：合否を記録し、次にすることを返す', async (t) => {
   assert.equal(st.next, 'テストの落ちた所を直す');
 
   await fake.call('plan', { iteration: 2, plan: 'p2' });
-  const pass = await fake.call('study', { iteration: 2, verdicts: [{ criterion: 'C1', result: 'pass', reason: 'r' }, { criterion: 'C2', result: 'pass', reason: 'r' }], next: '' });
+  assert.equal((await fake.call('study', { iteration: 2, verdicts: verdictsOf('pass', 'pass'), next: '' })).ok, false, '試行ごとに検証が要る');
+  verifierReplied(fake, 'v2');
+  const pass = await fake.call('study', { iteration: 2, verdicts: verdictsOf('pass', 'pass'), next: '' });
   assert.equal(pass.text, 'すべての条件が合格です。embedded-debug-loop_finish（outcome は success）で終えてください。');
 
   await fake.call('plan', { iteration: 3, plan: 'p3' });
-  const last = await fake.call('study', { iteration: 3, verdicts: [{ criterion: 'C1', result: 'unknown', reason: 'r' }], next: '' });
+  const last = await fake.call('study', { iteration: 3, verdicts: verdictsOf('unknown', 'unknown'), next: '' });
   assert.equal(last.text, '上限（3 回）に達しました。embedded-debug-loop_finish（outcome は failure）で終えてください。');
 });
 
@@ -361,6 +375,9 @@ test('終わり：結論を記録して終える。記録のファイルと一�
   const { fake, app, dataDir } = await startRun(t);
   assert.equal((await fake.call('finish', { outcome: 'great', conclusion: 'x', retro: '' })).ok, false);
   assert.equal((await fake.call('finish', { outcome: 'success', conclusion: '', retro: '' })).ok, false);
+  // 最後の評価ですべて合格していなければ、success では終えられない
+  const notYet = await fake.call('finish', { outcome: 'success', conclusion: '直った', retro: '' });
+  assert.equal(notYet.text, '最後の評価で、すべての条件が合格していません。outcome は failure か needs-human にしてください。');
   const r = await fake.call('finish', { outcome: 'needs-human', conclusion: '人の判断が要る', retro: '頼み方を短く' });
   assert.ok(r.ok);
   assert.match(r.text, /結果の画面：http:\/\/127\.0\.0\.1:\d+\/\?k=.*#result\n利用者に結論を短く伝えてください。/);
@@ -400,6 +417,33 @@ test('Issue：gh が URL を出したときだけ「作りました」と返す'
   assert.equal((await fake.call('issue', { title: '', body: '本文' })).ok, false);
 });
 
+test('Issue：終わった実行の記録に、題・本文・送り先・URL を残す', async (t) => {
+  const runCommand = async () => ({ code: 0, stdout: 'https://github.com/owner/repo/issues/7\n', stderr: '' });
+  const { fake, app, dataDir } = await startRun(t, { runCommand });
+  await fake.call('finish', { outcome: 'needs-human', conclusion: '人の判断が要る', retro: '頼み方を短く' });
+  assert.ok((await fake.call('issue', { title: '題', body: '本文' })).ok);
+  const id = app.store.snapshot().run.id;
+  const events = fs.readFileSync(path.join(dataDir, 'runs', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const issue = events.find((e) => e.type === 'issue');
+  assert.deepEqual({ ...issue, at: undefined }, { at: undefined, type: 'issue', title: '題', body: '本文', url: 'https://github.com/owner/repo/issues/7', repo: 'owner/repo' });
+});
+
+test('準備：準備ができているかは、返事の1行目で決める（1行目にその形がないときだけ ready を使う）', async (t) => {
+  const { fake, app } = await startWith(t);
+  await fake.call('open', { request: '作業', criteria: ['条件'] });
+  const cases = [
+    [{ ready: false, report: '準備：できている\n要約' }, true],
+    [{ ready: true, report: '\n準備：できていない\n足りないもの' }, false],
+    [{ ready: true, report: '準備: できていない' }, false],
+    [{ ready: true, report: '要約だけ' }, true],
+    [{ ready: false, report: '要約だけ' }, false],
+  ];
+  for (const [args, ready] of cases) {
+    await fake.call('prepare', { worker: WORKER, ...args });
+    assert.equal(app.store.snapshot().draft.prepared.ready, ready, JSON.stringify(args));
+  }
+});
+
 test('ツールの処理が思わず失敗しても、例外を投げずに失敗の結果を返す', async (t) => {
   const { fake } = await startWith(t, { runCommand: async () => { throw new Error('壊れた'); } });
   const r = await fake.call('issue', { title: '題', body: '本文' });
@@ -424,13 +468,15 @@ test('合格の条件の頭の番号（C1：など）は取り除く：open・�
 test('評価の criterion：番号でも文でも、実行の合格の条件の番号と文に結び付ける', async (t) => {
   const { fake, app } = await startRun(t); // 条件は「画面に「完了」と出る」「テストがすべて通る」
   await fake.call('plan', { iteration: 1, plan: 'p1' });
+  verifierReplied(fake);
+  const other = await fake.call('study', { iteration: 1, verdicts: [...verdictsOf('pass', 'fail'), { criterion: 'ほかの条件', result: 'unknown', reason: 'r' }], next: 'n' });
+  assert.match(other.text, /^合格の条件にない評価があります（ほかの条件）。/);
   await fake.call('study', {
     iteration: 1,
     verdicts: [
       { criterion: 'C1', result: 'pass', reason: '出た' },
       { criterion: 'テストがすべて通る', result: 'fail', reason: '1件落ちた' },
       { criterion: 'C2：言い方を変えた条件', result: 'fail', reason: 'r' },
-      { criterion: 'ほかの条件', result: 'unknown', reason: 'r' },
     ],
     next: 'n',
   });
@@ -439,7 +485,6 @@ test('評価の criterion：番号でも文でも、実行の合格の条件の�
     ['C1', 1, '画面に「完了」と出る'],
     ['テストがすべて通る', 2, 'テストがすべて通る'],
     ['C2：言い方を変えた条件', 2, 'テストがすべて通る'],
-    ['ほかの条件', null, 'ほかの条件'],
   ]);
 });
 

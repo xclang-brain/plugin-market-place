@@ -31,7 +31,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04]
-        python: ['3.8', '3.12']
+        # 3.8 は対応する最も古い版。3.x は、そのときの最新の安定版（Windows の py -3 が選ぶもの）
+        python: ['3.8', '3.12', '3.x']
     defaults:
       run:
         working-directory: plugins/embedded-debug-loop/skills
@@ -111,14 +112,19 @@ jobs:
           python -m pip list --disable-pip-version-check
       - name: 独立性のテスト
         run: python -m unittest discover -s tests/independence -v
+      # 版の一致と、要求の番号（仕様書・設計書・テスト）
+      - name: 文書のテスト
+        run: python -m unittest discover -s tests/docs -v
 
   extension:
-    name: Web管理画面（${{ matrix.os }}、Node 20）
+    name: Web管理画面（${{ matrix.os }}、Node ${{ matrix.node }}）
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04]
+        # 保守期間中の LTS（Node 20 は 2026-04-30 に保守が終わった）
+        node: ['22', '24']
     defaults:
       run:
         working-directory: plugins/embedded-debug-loop
@@ -126,7 +132,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node }}
       - name: Web管理画面のテスト
         shell: bash
         run: node --test tests/extension/*.test.mjs

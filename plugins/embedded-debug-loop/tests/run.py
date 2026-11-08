@@ -8,6 +8,7 @@
 動かすもの：
 - 各スキルのフォルダの中のテスト（skills/<スキル>/tests/。スキルのフォルダで動かす。そのフォルダだけで動く形）
 - tests/independence/ の独立性のテスト（unittest）
+- tests/docs/ の文書のテスト（版の一致と、要求の番号。unittest）
 - tests/extension/*.test.mjs（node --test）
 
 すべて合格なら終了コード 0、1つでも不合格や動かせないテストがあれば 1 を返す。
@@ -33,7 +34,7 @@ TAIL_LINES = 80
 
 
 def python_groups():
-    """（名前, 動かすフォルダ, テストのフォルダ）の並び。スキルごとと、独立性"""
+    """（名前, 動かすフォルダ, テストのフォルダ）の並び。スキルごと、独立性、文書"""
     groups = []
     skills = ROOT / "skills"
     if skills.is_dir():
@@ -44,6 +45,9 @@ def python_groups():
     independence = TESTS / "independence"
     if independence.is_dir() and any(independence.rglob("test_*.py")):
         groups.append(("独立性のテスト", ROOT, str(independence)))
+    docs = TESTS / "docs"
+    if docs.is_dir() and any(docs.rglob("test_*.py")):
+        groups.append(("文書のテスト", ROOT, str(docs)))
     return groups
 
 

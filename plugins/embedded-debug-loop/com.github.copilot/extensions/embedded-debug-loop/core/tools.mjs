@@ -3,13 +3,36 @@
 
 import { execFile } from 'node:child_process';
 
-import { CHANGED_FILES_HEAD, MSG, TOOL, agentRef, changedFilesLines, manualIssue, preparedNext, settingsLines } from './messages.mjs';
+import { CHANGED_FILES_HEAD, FINISHED_FILES_HEAD, MSG, TOOL, agentRef, changedFilesLines, manualIssue, preparedNext, settingsLines } from './messages.mjs';
 import { OUTCOMES, agentOf, matchCriterion, readCriteria, text } from './store.mjs';
 
 const VERDICTS = ['pass', 'fail', 'unknown'];
 const ISSUE_TIMEOUT_MS = 30_000;
 
 const fail = (message) => ({ textResultForLlm: message, resultType: 'failure' });
+
+/**
+ * 準備ができているか。頼みの文で決めた返事の1行目（「準備：できている」か「準備：できていない」）で決める。
+ * 1行目にその形がないときだけ、統括エージェントが渡した ready を使う
+ */
+export function readyOf(report, given) {
+  const first = String(report).split(/\r?\n/).find((line) => line.trim()) ?? '';
+  const m = /準備\s*[：:]\s*(できていない|できている)/.exec(first);
+  if (m) return m[1] === 'できている';
+  return given === true || given === 'true';
+}
+
+/** 最後の試行の評価で、すべての条件が合格したか */
+function allPassed(run) {
+  const verdicts = run.iterations[run.iteration - 1]?.study?.verdicts ?? [];
+  return run.criteria.length > 0 && unjudged(verdicts, run.criteria.length).length === 0 && verdicts.every((v) => v.result === 'pass');
+}
+
+/** 評価がまだない条件の番号（1 から）。verdicts は記録した評価、count は合格の条件の数 */
+function unjudged(verdicts, count) {
+  const judged = new Set(verdicts.map((v) => v.no).filter((no) => Number.isInteger(no)));
+  return Array.from({ length: count }, (_, i) => i + 1).filter((no) => !judged.has(no));
+}
 // モデルが数や真偽を文字で渡すこともあるので、受け入れる
 const int = (v) => (typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : v);
 
@@ -168,7 +191,7 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       } catch (error) {
         return fail(`${error.message}\nworker には、準備の確認を task で頼んだ作業エージェントの名前を入れてください。`);
       }
-      const prepared = { worker: worker.id, ready: args?.ready === true || args?.ready === 'true', report, at: store.iso() };
+      const prepared = { worker: worker.id, ready: readyOf(report, args?.ready), report, at: store.iso() };
       const run = store.activeRun();
       if (run) {
         run.prepared = prepared;
@@ -216,13 +239,26 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       const bad = verdicts.length === 0 || verdicts.some((v) => !text(v?.criterion) || !VERDICTS.includes(v?.result));
       if (bad) return fail('verdicts に、条件ごとの criterion と result（pass・fail・unknown のどれか）と reason を入れてください。');
       const next = text(args?.next);
+      const matched = verdicts.map((v) => ({ raw: text(v.criterion), ...matchCriterion(v.criterion, run.criteria) }));
+      const outside = matched.filter((m) => !Number.isInteger(m.no) || m.no < 1 || m.no > run.criteria.length);
+      if (outside.length) {
+        return fail(`合格の条件にない評価があります（${outside.map((m) => m.raw).join('、')}）。criterion には C1〜C${run.criteria.length} を入れてください。`);
+      }
+      const missing = unjudged(matched, run.criteria.length);
+      if (missing.length) {
+        return fail(`評価のない条件があります：${missing.map((no) => `C${no}`).join('、')}。すべての条件の合否を記録してください（判断できなければ unknown）。`);
+      }
+      const verifierCalled = Boolean(it._verifierCalled || it._verifierReport);
+      if (!verifierCalled && verdicts.some((v) => v.result === 'pass')) {
+        return fail('検証エージェントの評価がないので、合格（pass）は記録できません。検証エージェントに評価を頼んでから記録してください。作業が進めなかったときは、unknown で記録してください。');
+      }
       it.study = {
         // criterion はモデルが書いたまま。no と text は、実行の合格の条件の番号と文（画面に出す）
         verdicts: verdicts.map((v) => ({ criterion: text(v.criterion), ...matchCriterion(v.criterion, run.criteria), result: v.result, reason: text(v.reason) })),
         next,
         verifierReport: it._verifierReport ?? '',
         // 検証エージェントを呼ばずに評価したか（作業が進めなかったときなど）。後から呼べば true に変わる
-        verifierCalled: Boolean(it._verifierCalled || it._verifierReport),
+        verifierCalled,
         at: store.iso(),
       };
       delete it._verifierReport;
@@ -248,8 +284,12 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       if (!OUTCOMES.includes(outcome) || !conclusion) {
         return fail(`outcome（${OUTCOMES.join('・')} のどれか）と conclusion（結論）を入れてください。`);
       }
-      // 止めたときの仮の結論は、統括エージェントの結論で置き換える。途中で変えたファイルの一覧は残す
-      const files = stopped && !conclusion.includes(CHANGED_FILES_HEAD) ? changedFilesLines(store.changedFiles(run)) : [];
+      if (outcome === 'success' && !allPassed(run)) {
+        return fail('最後の評価で、すべての条件が合格していません。outcome は failure か needs-human にしてください。');
+      }
+      // 止めたときの仮の結論は、統括エージェントの結論で置き換える。変えたファイルの一覧は、どの終わり方でも足す
+      const head = stopped ? CHANGED_FILES_HEAD : FINISHED_FILES_HEAD;
+      const files = conclusion.includes(head) ? [] : changedFilesLines(store.changedFiles(run), head);
       store.finish({ outcome, conclusion: [conclusion, ...files].join('\n'), retro: text(args?.retro) });
       return `記録しました。結果の画面：${store.url}#result\n利用者に結論を短く伝えてください。`;
     },
@@ -262,7 +302,7 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
       const result = await run('gh', ['issue', 'create', '--repo', issueRepo, '--title', title, '--body', body], ISSUE_TIMEOUT_MS);
       const url = /https:\/\/github\.com\/\S+\/issues\/\d+/.exec(result.stdout)?.[0];
       if (url) {
-        store.log('issue', { title, url });
+        store.log('issue', { title, body, url, repo: issueRepo }, { finished: true });
         return `Issue を作りました：${url}\n利用者に URL を伝えてください。`;
       }
       const reason = result.missing
@@ -279,7 +319,8 @@ export function createTools({ store, ensureServer, refreshOptions = () => {}, re
     name: TOOL[short],
     description: def.description,
     parameters: def.parameters,
-    skipPermission: true,
+    // Issue は、公開の場に書く。Copilot CLI の許可の確認を通し、利用者に題と本文を見せる
+    skipPermission: short !== 'issue',
     defer: 'never',
     handler: async (args) => {
       try {
