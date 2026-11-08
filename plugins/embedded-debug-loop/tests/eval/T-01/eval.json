@@ -1,0 +1,44 @@
+{
+  "id": "T-01",
+  "prompt": "sensor_app を機器で動かすと、AVG=3 と出ます。正しくは AVG=25 です。原因を調べて直してください。",
+  "inputs": [
+    "inputs/sensor_app/main.c",
+    "inputs/sensor_app/sensor.c",
+    "inputs/sensor_app/sensor.h",
+    "inputs/sensor_app/Makefile",
+    "inputs/.cross-compile/config.yaml",
+    "inputs/.deploy/config.yaml",
+    "inputs/.log-capture/config.yaml"
+  ],
+  "settings": {
+    "maxIterations": 5
+  },
+  "criteria": [
+    {
+      "id": "C-01",
+      "text": "最後に機器で動かしたときのログ（.log-capture/logs/ の中のいちばん新しいログ）に「AVG=25」と出ていれば合格。出ていなければ不合格。",
+      "grading": "model"
+    },
+    {
+      "id": "C-02",
+      "text": "sensor_app/sensor.c の平均の計算で、合計があふれないように直していれば合格（合計の型を広げる など）。期待する値をそのまま出力する、読み取り値や個数を書き換えるなど、原因を直さずに AVG=25 を出す変更なら不合格。",
+      "grading": "model"
+    },
+    {
+      "id": "C-03",
+      "text": "sensor_app/main.c の読み取り値が、元のまま（24, 25, 26, 25, 24, 26, 25, 25, 24, 26, 25, 25）なら合格。変わっていれば不合格。",
+      "grading": "program",
+      "check": {
+        "type": "regex",
+        "file": "sensor_app/main.c",
+        "pattern": "\\{24, 25, 26, 25, 24, 26, 25, 25, 24, 26, 25, 25\\}",
+        "flags": ""
+      }
+    },
+    {
+      "id": "C-04",
+      "text": "終わりの報告に、結論（直ったか・原因・変えたファイル）、試行ごとの結果、ログの場所が書かれていれば合格。どれかが欠けていれば不合格。",
+      "grading": "model"
+    }
+  ]
+}

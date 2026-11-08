@@ -1,0 +1,22 @@
+# クロスコンパイルのスキルの設定ファイルです（EVAL 用。模擬の機器はこの PC なので、SDK は使わない）。
+
+# ビルドするフォルダ。
+source_dir: "sensor_app"
+
+# コマンドを実行するシェル。
+shell: "auto"
+
+# SDK の環境設定ファイル。模擬の機器はこの PC なので、空。
+sdk_env: ""
+
+# ビルドのコマンド。
+build_command: "make"
+
+# 片付けのコマンド。
+clean_command: "make clean"
+
+# ビルドでできるファイル（必須）。
+outputs: ["sensor_app"]
+
+# ビルドを待つ最長の秒数。
+timeout_seconds: 600

@@ -3,7 +3,7 @@
 
 import path from 'node:path';
 
-import { agentChoices, stoppedConclusion } from './messages.mjs';
+import { agentChoices, interruptedConclusion, stoppedConclusion } from './messages.mjs';
 
 export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 export const OUTCOMES = Object.freeze(['success', 'failure', 'stopped', 'needs-human']);
@@ -111,6 +111,18 @@ export function readSettingsInput(body, base, agents) {
   return out;
 }
 
+/** その実行で変えたファイル（失敗したものは除く。終わりの知らせが来ていないものは、変えたかもしれないので入れる） */
+export function changedFilesOf(run) {
+  if (!run?._files) return Array.isArray(run?.changedFiles) ? [...run.changedFiles] : [];
+  return [...run._files].filter(([, state]) => state !== 'failed').map(([p]) => p);
+}
+
+/** Copilot CLI が途中で終わって「実行中」のまま残った実行の記録を、「途中で止まった」として閉じる */
+export function closeInterruptedRun(run, at) {
+  const conclusion = interruptedConclusion(stopPlace(run), changedFilesOf(run));
+  return { ...run, status: 'finished', finishedAt: at, active: null, waiting: null, finish: { outcome: 'stopped', conclusion, retro: '', at } };
+}
+
 function pad(n) {
   return String(n).padStart(2, '0');
 }
@@ -137,6 +149,9 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
     const saved = persist.readSettings(folder)?.maxIterations;
     return isMaxIterations(saved) ? saved : base.maxIterations;
   }
+
+  // 前に Copilot CLI が途中で終わって、「実行中」のまま残った実行を閉じてから、一覧を読む
+  persist.closeInterrupted?.((run) => closeInterruptedRun(run, now().toISOString()));
 
   let saveTimer = null;
   let unnamed = 0; // 番号のない求めに付ける仮の番号
@@ -235,6 +250,8 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       const s = store.settings;
       return {
         id,
+        // 記録を書いている Copilot CLI のプロセス。途中で終わった実行を、次の起動で見分けるため
+        pid: process.pid,
         status: 'running',
         startedAt: started.toISOString(),
         finishedAt: null,
@@ -285,10 +302,7 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
       run._files ??= new Map();
       for (const p of paths) if (run._files.get(p) !== 'ok') run._files.set(p, state);
     },
-    /** その実行で変えたファイル（失敗したものは除く。終わりの知らせが来ていないものは、変えたかもしれないので入れる） */
-    changedFiles(run) {
-      return [...(run?._files ?? new Map())].filter(([, state]) => state !== 'failed').map(([p]) => p);
-    },
+    changedFiles: changedFilesOf,
     snapshot() {
       return {
         version: store.version,
@@ -311,6 +325,7 @@ export function createStore({ defaults, persist, now = () => new Date() }) {
 export function publicRun(run, forFile) {
   const out = {
     id: run.id,
+    pid: run.pid,
     status: run.status,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
@@ -332,6 +347,7 @@ export function publicRun(run, forFile) {
     })),
     finish: run.finish ? { outcome: run.finish.outcome, conclusion: run.finish.conclusion, retro: run.finish.retro, at: run.finish.at } : null,
     activity: run.activity.map((a) => ({ ...a })),
+    changedFiles: changedFilesOf(run),
   };
   if (forFile) out.savedAt = new Date().toISOString();
   return out;

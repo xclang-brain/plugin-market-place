@@ -2,6 +2,8 @@
 // - 127.0.0.1 だけで待ち受け、番号は OS に選ばせる。
 // - 起動ごとに合言葉（24 文字）を作る。すべての問い合わせで、URL の ?k= か、最初に開いたときに渡すクッキーで確かめる。
 // - Host が 127.0.0.1 か localhost で、番号が合うものだけを受ける（ほかのサイトからの呼び出しを防ぐ）。
+// - 書き込みの要求（POST）は、この画面から送ったもの（Origin が同じ）で、JSON のものだけを受ける。
+//   同じ PC のほかのポートの画面からの送信（クッキーはポートを区別しない）を断るため。
 // api：state()、saveSettings(body)、start(body)、stop()、runDetail(id)。誤りは status と message を持つ例外で返す。
 
 import crypto from 'node:crypto';
@@ -22,8 +24,11 @@ const HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy':
-    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
+
+const BAD_KEY = 'この画面の URL が正しくないか、古くなっています。チャットに出た URL を開き直してください。';
+const badKeyPage = () => `<!doctype html><meta charset="utf-8"><title>Web管理画面</title><p>${BAD_KEY}</p>`;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -81,8 +86,20 @@ export async function startServer({ staticDir, api }) {
   let port = 0;
   let cookieName = '';
 
+  // POST は、この画面から送った JSON だけを受ける（Origin がなければ、ブラウザーからではないとみなす）
+  function checkPost(req) {
+    const origin = req.headers.origin;
+    if (origin !== undefined && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+      throw new HttpError(403, 'ほかの画面からの操作は受け付けません。');
+    }
+    if (!/^application\/json\b/i.test(String(req.headers['content-type'] ?? ''))) {
+      throw new HttpError(415, '送る内容は JSON にしてください（Content-Type: application/json）。');
+    }
+  }
+
   async function route(req, res, url) {
     const method = req.method ?? 'GET';
+    if (method === 'POST') checkPost(req);
     const file = STATIC[url.pathname];
     if (file) {
       if (method !== 'GET') throw new HttpError(405, 'この操作はできません。');
@@ -113,7 +130,9 @@ export async function startServer({ staticDir, api }) {
       if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) throw new HttpError(403, 'この URL では開けません。チャットに出た URL（http://127.0.0.1: で始まるもの）から開いてください。');
       const url = new URL(req.url ?? '/', `http://${host}`);
       if (!matches(url.searchParams.get('k')) && !matches(cookieOf(req, cookieName))) {
-        throw new HttpError(403, '合言葉が違います。チャットに出た URL から開き直してください。');
+        // 画面を開こうとしたときは、案内の短いページを返す（JSON の文字をそのまま見せない）
+        if (STATIC[url.pathname]?.[0] === 'index.html') return send(res, 403, 'text/html; charset=utf-8', badKeyPage());
+        throw new HttpError(403, BAD_KEY);
       }
       await route(req, res, url);
     } catch (error) {

@@ -169,6 +169,7 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     const busy = busyError();
     if (busy) throw new UserError(409, '実行中は設定を変えられません。');
     await Promise.all([refreshFolder(), refreshOptions()]);
+    if (busyError()) throw new UserError(409, '実行中は設定を変えられません。'); // 待つあいだに始まったとき
     const next = readSettingsInput(body, store.settings, store.options.agents);
     keepDraft(body);
     const saved = store.setSettings(next);
@@ -182,6 +183,8 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     const busy = busyError();
     if (busy) throw busy;
     await Promise.all([refreshFolder(), refreshOptions()]);
+    const busyAgain = busyError(); // 待つあいだに、ほかのタブから始まったとき
+    if (busyAgain) throw busyAgain;
     const settings = readSettingsInput(body, store.settings, store.options.agents);
     const request = text(body?.request ?? store.draft?.request);
     const criteria = readCriteria(body?.criteria ?? store.draft?.criteria);
@@ -195,6 +198,8 @@ export function createControl({ store, port, persist, orchestrator = '' }) {
     } catch (error) {
       warning = `モデルと考える深さを設定できませんでした（${error?.message ?? error}）。エージェントの定義のままで動きます。`;
     }
+    const busyLast = busyError();
+    if (busyLast) throw busyLast;
 
     const draft = store.draft;
     const previous = store.run;

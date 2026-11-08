@@ -102,12 +102,53 @@ test('止めた後に統括エージェントが終わりを記録したら、�
   assert.equal(again.app.store.snapshot().run.finish.conclusion, own);
 });
 
-test('止めていない終わり方の結論には、ファイルの一覧を足さない', async (t) => {
-  const { fake, app } = await working(t);
+test('止めずに終えたときも、結論に変えたファイルの一覧を足し、実行の記録にも残す', async (t) => {
+  const { fake, app, dataDir } = await working(t);
   tool(fake, 'c1', 'edit', { path: '/w/project/a.c' });
   done(fake, 'c1');
   await fake.call('finish', { outcome: 'needs-human', conclusion: '人の判断が要ります。', retro: 'なし' });
+  const run = app.store.snapshot().run;
+  assert.equal(run.finish.conclusion, '人の判断が要ります。\nこの実行で変えたファイル（コマンドで変わったファイルは含みません）：\n- /w/project/a.c');
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'runs', run.id, 'run.json'), 'utf8'));
+  assert.deepEqual(saved.changedFiles, ['/w/project/a.c']);
+});
+
+test('変えたファイルがなければ、結論に一覧を足さない', async (t) => {
+  const { fake, app } = await working(t);
+  await fake.call('finish', { outcome: 'needs-human', conclusion: '人の判断が要ります。', retro: 'なし' });
   assert.equal(app.store.snapshot().run.finish.conclusion, '人の判断が要ります。');
+});
+
+test('Copilot CLI が途中で終わって「実行中」のまま残った実行は、次に起動したときに「途中で止まった」として閉じる', async (t) => {
+  const a = await working(t);
+  tool(a.fake, 'c1', 'edit', { path: '/w/project/a.c' });
+  done(a.fake, 'c1');
+  a.app.store.flush();
+  const id = a.app.store.snapshot().run.id;
+  const file = path.join(a.dataDir, 'runs', id, 'run.json');
+  // 書いたプロセスが終わったことにする（ありえない番号）
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.status, 'running');
+  fs.writeFileSync(file, JSON.stringify({ ...saved, pid: 2 ** 31 - 2 }));
+  // ほかに動いている Copilot CLI の実行（このプロセスの番号でないもの）は閉じない
+  const liveId = 'R-20000101-000000';
+  fs.mkdirSync(path.join(a.dataDir, 'runs', liveId), { recursive: true });
+  fs.writeFileSync(path.join(a.dataDir, 'runs', liveId, 'run.json'), JSON.stringify({ ...saved, id: liveId, pid: process.ppid }));
+
+  const b = await startRun(t, { dataDir: a.dataDir });
+  const closed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(closed.status, 'finished');
+  assert.equal(closed.finish.outcome, 'stopped');
+  assert.equal(closed.finish.conclusion, [
+    'Copilot CLI が実行の途中で終わったため、この実行は途中で止まりました。',
+    '試行 1 の作業の途中で止めました。',
+    FILES,
+    '- /w/project/a.c',
+  ].join('\n'));
+  assert.equal(b.app.store.snapshot().runs.find((r) => r.id === id).outcome, 'stopped');
+  const events = fs.readFileSync(path.join(a.dataDir, 'runs', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(events.some((e) => e.type === 'finish' && e.interrupted === true));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(a.dataDir, 'runs', liveId, 'run.json'), 'utf8')).status, 'running');
 });
 
 test('stopPlace：記録といま動いているエージェントで、止めた所を決める', () => {

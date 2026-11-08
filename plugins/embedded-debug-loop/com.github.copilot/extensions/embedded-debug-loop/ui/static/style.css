@@ -12,7 +12,7 @@
   --text: #1b1f24;
   --muted: #59626d;
   --line: #d8dde3;
-  --line-strong: #9aa4af;
+  --line-strong: #7f8994; /* 白の上で 3:1 以上（入力欄の枠） */
   --accent: #1f5fbf;
   --accent-text: #ffffff;
   --focus: #2f6feb;
@@ -281,6 +281,11 @@ h3 {
   background: var(--ng-bg);
   color: var(--ng);
   font-weight: 600;
+}
+
+/* 上に貼り付く知らせの下に、フォーカスした欄が隠れないように */
+html {
+  scroll-padding-top: 7rem;
 }
 
 .banner-wait {

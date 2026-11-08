@@ -36,3 +36,18 @@
 1. `com.github.copilot/agents/device-worker.agent.md` を消し、`com.github.copilot/agents/host-worker.agent.md` を置きます。
 2. `com.github.copilot/agents/README.markdown` を、`host-worker` の README に替えます。
 3. `com.github.copilot/extensions/embedded-debug-loop/defaults.json` の `"worker": "embedded-debug-loop:device-worker"` を `"worker": "embedded-debug-loop:host-worker"` にします。
+
+新しい作業エージェントは、ほかのエージェントからの依頼（ask_user が使えないとき）では、質問も合否の判断もせず、頼みの文が求める形で返します（[仕様書](specs/requirements.md) の REQ-201〜REQ-208）。
+
+## 変えた後に確かめる
+
+プラグインのフォルダで、すべてのテストを動かします。独立性のテストが、部品の決まりを守っているかを確かめます。
+
+```
+# Windows（PowerShell）
+py -3 tests/run.py
+# Linux（bash）
+python3 tests/run.py
+```
+
+新しいスキルが守ること（フォルダだけで完結する、README とテストを持つ など）は、[仕様書](specs/requirements.md) の REQ-108 と [設計書](design/design.md) の 3.4 にあります。

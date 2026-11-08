@@ -16,7 +16,7 @@
     {
       "name": "embedded-debug-loop",
       "description": "組み込み機器の C/C++ の不具合を、スキルを使って機器で試すことを繰り返して調べ、直すプラグイン。スキルだけ、作業エージェントだけ、統括エージェントと Web管理画面つき、の3つの段階で使える",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "source": "./plugins/embedded-debug-loop"
     },
     {

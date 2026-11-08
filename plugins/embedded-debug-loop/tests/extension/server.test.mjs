@@ -34,11 +34,17 @@ test('合言葉がないと断る。127.0.0.1 だけで待ち受ける', async (
   const { url, token, api } = await opened(t);
   assert.equal(url.hostname, '127.0.0.1');
   assert.equal(token.length, 24);
-  for (const p of ['/', '/app.js', '/api/state']) {
+  const BAD_KEY = 'この画面の URL が正しくないか、古くなっています。チャットに出た URL を開き直してください。';
+  for (const p of ['/app.js', '/api/state']) {
     const r = await http(`${url.origin}${p}`);
     assert.equal(r.status, 403, p);
-    assert.match(r.data.error, /合言葉が違います/);
+    assert.equal(r.data.error, BAD_KEY);
   }
+  // 画面を開こうとしたときは、JSON ではなく、案内の短いページを返す
+  const page = await http(`${url.origin}/`);
+  assert.equal(page.status, 403);
+  assert.match(page.headers.get('content-type'), /^text\/html/);
+  assert.ok(page.data.includes(BAD_KEY));
   assert.equal((await http(`${url.origin}/api/state?k=${'x'.repeat(24)}`)).status, 403);
   assert.equal((await http(api('/api/state'))).status, 200);
 });
@@ -157,7 +163,7 @@ test('設定の保存・開始：使えるエージェントにない名前と�
 
 test('設定の保存：下書きがなく、頼む作業も条件も空なら、下書きを作らない', async (t) => {
   const { fake, app } = await startRun(t);
-  await fake.call('finish', { outcome: 'success', conclusion: 'できた', retro: 'なし' });
+  await fake.call('finish', { outcome: 'needs-human', conclusion: 'できた', retro: 'なし' });
   assert.equal(app.store.draft, null);
   await app.control.saveSettings({ request: '', criteria: [], worker: WORKER, verifier: VERIFIER, maxIterations: 3 });
   assert.equal(app.store.snapshot().draft, null);
@@ -407,4 +413,35 @@ test('設定：作業フォルダが変わったら（/cd）、そのフォル�
   assert.equal(a.app.store.folder, A, '末尾の / は同じフォルダとみなす');
   assert.equal(a.app.store.settings.maxIterations, 4);
   assert.equal(a.app.store.settings.worker, 'only-a:helper');
+});
+
+test('POST は、この画面から送った JSON だけを受ける（同じ PC のほかのポートの画面からの操作を断る）', async (t) => {
+  const { url, api, app } = await opened(t);
+  const body = JSON.stringify({ worker: WORKER, verifier: VERIFIER, maxIterations: 3 });
+  // ほかのポートの画面から（Origin が違う）
+  const other = await http(api('/api/settings'), { method: 'POST', body, headers: { Origin: 'http://127.0.0.1:1' } });
+  assert.equal(other.status, 403);
+  assert.equal(other.data.error, 'ほかの画面からの操作は受け付けません。');
+  // フォームのように text/plain で送ったもの
+  const plain = await http(api('/api/start'), { method: 'POST', body, headers: { 'Content-Type': 'text/plain' } });
+  assert.equal(plain.status, 415);
+  assert.equal(app.store.run, null, '始めない');
+  // この画面からの送信（Origin が同じ）と、Origin のない送信は受ける
+  assert.equal((await http(api('/api/settings'), { method: 'POST', body, headers: { Origin: url.origin } })).status, 200);
+  assert.equal((await http(api('/api/settings'), { method: 'POST', body })).status, 200);
+});
+
+test('どの応答にも、セキュリティのためのヘッダーを付ける', async (t) => {
+  const { api } = await opened(t);
+  for (const p of ['/', '/app.js', '/api/state']) {
+    const r = await http(api(p));
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff', p);
+    assert.equal(r.headers.get('referrer-policy'), 'no-referrer', p);
+    assert.equal(r.headers.get('cache-control'), 'no-store', p);
+    const csp = r.headers.get('content-security-policy');
+    assert.match(csp, /default-src 'none'/, p);
+    assert.match(csp, /script-src 'self';/, p);
+    assert.match(csp, /frame-ancestors 'none'/, p);
+    assert.ok(!csp.includes('unsafe-inline'), p);
+  }
 });
