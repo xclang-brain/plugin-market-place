@@ -7,3 +7,5 @@ expected_outcome: |
   summary か impact に、最新で直っている場所（work/w1/src/loader.c の goto done と done: の fclose、32〜33 行あたり）を書く。
   exceeded_constraints は空の並び、classification は Bug、action は Fix Required、severity は Major、impact は文。
   repo/ も work/w1/ も変えない。質問はせず、「20002: …」の1行だけを返す。
+context:
+  scaffold_script: place-files.sh

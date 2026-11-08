@@ -55,6 +55,8 @@ AI は差分と、直した内容の1行と、影響を示し、「この差分�
 | 最新で直っている（already_fixed_on_latest） | 真なら何も変えていない。直っている場所も示す |
 | Classification / Action / Severity | Bug / Fix Required / 警告の Impact に合わせた重さ（High は Major、Medium は Moderate、Low は Minor） |
 
+チャットでは、差分と、直した内容・影響（決まりを超えたときは、その決まり）を、ふつうの言葉で返します（項目の名前は、ファイルに書くときに使います）。
+
 注釈（`/* coverity[<タグ>:FALSE] 誤検知。… */` など）は、注釈を入れるフォルダを渡されて頼まれたときだけ入れます。
 
 ## うまくいかないとき

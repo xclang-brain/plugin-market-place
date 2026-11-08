@@ -7,3 +7,5 @@ expected_outcome: |
   out/fix.json に指定の7項目だけを書く：already_fixed_on_latest は false、exceeded_constraints は空、
   classification は Bug、action は Fix Required、severity は Impact High に合わせて Major。場所を行で書くなら最新の行（23〜25 行）。
   質問はせず、1行だけを返す。
+context:
+  scaffold_script: place-files.sh

@@ -6,3 +6,5 @@ expected_outcome: |
   ok: false、rework に「根拠の行を直す」「判定を true_bug にする」などの直す点が書かれる。埋めた誤りと関係のない基準
   （C-05、C-07、C-13、当てはまらない C-20・C-22・C-23）は ok: true。findings は scope が item の20個の基準を1回ずつで、
   check_review.py が ok: true を返す。result.json とコードは変えない。
+context:
+  scaffold_script: place-files.sh

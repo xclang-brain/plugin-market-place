@@ -163,22 +163,42 @@ def run_command(command, cwd, env, timeout, encoding=None):
 # 出力を読む
 # ---------------------------------------------------------------------------
 
-def unittest_counts(out, code):
+def unittest_counts(out, code, modules=None):
     # A test that runs another suite and prints its output (independence, selftest) leaves earlier "Ran N tests"
     # and "OK"/"FAILED" lines: the suite's own summary is the last "Ran" line and the lines after it.
     runs = list(re.finditer(r"^Ran (\d+) tests?", out, re.M))
     total = int(runs[-1].group(1)) if runs else 0
     tail = out[runs[-1].end():] if runs else out
-    bad = 0
+    counts = {"failures": 0, "errors": 0, "unexpected successes": 0}
     m = re.search(r"^FAILED \((.*)\)", tail, re.M)
     if m:
-        for _, value in re.findall(r"(failures|errors|unexpected successes)=(\d+)", m.group(1)):
-            bad += int(value)
+        for key, value in re.findall(r"(failures|errors|unexpected successes)=(\d+)", m.group(1)):
+            counts[key] += int(value)
+    failed = counts["failures"] + counts["errors"]
+    if failed and modules:
+        # "failures=" counts every failing subTest: count the failing tests of the suite's own modules instead
+        # (not those of a suite a test ran and printed), so that the failures never outnumber the tests run.
+        head = out[:runs[-1].start()] if runs else out
+        failing = {found for found in re.findall(r"^(?:FAIL|ERROR): (\S+) \(([\w.]+)\)", head, re.M)
+                   if found[1].split(".")[0] in modules or found[1].startswith("unittest.")}
+        if failing:
+            failed = min(failed, len(failing))
+    bad = failed + counts["unexpected successes"]
     if code != 0 and bad == 0:
         bad = 1  # 数えられない失敗（読み込みの失敗、時間切れなど）
     m = re.search(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", tail, re.M)
     skipped = int(m.group(1)) if m else 0
+    if total:
+        skipped = min(skipped, total)  # skipped subTests are counted one by one too
     return total, bad, skipped
+
+
+def suite_modules(root):
+    """The names unittest gives the modules found under root (discover -s root): test_x, or the package of a sub-folder"""
+    root = Path(root)
+    if not root.is_dir():
+        return set()
+    return {p.relative_to(root).parts[0].rsplit(".", 1)[0] for p in root.rglob("test*.py") if "node_modules" not in p.parts}
 
 
 def unittest_reasons(out, limit=12):
@@ -438,7 +458,8 @@ def run_suite(suite, args, uv_root):
         total, bad, skipped = tap_counts(out, code)
         reasons = tap_reasons(out) if bad else []
     else:
-        total, bad, skipped = unittest_counts(out, code)
+        root = suite.folder / "tests" if suite.kind == "part" else suite.folder
+        total, bad, skipped = unittest_counts(out, code, suite_modules(root) if root else None)
         reasons = unittest_reasons(out) if bad else []
         if bad == 0 and total == 0:
             bad, reasons = 1, ["試験が1つも動きませんでした"]

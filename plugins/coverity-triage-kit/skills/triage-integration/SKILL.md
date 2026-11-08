@@ -78,21 +78,21 @@ allowed-tools: ["shell(uv run:*)"]
   "merges": [
     {
       "members": ["30101", "30102"],
-      "reason": "どちらもマクロ NAME_MAX（include/msg.h:8）の定義が配列の大きさと合っていないことが原因",
+      "reason": "どちらもマクロ MSG_NAME_LEN（include/msg.h:8）の定義が配列の大きさと合っていないことが原因",
       "fix_source": "item:30101",
       "result": {
-        "verdict": {"judgement": "true_bug", "summary": "NAME_MAX が配列より 1 大きい",
-                    "rationale": "30101（src/msg.c:41）と 30102（src/msg.c:58）は、どちらも NAME_MAX を添字の上限に使っており、配列は NAME_MAX - 1 要素しかない。",
-                    "evidence": [{"file": "include/msg.h", "line": 8, "note": "NAME_MAX の定義"},
+        "verdict": {"judgement": "true_bug", "summary": "MSG_NAME_LEN が配列より 1 大きい",
+                    "rationale": "30101（src/msg.c:41）と 30102（src/msg.c:58）は、どちらも MSG_NAME_LEN を添字の上限に使っており、配列は MSG_NAME_LEN - 1 要素しかない。",
+                    "evidence": [{"file": "include/msg.h", "line": 8, "note": "MSG_NAME_LEN の定義"},
                                  {"file": "src/msg.c", "line": 41, "note": "30101 の警告の場所"},
                                  {"file": "src/msg.c", "line": 58, "note": "30102 の警告の場所"}]},
         "recommendation": "fix",
         "confidence": "medium",
         "confidence_reason": "2つの警告の経路とマクロの定義をコードで確かめた。30102 の確信度が中なので、それに合わせた",
         "deviation": {"classification": "Bug", "action": "Ignore", "severity": "Major",
-                      "comment": "本物の不具合。NAME_MAX（include/msg.h:8）が配列の大きさより 1 大きく、src/msg.c:41 と src/msg.c:58 で配列の外を書くため、直さない理由は説明できない。"},
+                      "comment": "本物の不具合。MSG_NAME_LEN（include/msg.h:8）が配列の大きさより 1 大きく、src/msg.c:41 と src/msg.c:58 で配列の外を書くため、直さない理由は説明できない。"},
         "fix": {"classification": "Bug", "action": "Fix Required", "severity": "Major",
-                "summary": "NAME_MAX を配列の大きさに合わせる", "impact": "NAME_MAX を使う2か所の上限が 1 小さくなる",
+                "summary": "MSG_NAME_LEN を配列の大きさに合わせる", "impact": "MSG_NAME_LEN を使う2か所の上限が 1 小さくなる",
                 "exceeded_constraints": [], "already_fixed_on_latest": false},
         "revision_drift": {"status": "none", "detail": ""}
       }

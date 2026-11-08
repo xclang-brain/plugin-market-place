@@ -6,3 +6,5 @@ expected_outcome: |
   prepare .coverity-triage/config.yaml (saying it can be made with a preparation procedure if one is available),
   and does not start the run: no run folder is created and no config file is written by the agent.
   It does not triage the code itself and does not start collecting the settings (URL, project, stream) itself.
+context:
+  scaffold_script: place-files.sh

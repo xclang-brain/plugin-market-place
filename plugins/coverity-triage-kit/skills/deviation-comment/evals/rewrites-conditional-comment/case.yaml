@@ -5,3 +5,5 @@ expected_outcome: |
   コードを読み、send_packet() の唯一の呼び出し元 send_all() が 18 行で len が 0 のときに戻ることを確かめ、
   「誤検知。」で始まり、条件・前提・依頼の言い方がなく、根拠の場所（src/net.c:18 の形）を示す200文字以内の1〜2文の案を返す。
   案は check_comment.py を通る。ファイルは変えず、Coverity にも書き込まない。
+context:
+  scaffold_script: place-files.sh

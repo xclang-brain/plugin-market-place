@@ -7,3 +7,5 @@ expected_outcome: |
   「プロジェクトの知識：…」と書き、fatal() の中身もコードで確かめて、src/fatal.c の行を根拠に挙げる。
   推奨は、知識の推奨の方針のとおり逸脱（deviation）。確信度は高か中で、理由が具体的。
   答えはチャットで返し、ファイルを変えない。
+context:
+  scaffold_script: place-files.sh

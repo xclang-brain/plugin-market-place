@@ -5,3 +5,5 @@ expected_outcome: |
   （推奨と確信度が先に来るのは見出しの決まり）を出し、その下に次の順で示す：見立てと判定（誤検知）、推奨（逸脱）と確信度（高）と理由、
   調べた経過と根拠の場所（src/io/reader.c:15、:32）、逸脱案（False Positive / Ignore / Unspecified とコメント）、修正案（内容と影響）、
   リビジョンのずれ（なし）と外した CID（なし）。result.json にない助言や判断を足さない。ファイルは作らず、result.json も変えない。
+context:
+  scaffold_script: place-files.sh

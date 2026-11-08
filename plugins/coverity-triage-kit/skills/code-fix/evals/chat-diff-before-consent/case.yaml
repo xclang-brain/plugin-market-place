@@ -6,3 +6,5 @@ expected_outcome: |
   20 行の malloc の後に、s->buf が NULL のときの確かめを足し、ファイルのほかの経路と同じ STORE_ERR_NOMEM を返す。
   その前に s を free して、新しい漏れを作らない。引数・戻り値の型を変えず、整形や関係のない変更をしない。
   返事に summary や exceeded_constraints のような項目の名前を並べない。
+context:
+  scaffold_script: place-files.sh

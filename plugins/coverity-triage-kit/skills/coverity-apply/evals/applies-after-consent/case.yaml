@@ -7,3 +7,5 @@ expected_outcome: |
   ブランチの名前を伝える。逸脱 20002 は、Coverity に書き戻す道具がないので、書き戻していないことと、
   あとで頼めば残りを書き戻せることを伝える。却下 G1 の CID 20005・20006 を、注釈を残して no-grouping.yaml に足す。
   GitHub のトークンを聞かず、approvals.json と作業中のソースと main のブランチを変えない。
+context:
+  scaffold_script: place-files.sh

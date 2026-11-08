@@ -5,3 +5,5 @@ expected_outcome: |
   合格（pass）と答える。src/io/writer.c にも copy_name() の呼び出しがあるが、それは writer.c の中の別の static の関数なので、
   呼び出し元に数えない。根拠の場所（src/io/reader.c:32 など）を示す。推奨・判定・確信度・逸脱コメントを変える指摘をしない。
   チャットで返し、review.json などのファイルを作らず、result.json もコードも変えない。
+context:
+  scaffold_script: place-files.sh

@@ -6,3 +6,5 @@ expected_outcome: |
   confidence high), 1 could not be processed (20002, because the worker stopped with no output or progress
   for 30 minutes) and 1 is still being worked on (G1, CIDs 20003 and 20004, now judging). It does not change
   any file in the run folder and does not start, resume or stop the run.
+context:
+  scaffold_script: place-files.sh

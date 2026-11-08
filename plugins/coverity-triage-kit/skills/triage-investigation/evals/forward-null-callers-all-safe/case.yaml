@@ -7,3 +7,5 @@ expected_outcome: |
   -1 を返すので buf_append には届かない。判定は誤検知（false_positive）で、根拠に 3 か所の呼び出し元を相対パスと行で挙げる。
   呼び出し元がすべてリポジトリにありコードで確かめたので、確信度は高。推奨は逸脱、または小さく安全な修正。
   答えはチャットで返し、コードを変えず、結果のファイルも作らない。
+context:
+  scaffold_script: place-files.sh

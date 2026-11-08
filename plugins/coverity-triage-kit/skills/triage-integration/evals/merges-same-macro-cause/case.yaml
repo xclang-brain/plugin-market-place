@@ -6,3 +6,5 @@ expected_outcome: |
   20013（total_count() の i <= k）は原因が違うのでまとめず、その理由を書く。まとめた確信度は、20012 の medium 以下。
   まとめた逸脱コメントは1つで、「本物の不具合。」で始まり200文字以内、条件の言い方がなく、Bug / Ignore。
   integration/plan.json だけを書き、check_plan.py が ok: true を返す。コードと results/、patches/ は変えない。
+context:
+  scaffold_script: place-files.sh

@@ -4,3 +4,5 @@ expected_outcome: |
   result.json を変えずに、直すところを挙げる：verdict.summary が空、confidence が決まった値（high / medium / low）でない、
   決まった項目のほかの notes がある（消す）、逸脱コメントが200文字の上限を超える（調べた過程や「直さなくてよい」も書いている）、
   グループでないのに group_excluded_cids に CID がある。fix を消す・null にする、notes を残す、のような形に合わない直し方は示さない。
+context:
+  scaffold_script: place-files.sh
