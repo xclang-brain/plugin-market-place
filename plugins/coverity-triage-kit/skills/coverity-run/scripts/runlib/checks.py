@@ -62,33 +62,28 @@ def c18(run: Run) -> dict[str, Any]:
         if item.get("review") in (None, "unverified"):
             continue
         review = try_json(run.review_file(item["id"]))
-        if not isinstance(review, dict) or not rules.review_check(review, item["id"])["ok"]:
+        checker, merged = briefs.review_context(run, item)
+        if not isinstance(review, dict) or not rules.review_check(review, item["id"], checker, merged)["ok"]:
             bad.append(item["id"])
     if bad:
         return _check("C-18", False, "確かめの結果の形（pass / flag と上限 / rework と直す点）が正しくない作業: " + "、".join(bad))
     return _check("C-18", True, "確かめの結果は、どれも pass / flag（確信度の上限つき）/ rework（直す点つき）の形だった")
 
 
-def c19(run: Run) -> dict[str, Any]:
+def c19(run: Run, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """result.json is not changed after it was taken in, and the summary shows the shared rule's confidence."""
     bad = []
     verify = try_json(run.dir / "verify.json") or {}
+    shown = {r["id"]: r.get("confidence") for r in rows}
     for item in _reviewed(run):
         raw = try_json(run.result_file(item["id"])) or {}
         if item.get("result_sha") and file_sha(run.result_file(item["id"])) != item["result_sha"]:
             bad.append(f"{item['id']}（結果ファイルが受け取った後に変わった）")
             continue
         review = assess.shown_review(item, try_json(run.review_file(item["id"])) if item.get("review") else None)
-        shown = assess.effective(raw, review if review and review.get("outcome") != "unverified" else None,
-                                 verify.get(item["id"]) if isinstance(verify, dict) else None)
-        levels = [raw.get("confidence")]
-        cap = assess.review_cap(review if review and review.get("outcome") != "unverified" else None)
-        if cap:
-            levels.append(cap)
-        v = verify.get(item["id"]) if isinstance(verify, dict) else None
-        if v and v.get("problems") and raw.get("recommendation") == "fix":
-            levels.append("low")
-        lowest = min((lv for lv in levels if lv in assess.ORDER), key=assess.ORDER.get, default="low")
-        if shown.get("confidence") != lowest:
+        wanted = rules.effective_confidence(raw, assess.review_for_confidence(review),
+                                            verify.get(item["id"]) if isinstance(verify, dict) else None)
+        if item["id"] in shown and shown[item["id"]] != wanted["confidence"]:
             bad.append(item["id"])
     if bad:
         return _check("C-19", False, "人に見せる確信度が、いちばん低いものになっていない作業: " + "、".join(bad))
@@ -210,4 +205,4 @@ def c27(run: Run) -> dict[str, Any]:
 
 
 def run_checks(run: Run, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [c16(run), c17(run), c18(run), c19(run), c24(run), c25(run, rows), c26(run), c27(run)]
+    return [c16(run), c17(run), c18(run), c19(run, rows), c24(run), c25(run, rows), c26(run), c27(run)]

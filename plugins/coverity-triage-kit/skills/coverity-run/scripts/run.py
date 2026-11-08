@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pyyaml>=6.0"]
+# dependencies = ["pyyaml>=6.0", "jsonschema>=4.18,<5"]
 # ///
 """The batch triage of Coverity warnings: the run folder and the order of the work.
 

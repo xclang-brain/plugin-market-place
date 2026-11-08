@@ -86,7 +86,8 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/run.py" <コマンド>
 
 ### status の出力（あらまし）
 
-`stage`、`counts`、作業ごとの `items[]`（段・経過時間・`stalled`（10 分動きなし）・確かめの結果・人に見せる確信度）、
+`stage`、`stopped`（止めた）、`halted` と `halt_reason`（続けられないため止まっている。認証の失敗、5xx、初回解析の失敗など。
+直して `resume` すると `false` に戻る）、`counts`、作業ごとの `items[]`（段・経過時間・`stalled`（10 分動きなし）・確かめの結果・人に見せる確信度）、
 `running_tasks[]`、`errors[]`、`recent[]`（新しい順に 10 行）、`initial`（初回解析の進み）、`progress`（処理した件数 / 全体）、
 `run_checks[]`（実行ごとの評価基準の合否）、`criteria[]`（評価基準の文）、`criteria_results[]`（基準ごとの合格・不合格の件数）、
 `issues_found[]`（書き残した課題）。
@@ -114,7 +115,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/run.py" <コマンド>
 `<output_dir>/<YYYYmmdd-HHMMSS>/`：
 
 ```text
-run.json                 実行の状態（format: 2、tool_version。このスクリプトだけが書く）
+run.json                 実行の状態（format: 2、tool_version。このスクリプトだけが書く。形は assets/run.schema.json）
 filter.json  issues.json  issues.mapped.json  config.snapshot.yaml
 schemas/                 結果・確かめ・統合の形と評価基準の写し（指示ファイルが指す）
 operations.log           出来事（1 行に 1 つの JSON：time、event、level、item、message。認証情報は ****）
@@ -131,9 +132,36 @@ approvals.json  verify.json  metrics.json  issues-found.jsonl
 
 - `summary.html` と `cid/<ID>.html` は 1 つのファイルで、スクリプトを含まず、AI の書いた文はすべてエスケープしてあります。
 - 人に見せる確信度は、作業役・確かめ・ビルドでの確かめのいちばん低いものです（`result.json` は変えません）。
-- `approvals.json` には推奨が入ります（最新で直っていて差分がないものは「反映しない」）。人が選んだ値は書き換えません。
+  決まりは `scripts/confidence.py`（下の「決まった確かめ」）。
+- `approvals.json` には推奨が入ります（最新で直っていて差分がないものは「反映しない」）。人が選んだ値は書き換えず、ない作業の鍵だけを足します。
+  ファイルが壊れている（JSON として読めない、形が `assets/approvals.schema.json` と違う）ときは、書き換えずに `ok: false` で止め、ファイルの場所を示します。
+- `run.json` の `tool_version` は、実行フォルダの形の版です（`scripts/runlib/state.py` の `TOOL_VERSION`）。
+  実行フォルダの形か意味を変えたときだけ、手で 1 つ上げます。違う版のスクリプトは、その実行フォルダを読むだけで変えません（再開もしません）。
+  形を変えない直し（文の直し、不具合の直し）では上げません。
+- `run.json` で、ほかの部品が読む項目は `assets/run.schema.json` に決めてあります（`jobs/<名前>.json` の形は、その中の `$defs.job`）。
+  反映したかどうかは、`run.json` に書きません（反映の記録は反映する側が持ちます）。
 - `verify.json`：作業ごとの `{mode, applied, build_ok, problems, note, resolved_cids, remaining_cids, new_issue_count, log}`。
 - `metrics.json`（`options.metrics`）：`{"version": 1, "run_id", "items": [{item, cids, recommendation, confidence, shown_confidence, judgement, seconds, attempts, rework_rounds, review, build_ok}], "totals": {…}}`。
+
+## 決まった確かめ（ほかの部品と同じ決まり）
+
+エージェントが書いたものは、次のスクリプトで確かめます。どれも、持ち主の部品のスクリプトを、そのまま（同じバイト列で）写したものです。
+`scripts/runlib/` は、これらを読み込んで使うだけで、同じ決まりを自分では書きません。持ち主を直したら、写しも同じに直します。
+
+| ファイル | 決まり |
+|---|---|
+| `scripts/check_result.py` | 1 件の結果（`result.json`）の形と決まり（逸脱コメントの決まりを含む） |
+| `scripts/check_comment.py` | 逸脱コメントの決まり |
+| `scripts/check_review.py` | 確かめの結果（`review.json`）：評価基準の `scope: item` をすべて 1 回ずつ（当てはまらないものも `ok: true` と「対象外」で書く）、`flag` は確信度の上限つき、など |
+| `scripts/lint_result.py` | 検証役に示す、決まった方法で見つけた点 |
+| `scripts/check_plan.py` | 統合の計画（`integration/plan.json`）の形と決まり（逸脱コメントの決まりを含む） |
+
+`scripts/confidence.py` は、このスキルが持ち主の決まり（人に見せる確信度）です。標準ライブラリだけを使い、ほかのファイルを読まないので、
+ほかの部品はこのファイルをそのまま写して使えます。共通の試験のデータは `assets/contract/confidence/cases.json` です。
+この決まりだけを動かすときは、`uv run --native-tls --quiet "<このフォルダ>/scripts/confidence.py" --stdin` に
+`{"result": {…}, "review": {…} か null, "verify": {…} か null}` を渡します。
+
+このほか、スクリプトは tick ごとに、決まりにない確かめもします（作業用のコピーに変更があるか、確かめの間に結果と差分が変わっていないか、など）。
 
 ## うまくいかないとき
 
@@ -142,11 +170,12 @@ approvals.json  verify.json  metrics.json  issues-found.jsonl
 - 「設定ファイルがありません」：`.coverity-triage/config.yaml` を用意します。
 - 「実行フォルダの置き場所がリポジトリの中です」：`output_dir` をリポジトリの外にします。
 - 「別の版のスクリプトで作られました」「別の形で作られたものです」：その実行は続きからできません。新しく始めます。
+- 「承認のファイル … が壊れているため、書き換えません」：示されたファイルを直すか、選んだ承認が要らなければ消してから、もう一度 `summary` を動かします。
 - Windows で日本語が化けるとき：スクリプトはコンソールの文字コードで書きます。`PYTHONIOENCODING` を付けると、その文字コードで書きます。
 
 ## テストを動かす
 
-このフォルダで動かします（uv があれば uv で、なければ pyyaml のある Python でスクリプトを動かします。git が要ります。svn の試験は svn があるときだけ）。
+このフォルダで動かします（uv があれば uv で、なければ pyyaml と jsonschema のある Python でスクリプトを動かします。git が要ります。svn の試験は svn があるときだけ）。
 
 ```
 # Windows（PowerShell）
@@ -156,5 +185,6 @@ python3 -m unittest discover -s tests
 ```
 
 試験は一時フォルダに git のリポジトリ・偽の Coverity の出力・偽のエージェントの出力・偽の `cov-*` を作って、`tick` の流れを最後まで動かします。
-`assets/contract/<名前>/cases.json`（ほかの部品と共通の試験のデータ）があれば、それも動かします。
+`assets/contract/<名前>/cases.json`（ほかの部品と共通の試験のデータ：comment、result、lint、plan、confidence）があれば、
+`scripts/runlib/` が使う道筋で、すべての組を動かします。
 試験の課題（モデルで解かせて採点する）は `evals/` にあります。

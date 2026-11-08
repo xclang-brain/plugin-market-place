@@ -109,6 +109,11 @@ def worker(run: Run, item: dict[str, Any], fix_problems: list[str] | None = None
              f"- 直すフォルダは、取り込み先の最新のリビジョン {latest or '-'} です。最新でもう直っているときは、何も直さずに "
              "fix.already_fixed_on_latest を true にします。",
              "- 結果ファイルは最後に書きます（書いた後で直すフォルダを変えない）。", "",
+             "## 逸脱コメントの書き方（書いた後にスクリプトが確かめます）", "",
+             "- 「誤検知。」「意図的。」「本物の不具合。」のどれかで始め、そのあとに問題にならない理由とコードの場所（ファイルと行）を"
+             "1〜2 文で書きます。全体で 200 文字以内、前後に空白を入れず、改行と書式（見出し・箇条書き・太字・コードの印）を使いません。",
+             "- 条件・但し書き・推量（「ただし」「場合に限る」「おそらく」「かもしれない」など）、調べた過程（「確認できなかった」など）、"
+             "推奨や依頼（「を推奨」「ください」「要確認」など）は書きません。条件なしで言い切れないときは、推奨を修正にします。", "",
              "## 進み具合", "",
              f"節目ごとに、進み具合のファイルへ `{example}` の形で上書きします（人が画面で見ます。書けなくても作業は続けます）。"
              "phase は read（警告経路とコードを読む）→ judge（真偽を決める）→ fix（修正を作る）→ deviation（逸脱コメントを書く）"
@@ -196,9 +201,16 @@ def _result_lines(result: dict[str, Any]) -> list[str]:
     return lines
 
 
-def lint_for(run: Run, result: dict[str, Any]) -> list[dict[str, str]]:
-    root = investigate_root(run)
-    return rules.lint_points(result, lambda rel: issues.read_text(root, rel))
+def lint_for(run: Run, result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The points the fixed rules find in a result, against the code the worker read (contract "lint")."""
+    return rules.lint_findings(result, investigate_root(run))
+
+
+def review_context(run: Run, item: dict[str, Any]) -> tuple[str | None, bool]:
+    """(checker, merged) of an item: what decides which conditional criteria apply to its review."""
+    found = issues.mapped(run)
+    checker = next((found[c].get("checker") for c in item["cids"] if c in found and found[c].get("checker")), None)
+    return checker, bool(item.get("merged_from"))
 
 
 def reviewer(run: Run, item: dict[str, Any], fix_problems: list[str] | None = None) -> Path:
@@ -231,18 +243,30 @@ def reviewer(run: Run, item: dict[str, Any], fix_problems: list[str] | None = No
                      "すべての CID が同じ原因か、修正がすべての警告に効くかも確かめます。")
     elif is_group(item_id):
         lines.append("- この作業は、同じ原因と思われる警告のグループです。すべての CID が同じ原因かも確かめます。")
+    criteria = rules.item_criteria()
+    na = rules.not_applicable_word()
+    applies = rules.applicability(*review_context(run, item))
     lines += ["", "## 評価基準（警告ごと）", "",
-              "findings に、次の基準を 1 つずつ書きます（check に id、ok に合否、detail に理由、分かれば file と line）。"
-              "「当てはまるとき」のある基準が当てはまらないときは、ok を true にし、detail に「対象外」と書きます。", ""]
-    for c in rules.item_criteria():
-        when = f"（{c['applies_when']}）" if c.get("applies_when") else ""
+              f"findings に、次の {len(criteria)} 個の基準を、すべて 1 回ずつ書きます（check に id、ok に合否、detail に理由、"
+              f"分かれば file と line）。この警告に当てはまらない基準も省かず、ok を true にし、detail に「{na}」と書きます。"
+              f"当てはまる基準の detail は「{na}」で始めません。", ""]
+    for c in criteria:
+        when = ""
+        if c.get("applies_when"):
+            fits = applies.get(c["id"])
+            mark = ("この警告には当てはまる" if fits else
+                    f"この警告には当てはまらない。ok を true、detail を「{na}」にする" if fits is False else
+                    "当てはまるかを確かめる")
+            when = f"（{c['applies_when']}。{mark}）"
         lines.append(f"- {c['id']}{when}: {c['text']}")
     points = lint_for(run, result)
     lines += ["", "## スクリプトが決まった方法で見つけた点（重みは自分で決める）", ""]
     lines += [f"- {p['message']}" for p in points] or ["- なし"]
     lines += ["", "## 確かめの結果の書き方", "",
               "- outcome は pass（合格）／ flag（要確認。confidence_cap に high・medium・low のどれかを書く）／ "
-              "rework（差し戻し。rework に、作業役が直す点を 1 点ずつ書く）。note に人が読む 1〜2 文を書きます。", ""]
+              "rework（差し戻し。rework に、作業役が直す点を 1 点ずつ書く）。note に人が読む 1〜2 文を書きます。",
+              "- ok が false の基準があるときは、pass にしません（flag か rework にします）。rework のときは、差し戻す理由の基準を "
+              "ok: false にします。pass と flag のときは、rework を空の配列 [] にします。", ""]
     if fix_problems:
         lines += ["## 確かめの結果の直すこと", "",
                   "前に書いた確かめの結果を確かめたところ、次の点が決まりに合いませんでした。これらの点だけを直して書き直します。",
@@ -302,7 +326,7 @@ def integrator(run: Run, found: list[dict[str, Any]], fix_problems: list[str] | 
               "|---|---|---|---|---|---|---|---|---|---|", *table, "",
               "## 警告経路の ★（問題の起きる場所）", "", *paths, "",
               "## 計画の決まり", "",
-              f"- 1 つにまとめる作業は 2 つ以上、CID は合わせて {rules.MAX_GROUP} 件まで。1 つの作業は 1 つのまとまりにだけ入れます。",
+              f"- 1 つにまとめる作業は 2 つ以上、CID は合わせて {rules.max_cids()} 件まで。1 つの作業は 1 つのまとまりにだけ入れます。",
               "- まとめてよいのは、上の表にある作業だけです（グループにしない CID を含む作業は載せていません）。",
               "- result には、まとめた結果（結果ファイルと同じ形）を書きます。confidence は、まとめる作業のいちばん低い確信度以下にします。"
               "逸脱コメントは、すべての CID に当てはまるように書きます。",

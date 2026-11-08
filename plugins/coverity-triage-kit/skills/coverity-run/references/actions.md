@@ -73,9 +73,12 @@
 
 ## status の主な項目
 
-`run_id, run_dir, repo_root, stage, stage_label, finished, stopped, has_summary, review, integration, max_rework, parallel,
-counts, items[], running_tasks[], errors[], recent[], initial, progress, run_checks[], criteria[], criteria_results[],
-issues_found[]`
+`run_id, run_dir, repo_root, stage, stage_label, finished, stopped, halted, halt_reason, has_summary, review, integration,
+max_rework, parallel, counts, items[], running_tasks[], errors[], recent[], initial, progress, run_checks[], criteria[],
+criteria_results[], issues_found[]`
+
+- `halted` は、最後の tick が `stop: true` を返した（続けられない。認証の失敗、5xx、初回解析の失敗、警告の取得の失敗など）とき真で、
+  `halt_reason` にその理由が入ります。利用者が止めたときは `stopped` が真になり、`halted` は偽です。直して `resume` すると偽に戻ります。
 
 - `items[]`：`id, cids, checker, status, phase, note, elapsed_seconds, stalled, preparing_copy, attempts, rework_rounds,
   review, recommendation, confidence, error`。`confidence` は人に見せる確信度（作業役・確かめ・ビルドでの検証のいちばん低いもの）。

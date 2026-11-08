@@ -15,6 +15,9 @@ REQ-202、REQ-603、設計書 9.1「独立性」）。
 - 上の段の文書（プラグインの README、4段階目のガイド、エージェントの README、変更履歴）に、下の段のスクリプトの名前と設定の項目がない。
 - エクステンション：スキルとエージェントの名前（とスクリプトの名前）は defaults.json にだけ。
 - 元のプラグインなど、同じリポジトリのほかのプラグインと、エージェントと MCP サーバーの名前が重ならない（REQ-007）。
+- 一括実行が書く指示ファイル（作業・確かめ・統合）と launch の頼みの文に、部品の名前がない（設計書 4.14）。
+  一時フォルダのリポジトリで、取ってある警告の一覧から実行を作り、決まった振る舞いの偽のエージェントで最後まで流して確かめる。
+- 名前を探す決まりそのもの（単語として数える、uv.lock を見ない、output_dir の既定の値だけを許す）。
 
   python3 -m unittest discover -s tests/independence -v
 環境変数：SKIP_SLOW_TESTS=1 でコピーして動かす試験を飛ばす。TESTS_JOBS（同時に動かす数）、TESTS_PART_TIMEOUT（秒）。
@@ -71,9 +74,10 @@ def upper_patterns():
 
 
 def outside_patterns():
-    """フォルダの外を指すもの。../ は、設定の output_dir の既定（設計書 4.1）と、パスを調べるための文字列 "../" だけは許す"""
+    """フォルダの外を指すもの。../ は、設定の output_dir の既定の値そのもの（設計書 4.1 の `../coverity-triage-out` など）と、
+    パスを調べるための文字列 "../" だけは許す（../coverity-triage-outside や ../other は数える）"""
     allowed = pp.output_dir_default() or ""
-    tail = re.escape(allowed[3:]) if allowed.startswith("../") else None
+    tail = re.escape(allowed[3:]) + r"(?![\w.\-])" if allowed.startswith("../") else None
     parent = r"(?<!\.)\.\.[/\\](?![\"']|\\[\"'])" + (r"(?!" + tail + r")" if tail else "")
     return [("../（フォルダの外）", re.compile(parent)),
             ("プラグインの根の環境変数", re.compile(r"PLUGIN_ROOT|CLAUDE_PLUGIN|COPILOT_PLUGIN|PLUGIN_DATA")),
@@ -540,6 +544,118 @@ class NoNameCollision(unittest.TestCase):
                 self.assertEqual(sorted(ours_agents & agents), [], f"{other.name} と同じ名前のエージェントがあります")
                 self.assertEqual(sorted(ours_servers & servers), [], f"{other.name} と同じ登録名の MCP サーバーがあります")
                 self.assertEqual(sorted(ours_ext & exts), [], f"{other.name} と同じ名前のエクステンションがあります")
+
+
+class ScannerRules(unittest.TestCase):
+    """この試験の、言葉を探す決まりそのもの（数えすぎも、見落としもしない）"""
+
+    def count(self, patterns, text):
+        return [w for w, pattern in patterns if pattern.search(text)]
+
+    def test_english_upper_words_count_as_words_only(self):
+        patterns = upper_patterns()
+        for text in ("typing-extensions==4.12", "typing_extensions", "my-extension-lib", "extension_id = 1"):
+            with self.subTest(text=text):
+                self.assertEqual(self.count(patterns, text), [], "単語の一部は数えません")
+        for text in ("an extension of the screen", "Extensions", "the ORCHESTRATOR"):
+            with self.subTest(text=text):
+                self.assertTrue(self.count(patterns, text), "単語としての出現は数えます")
+
+    def test_generated_and_vendored_files_are_not_read(self):
+        with tempfile.TemporaryDirectory(prefix="scanner-") as tmp:
+            folder = Path(tmp)
+            (folder / "uv.lock").write_text('name = "typing-extensions"\nextension\n', encoding="utf-8")
+            (folder / "__pycache__").mkdir()
+            (folder / "__pycache__" / "x.py").write_text("extension\n", encoding="utf-8")
+            (folder / "README.md").write_text("x\n", encoding="utf-8")
+            self.assertEqual([p.name for p in pp.text_files(folder)], ["README.md"])
+
+    def test_only_the_default_output_dir_may_point_outside(self):
+        default = pp.output_dir_default()
+        if not default or not default.startswith("../"):
+            self.skipTest("設計書 4.1 の output_dir の既定が ../ で始まりません")
+        name = default[3:]
+        patterns = outside_patterns()[:1]
+        for text in (f"output_dir: {default}", f"既定は `{default}`。", f'DEFAULT = "{default}"', f"{default}/<日時>/",
+                     'if part == "../":'):
+            with self.subTest(text=text):
+                self.assertEqual(self.count(patterns, text), [], "既定の値と、言葉だけの文字列は許します")
+        for text in (f"../{name}side/x", "../other/file.md", "see ../README.md", f"output_dir: ../{name}2"):
+            with self.subTest(text=text):
+                self.assertTrue(self.count(patterns, text), "ほかの ../ は数えます")
+
+
+class GeneratedBriefs(unittest.TestCase):
+    """一括実行が書く指示ファイルと、launch の頼みの文に、部品の名前（スキル・エージェント・MCP サーバーの登録名・ツールの名前・
+    プラグインの名前）がない（設計書 4.14：「スキルやエージェントの名前は書かない」）。名前は木から読む"""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(TESTS / "integration"))
+        import flowlib  # noqa: E402  (the shared harness of the plugin-level flow tests)
+
+        cls.fl = flowlib
+        reason = flowlib.prerequisites()
+        if reason:
+            raise unittest.SkipTest(reason)
+        cls.tmp = Path(tempfile.mkdtemp(prefix="briefs-")).resolve()
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
+        fl = flowlib
+        env = fl.base_env(cls.tmp)
+        env.update(TMPDIR=str(cls.tmp), TEMP=str(cls.tmp), TMP=str(cls.tmp))
+        repo = cls.tmp / "repo"
+        repo.mkdir()
+        revision = fl.write_repo(repo, env)
+        fl.write_settings(repo, cls.tmp / "out", "https://coverity.example.invalid", extra_coverity="  api: fake\n", env=env)
+        cids = {w["key"]: 30001 + n for n, w in enumerate(fl.WARNINGS)}
+        issues = fl.offline_files(cls.tmp / "fetched", cids, revision)
+        run_py = fl.command_script("runCommand")
+        created = fl.run_script(run_py, "new-run", "--repo", str(repo), "--issues-file", str(issues), "--review", "--integration",
+                                env=env, cwd=repo)
+        run_dir = Path(created["run_dir"])
+        cls.agents = fl.FakeAgents(cids, review_outcomes={str(cids["C"]): ["rework", "pass"]})
+        cls.orchestrator = fl.Orchestrator(run_py, run_dir, env, repo, cls.agents)
+        try:
+            cls.orchestrator.drive(limit_seconds=150)
+        finally:
+            fl.run_script(run_py, "stop", "--run", str(run_dir), env=env, cwd=repo, ok=None, timeout=60)
+        cls.run_dir = run_dir
+
+    def patterns(self):
+        names = set(pp.all_part_names())
+        for entry in mcp_entries().values():
+            names |= entry["inner"]
+        return [(n, pp.name_token(n)) for n in sorted(names)] + plugin_patterns()
+
+    def test_every_role_got_an_instruction_file(self):
+        roles = {a.get("role") for a in self.orchestrator.launches()}
+        self.assertEqual(roles, {"worker", "reviewer", "integrator"}, "作業・確かめ・統合の指示ファイルが揃いません")
+        self.assertTrue(any("## 確かめの指摘" in p.read_text(encoding="utf-8") for p in self.agents.briefs),
+                        "作り直しの指示ファイルがありません")
+
+    def test_briefs_and_prompts_name_no_part(self):
+        files = sorted(set(self.agents.briefs) | set(self.run_dir.glob("items/*/brief.md"))
+                       | set(self.run_dir.glob("agents/*/*.md")))
+        self.assertTrue(files, "指示ファイルがありません")
+        problems = []
+        for path in files:
+            problems += pp.hits_in_text(path.relative_to(self.run_dir).as_posix(), pp.read(path), self.patterns())
+        for action in self.orchestrator.launches():
+            text = "\n".join(str(action.get(k, "")) for k in ("prompt", "description"))
+            problems += pp.hits_in_text(f"launch {action.get('task')}", text, self.patterns())
+        self.assertEqual(problems, [], "指示ファイルか頼みの文に、部品の名前があります（役割を、ふつうの言葉で書きます）：\n"
+                         + "\n".join(problems))
+
+    def test_briefs_point_inside_the_run_folder_or_the_repository(self):
+        """指示ファイルの表のファイルは、実行フォルダか、リポジトリ（とその設定）の中だけ。部品のフォルダを指さない"""
+        problems = []
+        for path in sorted(set(self.agents.briefs)):
+            brief = self.fl.Brief(path)
+            for label, value in brief.rows.items():
+                target = Path(value)
+                if target.is_absolute() and pp.ROOT.resolve() in [target.resolve(), *target.resolve().parents]:
+                    problems.append(f"{path.name}: 「{label}」がプラグインの部品のフォルダを指しています：{value}")
+        self.assertEqual(problems, [], "\n".join(problems))
 
 
 if __name__ == "__main__":

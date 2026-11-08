@@ -1,46 +1,27 @@
-"""The confidence shown to the person: the lowest of the worker's, the review's cap and the build check's (C-19).
-
-result.json keeps what the worker wrote; this only lowers what the reports and status show. A review
-that flags or sends back without a cap counts as low. A build check with problems lowers a fix
-recommendation to low (a deviation keeps its confidence: its fix is only the other proposal).
+"""What the person is shown for a finished item: the review as shown, and the result with the shown
+confidence (C-19). The confidence rule itself is ``scripts/confidence.py`` (the contract "confidence");
+result.json keeps what the worker wrote.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-ORDER = {"low": 0, "medium": 1, "high": 2}
-JA = {"high": "高", "medium": "中", "low": "低"}
-
-
-def review_cap(review: dict[str, Any] | None) -> str | None:
-    if not review:
-        return None
-    cap = review.get("confidence_cap")
-    if review.get("outcome") in ("flag", "rework") and not cap:
-        cap = "low"
-    return cap if cap in ORDER else None
+from . import rules
 
 
 def effective(result: dict[str, Any], review: dict[str, Any] | None = None,
               verify: dict[str, Any] | None = None) -> dict[str, Any]:
-    """A copy of ``result`` with the shown confidence and the reasons it was lowered."""
-    confidence = result.get("confidence", "low")
-    if confidence not in ORDER:
-        confidence = "low"
-    reasons = []
-    cap = review_cap(review)
-    if cap and ORDER[cap] < ORDER[confidence]:
-        confidence = cap
-        note = str((review or {}).get("note") or "").strip() or "要確認"
-        reasons.append(f"結果の確かめで「{JA[cap]}」まで（{note}）")
-    if verify and verify.get("problems") and result.get("recommendation") == "fix" and confidence != "low":
-        confidence = "low"
-        reasons.append("ビルドでの確かめで問題: " + "、".join(verify["problems"]))
-    if confidence == result.get("confidence"):
+    """A copy of ``result`` with the shown confidence and, when it was lowered, the reasons."""
+    shown = rules.effective_confidence(result, review, verify)
+    if shown["confidence"] == result.get("confidence") and not shown["lowered_by"]:
         return result
-    return {**result, "confidence": confidence,
-            "confidence_reason": f"{result.get('confidence_reason', '')}（{'。'.join(reasons)}）"}
+    return {**result, "confidence": shown["confidence"], "confidence_reason": shown["reason"]}
+
+
+def review_for_confidence(review: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The review that counts for the confidence: none when the item could not be reviewed."""
+    return review if review and review.get("outcome") != "unverified" else None
 
 
 def shown_review(item: dict[str, Any], review: dict[str, Any] | None) -> dict[str, Any] | None:

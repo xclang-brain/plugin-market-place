@@ -131,7 +131,8 @@ class BasicFlowTest(RunCase):
         self.assertIn("worker:20001@1#2", seen)
         brief = (Path(run_dir) / "items" / "20001" / "brief.md").read_text(encoding="utf-8")
         self.assertIn("## 結果ファイルの直すこと", brief)
-        self.assertIn("判定区分", brief)
+        self.assertIn("deviation.comment: 「誤検知。」「意図的。」「本物の不具合。」のどれかで始め", brief)  # the comment rules' words
+        self.assertIn("「を推奨」", brief)
 
     def test_an_item_fails_after_two_fix_requests(self) -> None:
         run_dir = self.new_run()["run_dir"]
@@ -251,7 +252,13 @@ class FetchFailureTest(RunCase):
         out = self.tick(run_dir)
         out = self.tick(run_dir, "--failed", out["actions"][0]["task"], "--reason", "HTTP 401: 認証に失敗しました")
         self.assertTrue(out["stop"], out)
+        status = self.run_json("status", "--run", run_dir)
+        self.assertTrue(status["halted"])
+        self.assertFalse(status["stopped"])
+        self.assertIn("警告", status["halt_reason"])
         self.run_json("resume", "--run", run_dir)
+        status = self.run_json("status", "--run", run_dir)
+        self.assertEqual((status["halted"], status["halt_reason"]), (False, None))
         self.assertEqual(self.tick(run_dir)["actions"][0]["type"], "fetch_issues")
 
     def test_paths_fetched_twice_then_the_work_goes_on(self) -> None:

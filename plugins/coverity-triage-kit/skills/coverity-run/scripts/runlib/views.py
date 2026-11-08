@@ -238,6 +238,8 @@ def resume(run_dir: str) -> dict[str, Any]:
         st["finished_at"] = None
         st.pop("copy_failed", None)
         st.pop("fatal", None)
+        st["halted"] = False
+        st["halt_reason"] = None
         if not st.get("planned"):
             st.setdefault("fetch", {})["issues_failures"] = 0
         if st.get("verify_started") and not st.get("verified") and "verify" not in running:
@@ -418,7 +420,9 @@ def status(run_dir: str) -> dict[str, Any]:
     processed = c["done"] + c["error"]
     return {"ok": True, "run_id": st["run_id"], "run_dir": str(run.dir), "repo_root": st.get("repo_root"),
             "stage": stage, "stage_label": STAGE_JA.get(stage, stage), "finished": bool(st.get("finished")),
-            "stopped": bool(st.get("stopped")), "has_summary": run.summary_file().is_file(),
+            "stopped": bool(st.get("stopped")), "halted": bool(st.get("halted")),
+            "halt_reason": (st.get("halt_reason") or None) if st.get("halted") else None,
+            "has_summary": run.summary_file().is_file(),
             "review": bool(st.get("review")), "integration": bool(st.get("integration")),
             "max_rework": st.get("max_rework"), "parallel": st.get("parallel"),
             "counts": {k: c[k] for k in ("pending", "in_progress", "done", "error", "merged", "total")},

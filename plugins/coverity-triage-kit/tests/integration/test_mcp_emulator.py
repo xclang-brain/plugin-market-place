@@ -228,8 +228,8 @@ class McpEmulatorTest(unittest.TestCase):
 
     def test_unknown_value_is_left_out_and_reported(self) -> None:
         out = self.call("coverity_search_issues", repo_root=self.repo,
-                        # first in the list: the emulator checks the keys while it matches, in order
-                        filter={"streams": ["app-main"], "triage": {"classification": ["Tested Elsewhere", "Unclassified"]}})
+                        # after a value that matches: the server refuses the whole request all the same
+                        filter={"streams": ["app-main"], "triage": {"classification": ["Unclassified", "Tested Elsewhere"]}})
         self.assertEqual(out["count"], 4)
         self.assertEqual(out["ignored_values"], [{"filter": "triage.classification", "value": "Tested Elsewhere"}])
 

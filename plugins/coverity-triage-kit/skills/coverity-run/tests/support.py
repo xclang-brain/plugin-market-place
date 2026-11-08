@@ -7,6 +7,7 @@ folder that is removed afterwards.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -17,6 +18,11 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
+
+# No bytecode cache in the skill's folder: the modules imported from now on are not cached, and the cache of
+# the test module that the test runner imported first is removed when the tests end.
+sys.dont_write_bytecode = True
+atexit.register(shutil.rmtree, Path(__file__).resolve().parent / "__pycache__", True)
 
 SKILL = Path(__file__).resolve().parents[1]
 RUN = SKILL / "scripts" / "run.py"
@@ -53,19 +59,25 @@ int parse(const char *p) {
 _RUNNER: list[str] | None = None
 
 
+def script_runner(script: Path) -> list[str]:
+    """How a script of this folder is run: with uv as in real use (it reads the script's PEP 723 header),
+    else with this Python when pyyaml and jsonschema are there."""
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "run", "--native-tls", "--quiet", str(script)]
+    try:
+        import jsonschema  # noqa: F401
+        import yaml  # noqa: F401
+    except ImportError:
+        raise unittest.SkipTest("uv も、pyyaml と jsonschema のある Python もないため、スクリプトを動かせません") from None
+    return [sys.executable, str(script)]
+
+
 def runner() -> list[str]:
-    """How the scripts are run: with uv as in real use, else with this Python when pyyaml is there."""
+    """How run.py is run."""
     global _RUNNER
     if _RUNNER is None:
-        uv = shutil.which("uv")
-        if uv:
-            _RUNNER = [uv, "run", "--native-tls", "--quiet", str(RUN)]
-        else:
-            try:
-                import yaml  # noqa: F401
-            except ImportError:
-                raise unittest.SkipTest("uv も pyyaml もないため、スクリプトを動かせません") from None
-            _RUNNER = [sys.executable, str(RUN)]
+        _RUNNER = script_runner(RUN)
     return _RUNNER
 
 
@@ -245,9 +257,19 @@ class RunCase(unittest.TestCase):
         result_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         return result
 
+    @staticmethod
+    def not_applicable_in(brief: Path) -> set[str]:
+        """The criteria the reviewer brief marks as not applying to the item."""
+        found = set()
+        for line in brief.read_text(encoding="utf-8").splitlines():
+            if line.startswith("- C-") and "この警告には当てはまらない" in line:
+                found.add(line[2:].split("（", 1)[0].split(":", 1)[0])
+        return found
+
     def review_as_reviewer(self, action: dict[str, Any], outcome: str = "pass", **extra: Any) -> dict[str, Any]:
         brief = self.brief_path(action)
         out = Path(self.brief_value(brief, "確かめの結果（書く）"))
+        extra.setdefault("not_applicable", self.not_applicable_in(brief))
         review = review_json(action["item"], outcome, **extra)
         out.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
         return review
@@ -306,14 +328,25 @@ def result_json(item: str, recommendation: str = "fix", comment: str | None = No
     return data
 
 
-def review_json(item: str, outcome: str = "pass", fail: tuple[str, ...] = (), **extra: Any) -> dict[str, Any]:
+# For a standard checker in an item that was not merged: the integration, MISRA and CERT criteria do not apply.
+NOT_FOR_STANDARD = frozenset({"C-20", "C-22", "C-23"})
+
+
+def review_json(item: str, outcome: str = "pass", fail: tuple[str, ...] = (),
+                not_applicable: frozenset[str] | set[str] = NOT_FOR_STANDARD, **extra: Any) -> dict[str, Any]:
+    """A review.json as a reviewer writes it: every scope:item criterion once (those that do not apply: ok, 対象外)."""
     criteria = json.loads((SKILL / "assets" / "criteria.json").read_text(encoding="utf-8"))["criteria"]
+    if outcome == "rework" and not fail:
+        fail = ("C-12",)  # a send-back names the criterion it failed
     findings = []
     for c in criteria:
         if c["scope"] != "item":
             continue
+        if c["id"] in not_applicable:
+            findings.append({"check": c["id"], "ok": True, "detail": "対象外"})
+            continue
         ok = c["id"] not in fail
-        detail = "対象外" if c.get("applies_when") and ok else ("確かめた" if ok else "根拠の行にそのコードがない")
+        detail = "確かめた" if ok else "根拠の行にそのコードがない"
         findings.append({"check": c["id"], "ok": ok, "detail": detail, "file": "src/reader.c", "line": 6})
     data = {"item": item, "outcome": outcome, "findings": findings,
             "confidence_cap": "medium" if outcome == "flag" else None,

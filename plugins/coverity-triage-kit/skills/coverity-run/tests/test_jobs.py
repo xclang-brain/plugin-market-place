@@ -94,6 +94,8 @@ class InitialAnalysisTest(RunCase):
         self.assertTrue(out["stop"], out)
         self.assertIn("解析（cov-analyze）", out["error"])
         status = self.run_json("status", "--run", run_dir)
+        self.assertTrue(status["halted"])
+        self.assertIn("cov-analyze", status["halt_reason"])
         self.assertTrue(any(e["kind"] == "初回解析" and e["level"] == "critical" for e in status["errors"]))
         self.assertIn("失敗", status["initial"]["label"])
         del self.env["FAKE_COV_FAIL_COV_ANALYZE"]
@@ -123,6 +125,7 @@ class InitialAnalysisTest(RunCase):
         self.assertTrue(out["stop"])
         status = self.run_json("status", "--run", run_dir)
         self.assertTrue(status["stopped"])
+        self.assertFalse(status["halted"])  # a person stopped it: not a run that cannot go on
         self.assertEqual(status["stage"], "stopped")
 
 

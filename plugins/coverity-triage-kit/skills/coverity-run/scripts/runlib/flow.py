@@ -118,6 +118,12 @@ def _answer(run: Run, result: Step, say: list[str]) -> dict[str, Any]:
     current = counts(run.state)
     with run.update() as st:
         st["stage"] = result.stage
+        if result.stop and result.stage != "stopped":  # the run cannot go on until it is fixed and resumed
+            st["halted"] = True
+            st["halt_reason"] = result.error or (say[0] if say else "続けられないため止めました")
+        else:
+            st["halted"] = False
+            st["halt_reason"] = None
         st["last_tick"] = now_iso()
         if st.get("last_counts") != current:
             st["last_counts"] = current
@@ -564,7 +570,12 @@ def _save_reaped(run: Run, job: dict[str, Any], say: list[str], actions: list[di
     for warning in result.get("warnings") or []:
         say.append(f"{item_id}: {warning}")
     if run.summary_file().is_file():
-        approvals.ensure_defaults(run, {item_id: data})
+        try:
+            approvals.ensure_defaults(run, {item_id: data})
+        except RunError as exc:  # a broken approvals.json is never overwritten; summary says the same
+            with run.update() as st:
+                _alert(st, item_id, "承認", str(exc))
+            say.append(str(exc))
     report.write_item(run, item_id)
 
 
@@ -784,7 +795,7 @@ def _reviewer_ended(run: Run, item_id: str, failed: bool, reason: str, say: list
         if review is None:
             problems = [f"確かめの結果 {path} がないか、JSON として読めません（この確かめを頼んだ後に書いたものだけを使います）"]
         else:
-            problems = rules.review_check(review, item_id)["problems"]
+            problems = rules.review_check(review, item_id, *briefs.review_context(run, item))["problems"]
         if problems and (item.get("review_fix_rounds") or 0) < FIX_ROUNDS:
             with run.update() as st:
                 current = run.item(item_id, st)
@@ -934,7 +945,9 @@ def _collect_outputs(run: Run, say: list[str], actions: list[dict[str, Any]]) ->
                 _worker_ended(run, item_id, False, "", say, actions)
         elif role == "reviewer" and _settled(run.review_file(item_id), since):
             data = try_json(run.review_file(item_id))
-            if data is not None and rules.review_check(data, item_id)["ok"]:
+            item = run.find(item_id)
+            if data is not None and item is not None and \
+                    rules.review_check(data, item_id, *briefs.review_context(run, item))["ok"]:
                 _reviewer_ended(run, item_id, False, "", say, actions)
         elif role == "integrator" and _settled(run.dir / "integration" / "plan.json", since):
             plan, problems = integrate.check(run)

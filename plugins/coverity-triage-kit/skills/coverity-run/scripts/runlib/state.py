@@ -8,17 +8,15 @@ of another format (an older plugin's) is listed as foreign and never read furthe
 
 from __future__ import annotations
 
-import hashlib
 import re
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
 from . import envvars, oplog
-from .common import SCRIPTS_DIR, RunError, file_lock, now_iso, read_json, resolve_path, write_json
+from .common import RunError, file_lock, now_iso, read_json, resolve_path, write_json
 
 FORMAT = 2
 RUN_FILE = "run.json"
@@ -27,19 +25,19 @@ STATUSES = ("pending", "in_progress", "done", "error", "merged")
 SUBFOLDERS = ("items", "cid", "patches", "fixed", "work", "agents", "jobs", "schemas", "details")
 
 
-@lru_cache(maxsize=None)
+# The version of the run folder as these scripts write and read it. Raise it (by hand) only when the
+# meaning or the form of a run folder changes, so that a run made by older scripts is not changed by
+# newer ones; fixes that keep the run folder as it was do not raise it.
+TOOL_VERSION = "1"
+
+
 def tool_version() -> str:
-    """The version of these scripts: a hash of run.py and runlib/*.py (line ends ignored)."""
-    digest = hashlib.sha256()
-    for path in sorted([SCRIPTS_DIR / "run.py", *(SCRIPTS_DIR / "runlib").glob("*.py")], key=lambda p: p.name):
-        digest.update(path.name.encode())
-        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
-    return digest.hexdigest()[:16]
+    return TOOL_VERSION
 
 
 def new_item(item_id: str, cids: list[int], **extra: Any) -> dict[str, Any]:
     item = {"id": item_id, "cids": list(cids), "status": "pending", "merged_into": None, "review": None,
-            "applied": {}, "slot": None, "stage": None, "attempts": 0, "stale_retries": 0, "error": "",
+            "slot": None, "stage": None, "attempts": 0, "stale_retries": 0, "error": "",
             "started": None, "seconds": None, "split_from": None, "cluster": None, "fix_rounds": 0,
             "merged_from": [], "review_rounds": 0, "review_gen": 0, "review_fix_rounds": 0, "rework": [],
             "warnings": [], "repo_fingerprint": None, "result_sha": None}
@@ -171,7 +169,8 @@ def create_run(output: Path, state: dict[str, Any]) -> Run:
     for sub in SUBFOLDERS:
         (folder / sub).mkdir(parents=True, exist_ok=True)
     full = {"format": FORMAT, "tool_version": tool_version(), "run_id": run_id, "created_at": now_iso(),
-            "stopped": False, "stopped_at": None, "finished": False, "finished_at": None, **state}
+            "stopped": False, "stopped_at": None, "finished": False, "finished_at": None, "halted": False,
+            "halt_reason": None, **state}
     write_json(folder / RUN_FILE, full)
     return Run(folder)
 

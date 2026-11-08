@@ -13,7 +13,6 @@ from .config import load_no_grouping
 from .state import Run, new_item
 
 HUNK = re.compile(rb"^@@ -(\d+)(?:,(\d+))? ", re.MULTILINE)
-ORDER = rules.ORDER
 
 
 def changed_ranges(patch: Path) -> dict[str, list[tuple[int, int]]]:
@@ -96,18 +95,12 @@ def plan_items(run: Run) -> dict[str, dict[str, Any]]:
 
 
 def check(run: Run) -> tuple[dict[str, Any] | None, list[str]]:
-    """The plan and its problems (the contract rules, and the deviation comment rules of each merge)."""
+    """The plan and its problems (the contract "plan", which also holds the comment rules of each merge)."""
     path = run.dir / "integration" / "plan.json"
     plan = read_json(path, {}) if path.is_file() else None
     if plan is None:
         return None, [f"計画のファイル {path} がありません"]
-    checked = rules.plan_check(plan, plan_items(run))
-    problems = list(checked["problems"])
-    if checked["ok"]:
-        for n, merge in enumerate(plan.get("merges") or [], 1):
-            comment = ((merge.get("result") or {}).get("deviation") or {}).get("comment")
-            problems += [f"merges[{n}].result.deviation.comment: {p['message']}" for p in rules.comment_problems(comment)]
-    return plan, problems
+    return plan, rules.plan_check(plan, plan_items(run))["problems"]
 
 
 def apply(run: Run, plan: dict[str, Any], state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -128,13 +121,9 @@ def apply(run: Run, plan: dict[str, Any], state: dict[str, Any]) -> tuple[list[d
                 src = run.item_dir(member) / f"issue-{cid}.json"
                 if src.is_file():
                     (folder / src.name).write_bytes(src.read_bytes())
-        lowest = min((read_json(run.result_file(m), {}).get("confidence", "low") for m in members),
-                     key=lambda c: ORDER.get(c, 0))
         result = dict(merge["result"])
         result.pop("item", None)
         result.pop("group_excluded_cids", None)
-        if ORDER.get(result.get("confidence"), 0) > ORDER.get(lowest, 0):
-            result["confidence"] = lowest
         merged_info[new_id] = {"members": members, "reason": merge["reason"], "fix_source": merge["fix_source"],
                                "result": result}
         cids = [c for m in members for c in items[m]["cids"]]

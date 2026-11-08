@@ -66,7 +66,8 @@ class ReviewTest(RunCase):
             self.assertTrue(checks[cid]["ok"], checks[cid])
         by_id = {c["id"]: c for c in summary["criteria_results"]}
         self.assertEqual(by_id["C-01"]["passed"], 2)
-        self.assertEqual(by_id["C-21"]["not_applicable"], 2)
+        self.assertEqual(by_id["C-21"]["passed"], 2)  # standard checkers: C-21 applies
+        self.assertEqual(by_id["C-22"]["not_applicable"], 2)  # the MISRA criterion does not
         self.assertEqual(by_id["C-25"]["passed"], 1)
         status = self.run_json("status", "--run", run_dir)
         review = next(i for i in status["items"] if i["id"] == "20002")["review"]

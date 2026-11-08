@@ -164,7 +164,7 @@ def item_data(run: Run, item_id: str, decided: dict[str, dict[str, Any]] | None 
     raw = read_json(run.result_file(item_id), {})
     review = assess.shown_review(item, try_json(run.review_file(item_id)) if item.get("review") else None)
     verify = (try_json(run.dir / "verify.json") or {}).get(item_id) if (run.dir / "verify.json").is_file() else None
-    result = assess.effective(raw, review if review and review.get("outcome") != "unverified" else None, verify)
+    result = assess.effective(raw, assess.review_for_confidence(review), verify)
     decided = approvals.load(run) if decided is None else decided
     return {"id": item_id, "item": item, "issues": found, "events": events, "description": description,
             "notes": notes + list(item.get("warnings") or []), "result": result, "raw": raw,
@@ -178,8 +178,7 @@ def shown_result(run: Run, item: dict[str, Any], verify: dict[str, Any] | None =
     if not isinstance(raw, dict):
         return None
     review = assess.shown_review(item, try_json(run.review_file(item["id"])) if item.get("review") else None)
-    return assess.effective(raw, review if review and review.get("outcome") != "unverified" else None,
-                            (verify or {}).get(item["id"]))
+    return assess.effective(raw, assess.review_for_confidence(review), (verify or {}).get(item["id"]))
 
 
 def _deviation_shown(result: dict[str, Any], decision: dict[str, Any] | None) -> tuple[dict[str, str], bool]:

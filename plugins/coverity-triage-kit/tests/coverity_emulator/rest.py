@@ -155,6 +155,17 @@ def _known_keys(store: Store, column: str) -> list[str] | None:
     return None
 
 
+def _check_key(store: Store, column: str, matcher: dict) -> None:
+    """A keyMatcher with a value the server does not know is refused (the whole request, as the real server does)."""
+    if matcher.get("type") in ("idMatcher", "nameMatcher", "dateMatcher"):
+        return
+    key = matcher.get("key")
+    known = _known_keys(store, column)
+    if known is not None and key not in known and not (
+            column == "checker" and re.match(r"^(MISRA C|CERT |AUTOSAR )", str(key))):
+        raise InvalidKey(str(key))
+
+
 def _matches(store: Store, view: dict, column: str, matcher: dict) -> bool:
     kind = matcher.get("type")
     if kind == "idMatcher":
@@ -172,10 +183,7 @@ def _matches(store: Store, view: dict, column: str, matcher: dict) -> bool:
         from .state import parse_time
         return view["_firstDetected"] >= parse_time(date)
     key = matcher.get("key")
-    known = _known_keys(store, column)
-    if known is not None and key not in known and not (
-            column == "checker" and re.match(r"^(MISRA C|CERT |AUTOSAR )", str(key))):
-        raise InvalidKey(str(key))
+    _check_key(store, column, matcher)
     if column == "displayIssueKind":
         return key in view["_kinds"]
     return view.get(column) == key or (column == "cid" and str(view.get("cid")) == str(key))
@@ -255,6 +263,8 @@ def search(store: Store, query: dict, body: Any, user: str) -> Response:
         matchers = f.get("matchers") or []
         if mode not in ("oneOrMoreMatch", "noneMatch"):
             raise ApiError(400, 1006, f"Invalid matchMode: {mode}")
+        for m in matchers:  # every value is checked, not only those reached while matching (any() stops early)
+            _check_key(store, column, m)
         kept = []
         for v in views:
             hit = any(_matches(store, v, column, m) for m in matchers)

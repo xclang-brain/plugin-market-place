@@ -16,7 +16,8 @@ ISSUES = [issue(20001, line=6), issue(20002, checker="RESOURCE_LEAK", function="
           issue(20003, checker="INTEGER_OVERFLOW", function="parse", line=21),
           issue(20004, checker="INTEGER_OVERFLOW", function="parse", line=22)]
 
-STATUS_KEYS = {"ok", "run_id", "run_dir", "repo_root", "stage", "stage_label", "finished", "stopped", "has_summary",
+STATUS_KEYS = {"ok", "run_id", "run_dir", "repo_root", "stage", "stage_label", "finished", "stopped", "halted",
+               "halt_reason", "has_summary",
                "review", "integration", "max_rework", "parallel", "counts", "items", "running_tasks", "errors", "recent",
                "initial", "progress", "run_checks", "criteria", "criteria_results", "issues_found"}
 ITEM_KEYS = {"id", "cids", "checker", "status", "phase", "note", "elapsed_seconds", "stalled", "preparing_copy",
@@ -125,6 +126,19 @@ class FinishedRunTest(unittest.TestCase):
         state = json.loads((self.folder / "run.json").read_text(encoding="utf-8"))
         self.assertEqual(validate(state, "run.schema.json"), [])
         self.assertEqual(state["format"], 2)
+        self.assertEqual(state["tool_version"], "1")
+        self.assertEqual((state["halted"], state["halt_reason"]), (False, None))
+        self.assertTrue(all("applied" not in i for i in state["items"]))  # what was applied is not the run's record
+        import_runlib()
+        from runlib import schema
+
+        job_schema = {"$defs": schema.load("run.schema.json")["$defs"], "$ref": "#/$defs/job"}  # jobs/<name>.json
+        jobs = sorted((self.folder / "jobs").glob("*.json"))
+        self.assertTrue(jobs)
+        for path in jobs:
+            self.assertEqual(schema.Validator(job_schema).errors(json.loads(path.read_text(encoding="utf-8"))), [], path.name)
+        broken = {"name": "x", "kind": "copy", "status": "lost", "pid": "1", "started": "t", "args": {}}
+        self.assertTrue(schema.Validator(job_schema).errors(broken))
         status = self.run_json("status", "--run", self.run_dir)
         self.assertEqual(set(status) - {"stale_seconds"}, STATUS_KEYS)
         self.assertEqual(set(status["counts"]), {"pending", "in_progress", "done", "error", "merged", "total"})
@@ -151,6 +165,16 @@ class FinishedRunTest(unittest.TestCase):
         patch.write_text(patch.read_text(encoding="utf-8") + "diff --git a/src/other.c b/src/other.c\n", encoding="utf-8")
         again = self.run_json("summary", "--run", self.run_dir)
         self.assertFalse({c["id"]: c["ok"] for c in again["run_checks"]}["C-27"])
+
+    def test_z_broken_approvals_is_never_written_over(self) -> None:
+        path = self.folder / "approvals.json"
+        for text in ('{"version": 1, "items": {"20001": {"decision": "reject", "edited": true}', '{"version": 1, "items": []}'):
+            path.write_text(text, encoding="utf-8")
+            out = self.run_json("summary", "--run", self.run_dir, ok=False)
+            self.assertIn("承認のファイル", out["error"])
+            self.assertIn(str(path), out["error"])
+            self.assertEqual(out["approvals_file"], str(path))
+            self.assertEqual(path.read_text(encoding="utf-8"), text)  # the person's choices are kept as they were
 
     def test_4_note_issue(self) -> None:
         self.run_json("note-issue", "--run", self.run_dir, "--title", "経路が取れない", "--body", "2 回失敗した")
@@ -269,7 +293,10 @@ class CommandsTest(RunCase):
         for section in ("## フォルダとファイル", "## 守ること", "## 警告", "## 返す形", "★"):
             self.assertIn(section, brief)
         self.assertIn("schemas/result.schema.json".replace("/", "/"), brief.replace("\\", "/"))
-        self.assertNotRegex(brief, r"triage-|checker-knowledge|code-fix|deviation-comment|coverity-")
+        # The brief names no part: no `kebab-case` name in backquotes (only paths and file names), no /command.
+        for quoted in re.findall(r"`([^`]+)`", brief):
+            self.assertNotRegex(quoted, r"^[a-z0-9]+(-[a-z0-9]+)+$", quoted)
+        self.assertNotRegex(brief, r"(^|\s)/[a-z][a-z0-9-]+(\s|$)")
         self.assertIn("`20001: <推奨（修正 か 逸脱）>（確信度 <高 / 中 / 低>）— <40 文字ほどの要約>`", brief)
 
 

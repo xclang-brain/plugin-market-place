@@ -2,13 +2,15 @@
 
 The default is the recommendation, except a fix with nothing to take in (the latest revision is already
 fixed, so there is no diff), which is null (not applied). Existing entries are never changed: only
-missing items are added. A human's choice always stays.
+missing items are added. A human's choice always stays: a file that cannot be read or does not have the
+form of assets/approvals.schema.json is never written over (the command fails and names the file).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from . import schema
 from .common import RunError, file_lock, now_iso, read_json, write_json
 from .state import Run
 
@@ -29,7 +31,7 @@ def load(run: Run) -> dict[str, dict[str, Any]]:
         return {}
     items = data.get("items") if isinstance(data, dict) else None
     out = {}
-    for key, entry in (items or {}).items():
+    for key, entry in (items if isinstance(items, dict) else {}).items():
         if not isinstance(entry, dict):
             continue
         entry = dict(entry)
@@ -48,14 +50,28 @@ def default_decision(run: Run, item_id: str, result: dict[str, Any]) -> str | No
     return result.get("recommendation")
 
 
+def broken(file) -> RunError:
+    return RunError(f"承認のファイル {file} が壊れているため、書き換えません（人が選んだ承認を消さないため）。"
+                    "ファイルを直すか、選んだ承認が要らなければファイルを消してから、もう一度動かしてください",
+                    approvals_file=str(file))
+
+
 def ensure_defaults(run: Run, results: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Add the recommendation for finished items that have no entry yet; keep every existing entry."""
-    with file_lock(path(run)):
-        try:
-            data = read_json(path(run), {})
-        except RunError:
-            data = {}
-        if not isinstance(data, dict) or not isinstance(data.get("items"), dict):
+    """Add the recommendation for finished items that have no entry yet; keep every existing entry.
+    A broken approvals.json is refused (RunError), never replaced."""
+    file = path(run)
+    with file_lock(file):
+        if file.is_file():
+            try:
+                data = read_json(file)
+            except RunError:
+                raise broken(file) from None
+            problems = schema.validate(data, "approvals.schema.json")
+            if problems:
+                error = broken(file)
+                error.details["problems"] = problems
+                raise error
+        else:
             data = {"version": VERSION, "updated_at": now_iso(), "items": {}}
         items = data["items"]
         added = False
@@ -64,10 +80,9 @@ def ensure_defaults(run: Run, results: dict[str, dict[str, Any]]) -> dict[str, d
                 items[item_id] = {"decision": default_decision(run, item_id, result), "edited": False,
                                   "updated_at": now_iso()}
                 added = True
-        if added or not path(run).is_file():
-            data["version"] = data.get("version", VERSION)
+        if added or not file.is_file():
             data["updated_at"] = now_iso()
-            write_json(path(run), data)
+            write_json(file, data)
     return load(run)
 
 

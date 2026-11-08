@@ -1,0 +1,592 @@
+{
+ "version": 1,
+ "contract": "confidence",
+ "cases": [
+  {
+   "name": "worker_only_high",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "worker_only_medium",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "medium"
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "worker_only_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "low"
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "worker_confidence_missing_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ"
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "worker_confidence_unknown_value_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "sure"
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "pass_without_cap_keeps_worker",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "pass",
+     "findings": [],
+     "confidence_cap": null,
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "pass_with_cap_lowers",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "pass",
+     "findings": [],
+     "confidence_cap": "medium",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "flag_with_cap_medium",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": "medium",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "flag_cap_never_raises",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "medium"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": "high",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "flag_cap_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": "low",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "flag_without_cap_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": null,
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "rework_without_cap_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "rework",
+     "findings": [],
+     "confidence_cap": null,
+     "rework": [
+      "根拠の行を直す"
+     ],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "rework_with_cap_medium",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "rework",
+     "findings": [],
+     "confidence_cap": "medium",
+     "rework": [
+      "根拠の行を直す"
+     ],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "flag_with_unknown_cap_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": "huge",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "pass_with_unknown_cap_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "pass",
+     "findings": [],
+     "confidence_cap": "huge",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "worker_low_cap_high_stays_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "low"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "pass",
+     "findings": [],
+     "confidence_cap": "high",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "fix_build_ok_keeps",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": true,
+     "problems": []
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "fix_build_failed_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": false,
+     "problems": [
+      "ビルドエラーが、この修正案の変えたファイルで出ています"
+     ]
+    }
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "fix_warning_left_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "medium"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "pass",
+     "findings": [],
+     "confidence_cap": null,
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": {
+     "mode": "build+analyze",
+     "batch": true,
+     "applied": true,
+     "build_ok": true,
+     "remaining_cids": [
+      20001
+     ],
+     "problems": [
+      "警告が残っています: CID [20001]"
+     ]
+    }
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "fix_build_failed_without_text_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": false,
+     "problems": []
+    }
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "fix_not_checked_keeps",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": null,
+     "problems": [],
+     "note": "ほかの修正案のビルドエラーのため、この修正案は確かめられませんでした"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "fix_not_applied_keeps",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": false,
+     "build_ok": null,
+     "problems": [],
+     "note": "ほかの修正案と同じ箇所を変えているため、まとめた確かめに入れられませんでした"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "deviation_build_failed_keeps",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "deviation",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": false,
+     "problems": [
+      "ビルドエラーが、この修正案の変えたファイルで出ています"
+     ]
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "deviation_flag_cap_medium",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "deviation",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": "medium",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": false,
+     "problems": [
+      "ビルドエラーが、この修正案の変えたファイルで出ています"
+     ]
+    }
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "fix_cap_medium_and_build_failed_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "outcome": "flag",
+     "findings": [],
+     "confidence_cap": "medium",
+     "rework": [],
+     "note": "根拠の行を確かめた"
+    },
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": false,
+     "problems": [
+      "ビルドエラーが、この修正案の変えたファイルで出ています"
+     ]
+    }
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "review_null_verify_null",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "deviation",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "medium"
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  }
+ ]
+}

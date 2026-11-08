@@ -1,13 +1,17 @@
 """部品の間の取り決めを確かめる試験（憲章 第25条4項・5項、仕様 REQ-003、REQ-004、REQ-103、REQ-107、設計書 4.17、8.4、9.1「取り決め」）。
 
-- 写し：設計書 4.17 の取り決めのファイルは、持ち主の写しと、ほかの部品の写しが同じバイト列。
-  決まった部品（4.17 の「写しを持つ部品」）が写しを持つ。共通の試験のデータ（cases.json）の形。
+- 写し（設計書 4.17）：取り決めのファイル（データ・持ち主のスクリプト・共通の試験のデータ）は、持ち主のものと、
+  ほかの部品の写しが同じバイト列。写しは、部品のフォルダの中を「ファイルの名前」で探す（表に書いた部品のほかに
+  同じ名前のファイルを持つ部品も、写しとして確かめる）。表の「写しを持つ部品」に写しがなければ、理由を書いて飛ばす。
+  スクリプトの写しは、写す側が読み込んで使い（自分で書き直さない）、要るライブラリを写す側が持ち、
+  探すデータ（assets/ のファイル）を写す側も同じ場所に持つ。
 - 中身：plan.schema.json の中の結果の定義が、result.schema.json の $defs と同じ。評価基準 C-01〜C-28 の分け方（4.6）。
-  確認の文字列の試験のデータが、4.10 の決まりで計算した値と合う。
+  確認の文字列の試験のデータが、4.10 の決まりと、持ち主の確認の文字列の関数（とその写し）で計算した値と合う。
 - defaults.json：役割（roles）と統括エージェント（orchestrator）が、統括エージェントの「使う部品」の表と、役割の言葉に合う。
   コマンドの場所とスキルがある。
 - 書く部品と読む部品：MCP サーバーの偽の Coverity（api: fake）が書いた issues.json・issue-<CID>.json を、
-  一括実行のコマンドが受け付けて作業を始める。MCP サーバーの確認の文字列が、反映の計画のファイルのバイト列から決まる。
+  一括実行のコマンドが受け付けて作業を始める。真偽の調査のスクリプトが issue-<CID>.json を読める。
+  MCP サーバーの確認の文字列が、反映の計画のファイルのバイト列から決まる（計画のファイルの case を MCP サーバーで）。
 
 部品の名前は書かない。部品は、役割の名前で表に書き、docs/replace.md の「## 今の部品」の表で今の名前に直す。
 ないものは、理由を書いて飛ばす。
@@ -16,7 +20,9 @@
 環境変数：SKIP_SLOW_TESTS=1 で、部品を動かして確かめる試験を飛ばす。
 """
 
+import ast
 import hashlib
+import importlib.util
 import json
 import os
 import queue
@@ -35,26 +41,49 @@ TESTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TESTS / "structure"))
 import plugin_parts as pp  # noqa: E402
 
-# 取り決めのファイル（設計書 4.17）。ここだけに、取り決めのファイルの名前を書く。
-# （ファイル, 持ち主の役割, 写しを持つ部品の役割）。役割の名前は docs/replace.md の「今の部品」の表と同じ
-OWNERS = [
-    ("result.schema.json", "結果の記録", ["一括実行", "結果と設定の画面"]),
-    ("review.schema.json", "結果の確かめ", ["一括実行"]),
-    ("criteria.json", "結果の確かめ", ["一括実行"]),
-    ("plan.schema.json", "同じ原因の統合", ["一括実行"]),
-    ("run.schema.json", "一括実行", ["反映", "結果と設定の画面", "困ったとき", "自己診断"]),
-    ("approvals.schema.json", "一括実行", ["反映", "結果と設定の画面"]),
-    ("contract/comment/cases.json", "逸脱コメント", ["結果の記録", "一括実行"]),
-    ("contract/result/cases.json", "結果の記録", ["一括実行"]),
-    ("contract/lint/cases.json", "結果の確かめ", ["一括実行"]),
-    ("contract/plan/cases.json", "同じ原因の統合", ["一括実行"]),
-    ("contract/yaml-edit/cases.json", "準備", ["結果と設定の画面"]),
-    ("contract/token/cases.json", "反映", ["Coverity との通信"]),
+# 取り決めのファイル（設計書 4.17 の表）。ここだけに、取り決めのファイルの名前を書く。
+# （持ち主のフォルダの中のパス, 持ち主の役割, 写しを持つ部品の役割）。役割の名前は docs/replace.md の「今の部品」の表と同じ。
+# 写しの置き場所：データは assets/、スクリプトは scripts/（MCP サーバーはパッケージ src/<パッケージ>/）、
+# 共通の試験のデータは assets/contract/（MCP サーバーは tests/contract/）。
+CONTRACTS = [
+    # 結果の形・確かめの形と評価基準・統合の計画の形（データ）
+    ("assets/result.schema.json", "結果の記録", ["一括実行", "同じ原因の統合", "結果と設定の画面"]),
+    ("assets/review.schema.json", "結果の確かめ", ["一括実行"]),
+    ("assets/criteria.json", "結果の確かめ", ["一括実行"]),
+    ("assets/plan.schema.json", "同じ原因の統合", ["一括実行"]),
+    # 逸脱コメントの決まり
+    ("scripts/check_comment.py", "逸脱コメント", ["結果の記録", "同じ原因の統合", "一括実行"]),
+    ("assets/contract/comment/cases.json", "逸脱コメント", ["結果の記録", "同じ原因の統合", "一括実行"]),
+    # 結果の決まり
+    ("scripts/check_result.py", "結果の記録", ["一括実行"]),
+    ("assets/contract/result/cases.json", "結果の記録", ["一括実行"]),
+    # 確かめの決まり・機械的な確かめ
+    ("scripts/check_review.py", "結果の確かめ", ["一括実行"]),
+    ("scripts/lint_result.py", "結果の確かめ", ["一括実行"]),
+    ("assets/contract/lint/cases.json", "結果の確かめ", ["一括実行"]),
+    # 統合の計画の決まり
+    ("scripts/check_plan.py", "同じ原因の統合", ["一括実行"]),
+    ("assets/contract/plan/cases.json", "同じ原因の統合", ["一括実行"]),
+    # 人に見せる確信度
+    ("scripts/confidence.py", "一括実行", ["反映", "結果と設定の画面"]),
+    ("assets/contract/confidence/cases.json", "一括実行", ["反映", "結果と設定の画面"]),
+    # 注釈を残す書き換え
+    ("scripts/yamledit.py", "準備", ["結果と設定の画面"]),
+    ("assets/contract/yaml-edit/cases.json", "準備", ["結果と設定の画面"]),
+    # 確認の文字列
+    ("scripts/plantoken.py", "反映", ["Coverity との通信"]),
+    ("assets/contract/token/cases.json", "反映", ["Coverity との通信"]),
+    # 実行フォルダと承認の形
+    ("assets/run.schema.json", "一括実行", ["反映", "結果と設定の画面", "自己診断", "困ったとき"]),
+    ("assets/approvals.schema.json", "一括実行", ["反映", "結果と設定の画面", "自己診断"]),
 ]
 LINT_CODES = {"evidence_missing_file", "evidence_line_out_of_range", "undetermined_high", "drift_high",
               "true_bug_deviation", "not_bug_fix", "no_evidence"}
+CONFIDENCES = {"high", "medium", "low"}
 MIN_CASES = 8
 SLOW = os.environ.get("SKIP_SLOW_TESTS") == "1"
+# PEP 723 / pyproject.toml の名前と、import の名前が違うライブラリ
+IMPORT_NAMES = {"pyyaml": "yaml", "beautifulsoup4": "bs4", "pillow": "PIL"}
 
 
 # ---------------------------------------------------------------------------
@@ -70,81 +99,281 @@ def part_folder(role):
     return None
 
 
+def role_of(folder):
+    for row in pp.current_parts():
+        if (pp.ROOT / row["place"]).resolve() == Path(folder).resolve():
+            return row["role"]
+    return None
+
+
+def part_folders():
+    """取り決めのファイルを持ちうる部品のフォルダ（スキルと MCP サーバー）"""
+    return [pp.SKILLS_DIR / n for n in pp.skill_names()] + pp.mcp_dirs()
+
+
+def kind_of(contract):
+    if re.search(r"(^|/)contract/[^/]+/cases\.json$", contract):
+        return "cases"
+    return "script" if contract.endswith(".py") else "data"
+
+
+def contract_name(contract):
+    """共通の試験のデータの名前（assets/contract/<名前>/cases.json の <名前>）"""
+    return Path(contract).parts[-2]
+
+
 def copies_in(folder, contract):
-    """部品のフォルダの中の、取り決めのファイルの写し（スキルは assets/ の下、MCP サーバーは tests/ の下）"""
+    """部品のフォルダの中の、取り決めのファイルの写し（ファイルの名前で探す）。
+    スクリプトは scripts/ と src/ の下、データは assets/ の下（assets/contract/ を除く）、
+    共通の試験のデータ（contract/<名前>/cases.json）は assets/ と tests/ の下。evals/ と作られたものは見ない"""
+    folder = Path(folder)
+    kind, name = kind_of(contract), Path(contract).name
+    bases = {"script": ("scripts", "src"), "data": ("assets",), "cases": ("assets", "tests")}[kind]
+    tail = "/".join(Path(contract).parts[-3:])
     found = []
-    name = Path(contract).name
-    for base in (folder / "assets", folder / "tests"):
-        if not base.is_dir():
+    for base in bases:
+        top = folder / base
+        if not top.is_dir():
             continue
-        for path in base.rglob(name):
-            if path.is_file() and not pp.skipped(path, folder) and path.as_posix().endswith(contract):
-                found.append(path)
+        for path in top.rglob(name):
+            if not path.is_file() or pp.skipped(path, folder):
+                continue
+            inner = path.relative_to(folder).parts
+            if kind == "cases" and not path.as_posix().endswith("/" + tail):
+                continue
+            if kind == "data" and "contract" in inner:
+                continue
+            found.append(path)
     return sorted(found)
 
 
-def all_copies(contract):
-    folders = [pp.SKILLS_DIR / n for n in pp.skill_names()] + pp.mcp_dirs()
-    out = []
-    for folder in folders:
-        out += copies_in(folder, contract)
-    return out
+def owner_copy(contract, role):
+    """持ち主のファイル（持ち主のフォルダの決まった場所）。なければ None"""
+    folder = part_folder(role)
+    if folder is None:
+        return None
+    path = folder / contract
+    return path if path.is_file() else None
+
+
+def contract_by_name(name):
+    """共通の試験のデータの名前 → (contract, 持ち主の役割, 写しを持つ部品の役割)"""
+    for contract, owner, holders in CONTRACTS:
+        if kind_of(contract) == "cases" and contract_name(contract) == name:
+            return contract, owner, holders
+    return None
+
+
+def cases_path(name):
+    """持ち主の共通の試験のデータ（なければ、どれかの写し）"""
+    entry = contract_by_name(name)
+    if entry is None:
+        return None
+    contract, owner, _ = entry
+    path = owner_copy(contract, owner)
+    if path is not None:
+        return path
+    for folder in part_folders():
+        found = copies_in(folder, contract)
+        if found:
+            return found[0]
+    return None
 
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def owner_copy(contract, role):
-    folder = part_folder(role)
-    if folder is None:
-        return None
-    paths = copies_in(folder, contract)
-    return paths[0] if paths else None
+def declared_libraries(folder):
+    """写す側の部品が持つ（uv が用意する）ライブラリの import の名前。
+    スキル：scripts/ の直下の .py の PEP 723 の dependencies。MCP サーバー：pyproject.toml の [project] の dependencies"""
+    names = set()
+    specs = []
+    for path in sorted((Path(folder) / "scripts").glob("*.py")) if (Path(folder) / "scripts").is_dir() else []:
+        block = re.search(r"(?ms)^# /// script\s*$(.*?)^# ///\s*$", pp.read(path))
+        if block:
+            body = "\n".join(line[1:].lstrip() if line.startswith("#") else line for line in block.group(1).splitlines())
+            m = re.search(r"(?s)dependencies\s*=\s*\[(.*?)\]", body)
+            if m:
+                specs += re.findall(r"[\"']([^\"']+)[\"']", m.group(1))
+    pyproject = Path(folder) / "pyproject.toml"
+    if pyproject.is_file():
+        m = re.search(r"(?ms)^\[project\].*?^dependencies\s*=\s*\[(.*?)\]", pp.read(pyproject))
+        if m:
+            specs += re.findall(r"[\"']([^\"']+)[\"']", m.group(1))
+    for spec in specs:
+        base = re.split(r"[\s<>=!~;\[]", spec.strip(), maxsplit=1)[0].lower()
+        names.add(IMPORT_NAMES.get(base, base.replace("-", "_")))
+    return names
+
+
+def required_imports(path):
+    """スクリプトが読み込む、標準ライブラリでないモジュール（try … except ImportError の中のものは除く）。
+    相対 import は、(None, 文) で返す"""
+    tree = ast.parse(pp.read(path))
+    optional = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try) and any(
+                isinstance(h.type, ast.Name) and h.type.id in ("ImportError", "ModuleNotFoundError") or
+                isinstance(h.type, ast.Tuple) and any(getattr(e, "id", None) in ("ImportError", "ModuleNotFoundError") for e in h.type.elts)
+                for h in node.handlers):
+            for inner in node.body:
+                optional |= {id(n) for n in ast.walk(inner)}
+    out = []
+    for node in ast.walk(tree):
+        if id(node) in optional:
+            continue
+        if isinstance(node, ast.Import):
+            out += [(a.name.split(".")[0], f"import {a.name}") for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                out.append((None, f"from {'.' * node.level}{node.module or ''} import …"))
+            elif node.module:
+                out.append((node.module.split(".")[0], f"from {node.module} import …"))
+    return [(name, text) for name, text in out if name is None or name not in sys.stdlib_module_names]
+
+
+def asset_names(path):
+    """スクリプトが自分の部品の assets/ から探すファイルの名前（文の中の "….json" など）"""
+    text = pp.read(path)
+    if "assets" not in text:
+        return set()
+    return set(re.findall(r"[\"']([\w.-]+\.(?:json|ya?ml|md|txt))[\"']", text))
+
+
+def import_module(path, label):
+    spec = importlib.util.spec_from_file_location(f"contract_copy_{label}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class CopiesTest(unittest.TestCase):
-    """設計書 4.17：写しは持ち主と同じバイト列"""
+    """設計書 4.17：写しは持ち主と同じバイト列。決まった部品が写しを持ち、使う"""
 
-    def test_replace_doc_names_the_owners(self):
+    def test_replace_doc_names_the_roles(self):
         if not pp.REPLACE_DOC.is_file():
             self.skipTest("docs/replace.md がまだありません")
         roles = {row["role"] for row in pp.current_parts()}
-        needed = {role for _, owner, holders in OWNERS for role in [owner] + holders}
+        needed = {role for _, owner, holders in CONTRACTS for role in [owner] + holders}
         self.assertEqual(sorted(needed - roles), [], "docs/replace.md の「今の部品」の表に、取り決めの役割がありません")
 
-    def test_copies_are_identical(self):
+    def test_owners_have_their_files(self):
         problems, checked = [], 0
-        for contract, owner, _ in OWNERS:
-            paths = all_copies(contract)
-            if len(paths) < 2:
-                continue
-            canonical = owner_copy(contract, owner) or paths[0]
-            for path in paths:
-                checked += 1
-                if path.read_bytes() != canonical.read_bytes():
-                    problems.append(f"{pp.rel(path)} が {pp.rel(canonical)}（持ち主：{owner}）と違います")
-        if not checked:
-            self.skipTest("写しがまだありません")
-        self.assertEqual(problems, [], "取り決めの写しが、持ち主のものと違います（持ち主の写しをそのままコピーしてください）：\n" + "\n".join(problems))
-
-    def test_owners_and_holders_have_the_files(self):
-        problems, checked = [], 0
-        for contract, owner, holders in OWNERS:
-            owner_dir = part_folder(owner)
-            if owner_dir is None:
+        for contract, owner, _ in CONTRACTS:
+            folder = part_folder(owner)
+            if folder is None:
                 continue
             checked += 1
-            if not copies_in(owner_dir, contract):
-                problems.append(f"持ち主（{owner}：{pp.rel(owner_dir)}）に {contract} がありません")
-                continue
-            for holder in holders:
-                folder = part_folder(holder)
-                if folder is not None and not copies_in(folder, contract):
-                    problems.append(f"{holder}（{pp.rel(folder)}）に {contract} の写しがありません")
+            if owner_copy(contract, owner) is None:
+                problems.append(f"持ち主（{owner}：{pp.rel(folder)}）に {contract} がありません")
         if not checked:
             self.skipTest("取り決めの持ち主の部品がまだありません")
-        self.assertEqual(problems, [], "取り決めのファイルが足りません（設計書 4.17）：\n" + "\n".join(problems))
+        self.assertEqual(problems, [], "取り決めの持ち主のファイルがありません（設計書 4.17）：\n" + "\n".join(problems))
+
+    def test_every_copy_is_identical(self):
+        """部品のフォルダの中の、同じ名前のファイルは、どれも持ち主のものと同じバイト列"""
+        problems, checked = [], 0
+        for contract, owner, _ in CONTRACTS:
+            canonical = owner_copy(contract, owner)
+            if canonical is None:
+                continue
+            for folder in part_folders():
+                for path in copies_in(folder, contract):
+                    if path.resolve() == canonical.resolve():
+                        continue
+                    checked += 1
+                    if path.read_bytes() != canonical.read_bytes():
+                        problems.append(f"{pp.rel(path)} が {pp.rel(canonical)}（持ち主：{owner}）と違います")
+        if not checked:
+            self.skipTest("写しがまだありません")
+        self.assertEqual(problems, [], "取り決めの写しが、持ち主のものと違います（持ち主のファイルをそのままコピーしてください。"
+                                       "手順は docs/replace.md の「取り決めの写し」）：\n" + "\n".join(problems))
+
+    def test_holders_have_their_copies(self):
+        """設計書 4.17 の「写しを持つ部品」が写しを持つ。まだない写しは、理由を書いて飛ばす（ほかの人が作っている途中のことがある）"""
+        for contract, owner, holders in CONTRACTS:
+            for holder in holders:
+                with self.subTest(contract=contract, holder=holder):
+                    folder = part_folder(holder)
+                    if folder is None:
+                        self.skipTest(f"{holder} の部品がまだありません")
+                    if not copies_in(folder, contract):
+                        self.skipTest(f"{holder}（{pp.rel(folder)}）に {contract} の写しがまだありません"
+                                      f"（持ち主：{owner}。docs/replace.md の手順でコピーしてください）")
+
+    def test_copies_are_listed(self):
+        """同じ名前のファイルを持つ部品は、表（設計書 4.17）の持ち主か写しを持つ部品"""
+        problems = []
+        for contract, owner, holders in CONTRACTS:
+            for folder in part_folders():
+                if copies_in(folder, contract) and role_of(folder) not in [owner] + holders:
+                    problems.append(f"{pp.rel(folder)}（{role_of(folder) or '表にない部品'}）が {contract} の写しを持っていますが、"
+                                    "設計書 4.17 の表と、この試験の CONTRACTS にありません")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_copies_are_placed_like_the_owner(self):
+        """写しは持ち主と同じ名前で、データは assets/、スクリプトは scripts/（MCP サーバーは src/ の下）に置く。
+        自分の部品の assets/ を探すスクリプトは、持ち主と同じ場所（scripts/ の直下）に置き、探すファイルを写す側も持つ"""
+        problems = []
+        for contract, owner, _ in CONTRACTS:
+            canonical = owner_copy(contract, owner)
+            if canonical is None or kind_of(contract) != "script":
+                continue
+            wanted = asset_names(canonical)
+            for folder in part_folders():
+                for path in copies_in(folder, contract):
+                    if path.resolve() == canonical.resolve():
+                        continue
+                    inner = path.relative_to(folder).as_posix()
+                    if wanted and inner != contract:
+                        problems.append(f"{pp.rel(path)}：assets/ のファイルを探すスクリプトなので、{contract} に置きます")
+                    for name in sorted(wanted):
+                        if (canonical.parents[1] / "assets" / name).is_file() and not (path.parents[1] / "assets" / name).is_file():
+                            problems.append(f"{pp.rel(path)} は assets/{name} を探しますが、{pp.rel(folder)}/assets/{name} がありません")
+        self.assertEqual(problems, [], "写しの置き場所が違います（設計書 4.17）：\n" + "\n".join(problems))
+
+    def test_script_copies_are_used_not_rewritten(self):
+        """写す側は、写したスクリプトを読み込んで使う（試験の外のスクリプトに、そのモジュールの名前がある）"""
+        problems = []
+        for contract, owner, _ in CONTRACTS:
+            if kind_of(contract) != "script":
+                continue
+            stem = Path(contract).stem
+            pattern = re.compile(r"(?<![\w.])" + re.escape(stem) + r"(?![\w])")
+            for folder in part_folders():
+                copies = copies_in(folder, contract)
+                if not copies or role_of(folder) == owner:
+                    continue
+                users = [p for p in sorted(folder.rglob("*.py")) if not pp.skipped(p, folder) and p not in copies
+                         and p.relative_to(folder).parts[0] not in ("tests", "evals") and pattern.search(pp.read(p))]
+                if not users:
+                    problems.append(f"{pp.rel(copies[0])} を、{pp.rel(folder)} のスクリプトが読み込んでいません（写しを使い、自分で書き直さない）")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_script_copies_need_only_what_the_holder_has(self):
+        """持ち主のスクリプトは、標準ライブラリか、写す側も持つライブラリだけを使い、ほかのファイルを読み込まない
+        （表のほかのスクリプトを読み込むときは、写す側もそれを持つ）"""
+        problems = []
+        scripts = {Path(c).stem: c for c, _, _ in CONTRACTS if kind_of(c) == "script"}
+        for contract, owner, _ in CONTRACTS:
+            canonical = owner_copy(contract, owner)
+            if canonical is None or kind_of(contract) != "script":
+                continue
+            for folder in part_folders():
+                if not copies_in(folder, contract):
+                    continue
+                have = declared_libraries(folder)
+                for name, text in required_imports(canonical):
+                    if name is None:
+                        problems.append(f"{pp.rel(canonical)}：相対の読み込み（{text}）があります。写しは1つのファイルだけで動くようにします")
+                    elif name in scripts:
+                        if not copies_in(folder, scripts[name]):
+                            problems.append(f"{pp.rel(folder)}：{Path(contract).name} が読み込む {scripts[name]} の写しがありません")
+                    elif name not in have:
+                        problems.append(f"{pp.rel(folder)}：{Path(contract).name} が読み込む {name}（{text}）を、"
+                                        "この部品の依存（スクリプトの PEP 723 か pyproject.toml）に書いていません")
+        self.assertEqual(problems, [], "\n".join(problems))
 
 
 class CasesTest(unittest.TestCase):
@@ -152,11 +381,13 @@ class CasesTest(unittest.TestCase):
 
     def cases_files(self):
         found = []
-        for contract, owner, _ in OWNERS:
-            if contract.startswith("contract/"):
-                path = owner_copy(contract, owner) or next(iter(all_copies(contract)), None)
-                if path is not None:
-                    found.append((contract.split("/")[1], path, path == owner_copy(contract, owner)))
+        for contract, owner, _ in CONTRACTS:
+            if kind_of(contract) != "cases":
+                continue
+            canonical = owner_copy(contract, owner)
+            for folder in part_folders():
+                for path in copies_in(folder, contract):
+                    found.append((contract_name(contract), path, canonical is not None and path.resolve() == canonical.resolve()))
         if not found:
             self.skipTest("共通の試験のデータがまだありません")
         return found
@@ -194,6 +425,11 @@ class CasesTest(unittest.TestCase):
             self.assertTrue(isinstance(inp.get("plan_text"), str) or isinstance(inp.get("entries"), list),
                             "input は plan_text か entries のどちらかです")
             self.assertRegex(str(exp.get("token")), r"^[0-9a-f]{12}$")
+        elif kind == "confidence":
+            self.assertIn("result", inp)
+            for key in ("review", "verify"):
+                self.assertTrue(key not in inp or inp[key] is None or isinstance(inp[key], dict), f"{key} は物か null です")
+            self.assertIn(exp.get("confidence"), CONFIDENCES)
 
     def test_cases_have_the_contract_shape(self):
         for kind, path, is_owner in self.cases_files():
@@ -212,15 +448,38 @@ class CasesTest(unittest.TestCase):
                     with self.subTest(case=case.get("name")):
                         self.check_case(kind, case)
 
+    def token_cases(self):
+        path = cases_path("token")
+        if path is None:
+            self.skipTest("確認の文字列の試験のデータがまだありません")
+        return json.loads(pp.read(path)).get("cases", [])
+
     def test_token_cases_follow_the_rule(self):
         """確認の文字列（設計書 4.10）：ファイルはバイト列の SHA-256 の先頭12文字。entries は {"triage": [...]} を
         sort_keys・区切り (",", ":")・ensure_ascii=False で JSON にした UTF-8 の SHA-256 の先頭12文字"""
-        path = owner_copy("contract/token/cases.json", "反映") or next(iter(all_copies("contract/token/cases.json")), None)
-        if path is None:
-            self.skipTest("確認の文字列の試験のデータがまだありません")
-        for case in json.loads(pp.read(path)).get("cases", []):
+        for case in self.token_cases():
             with self.subTest(case=case.get("name")):
                 self.assertEqual(token_of(case["input"]), case["expect"]["token"])
+
+    def test_token_function_and_its_copies_give_the_case_tokens(self):
+        """持ち主の確認の文字列の関数（とその写し）が、どの case でも期待する値を出す。
+        entries の case は、ここ（関数）でだけ確かめる（MCP サーバーのツールは、知らない鍵と空の entries を、入力の誤りとして断る）"""
+        entry = next((e for e in CONTRACTS if Path(e[0]).name == "plantoken.py"), None)
+        canonical = owner_copy(entry[0], entry[1]) if entry else None
+        if canonical is None:
+            self.skipTest("確認の文字列の関数（持ち主のスクリプト）がまだありません")
+        cases = self.token_cases()
+        paths = [canonical] + [p for f in part_folders() for p in copies_in(f, entry[0]) if p.resolve() != canonical.resolve()]
+        for n, path in enumerate(paths):
+            module = import_module(path, f"token{n}")
+            for case in cases:
+                with self.subTest(file=pp.rel(path), case=case.get("name")):
+                    inp = case["input"]
+                    if "plan_text" in inp:
+                        got = module.token_for_bytes(inp["plan_text"].encode("utf-8"))
+                    else:
+                        got = module.token_for_entries(inp["entries"])
+                    self.assertEqual(got, case["expect"]["token"])
 
 
 ENTRY_KEYS = ("id", "cids", "stream", "classification", "action", "severity", "comment")
@@ -228,7 +487,7 @@ ENTRY_KEYS = ("id", "cids", "stream", "classification", "action", "severity", "c
 
 def token_entry(entry):
     """確認の文字列に入れる項目の形：取り決めの項目だけ。stream がない（null の）ときは鍵を入れない。
-    severity と comment がないときは空の文字列（設計書 4.10 を、持ち主の試験のデータのとおりに読んだもの）"""
+    severity と comment がないときは空の文字列（設計書 4.10）"""
     out = {k: entry[k] for k in ENTRY_KEYS if k in entry and entry[k] is not None}
     out.setdefault("severity", "")
     out.setdefault("comment", "")
@@ -248,14 +507,20 @@ class SchemaContentTest(unittest.TestCase):
     """取り決めの中身（設計書 4.5〜4.7）"""
 
     def load(self, contract, role):
-        path = owner_copy(contract, role) or next(iter(all_copies(contract)), None)
+        path = owner_copy(contract, role)
+        if path is None:
+            for folder in part_folders():
+                found = copies_in(folder, contract)
+                if found:
+                    path = found[0]
+                    break
         if path is None:
             self.skipTest(f"{contract} がまだありません")
         return json.loads(pp.read(path))
 
     def test_plan_schema_embeds_the_result_definitions(self):
-        result = self.load("result.schema.json", "結果の記録")
-        plan = self.load("plan.schema.json", "同じ原因の統合")
+        result = self.load("assets/result.schema.json", "結果の記録")
+        plan = self.load("assets/plan.schema.json", "同じ原因の統合")
         defs = plan.get("$defs", {})
         for key, value in result.get("$defs", {}).items():
             with self.subTest(definition=key):
@@ -269,7 +534,7 @@ class SchemaContentTest(unittest.TestCase):
 
     def test_criteria(self):
         """評価基準は C-01〜C-28。scope: run は C-16〜C-19 と C-24〜C-27、ほかの20個は scope: item（設計書 4.6）"""
-        data = self.load("criteria.json", "結果の確かめ")
+        data = self.load("assets/criteria.json", "結果の確かめ")
         criteria = data.get("criteria", [])
         ids = [c.get("id") for c in criteria]
         self.assertEqual(ids, [f"C-{n:02d}" for n in range(1, 29)])
@@ -280,8 +545,8 @@ class SchemaContentTest(unittest.TestCase):
             self.assertTrue(str(c.get("text", "")).strip(), f"{c.get('id')} の文が空です")
 
     def test_review_schema_checks_are_item_criteria(self):
-        review = self.load("review.schema.json", "結果の確かめ")
-        criteria = self.load("criteria.json", "結果の確かめ")
+        review = self.load("assets/review.schema.json", "結果の確かめ")
+        criteria = self.load("assets/criteria.json", "結果の確かめ")
         item_ids = sorted(c["id"] for c in criteria["criteria"] if c.get("scope") == "item")
         enums = [v["enum"] for v in _walk(review) if isinstance(v, dict) and "enum" in v and all(
             isinstance(x, str) and x.startswith("C-") for x in v["enum"])]
@@ -611,7 +876,9 @@ class WriterReaderTest(unittest.TestCase):
                 self.assertIn(key, event, f"{path.name} の events に {key} がありません")
 
     def test_token_from_the_plan_bytes(self):
-        """MCP サーバーの確認の文字列は、反映の計画のファイルのバイト列と、entries の決まりから決まる（設計書 4.10）"""
+        """MCP サーバーの確認の文字列は、反映の計画のファイルのバイト列から決まる（設計書 4.10）。
+        共通の試験のデータの plan_text の case は、そのバイト列を計画のファイルに書いて、MCP サーバーのツールで確かめる。
+        entries の case は、確認の文字列の関数で確かめる（CasesTest。ツールは知らない鍵と空の entries を入力の誤りとして断る）"""
         home = Path(tempfile.mkdtemp(prefix="token-", dir=self.tmp))
         plan = home / "apply-plan.json"
         entry = {"id": "20002", "cids": [20002], "stream": "app-main", "classification": "False Positive",
@@ -624,19 +891,47 @@ class WriterReaderTest(unittest.TestCase):
             self.assertEqual(got, hashlib.sha256(plan.read_bytes()).hexdigest()[:12], "計画のファイルの確認の文字列が違います")
             got = find_token(client.call("coverity_preview_triage", {"entries": [entry]}))
             self.assertEqual(got, token_of({"entries": [entry]}), "entries の確認の文字列が違います")
-            cases = owner_copy("contract/token/cases.json", "反映")
-            for case in (json.loads(pp.read(cases))["cases"] if cases else []):
+            path = cases_path("token")
+            cases = [c for c in (json.loads(pp.read(path))["cases"] if path else []) if "plan_text" in c["input"]]
+            for n, case in enumerate(cases):
                 with self.subTest(case=case["name"]):
-                    inp = case["input"]
-                    if "plan_text" in inp:
-                        path = home / f"case-{abs(hash(case['name']))}.json"
-                        path.write_bytes(inp["plan_text"].encode("utf-8"))
-                        got = find_token(client.call("coverity_preview_triage", {"plan_file": str(path)}))
-                    else:
-                        got = find_token(client.call("coverity_preview_triage", {"entries": inp["entries"]}))
+                    plan_file = home / f"case-{n}" / "apply-plan.json"
+                    plan_file.parent.mkdir()
+                    plan_file.write_bytes(case["input"]["plan_text"].encode("utf-8"))
+                    got = find_token(client.call("coverity_preview_triage", {"plan_file": str(plan_file)}))
                     self.assertEqual(got, case["expect"]["token"])
         finally:
             client.close()
+
+    def test_investigation_reads_the_details_written_by_the_mcp_server(self):
+        """MCP サーバーが output_dir に書いた issue-<CID>.json を、真偽の調査のスクリプトが読み、★ の行を出す（設計書 4.4、4.17）"""
+        self.need()
+        folder = part_folder("真偽の調査")
+        scripts = sorted(pp.entry_scripts(folder)) if folder else []
+        if len(scripts) != 1:
+            self.skipTest("真偽の調査のスクリプト（scripts/ の直下の .py が1つ）がまだありません")
+        repo = self.make_repo()
+        out = Path(tempfile.mkdtemp(prefix="details-", dir=self.tmp))
+        client = self.client(repo)
+        try:
+            client.call("coverity_get_issue_details", {"repo_root": str(repo), "stream": "app-main", "cids": [20001],
+                                                       "output_dir": str(out)})
+        finally:
+            client.close()
+        issue_file = out / "issue-20001.json"
+        self.check_detail_file(issue_file)
+        uv = shutil.which("uv")
+        done = subprocess.run([uv, "run", "--native-tls", "--quiet", str(folder / "scripts" / scripts[0]), "show", "--repo", str(repo),
+                               "--issue-file", str(issue_file)], cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8"), timeout=180)
+        try:
+            data = json.loads(done.stdout.decode("utf-8"))
+        except ValueError:
+            self.fail(f"真偽の調査のスクリプトの出力が JSON ではありません：{done.stdout[-800:]!r} {done.stderr[-800:]!r}")
+        self.assertTrue(data.get("ok"), f"真偽の調査のスクリプトが、MCP サーバーの書いたファイルを読めません：{json.dumps(data, ensure_ascii=False)[:1200]}")
+        text = data.get("text", "")
+        self.assertIn("\u2605", text, "★（問題の起きる行）がありません")
+        self.assertIn("strlen(line)", text, "警告の行のコードがありません")
 
     def run_command(self):
         """一括実行のコマンド（defaults.json の runCommand）。なければ飛ばす"""
@@ -684,7 +979,7 @@ class WriterReaderTest(unittest.TestCase):
                 options += ["--issues-file", str(fetched / "issues.json")]
             created = run("new-run", "--repo", str(repo), "--filter", str(filter_file.name), *options)
             run_dir = Path(created["run_dir"])
-            schema = owner_copy("run.schema.json", "一括実行")
+            schema = owner_copy("assets/run.schema.json", "一括実行")
             if schema is not None:
                 errors = pp.schema_errors(json.loads((run_dir / "run.json").read_text(encoding="utf-8")), json.loads(pp.read(schema)))
                 self.assertEqual(errors, [], "new-run が書いた run.json が run.schema.json に合いません")

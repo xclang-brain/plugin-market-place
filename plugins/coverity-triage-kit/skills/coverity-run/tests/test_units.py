@@ -1,15 +1,18 @@
-"""Unit tests of the deterministic pieces, imported from the skill's scripts (no subprocess)."""
+"""Unit tests of the deterministic pieces, imported from the skill's scripts (the shared contract cases run in
+one separate process, started like run.py)."""
 
 from __future__ import annotations
 
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from support import SKILL, import_runlib, result_json, review_json
+from support import SKILL, import_runlib, script_runner
 
 import_runlib()
 
@@ -113,156 +116,167 @@ class EncodingTest(unittest.TestCase):
 
 
 class SchemaTest(unittest.TestCase):
+    """The schemas this skill owns (run.json, approvals.json) are checked by runlib/schema.py."""
+
     def test_every_keyword_is_known(self) -> None:
-        for name in ("result.schema.json", "review.schema.json", "plan.schema.json", "run.schema.json",
-                     "approvals.schema.json"):
+        for name in ("run.schema.json", "approvals.schema.json"):
             self.assertEqual(schema.unsupported(schema.load(name)), set(), name)
 
-    def test_result_schema(self) -> None:
-        good = result_json("20001")
-        self.assertEqual(schema.validate(good, "result.schema.json"), [])
-        bad = dict(good, extra=1, confidence="sure")
-        bad["deviation"] = dict(good["deviation"], comment=" 誤検知。前に空白。")
-        errors = schema.validate(bad, "result.schema.json")
-        self.assertTrue(any("extra は使えない項目" in e for e in errors), errors)
-        self.assertTrue(any(e.startswith("confidence は次のどれか") for e in errors), errors)
-        self.assertTrue(any(e.startswith("deviation.comment の形") for e in errors), errors)
-        trailing = dict(good, deviation=dict(good["deviation"], comment="誤検知。末尾に改行。\n"))
-        self.assertTrue(schema.validate(trailing, "result.schema.json"))
-        long = dict(good, deviation=dict(good["deviation"], comment="誤" * 201))
-        self.assertTrue(any("200 文字以内" in e for e in schema.validate(long, "result.schema.json")))
-
-    def test_review_schema_rework_needs_items(self) -> None:
-        review = review_json("1", "rework")
-        self.assertEqual(schema.validate(review, "review.schema.json"), [])
-        review["rework"] = []
-        self.assertTrue(schema.validate(review, "review.schema.json"))
+    def test_approvals_schema(self) -> None:
+        good = {"version": 1, "updated_at": "2026-11-08T10:00:00",
+                "items": {"20001": {"decision": "fix", "edited": False, "updated_at": "2026-11-08T10:00:00"},
+                          "G1": {"decision": None, "edited": True,
+                                 "deviation": {"classification": "Intentional", "action": "Ignore",
+                                               "severity": "Unspecified", "comment": "意図的。人が直した。"}}}}
+        self.assertEqual(schema.validate(good, "approvals.schema.json"), [])
+        self.assertTrue(schema.validate({"version": 1, "items": []}, "approvals.schema.json"))
+        self.assertTrue(schema.validate({"version": 1, "items": {"1": {"decision": "maybe"}}}, "approvals.schema.json"))
 
 
-class RuleTest(unittest.TestCase):
-    def test_comment_rules(self) -> None:
-        ok = "誤検知。get_buf() の戻り値は、呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いてから渡している。"
-        self.assertEqual(rules.comment_problems(ok), [])
-        self.assertEqual(rules.comment_problems("本物の不具合。この機能は今の製品では無効（config.h:12）で、実行されない。"), [])
-        cases = {"x" * 201: "too_long", "これは誤検知です。": "no_category", " 誤検知。前に空白。": "surrounding_space",
-                 "誤検知。入力が正の場合に限り問題ない。": "condition", "誤検知。修正を推奨します。": "request",
-                 "誤検知。一。二。三。": "too_many_sentences", "誤検知。\n- 箇条書き": "markdown", "": "empty"}
-        for text, code in cases.items():
-            self.assertIn(code, [p["code"] for p in rules.comment_problems(text)], text)
-        self.assertEqual(rules.comment_problems("誤検知。推奨範囲の値だけが渡る（a.c:1）。"), [])
+COPIES = {"check_comment.py": "comment", "check_result.py": "result", "check_review.py": "review",
+          "lint_result.py": "lint", "check_plan.py": "plan"}
 
-    def test_result_rules(self) -> None:
-        self.assertTrue(rules.result_check(result_json("20001"), "20001", [20001])["ok"])
-        self.assertFalse(rules.result_check(result_json("20001"), "20002", [20002])["ok"])
-        group = result_json("G1", excluded=[2])
-        self.assertTrue(rules.result_check(group, "G1", [1, 2])["ok"])
-        self.assertFalse(rules.result_check(result_json("G1", excluded=[1, 2]), "G1", [1, 2])["ok"])
-        self.assertFalse(rules.result_check(result_json("G1", excluded=[3]), "G1", [1, 2])["ok"])
-        self.assertFalse(rules.result_check(result_json("5", excluded=[5]), "5", [5])["ok"])
-        odd = result_json("1", "deviation")
-        odd["deviation"]["classification"] = "Bug"
-        checked = rules.result_check(odd, "1", [1])
-        self.assertTrue(checked["ok"])
-        self.assertTrue(checked["warnings"])
 
-    def test_lint_points(self) -> None:
-        files = {"src/a.c": "1\n2\n3\n"}
-        result = result_json("1", "deviation")
-        result["verdict"]["judgement"] = "true_bug"
-        result["verdict"]["evidence"] = [{"file": "src/a.c", "line": 9, "note": ""}, {"file": "src/none.c", "line": 1}]
-        result["revision_drift"] = {"status": "detected", "detail": ""}
-        codes = [p["code"] for p in rules.lint_points(result, files.get)]
-        self.assertEqual(codes, ["drift_high", "evidence_line_out_of_range", "evidence_missing_file", "true_bug_deviation"])
-        empty = result_json("1")
-        empty["verdict"]["evidence"] = []
-        empty["verdict"]["judgement"] = "undetermined"
-        self.assertEqual([p["code"] for p in rules.lint_points(empty, files.get)], ["no_evidence", "undetermined_high"])
-        fp_fix = result_json("1")
-        fp_fix["verdict"]["judgement"] = "intentional"
-        fp_fix["verdict"]["evidence"] = [{"file": "src/a.c", "line": 3}]
-        self.assertEqual([p["code"] for p in rules.lint_points(fp_fix, files.get)], ["not_bug_fix"])
+class CopiedRulesTest(unittest.TestCase):
+    """The rules of other parts are their scripts copied unchanged; runlib holds no rule of its own."""
 
-    def test_plan_rules(self) -> None:
-        merged = result_json("x")
-        merged.pop("item")
-        items = {"1": {"cids": [1], "status": "done", "confidence": "medium", "no_grouping": False},
-                 "2": {"cids": [2], "status": "done", "confidence": "high", "no_grouping": False},
-                 "3": {"cids": [3], "status": "pending", "confidence": None, "no_grouping": False},
-                 "4": {"cids": [4], "status": "done", "confidence": "high", "no_grouping": True}}
-        plan = {"merges": [{"members": ["1", "2"], "reason": "同じ原因", "fix_source": "item:1",
-                            "result": dict(merged, confidence="medium")}], "conflicts": []}
-        self.assertTrue(rules.plan_check(plan, items)["ok"], rules.plan_check(plan, items))
-        for change in ({"confidence": "high"},):
-            bad = json.loads(json.dumps(plan))
-            bad["merges"][0]["result"].update(change)
-            self.assertFalse(rules.plan_check(bad, items)["ok"])
-        for members in (["1"], ["1", "3"], ["1", "4"]):
-            bad = json.loads(json.dumps(plan))
-            bad["merges"][0]["members"] = members
-            bad["merges"][0]["fix_source"] = "combine"
-            self.assertFalse(rules.plan_check(bad, items)["ok"], members)
-        twice = json.loads(json.dumps(plan))
-        twice["merges"].append(dict(twice["merges"][0], fix_source="rework"))
-        self.assertFalse(rules.plan_check(twice, items)["ok"])
-        wrong = json.loads(json.dumps(plan))
-        wrong["merges"][0]["fix_source"] = "item:9"
-        self.assertFalse(rules.plan_check(wrong, items)["ok"])
-        big = {str(n): {"cids": list(range(n * 10, n * 10 + 6)), "status": "done", "confidence": "low", "no_grouping": False}
-               for n in (5, 6)}
-        large = {"merges": [{"members": ["5", "6"], "reason": "r", "fix_source": "combine", "result": dict(merged, confidence="low")}]}
-        self.assertFalse(rules.plan_check(large, big)["ok"])
+    def test_copies_are_there_and_self_contained(self) -> None:
+        for name in COPIES:
+            path = SKILL / "scripts" / name
+            self.assertTrue(path.is_file(), name)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("# /// script", text, name)
+            self.assertNotIn("import runlib", text, name)
+            self.assertNotIn("from runlib", text, name)
 
-    def test_review_rules(self) -> None:
-        self.assertTrue(rules.review_check(review_json("1"), "1")["ok"])
-        missing = review_json("1")
-        missing["findings"] = [f for f in missing["findings"] if f["check"] != "C-01"]
-        self.assertIn("C-01", " ".join(rules.review_check(missing, "1")["problems"]))
-        optional = review_json("1")
-        optional["findings"] = [f for f in optional["findings"] if f["check"] != "C-20"]
-        self.assertTrue(rules.review_check(optional, "1")["ok"])  # a criterion with applies_when may be left out
-        flag = review_json("1", "flag", confidence_cap=None)
-        self.assertFalse(rules.review_check(flag, "1")["ok"])
-        twice = review_json("1")
-        twice["findings"].append(twice["findings"][0])
-        self.assertFalse(rules.review_check(twice, "1")["ok"])
+    def test_runlib_has_no_rule_of_its_own(self) -> None:
+        source = (SKILL / "scripts" / "runlib" / "rules.py").read_text(encoding="utf-8")
+        for word in ("CONDITION_WORDS", "REQUEST_WORDS", "COMMENT_MAX", "def check_comment", "evidence_missing_file"):
+            self.assertNotIn(word, source)
+
+    def test_runlib_loads_the_copies(self) -> None:
+        for name in ("check_comment", "check_result", "check_review", "lint_result", "check_plan", "confidence"):
+            module = rules.script(name)
+            self.assertEqual(Path(module.__file__).resolve(), (SKILL / "scripts" / f"{name}.py").resolve())
+
+    def test_applicability_follows_the_review_rules(self) -> None:
+        standard = rules.applicability("NULL_RETURNS", False)
+        self.assertEqual((standard["C-20"], standard["C-21"], standard["C-22"], standard["C-23"]), (False, True, False, False))
+        misra = rules.applicability("MISRA C-2012 Rule 10.4", True)
+        self.assertEqual((misra["C-20"], misra["C-21"], misra["C-22"]), (True, False, True))
+        self.assertIsNone(rules.applicability(None, False)["C-21"])
+        self.assertEqual(len(rules.item_criteria()), 20)
 
 
 class ContractCasesTest(unittest.TestCase):
-    """The shared test data of the contracts this skill holds copies of (design 4.17)."""
+    """Every case of the shared test data (design 4.17) through the code the run uses: scripts/runlib/rules.py with
+    the copied scripts. They run in a separate process started like run.py (uv reads the libraries it needs)."""
 
-    def cases(self, name: str) -> list[dict]:
+    answers: dict = {}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        names = [n for n in ("comment", "result", "lint", "plan", "confidence") if (CONTRACTS / n / "cases.json").is_file()]
+        if not names:
+            return
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+        env.pop("VIRTUAL_ENV", None)
+        proc = subprocess.run([*script_runner(SKILL / "tests" / "contract_runner.py"), *names], capture_output=True,
+                              env=env, timeout=300, cwd=tempfile.gettempdir())
+        if proc.returncode != 0:
+            raise AssertionError(f"contract_runner failed: {proc.stderr.decode('utf-8', 'replace')}")
+        cls.answers = json.loads(proc.stdout.decode("utf-8"))
+
+    def answers_of(self, name: str) -> list[dict]:
         path = CONTRACTS / name / "cases.json"
         if not path.is_file():
             self.skipTest(f"{path.relative_to(SKILL)} がまだありません（持ち主の部品のものが写されたら動きます）")
         data = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(data.get("contract"), name)
-        self.assertGreater(len(data["cases"]), 0)
-        return data["cases"]
+        self.assertEqual((data.get("version"), data.get("contract")), (1, name))
+        self.assertGreaterEqual(len(data["cases"]), 8)
+        self.assertEqual(len({c["name"] for c in data["cases"]}), len(data["cases"]))
+        self.assertEqual(len(self.answers[name]), len(data["cases"]))
+        return self.answers[name]
 
     def test_comment(self) -> None:
-        for case in self.cases("comment"):
+        for case in self.answers_of("comment"):
             with self.subTest(case["name"]):
-                self.assertEqual(not rules.comment_problems(case["input"]["comment"]), case["expect"]["ok"])
+                self.assertEqual(case["got"]["ok"], case["expect"]["ok"])
+                self.assertEqual(case["got"]["inside_result"], case["expect"]["ok"])
+                self.assertEqual(case["got"]["inside_plan"], case["expect"]["ok"])
 
     def test_result(self) -> None:
-        for case in self.cases("result"):
+        for case in self.answers_of("result"):
             with self.subTest(case["name"]):
-                given = case["input"]
-                checked = rules.result_check(given["result"], given.get("item"), given.get("cids"))
-                self.assertEqual(checked["ok"], case["expect"]["ok"], checked["problems"])
+                self.assertEqual(case["got"]["ok"], case["expect"]["ok"])
 
     def test_lint(self) -> None:
-        for case in self.cases("lint"):
+        for case in self.answers_of("lint"):
             with self.subTest(case["name"]):
-                files = case["input"].get("files") or {}
-                points = rules.lint_points(case["input"]["result"], files.get)
-                self.assertEqual(sorted(p["code"] for p in points), sorted(case["expect"]["points"]))
+                self.assertEqual(case["got"]["points"], sorted(case["expect"]["points"]))
 
     def test_plan(self) -> None:
-        for case in self.cases("plan"):
+        for case in self.answers_of("plan"):
             with self.subTest(case["name"]):
-                checked = rules.plan_check(case["input"]["plan"], case["input"]["items"])
-                self.assertEqual(checked["ok"], case["expect"]["ok"], checked["problems"])
+                self.assertEqual(case["got"]["ok"], case["expect"]["ok"])
+
+    def test_confidence(self) -> None:
+        for case in self.answers_of("confidence"):
+            with self.subTest(case["name"]):
+                self.assertEqual(case["got"]["confidence"], case["expect"]["confidence"])
+
+
+class ConfidenceTest(unittest.TestCase):
+    """scripts/confidence.py: this skill owns the contract "confidence" (other parts copy the file)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = rules.script("confidence")
+
+    def test_cases_file(self) -> None:
+        data = json.loads((CONTRACTS / "confidence" / "cases.json").read_text(encoding="utf-8"))
+        self.assertEqual((data["version"], data["contract"]), (1, "confidence"))
+        self.assertGreaterEqual(len(data["cases"]), 10)
+        for case in data["cases"]:
+            self.assertEqual(set(case["input"]), {"result", "review", "verify"})
+            self.assertIn(case["expect"]["confidence"], ("high", "medium", "low"))
+            with self.subTest(case["name"]):
+                got = self.m.effective_confidence(**case["input"])
+                self.assertEqual(got["confidence"], case["expect"]["confidence"])
+
+    def test_stdlib_only_and_reads_no_file(self) -> None:
+        text = (SKILL / "scripts" / "confidence.py").read_text(encoding="utf-8")
+        self.assertIn("# dependencies = []", text)
+        for word in ("open(", "read_text", "Path(", "import runlib", "from runlib"):
+            self.assertNotIn(word, text)
+
+    def test_reason_says_why_it_was_lowered(self) -> None:
+        result = {"confidence": "high", "recommendation": "fix", "confidence_reason": "経路をすべて読んだ"}
+        same = self.m.effective_confidence(result)
+        self.assertEqual((same["confidence"], same["reason"], same["lowered_by"]), ("high", "経路をすべて読んだ", []))
+        capped = self.m.effective_confidence(result, {"outcome": "flag", "confidence_cap": "medium", "note": "経路が一部だけ"})
+        self.assertEqual(capped["confidence"], "medium")
+        self.assertIn("経路が一部だけ", capped["reason"])
+        built = self.m.effective_confidence(result, None, {"build_ok": False, "problems": ["ビルドに失敗しました"]})
+        self.assertEqual(built["confidence"], "low")
+        self.assertIn("ビルドでの検証で問題", built["reason"])
+        self.assertTrue(built["reason"].startswith("経路をすべて読んだ（"))
+
+    def test_command(self) -> None:
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+        script = SKILL / "scripts" / "confidence.py"
+        command = [sys.executable, str(script)]  # stdlib only: any Python 3.10+ runs it
+        given = {"result": {"confidence": "high", "recommendation": "fix"}, "review": {"outcome": "rework"}, "verify": None}
+        proc = subprocess.run([*command, "--stdin"], input=json.dumps(given).encode("utf-8"), capture_output=True,
+                              env=env, timeout=60, cwd=tempfile.gettempdir())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout.decode("utf-8"))["confidence"], "low")
+        proc = subprocess.run([*command, "--stdin"], input=b"[1]", capture_output=True, env=env, timeout=60,
+                              cwd=tempfile.gettempdir())
+        self.assertEqual(proc.returncode, 1)
+        out = json.loads(proc.stdout.decode("utf-8"))
+        self.assertFalse(out["ok"])
+        self.assertIn("result", out["error"])
 
 
 class ConfigTest(unittest.TestCase):
