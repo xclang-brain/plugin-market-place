@@ -3,11 +3,13 @@ Coverity Connect on httpx.MockTransport.
 
 The answers follow recorded samples of Coverity Connect:
 - REST: GET /api/v2/issues/columns (a list of columns), POST /api/v2/issues/search
-  ({offset, totalRows, columns, rows}; every value is a string), GET /api/v2/streams/{name}
+  ({offset, totalRows, columns, rows}; every value is a string), GET /api/v2/streams
+  ({"streams": [{"name", "primaryProjectName", "triageStoreName", …}]}), GET /api/v2/streams/{name}
   ({"streams": [{"name", "triageStoreName"}]}), PUT /api/v2/issues/triage (200 without a body).
 - A wrong Authorization header: 401 with the body "Authentication failed.\\n" and no Content-Type.
   No header: 302 to /login/login.htm.
-- SOAP v9: getStreamDefects, getSnapshotsForStream, getSnapshotInformation; child elements have no
+- SOAP v9: getStreamDefects (one return per stream of streamIdList that holds the CID; no return
+  when none does), getSnapshotsForStream, getSnapshotInformation; child elements have no
   namespace. A bad key: HTTP 401 and the fault "User authentication failed." (no detail). Other
   errors: HTTP 500 and a CoverityFault in the detail.
 """
@@ -15,6 +17,7 @@ The answers follow recorded samples of Coverity Connect:
 from __future__ import annotations
 
 import base64
+import fnmatch
 import importlib.util
 import json
 import os
@@ -212,6 +215,7 @@ if not MISSING:
             self.soap_faults: dict[int, httpx.Response] = {}
             self.triage_responses: dict[int, Callable[[], httpx.Response]] = {}
             self.streams = {STREAM: "Default Triage Store", "libev-release": "Release Triage Store"}
+            self.reverse_returns = False  # answer the streams of getStreamDefects in the reverse order
             self.snapshots = [10001, 10005]
             self.source_version = "a1b2c3d4e5"
             self.requests: list[str] = []
@@ -246,6 +250,12 @@ if not MISSING:
                 return self._search(request)
             if request.method == "PUT" and path == "/api/v2/issues/triage":
                 return self._triage(request)
+            if request.method == "GET" and path == "/api/v2/streams":
+                pattern = request.url.params.get("namePattern", "*")
+                return json_response(200, {"streams": [
+                    {"name": n, "description": "", "primaryProjectName": "libev", "triageStoreName": store,
+                     "outdated": False} for n, store in self.streams.items() if fnmatch.fnmatchcase(n, pattern)],
+                    "code": None, "message": None})
             if request.method == "GET" and path.startswith("/api/v2/streams/"):
                 name = request.url.path[len("/api/v2/streams/"):]
                 if name not in self.streams:
@@ -297,11 +307,17 @@ if not MISSING:
             self.soap_requests.append(op)
             if name == "getStreamDefects":
                 cid = int(_find(op, "cid").text)
-                stream = _find(_find(op, "streamIdList"), "name").text
+                spec = _find(op, "filterSpec")
+                streams = [_find(s, "name").text for s in spec if _local(s.tag) == "streamIdList"]
                 if cid in self.soap_faults:
                     return self.soap_faults[cid]
-                found = [i for i in self.items if i["row"]["cid"] == str(cid) and i["stream"] == stream]
-                inner = defect_xml(found[0]) if found else ""  # a CID not in the stream: no return
+                unknown = [s for s in streams if s not in self.streams]
+                if unknown:
+                    return self.xml(500, soap_fault(f"No stream found for name {unknown[0]}.", 1300))
+                found = [i for s in streams for i in self.items if i["row"]["cid"] == str(cid) and i["stream"] == s]
+                if self.reverse_returns:
+                    found.reverse()
+                inner = "".join(defect_xml(i) for i in found)  # a CID in none of the streams: no return
                 return self.xml(200, soap_ok(name, inner))
             if name == "getSnapshotsForStream":
                 return self.xml(200, soap_ok(name, "".join(f"<return><id>{i}</id></return>" for i in self.snapshots)))

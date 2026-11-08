@@ -34,6 +34,33 @@ if not MISSING:
             self.assertEqual((out["url"], out["api"], out["triage_store"]), (BASE, "auto", "Default Triage Store"))
             self.assertEqual(out["config"], str(self.repo / ".coverity-triage" / "config.yaml"))
             self.assertNotIn("warning", out)
+            self.assertEqual((out["streams"], out["streams_total"]), ([STREAM, "libev-release"], 2))
+            self.assertNotIn("streams_note", out)
+            self.assertEqual(self.cov.requests, ["GET /api/v2/streams"])  # one request checks and lists
+
+        def test_detailed_streams_have_project_and_triage_store(self) -> None:
+            out = self.check(response_format="detailed")
+            self.assertEqual(out["streams"], [
+                {"name": STREAM, "project": "libev", "triage_store": "Default Triage Store"},
+                {"name": "libev-release", "project": "libev", "triage_store": "Release Triage Store"}])
+
+        def test_many_streams_are_capped_with_the_total(self) -> None:
+            self.cov.streams = {f"s{n:03}": "Default Triage Store" for n in range(150)}
+            out = self.check()
+            self.assertEqual((len(out["streams"]), out["streams"][0], out["streams_total"]), (100, "s000", 150))
+            self.assertIn("150", out["streams_note"])
+
+        def test_the_stream_list_is_kept_for_the_lookups(self) -> None:
+            self.check()
+            self.tools.get_issue_details(repo_root=str(self.repo), cids=[10001])
+            self.assertEqual(self.cov.requests.count("GET /api/v2/streams"), 1)
+
+        def test_an_unexpected_stream_list_still_checks_the_connection(self) -> None:
+            self.cov.rest_override = lambda request: cov.json_response(200, [{"name": "x"}])
+            out = self.check()
+            self.assertTrue(out["ok"])
+            self.assertNotIn("streams", out)
+            self.assertIn("想定と違います", out["streams_error"])
 
         def test_failures_are_reported_not_raised(self) -> None:
             cases = [(cov.rest_401, ["401"]), (cov.redirect_302, [cov.LOGIN]), (cov.html_200, ["JSON"]),

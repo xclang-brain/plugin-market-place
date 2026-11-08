@@ -145,6 +145,10 @@ class StdioTest(unittest.TestCase):
         ref = next(s["$ref"] for s in search["properties"]["filter"]["anyOf"] if "$ref" in s)
         self.assertIs(search["$defs"][ref.rsplit("/", 1)[-1]]["additionalProperties"], False)
         self.assertEqual(self.tools["coverity_update_triage"]["inputSchema"]["required"], ["confirmation_token"])
+        details = self.tools["coverity_get_issue_details"]["inputSchema"]
+        self.assertEqual(details["required"], ["cids"])  # the stream can be left out
+        check = self.tools["coverity_check_connection"]["inputSchema"]
+        self.assertEqual(set(check["properties"]), {"repo_root", "response_format"})
         for tool in self.tools.values():
             for name, prop in tool["inputSchema"]["properties"].items():
                 self.assertTrue(prop.get("description"), f"{tool['name']}.{name} has no description")
@@ -164,6 +168,10 @@ class StdioTest(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["issues"][0]["cid"], 30001)
         details = self.client.call("coverity_get_issue_details", {"stream": "s-main", "cids": [30001]})
         self.assertEqual(details["structuredContent"]["issues"][0]["events"][0]["main"], True)
+        found = self.client.call("coverity_get_issue_details", {"cids": [30001]})["structuredContent"]
+        self.assertEqual((found["issues"][0]["stream"], found["streams_searched"]), ("s-main", 1))
+        check = self.client.call("coverity_check_connection", {})["structuredContent"]
+        self.assertEqual(check["streams"], ["s-main"])
         entries = [{"id": "30001", "cids": [30001], "stream": "s-main", "classification": "False Positive",
                     "action": "Ignore", "comment": "誤検知。"}]
         preview = self.client.call("coverity_preview_triage", {"entries": entries})

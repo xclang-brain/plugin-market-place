@@ -4,12 +4,12 @@
 
 | ファイル | 中身 |
 | --- | --- |
-| `evaluation.xml` | 10 問の課題と答え（`<qa_pair><question>…</question><answer>…</answer></qa_pair>`） |
+| `evaluation.xml` | 12 問の課題と答え（`<qa_pair><question>…</question><answer>…</answer></qa_pair>`） |
 | `data/.coverity-triage/fake-issues.yaml` | 偽の Coverity の警告（2つのストリーム app-main・app-release、38 件） |
 | `data/.coverity-triage/config.yaml` | `api: fake` の設定（`repo_root` に `data` を渡して使うとき） |
 
 - どの課題も読むだけで解けます（書き戻しは要りません）。互いに頼らず、答えは1つに決まり、データを変えない限り変わりません。
-- 何度もツールを呼ぶ課題です（ページを続けて取る、2つのストリームを比べる、CID のストリームを探してから警告経路を取る、など）。
+- 何度もツールを呼ぶ課題です（ページを続けて取る、2つのストリームを比べる、CID だけからストリームを見つけ、そのストリームのトリアージストアや状態を調べる、など）。
 - 答えが今のデータとツールで出ることは、`tests/test_evals_data.py` が、ツールを順に呼んで確かめます（データを変えたら、この試験で答えを確かめ直します）。
 
 ## Claude Code で動かす

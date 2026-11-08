@@ -36,11 +36,23 @@ class Issue(BaseModel):
 
 
 class IssueDetail(BaseModel):
-    """Issue plus warning path and checker documentation."""
+    """Issue plus warning path and checker documentation.
+
+    ``found_in`` lists the streams, among those searched, that hold the CID (``issue.stream`` is the
+    one the warning path comes from)."""
 
     issue: Issue
     events: list[Event] = Field(default_factory=list)
     checker_description: str = ""
+    found_in: list[str] = Field(default_factory=list)
+
+
+class StreamInfo(BaseModel):
+    """A stream the user can see, its project and the triage store it uses."""
+
+    name: str
+    project: str | None = None
+    triage_store: str | None = None
 
 
 class TriageAttributes(BaseModel):

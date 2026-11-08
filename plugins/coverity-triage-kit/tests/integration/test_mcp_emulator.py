@@ -197,6 +197,11 @@ class McpEmulatorTest(unittest.TestCase):
         out = self.call("coverity_check_connection", repo_root=self.repo)
         self.assertTrue(out["ok"], out)
         self.assertIn("warning", out)  # http
+        self.assertEqual((out["streams"], out["streams_total"]), (["app-main", "app-release"], 2))
+        detailed = self.call("coverity_check_connection", repo_root=self.repo, response_format="detailed")
+        self.assertEqual(detailed["streams"], [
+            {"name": "app-main", "project": "app", "triage_store": "Default Triage Store"},
+            {"name": "app-release", "project": "app", "triage_store": "Release Triage Store"}])
         self.assertNotIn(emu_support.USERS["triager"], json.dumps(out, ensure_ascii=False))
         viewer = self.call("coverity_check_connection", repo_root=self.viewer_repo)
         self.assertFalse(viewer["ok"])
@@ -261,9 +266,45 @@ class McpEmulatorTest(unittest.TestCase):
         self.assertEqual(saved["saved"], [cid])
         data = json.loads((folder / str(cid) / f"issue-{cid}.json").read_text(encoding="utf-8"))
         self.assertEqual(set(data), {"fetched_at", "issue", "events", "checker_description"})
-        with self.assertRaises(ToolCallError) as caught:
-            self.call("coverity_get_issue_details", repo_root=self.repo, cids=[cid])
-        self.assertIn("stream を渡してください", str(caught.exception))
+
+    def test_warning_paths_without_a_stream(self) -> None:
+        both, main_only = self.cids["NULL_RETURNS"], self.cids["CHECKED_RETURN"]
+        out = self.call("coverity_get_issue_details", repo_root=self.repo, cids=[both, main_only, 99999])
+        self.assertEqual(out["streams_searched"], 2)
+        first, second = out["issues"]
+        self.assertEqual((first["cid"], first["stream"], first["other_streams"]), (both, "app-main", ["app-release"]))
+        self.assertEqual([e["line"] for e in first["events"]], [40, 5, 42])
+        self.assertEqual((second["cid"], second["stream"]), (main_only, "app-main"))
+        self.assertNotIn("other_streams", second)
+        self.assertIn("2 個のストリーム", out["failed"]["99999"])
+        fixed = self.call("coverity_get_issue_details", repo_root=self.repo, cids=[self.cids["UNINIT"]])
+        self.assertEqual(fixed["issues"][0]["stream"], "app-main")  # fixed in the latest snapshot: still found
+        # a stream that does not hold the CID: the note names the others
+        out = self.call("coverity_get_issue_details", repo_root=self.repo, stream="app-release", cids=[main_only])
+        self.assertIn(str(main_only), out["failed"])
+        self.assertIn("ほかの見られるストリーム（1 個）: app-main", out["failed_note"])
+        self.emu.config(soap_cid_not_in_stream="fault")
+        try:
+            out = self.call("coverity_get_issue_details", repo_root=self.repo, cids=[99999, main_only])
+            self.assertEqual([i["cid"] for i in out["issues"]], [main_only])
+            self.assertIn("99999", out["failed"])
+        finally:
+            self.emu.config(reset=True)
+
+    def test_a_stream_that_does_not_exist(self) -> None:
+        for mode in ("empty", "404"):
+            with self.subTest(mode=mode):
+                self.emu.config(unknown_stream=mode)
+                try:
+                    with self.assertRaises(ToolCallError) as caught:
+                        self.call("coverity_search_issues", repo_root=self.repo, filter={"streams": ["app-dev"]})
+                finally:
+                    self.emu.config(reset=True)
+                self.assertIn("app-dev は、見られるストリームにありません", str(caught.exception))
+                self.assertIn("app-main, app-release", str(caught.exception))
+        out = self.call("coverity_get_issue_details", repo_root=self.repo, stream="app-dev",
+                        cids=[self.cids["NULL_RETURNS"]])
+        self.assertIn("app-dev は、見られるストリームにありません", out["failed_note"])
 
     def test_write_back_with_entries(self) -> None:
         cid = self.cids["RESOURCE_LEAK"]

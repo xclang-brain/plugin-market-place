@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from .models import Event, Issue, IssueDetail, TriageAttributes
+from .models import Event, Issue, IssueDetail, StreamInfo, TriageAttributes
 from .settings import STATUSES, CoverityConfig, FilterSpec
 
 
@@ -34,6 +34,18 @@ class CoverityError(Exception):
         super().__init__(message)
         self.fatal = fatal
         self.status = status
+
+
+MAX_NAMED_STREAMS = 10  # stream names in the message of a CID found in none of them
+
+
+def not_found(cid: int, streams: list[str]) -> CoverityError:
+    """The CID is in none of the streams searched (only this CID fails)."""
+    if len(streams) == 1:
+        return CoverityError(f"CID {cid} の警告経路がストリーム {streams[0]} にありません", fatal=False)
+    names = f"（{', '.join(streams)}）" if len(streams) <= MAX_NAMED_STREAMS else ""
+    return CoverityError(f"CID {cid} の警告経路が、見られる {len(streams)} 個のストリーム{names}のどれにもありません。"
+                         "CID が正しいかを確かめてください", fatal=False)
 
 
 def filter_mismatches(issue: Issue, spec: FilterSpec, project: str | None = None,
@@ -113,8 +125,15 @@ class CoverityClient(ABC):
         that would end later than ``seconds``."""
 
     @abstractmethod
-    def issue_detail(self, cid: int, stream: str) -> IssueDetail:
-        """Warning path (events) and checker documentation."""
+    def list_streams(self) -> list[StreamInfo]:
+        """The streams the user can see, sorted by name."""
+
+    @abstractmethod
+    def issue_detail(self, cid: int, streams: list[str]) -> IssueDetail:
+        """Warning path (events) and checker documentation of the CID in one request, looked for in
+        every stream of ``streams``. The path comes from the first stream of ``streams`` that holds
+        the CID (the caller passes them sorted, so the choice does not depend on the server's order);
+        ``found_in`` lists all of them that hold it. Not found: a CoverityError that is not fatal."""
 
     @abstractmethod
     def snapshot_revision(self, stream: str, field: str) -> str | None:
@@ -166,6 +185,17 @@ class FakeCoverityClient(CoverityClient):
                 known[str(name)] = value if isinstance(value, dict) else {}
         return known
 
+    def list_streams(self) -> list[StreamInfo]:
+        """The streams of the issues and of ``streams:``. The project is ``streams.<name>.project``,
+        else the project of the first issue of the stream."""
+        projects: dict[str, str] = {}
+        for issue, record in zip(self.issues, self.records, strict=True):
+            if issue.stream and record.get("project") and issue.stream not in projects:
+                projects[issue.stream] = str(record["project"])
+        return [StreamInfo(name=name, project=str(value.get("project") or projects.get(name) or "") or None,
+                           triage_store=str(value.get("triage_store") or self.triage_store))
+                for name, value in sorted(self.streams().items())]
+
     def search(self, spec: FilterSpec, limit: int, offset: int, seconds: float) -> SearchPage:
         # Like the real server: the latest snapshot holds no Fixed or Absent Dismissed issue, so they
         # are found only when the status filter asks for them.
@@ -178,22 +208,30 @@ class FakeCoverityClient(CoverityClient):
         return SearchPage(page, len(found), end if end < len(found) else None,
                           ends=[offset + i + 1 for i in range(len(page))], ignored=unknown_statuses(spec))
 
-    def issue_detail(self, cid: int, stream: str) -> IssueDetail:
+    def issue_detail(self, cid: int, streams: list[str]) -> IssueDetail:
+        # Like the real server: one record per stream that holds the CID; a record without a stream
+        # is in every stream.
+        found: dict[str, tuple[Issue, dict[str, Any]]] = {}
         for issue, record in zip(self.issues, self.records, strict=True):
             if issue.cid != cid:
                 continue
-            if issue.stream and issue.stream != stream:
-                continue
-            events = []
-            for event in record.get("events") or []:
-                try:
-                    events.append(Event.model_validate(event))
-                except ValidationError as exc:
-                    raise CoverityError(f"偽の警告のファイルの CID {cid} の events が正しくありません: {exc}",
-                                        fatal=False) from exc
-            return IssueDetail(issue=issue, events=events,
-                               checker_description=str(record.get("checker_description") or ""))
-        raise CoverityError(f"CID {cid} の警告経路がストリーム {stream} にありません", fatal=False)
+            for stream in streams:
+                if stream not in found and (not issue.stream or issue.stream == stream):
+                    found[stream] = (issue, record)
+        if not found:
+            raise not_found(cid, streams)
+        first = next(s for s in streams if s in found)
+        issue, record = found[first]
+        events = []
+        for event in record.get("events") or []:
+            try:
+                events.append(Event.model_validate(event))
+            except ValidationError as exc:
+                raise CoverityError(f"偽の警告のファイルの CID {cid} の events が正しくありません: {exc}",
+                                    fatal=False) from exc
+        return IssueDetail(issue=issue.model_copy(update={"stream": first}), events=events,
+                           checker_description=str(record.get("checker_description") or ""),
+                           found_in=[s for s in streams if s in found])
 
     def snapshot_revision(self, stream: str, field: str) -> str | None:
         snapshot = self.data.get("snapshot") or {}

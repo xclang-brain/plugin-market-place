@@ -1,10 +1,17 @@
 """Coverity Connect client.
 
-REST API v2: issue search (``POST /api/v2/issues/search``; the latest snapshot, or every snapshot
-when the status Fixed or Absent Dismissed is wanted), the triage store of a stream
+REST API v2: the streams the user can see (``GET /api/v2/streams``; also the request that checks
+the connection), issue search (``POST /api/v2/issues/search``; the latest snapshot, or every
+snapshot when the status Fixed or Absent Dismissed is wanted), the triage store of a stream
 (``GET /api/v2/streams/{name}``) and triage write-back (``PUT /api/v2/issues/triage``, Coverity
 Connect 2022.6.0 or later). SOAP API v9: warning path (``getStreamDefects``) and snapshot
 information (``getSnapshotsForStream`` / ``getSnapshotInformation``).
+
+The warning path of a CID whose stream is not known is read with one ``getStreamDefects`` request
+that lists every stream to look in (``streamIdList`` may repeat, per the XSD); the answer has one
+``return`` per stream that holds the CID. One request per stream would take 1-5 seconds each on a
+production server, so a search over all streams would not fit in one call and would depend on the
+order of the streams.
 
 How answers that are not the expected data are handled (from answers recorded on a real server,
 Coverity Connect 2024.12, and the published XSD):
@@ -39,9 +46,9 @@ from urllib.parse import quote
 import httpx
 
 from .coverity import (ABSENT_STATUSES, CoverityClient, CoverityError, SearchPage, filter_mismatches, issue_value,
-                       unknown_statuses)
+                       not_found, unknown_statuses)
 from .envvars import get_env
-from .models import Event, Issue, IssueDetail, TriageAttributes
+from .models import Event, Issue, IssueDetail, StreamInfo, TriageAttributes
 from .settings import CoverityConfig, FilterSpec
 
 TIMEOUT = 15.0  # seconds for one request (a tool call has 20; clients stop a call after 30)
@@ -75,14 +82,52 @@ LATEST_SCOPE, ALL_SCOPE = "last()", "first()..last()"
 INVALID_KEY = re.compile(r"Invalid key provided:\s*(.+?)\s*$")
 AUTH_FAULT = re.compile(r"authentication failed|doesn't have permissions to perform", re.IGNORECASE)
 MAX_DEFECT_INSTANCES = 1  # only the first defect instance is read
+STREAMS_PATH = "/api/v2/streams"
+# excludeRoles: the role assignments of every stream are not needed and make the answer large.
+STREAMS_PARAMS = {"namePattern": "*", "excludeRoles": "true", "locale": "en_us"}
+STREAMS_TTL = 300.0  # seconds a stream list is reused: streams are added rarely, and a list costs a request
 
 _columns_cache: dict[str, dict[str, str]] = {}
 _columns_lock = threading.Lock()
+_streams_cache: dict[tuple[str, str], tuple[float, list[StreamInfo]]] = {}
 
 
 def clear_caches() -> None:
     with _columns_lock:
         _columns_cache.clear()
+        _streams_cache.clear()
+
+
+def _streams_key(config: CoverityConfig, user: str) -> tuple[str, str]:
+    return config.url.rstrip("/"), user  # users can see different streams
+
+
+def remember_streams(config: CoverityConfig, user: str, streams: list[StreamInfo]) -> None:
+    with _columns_lock:
+        _streams_cache[_streams_key(config, user)] = (time.monotonic(), streams)
+
+
+def remembered_streams(config: CoverityConfig, user: str) -> list[StreamInfo] | None:
+    with _columns_lock:
+        found = _streams_cache.get(_streams_key(config, user))
+    if found is None or time.monotonic() - found[0] > STREAMS_TTL:
+        return None
+    return found[1]
+
+
+def parse_streams(data: Any) -> list[StreamInfo] | None:
+    """``{"streams": [{"name", "primaryProjectName", "triageStoreName", …}]}`` -> streams sorted by
+    name; None when the answer has no list of streams."""
+    items = data.get("streams") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return None
+    out: dict[str, StreamInfo] = {}
+    for item in items:
+        name = str(item.get("name") or "").strip() if isinstance(item, dict) else ""
+        if name:
+            out[name] = StreamInfo(name=name, project=str(item.get("primaryProjectName") or "").strip() or None,
+                                   triage_store=str(item.get("triageStoreName") or "").strip() or None)
+    return [out[n] for n in sorted(out)]
 
 
 def _ssl_context(ca_file: str | None) -> ssl.SSLContext:
@@ -159,7 +204,8 @@ def http_kwargs(config: CoverityConfig, timeout: float, transport: httpx.BaseTra
 
 
 def check_auth(config: CoverityConfig, transport: httpx.BaseTransport | None = None) -> dict[str, Any]:
-    """Whether credentials are set, and one light authenticated request with its time."""
+    """Whether credentials are set, and one light authenticated request with its time: the list of
+    the streams the user can see (``streams``: StreamInfo, kept for the stream lookups)."""
     user, key = credentials(config)
     out: dict[str, Any] = {
         "user": f"環境変数 {config.user_env}: " + ("設定あり" if user else "なし"),
@@ -169,11 +215,12 @@ def check_auth(config: CoverityConfig, transport: httpx.BaseTransport | None = N
         out["result"] = (f"ユーザ名または認証キーが設定されていません。環境変数 {config.user_env} に"
                          f"ユーザ名を、{config.key_env} に認証キーを設定してください")
         return out
+    where = f"REST GET {STREAMS_PATH}"
     started = time.monotonic()
     try:
         with httpx.Client(**http_kwargs(config, AUTH_CHECK_TIMEOUT, transport)) as http:
-            resp = http.get("/api/v2/issues/columns", auth=(user, key), headers={"Accept": "application/json"},
-                            params={"queryType": "bySnapshot", "retrieveGroupByColumns": "false"})
+            resp = http.get(STREAMS_PATH, auth=(user, key), headers={"Accept": "application/json"},
+                            params=STREAMS_PARAMS)
     except httpx.TimeoutException:
         out["result"] = f"{AUTH_CHECK_TIMEOUT:.0f} 秒以内に応答がありません（URL と社内のネットワークを確認してください）"
         return out
@@ -186,19 +233,25 @@ def check_auth(config: CoverityConfig, transport: httpx.BaseTransport | None = N
     finally:
         out["seconds"] = round(time.monotonic() - started, 1)
     if 300 <= resp.status_code < 400:
-        out["result"] = str(_redirect_error("REST GET /api/v2/issues/columns", resp))
+        out["result"] = str(_redirect_error(where, resp))
     elif resp.status_code in (401, 403):
         out["result"] = f"認証に失敗しました（HTTP {resp.status_code}）。" + _what_to_check(resp.status_code)
     elif resp.status_code >= 400:
         out["result"] = f"Coverity が HTTP {resp.status_code} を返しました（{_body_info(resp)}）"
     else:
         try:
-            resp.json()
+            data = resp.json()
         except ValueError:
-            out["result"] = _not_json("REST GET /api/v2/issues/columns", resp)
+            out["result"] = _not_json(where, resp)
             return out
         out["ok"] = True
         out["result"] = f"認証できました（{out['seconds']} 秒）"
+        streams = parse_streams(data)
+        if streams is None:
+            out["streams_error"] = f"ストリームの一覧（{where}）の応答の形が想定と違います: {str(data)[:120]}"
+        else:
+            remember_streams(config, user, streams)
+            out["streams"] = streams
     return out
 
 
@@ -426,25 +479,44 @@ class ConnectClient(CoverityClient):
                      action=value("action"), severity=value("severity"), status=value("status"),
                      stream=stream)
 
+    # ---- streams ----------------------------------------------------------------------------
+
+    def list_streams(self) -> list[StreamInfo]:
+        """The streams the user can see (reused for STREAMS_TTL seconds)."""
+        known = remembered_streams(self.config, self.user)
+        if known is not None:
+            return known
+        data = self._rest("GET", STREAMS_PATH, dict(STREAMS_PARAMS))
+        streams = parse_streams(data)
+        if streams is None:
+            raise CoverityError(f"Coverity REST GET {STREAMS_PATH} の応答の形が想定と違います: {str(data)[:120]}",
+                                fatal=False)
+        remember_streams(self.config, self.user, streams)
+        return streams
+
     # ---- warning path -----------------------------------------------------------------------
 
-    def issue_detail(self, cid: int, stream: str) -> IssueDetail:
-        # filterSpec in the order of the XSD.
+    def issue_detail(self, cid: int, streams: list[str]) -> IssueDetail:
+        # filterSpec in the order of the XSD; streamIdList repeats, one per stream to look in.
         body = (f"<mergedDefectIdDataObjs><cid>{cid}</cid></mergedDefectIdDataObjs>"
                 "<filterSpec><includeDefectInstances>true</includeDefectInstances>"
                 "<includeHistory>false</includeHistory>"
                 "<includeTotalDefectInstanceCount>false</includeTotalDefectInstanceCount>"
                 f"<maxDefectInstances>{MAX_DEFECT_INSTANCES}</maxDefectInstances>"
-                f"<streamIdList><name>{escape(stream)}</name></streamIdList></filterSpec>")
+                + "".join(f"<streamIdList><name>{escape(s)}</name></streamIdList>" for s in streams)
+                + "</filterSpec>")
         response = self._soap("defectservice", "getStreamDefects", body)
-        defect = instance = None
+        found: dict[str, tuple[ET.Element, ET.Element]] = {}  # stream -> (streamDefect, its first instance)
         for candidate in _children(response, "return"):
             instance = _child(candidate, "defectInstances")
-            if instance is not None:
-                defect = candidate
-                break
-        if instance is None or defect is None:
-            raise CoverityError(f"CID {cid} の警告経路がストリーム {stream} にありません", fatal=False)
+            name = _text(candidate, "streamId", "name") or (streams[0] if len(streams) == 1 else "")
+            if instance is not None and name and name not in found:
+                found[name] = (candidate, instance)
+        order = [s for s in streams if s in found] + sorted(n for n in found if n not in streams)
+        if not order:
+            raise not_found(cid, streams)
+        stream = order[0]  # the first stream asked for that holds the CID, whatever the server's order
+        defect, instance = found[stream]
         events: list[Event] = []
 
         def walk(node: ET.Element) -> None:
@@ -466,7 +538,7 @@ class ConnectClient(CoverityClient):
                       cwe=_int(_text(instance, "cwe")), stream=stream)
         description = "\n\n".join(t for t in (_text(instance, "longDescription"),
                                               _text(instance, "localEffect")) if t)
-        return IssueDetail(issue=issue, events=events, checker_description=description)
+        return IssueDetail(issue=issue, events=events, checker_description=description, found_in=order)
 
     # ---- snapshots --------------------------------------------------------------------------
 

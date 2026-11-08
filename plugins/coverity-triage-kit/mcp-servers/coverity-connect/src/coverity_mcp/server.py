@@ -33,8 +33,10 @@ Coverity Connect の警告を検索し、警告経路を取り、トリアージ
 - 設定：repo_root（リポジトリの絶対パス）を渡すと <repo_root>/.coverity-triage/config.yaml の coverity の項目を読みます。\
 渡さないときは環境変数 COVERITY_URL などを読みます。ユーザ名と認証キーは環境変数（既定 COV_USER と COV_AUTH_KEY）から読みます。
 - パスの引数は、どれも絶対パスで渡します。
-- 読むとき：coverity_check_connection で接続を確かめる。coverity_search_issues で警告を探す（各警告に cid と stream がある）。\
-coverity_get_issue_details で警告経路を取る（stream が要る）。
+- 読むとき：coverity_check_connection で接続を確かめ、見られるストリームの名前（streams）を知る。\
+coverity_search_issues で1つのストリームの警告を探す（各警告に cid と stream がある）。\
+coverity_get_issue_details で CID の警告経路を取る（ストリームが分からなければ stream を省く。見られるすべての\
+ストリームから CID を探し、見つけたストリームを返す）。
 - 書き戻すとき（coverity_preview_triage と coverity_update_triage が使えるときだけ）：coverity_preview_triage で\
 書き戻す件数・内容と確認の文字列を出し、人に見せて同意を得てから、coverity_update_triage に同じ内容と確認の文字列を渡します。
 - 続き：has_more が true なら offset に next_offset を渡して呼び直します。done が false なら同じ引数でもう一度呼びます。\
@@ -98,29 +100,38 @@ async def _run(name: str, func: Callable[..., dict[str, Any]], **kwargs: Any) ->
 
 # ---- tools --------------------------------------------------------------------------------------
 
-@_register("coverity_check_connection", "Coverity 接続の確認",
+@_register("coverity_check_connection", "Coverity 接続の確認とストリームの一覧",
            readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
-async def coverity_check_connection(repo_root: RepoRoot = None) -> dict[str, Any]:
-    """Coverity Connect への接続と認証を確かめる（読み取りの問い合わせを1回、10 秒まで）。書き込みはしない。
+async def coverity_check_connection(repo_root: RepoRoot = None, response_format: Format = "concise") -> dict[str, Any]:
+    """Coverity Connect への接続と認証を確かめ、このユーザーが見られるストリームの一覧を返す
+    （読み取りの問い合わせを1回、10 秒まで）。書き込みはしない。
 
-    使うとき：初めて使う前、認証の失敗や接続のエラーが出たとき、設定を変えたあと。
+    使うとき：初めて使う前、認証の失敗や接続のエラーが出たとき、設定を変えたあと。ストリームの名前が
+    分からないとき（警告の検索にはストリームの名前が要る）、ストリームが使うプロジェクトとトリアージストアを知りたいとき。
     使わないとき：警告を探す・取るとき（それぞれのツールを使う）。
 
     引数:
       - repo_root: リポジトリの絶対パス（例: "/home/me/app"）。省くと環境変数の設定。
+      - response_format: concise（既定）は streams がストリームの名前の並び。detailed は
+        [{"name", "project", "triage_store"}]（triage_store は、そのストリームのトリアージを書き戻す先）。
 
     返す値（JSON）:
       {"ok": true/false, "result": "認証できました（0.4 秒）" などの説明,
-       "config": 設定のファイルのパスか "環境変数", "api": "auto"|"fake", "url": "https://…", "triage_store": "…",
-       "user": "環境変数 COV_USER: 設定あり|なし", "key": "環境変数 COV_AUTH_KEY: 設定あり（N 文字）|なし",
-       "seconds": 0.4, "warning": http のときの注意, "unknown_keys": [coverity の中の知らない項目],
-       "fake_data": 偽の Coverity のファイル（api が fake のとき）}
+       "config": 設定のファイルのパスか "環境変数", "api": "auto"|"fake", "url": "https://…",
+       "triage_store": 設定のトリアージストア（stream のない書き戻しだけの先。stream のある書き戻しは、
+       そのストリームのトリアージストアに書く。それは detailed の streams の triage_store）,
+       "user": "環境変数 COV_USER: 設定あり|なし",
+       "key": "環境変数 COV_AUTH_KEY: 設定あり（N 文字）|なし", "seconds": 0.4, "warning": http のときの注意,
+       "unknown_keys": [coverity の中の知らない項目], "fake_data": 偽の Coverity のファイル（api が fake のとき）,
+       "streams": ["app-main", "app-release"]（名前の順。最大 100 個）, "streams_total": ストリームの数,
+       "streams_note": 100 個を超えて省いたときの説明}
       認証キーの値は返さない。
 
     エラー: 設定のファイルがない・値が正しくないときは ok: false と、何を直すかを result に返す。
       認証の失敗は HTTP 401（ユーザ名と認証キー）か 403（それに加えて Web サービスを使う権限 Access Web services）。
     """
-    return await _run("coverity_check_connection", tools.check_connection, repo_root=repo_root)
+    return await _run("coverity_check_connection", tools.check_connection, repo_root=repo_root,
+                      response_format=response_format)
 
 
 @_register("coverity_search_issues", "Coverity の警告の検索",
@@ -144,20 +155,27 @@ async def coverity_search_issues(
     output_file: Annotated[str | None, Field(
         description="結果を書く JSON のファイルの絶対パス（例: \"/work/out/run1/issues.json\"）。渡すと会話には件数だけ返す")] = None,
 ) -> dict[str, Any]:
-    """1つのストリームの、条件に合う Coverity の警告を探す。最新のスナップショットの警告を探す
-    （triage.status に Fixed か Absent Dismissed があるときは、前のスナップショットの警告も探す）。
+    """1つのストリームの、条件に合う Coverity の警告を探す。
+
+    探す範囲: triage.status を省くと、最新のスナップショットのすべての警告（New・Triaged・Dismissed。
+    Dismissed も入る）。Fixed と Absent Dismissed の警告は前のスナップショットにしかないので、triage.status に
+    それを入れたときだけ、前のスナップショットも探す（例: 直った警告は {"triage": {"status": ["Fixed"]}}）。
 
     使うとき：「ストリーム app-main の、Impact が High の警告を一覧にして」「未分類の NULL_RETURNS は何件？」など。
-    使わないとき：CID ごとの警告経路やチェッカーの説明が要るとき（coverity_get_issue_details を使う）。
+    使わないとき：CID ごとの警告経路やチェッカーの説明が要るとき（coverity_get_issue_details を使う。CID だけ
+    分かっていてストリームが分からないときも、こちらではなく coverity_get_issue_details を stream なしで使う）。
 
     引数:
-      - filter か filter_file のどちらか一方（必須）。streams はちょうど1つ。checkers は * ? [ ] のワイルドカード可。
+      - filter か filter_file のどちらか一方（必須）。streams はちょうど1つ（名前は coverity_check_connection の
+        streams にある。2つのストリームを比べるときは、ストリームごとに呼ぶ）。checkers は * ? [ ] のワイルドカード可。
         impacts: High / Medium / Low / Unspecified。triage.classification: Unclassified / Pending / False Positive /
         Intentional / Bug。triage.action: Undecided / Fix Required / Fix Submitted / Modeling Required / Ignore。
         triage.status: New / Triaged / Dismissed / Absent Dismissed / Fixed。filter にほかの項目があればエラー。
       - offset, limit: 会話に返すときのページ（例: offset=0, limit=20 → 次は offset=next_offset）。
-      - response_format: concise（cid, checker, file, line, function, impact, classification, action, status, stream）
-        か detailed（それに category, cwe, severity, merge_key も）。
+      - response_format: concise（cid, checker, file, line, function, impact, cwe, classification, action, status,
+        stream）か detailed（それに category, severity, merge_key も）。どちらも、値のない項目は省く
+        （例: CWE のない MISRA の警告には cwe がない）。file と line は問題の起きる場所（警告経路の main のイベント）。
+        警告経路のイベントは含まない（要るときは coverity_get_issue_details）。
       - output_file: 渡すと、条件の limit 件（既定 100）までをファイルに書き、解析したリビジョンも記録する。
 
     返す値（会話のとき）:
@@ -170,7 +188,8 @@ async def coverity_search_issues(
        "analyzed_revision": "a1b2c3d", "revision_error": null, "output_file": "…", "next": 続きの案内}
       done が false なら、同じ引数でもう一度呼ぶ（保存済みの続きから探す）。
 
-    エラー: 認証の失敗（401/403）、リダイレクト（3xx）、5xx、JSON でない応答、接続の失敗は、何を確かめるかを返して止まる。
+    エラー: 見られるストリームにないストリームは、見られるストリームの名前を添えてエラーにする（0 件とは返さない）。
+      認証の失敗（401/403）、リダイレクト（3xx）、5xx、JSON でない応答、接続の失敗は、何を確かめるかを返して止まる。
     """
     return await _run("coverity_search_issues", tools.search_issues, repo_root=repo_root, filter=filter,
                       filter_file=filter_file, offset=offset, limit=limit, response_format=response_format,
@@ -180,40 +199,50 @@ async def coverity_search_issues(
 @_register("coverity_get_issue_details", "Coverity の警告経路の取得",
            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 async def coverity_get_issue_details(
+    cids: Annotated[list[int], Field(
+        description="CID の並び（例: [20001, 20002]）。会話に返すときは 10 件まで、output_dir のときは 50 件まで")],
     repo_root: RepoRoot = None,
     stream: Annotated[str | None, Field(
-        description="必須。警告のあるストリームの名前（例: \"app-main\"）。警告の検索の結果の各警告に stream がある")] = None,
-    cids: Annotated[list[int] | None, Field(
-        description="CID の並び（例: [20001, 20002]）。会話に返すときは 10 件まで、output_dir のときは 50 件まで")] = None,
+        description="警告のあるストリームの名前（例: \"app-main\"）。警告の検索の結果の各警告に stream がある。"
+                    "分からなければ省く（見られるすべてのストリームから CID を探す）")] = None,
     response_format: Format = "concise",
     output_dir: Annotated[str | None, Field(
         description="CID ごとに issue-<CID>.json を書くフォルダの絶対パス（例: \"/work/out/run1/items/20001\"）。"
                     "なければ作る（親のフォルダは要る）")] = None,
 ) -> dict[str, Any]:
-    """CID ごとに、ストリームでの警告経路（イベント）とチェッカーの説明を取る。
+    """CID ごとに、警告経路（イベント）とチェッカーの説明を取る。ストリームが分からない CID も探せる。
 
-    使うとき：「CID 20001 の警告経路を見せて」「この警告が本物か調べたいので、経路と説明を取って」など。
+    使うとき：「CID 20001 の警告経路を見せて」「この警告が本物か調べたいので、経路と説明を取って」
+    「CID 20001 はどのストリームの、どのチェッカーの警告？」など。
     使わないとき：条件に合う警告を一覧にするとき（coverity_search_issues を使う）。
 
     引数:
-      - stream（必須）と cids（例: stream="app-main", cids=[20001]）。
-      - response_format: concise はイベントの file, line, tag, description と main（問題の起きる場所なら true）。
-        イベントが 40 件を超えると間を省く。detailed は stream, impact, category, cwe と、すべてのイベント。
+      - cids（必須）と stream（例: stream="app-main", cids=[20001]）。
+        stream を省くと、見られるすべてのストリーム（100 個まで）から CID を探し、見つけたストリームの経路を返す。
+        2つ以上のストリームにある CID は、名前の順で最初のストリームの経路を返し、ほかを other_streams に入れる
+        （そのストリームの経路が要るときは、stream を渡して呼び直す）。問い合わせの数は stream を渡したときと同じ。
+      - response_format: concise はイベントの file, line, tag, description と、問題の起きる場所のイベントだけ main: true。
+        tag はイベントの種類（例: returned_null, alloc_fn, freed_arg, cond_true, dereference, leaked_storage）。
+        イベントは経路の順。concise でイベントが 40 件を超えると間を省く。detailed は impact, category, cwe と、
+        すべてのイベント（main は false も書く）。
       - output_dir: 渡すと issue-<CID>.json（{"fetched_at", "issue", "events", "checker_description"}）を書く。
         取れなかった CID は {"cid", "stream", "fetched_at", "error"} を書く。保存済みの CID は取り直さない。
 
-    返す値（会話のとき）:
-      {"stream": "app-main", "issues": [{"cid": 20001, "checker": "NULL_RETURNS", "file": "src/reader.c", "line": 42,
-       "function": "read_header", "events": [{"file": "src/reader.c", "line": 40, "tag": "returned_null",
-       "description": "…"}, …], "checker_description": "…"}], "failed": {"20009": "理由"}, "remaining": [取っていない CID],
-       "next": 続きの案内}
+    返す値（会話のとき。値のない項目は省く）:
+      {"stream": 渡したストリーム（省いたときは代わりに "streams_searched": 探したストリームの数）,
+       "issues": [{"cid": 20001, "stream": "app-main", "checker": "NULL_RETURNS", "file": "src/reader.c", "line": 42,
+       "function": "read_header", "other_streams": [同じ CID があるほかのストリーム], "events": [{"file": "src/reader.c",
+       "line": 40, "tag": "returned_null", "description": "…"}, …], "checker_description": "…"}],
+       "failed": {"20009": "理由"}, "failed_note": 次にすること（ほかの見られるストリームの名前など）,
+       "remaining": [取っていない CID], "next": 続きの案内}
       remaining が空でなければ、その CID だけで呼び直す。
     返す値（output_dir のとき）:
-      {"done": true/false, "saved": [...], "already_saved": [...], "failed": {...}, "remaining": [...], "output_dir": "…"}
+      {"done": true/false, "saved": [...], "already_saved": [...], "failed": {...}, "failed_note": …,
+       "remaining": [...], "output_dir": "…"}
       done が false なら、同じ引数でもう一度呼ぶ。
 
-    エラー: stream がないとき「stream を渡してください。警告の検索の結果の各警告に stream があります」。
-      ストリームにない CID は、その CID だけ failed になる。認証の失敗などは、何も書かずに止まる。
+    エラー: stream を渡して、そのストリームにない CID は、その CID だけ failed になり、failed_note に、ほかの見られる
+      ストリームの名前と、stream を省くと探せることを書く。認証の失敗などは、何も書かずに止まる。
     """
     return await _run("coverity_get_issue_details", tools.get_issue_details, repo_root=repo_root, stream=stream,
                       cids=cids, response_format=response_format, output_dir=output_dir)

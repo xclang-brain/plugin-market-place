@@ -40,7 +40,7 @@ class EvalDataTest(unittest.TestCase):
                 return found
             offset = page["next_offset"]
 
-    def details(self, stream: str, cids: list[int]) -> list[dict[str, Any]]:
+    def details(self, stream: str | None, cids: list[int]) -> list[dict[str, Any]]:
         out = []
         for start in range(0, len(cids), 10):
             page = self.tools.get_issue_details(stream=stream, cids=cids[start:start + 10], response_format="detailed")
@@ -84,10 +84,8 @@ class EvalDataTest(unittest.TestCase):
         files = Counter(i["file"] for i in main).most_common()
         self.assertGreater(files[0][1], files[1][1], "question 8 needs one answer")
         out.append(files[0][0])
-        # 9. CID 31026: the tag of the event before the main one (find its stream first)
-        stream = next(s for s, issues in (("app-main", main), ("app-release", release))
-                      if any(i["cid"] == 31026 for i in issues))
-        events = self.details(stream, [31026])[0]["events"]
+        # 9. CID 31026: the tag of the event before the main one (the stream is not given: the tool finds it)
+        events = self.details(None, [31026])[0]["events"]
         index = next(n for n, e in enumerate(events) if e["main"])
         out.append(events[index - 1]["tag"])
         # 10. a warning path that reaches another file
@@ -95,11 +93,25 @@ class EvalDataTest(unittest.TestCase):
                  if any(e["file"] != d["file"] for e in d["events"])]
         self.assertEqual(len(cross), 1, "question 10 needs one answer")
         out.append(str(cross[0]))
+        # 11. CID 31030 only: its stream, then the triage store that stream uses
+        found = self.details(None, [31030])[0]
+        self.assertNotIn("other_streams", found, "question 11 needs the CID in one stream")
+        streams = self.tools.check_connection(response_format="detailed")["streams"]
+        out.append(next(s["triage_store"] for s in streams if s["name"] == found["stream"]))
+        # 12. CID 31017: Fixed in one stream, still in the latest snapshot of the other
+        found = self.details(None, [31017])[0]
+        candidates = [found["stream"], *found.get("other_streams", [])]
+        self.assertEqual(len(candidates), 2, "question 12 needs the CID in two streams")
+        fixed = [s for s in candidates if any(i["cid"] == 31017 for i in self.issues(s, triage={"status": ["Fixed"]}))]
+        still = [s for s in candidates if any(i["cid"] == 31017 for i in self.issues(s))]
+        self.assertEqual(len(fixed), 1)
+        self.assertEqual(len(still), 1, "question 12 needs one answer")
+        out.append(still[0])
         return out
 
     def test_answers_of_the_evaluation_hold(self) -> None:
         pairs = ET.parse(XML).getroot().findall("qa_pair")
-        self.assertEqual(len(pairs), 10)
+        self.assertEqual(len(pairs), 12)
         expected = [p.findtext("answer").strip() for p in pairs]
         self.assertEqual(self.answers(), expected)
 

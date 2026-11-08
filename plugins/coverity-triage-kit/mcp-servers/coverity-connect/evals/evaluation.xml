@@ -28,7 +28,7 @@
     <answer>CERT EXP33-C</answer>
   </qa_pair>
   <qa_pair>
-    <question>ストリーム app-main の最新のスナップショットで、警告がいちばん多く出ているファイルはどれですか。Coverity のパスのまま答えてください。</question>
+    <question>ストリーム app-main の最新のスナップショットで、警告がいちばん多く出ているファイルはどれですか（Status が Dismissed の警告も数えます）。Coverity のパスのまま答えてください。</question>
     <answer>src/net/socket.c</answer>
   </qa_pair>
   <qa_pair>
@@ -38,5 +38,13 @@
   <qa_pair>
     <question>ストリーム app-main の最新のスナップショットにある警告のうち、警告経路に、その警告のファイルとは違うファイルのイベントを含むものが1つだけあります。その CID を、数字だけで答えてください。</question>
     <answer>31005</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>CID 31030 のトリアージ（Classification など）を Coverity に書き戻すと、どのトリアージストアに書かれますか。トリアージストアの名前を、Coverity の表記のまま答えてください。</question>
+    <answer>Release Triage Store</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>CID 31017 の警告は、1つのストリームではすでに直っています（Status が Fixed）が、もう1つのストリームでは、最新のスナップショットにまだ残っています。まだ残っているほうのストリームの名前を答えてください。</question>
+    <answer>app-release</answer>
   </qa_pair>
 </evaluation>

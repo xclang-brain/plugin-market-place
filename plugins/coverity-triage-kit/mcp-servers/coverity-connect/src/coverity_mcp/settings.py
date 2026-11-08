@@ -183,8 +183,9 @@ class TriageFilter(BaseModel):
     action: list[str] = Field(default_factory=list,
                               description="Action のどれか（例: [\"Undecided\"]、[\"Fix Required\"]）")
     status: list[str] = Field(default_factory=list,
-                              description="Status のどれか（例: [\"New\", \"Triaged\"]）。Fixed か Absent Dismissed を入れると、"
-                                          "前のスナップショットの警告も探す")
+                              description="Status のどれか（例: [\"New\", \"Triaged\"]）。省くと、最新のスナップショットの"
+                                          "すべての警告（New・Triaged・Dismissed）。Fixed と Absent Dismissed の警告は"
+                                          "前のスナップショットにしかないので、それを入れたときだけ、前のスナップショットも探す")
 
     @model_validator(mode="after")
     def _canonical_values(self) -> "TriageFilter":
@@ -225,7 +226,8 @@ class FilterArg(FilterSpec):
     name: str = Field(default="", description="表示の名前（省略可）")
     project: str | None = Field(default=None, description="プロジェクト（省略可。検索の絞り込みには使わない）")
     streams: list[str] = Field(default_factory=list,
-                               description="ストリームの名前をちょうど1つ（必須。例: [\"app-main\"]）")
+                               description="ストリームの名前をちょうど1つ（必須。例: [\"app-main\"]）。"
+                                           "名前は coverity_check_connection の streams にある")
     checkers: list[str] = Field(default_factory=list,
                                 description="チェッカーのどれか。* ? [ ] のワイルドカード可"
                                             "（例: [\"NULL_RETURNS\", \"MISRA C-2012 Rule 10.*\"]）")
@@ -241,7 +243,9 @@ class FilterArg(FilterSpec):
 def _one_stream(spec: FilterSpec, where: str) -> FilterSpec:
     if len(spec.streams) != 1:
         raise SettingsError(f"{where}の streams に、ストリームの名前をちょうど1つ書いてください"
-                            f"（今は {len(spec.streams)} 個。例: {{\"streams\": [\"app-main\"]}}）")
+                            f"（今は {len(spec.streams)} 個。例: {{\"streams\": [\"app-main\"]}}）。"
+                            "見られるストリームの名前は coverity_check_connection の streams にあります。"
+                            "2つ以上のストリームは、ストリームごとに呼んでください")
     return spec
 
 

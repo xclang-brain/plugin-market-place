@@ -37,7 +37,7 @@ from pydantic import ValidationError
 from . import connect, plantoken
 from .coverity import CoverityClient, CoverityError, make_client
 from .envvars import Masker
-from .models import Issue, IssueDetail, PlanEntry, TriageAttributes, TriageEntry
+from .models import Issue, IssueDetail, PlanEntry, StreamInfo, TriageAttributes, TriageEntry
 from .settings import CoverityConfig, FilterArg, FilterSpec, SettingsError, load_config, load_filter, parse_filter
 
 log = logging.getLogger("coverity_mcp")
@@ -51,13 +51,16 @@ MAX_EXCLUDED_SAMPLES = 50  # rows left out after the search, kept in issues.json
 MAX_RECORDS = 500  # request records kept in a file
 CHARACTER_LIMIT = 25_000  # inline results stay below this size (clients cap tool output near 25k tokens)
 CONCISE_EVENTS = 40  # events shown per warning in the concise form (first and last halves)
+MAX_LISTED_STREAMS = 100  # streams in one check result (names: about 3,000 characters)
+MAX_LOOKUP_STREAMS = 100  # streams one warning-path request looks in when no stream is given (see below)
+MAX_HINT_STREAMS = 20  # stream names in a hint of an error
 CALL_AGAIN = "続きがあります。同じ引数でもう一度呼んでください"
 RESULT_DIR = "coverity-connect-mcp"  # <RESULT_DIR>-<user> in the temporary folder: write-backs passed as entries
 DEFAULT_SECRET_NAMES = ("COV_USER", "COV_AUTH_KEY")
 
 ResponseFormat = Literal["concise", "detailed"]
-CONCISE_FIELDS = ("cid", "checker", "file", "line", "function", "impact", "classification", "action", "status",
-                  "stream")
+CONCISE_FIELDS = ("cid", "checker", "file", "line", "function", "impact", "cwe", "classification", "action",
+                  "status", "stream")
 DETAILED_FIELDS = tuple(Issue.model_fields)
 
 
@@ -198,10 +201,28 @@ def one_of(name_a: str, a: Any, name_b: str, b: Any) -> None:
         raise ToolFailure(f"{name_a} か {name_b} の、どちらか一方を渡してください")
 
 
-# ---- check -------------------------------------------------------------------------------------
+# ---- check ------------------------------------------------------------------------------------
+
+def _names(names: list[str], most: int = MAX_HINT_STREAMS) -> str:
+    """Stream names for a message: at most ``most``, then how many more."""
+    shown = ", ".join(names[:most])
+    return shown + (f" ほか {len(names) - most} 個" if len(names) > most else "")
+
+
+def _streams_out(streams: list[StreamInfo], response_format: ResponseFormat) -> dict[str, Any]:
+    shown = streams[:MAX_LISTED_STREAMS]
+    out: dict[str, Any] = {
+        "streams_total": len(streams),
+        "streams": [s.name for s in shown] if response_format == "concise"
+        else [compact(s.model_dump()) for s in shown]}
+    if len(streams) > len(shown):
+        out["streams_note"] = (f"ストリームが {len(streams)} 個あるので、名前の順に先頭の {len(shown)} 個だけを"
+                               "返しました")
+    return out
+
 
 @guarded
-def check_connection(repo_root: str | None = None) -> dict[str, Any]:
+def check_connection(repo_root: str | None = None, response_format: ResponseFormat = "concise") -> dict[str, Any]:
     try:
         config = config_of(repo_root)
     except SettingsError as exc:
@@ -217,15 +238,53 @@ def check_connection(repo_root: str | None = None) -> dict[str, Any]:
             client = make_client(config)
         except CoverityError as exc:
             return {**out, "ok": False, "result": str(exc)}
-        count = len(getattr(client, "issues", []))
-        client.close()
+        try:
+            count, streams = len(getattr(client, "issues", [])), client.list_streams()
+        finally:
+            client.close()
         return {**out, "ok": True, "fake_data": config.fake_data,
-                "result": f"偽の Coverity（api: fake）を使う設定です。偽の警告は {count} 件です"}
+                "result": f"偽の Coverity（api: fake）を使う設定です。偽の警告は {count} 件です",
+                **_streams_out(streams, response_format)}
     out.update(connect.check_auth(config))
+    streams = out.pop("streams", None)
     if config.url.lower().startswith("http://"):
         out["warning"] = ("URL が http です。認証キーが暗号化されずに送られます。"
                           "https が使えるか Coverity の管理者に確認してください")
+    if streams is not None:
+        out.update(_streams_out(streams, response_format))
     return out
+
+
+def visible_streams(config: CoverityConfig, client: CoverityClient, deadline: Deadline) -> list[StreamInfo] | None:
+    """The streams the user can see, or None when they cannot be read now. For hints only: a failure
+    here never fails the call whose result is already there."""
+    if not deadline.allows(client):
+        return None
+    try:
+        return client.list_streams()
+    except CoverityError as exc:
+        log.warning("%s", masker_for(config).text(f"ストリームの一覧を取れませんでした: {exc}"))
+        return None
+
+
+def unknown_stream(config: CoverityConfig, stream: str, deadline: Deadline) -> str | None:
+    """A message when ``stream`` is not among the streams the user can see; None when it is, or when
+    the list cannot be read now."""
+    try:
+        client = make_client(config)
+    except CoverityError:
+        return None
+    try:
+        streams = visible_streams(config, client, deadline)
+    finally:
+        client.close()
+    names = [s.name for s in streams or []]
+    if streams is None or stream in names:
+        return None
+    return (f"ストリーム {stream} は、見られるストリームにありません（名前は大文字と小文字も区別します）。"
+            + (f"見られるストリーム（{len(names)} 個）: {_names(names)}。" if names else
+               "見られるストリームが1つもありません。ユーザーにストリームを見る権限があるかを、Coverity の管理者に確かめてください。")
+            + "ストリームの名前は coverity_check_connection でも分かります")
 
 
 # ---- search ------------------------------------------------------------------------------------
@@ -269,12 +328,26 @@ def search_issues(repo_root: str | None = None, filter: FilterArg | dict | None 
         if not 1 <= limit <= MAX_PAGE:
             raise ToolFailure(f"limit は 1〜{MAX_PAGE} で渡してください（{limit}）。もっと多く取るときは、"
                               "ページを続けて取るか、output_file を渡してファイルに書いてください")
-        out = _search_inline(config, spec, offset, limit, response_format, deadline)
-    else:
-        if offset:
-            raise ToolFailure("offset は output_file を渡さないときだけ使います（output_file を渡したときは、"
-                              "同じ引数で呼び直すと続きから検索します）")
-        out = _search_file(config, spec, filter_sha, absolute(output_file, "output_file"), deadline)
+    elif offset:
+        raise ToolFailure("offset は output_file を渡さないときだけ使います（output_file を渡したときは、"
+                          "同じ引数で呼び直すと続きから検索します）")
+    try:
+        if output_file is None:
+            out = _search_inline(config, spec, offset, limit, response_format, deadline)
+            empty = offset == 0 and out["count"] == 0 and not out["has_more"]
+        else:
+            out = _search_file(config, spec, filter_sha, absolute(output_file, "output_file"), deadline)
+            empty = out["done"] and out["found"] == 0
+    except CoverityError as exc:
+        # Some servers answer a stream they do not have with 404, others with no issue.
+        if exc.fatal or exc.status != 404:
+            raise
+        raise ToolFailure(unknown_stream(config, spec.streams[0], deadline) or str(exc)) from None
+    if empty:
+        # No issue: say so when the stream itself is wrong, rather than "0 issues" (one request, reused).
+        message = unknown_stream(config, spec.streams[0], deadline)
+        if message:
+            raise ToolFailure(message)
     if skipped:
         out["skipped_keys"] = skipped
     return out
@@ -402,8 +475,13 @@ def _search_file(config: CoverityConfig, spec: FilterSpec, filter_sha: str, out:
 
 
 # ---- warning paths -----------------------------------------------------------------------------
-
-STREAM_MISSING = "stream を渡してください。警告の検索の結果の各警告に stream があります"
+#
+# Without a stream, the CID is looked for in every stream the user can see, in one request per CID
+# (the same number of requests as with a stream; see connect.py). The path comes from the first of
+# those streams, by name, that holds the CID, and the others are listed. More than
+# MAX_LOOKUP_STREAMS streams are not searched: the request and the server's work grow with the
+# number of streams, and 100 is the limit the SOAP API documents for its lists of CIDs (no limit is
+# documented for streamIdList; the same bound keeps one request of a known size).
 
 
 def _events(detail: IssueDetail, response_format: ResponseFormat, cap: bool) -> tuple[list[dict[str, Any]], int]:
@@ -422,14 +500,13 @@ def _events(detail: IssueDetail, response_format: ResponseFormat, cap: bool) -> 
 def _detail_inline(detail: IssueDetail, response_format: ResponseFormat, cap: bool) -> dict[str, Any]:
     issue = detail.issue
     events, omitted = _events(detail, response_format, cap)
+    head = {"cid": issue.cid, "stream": issue.stream, "checker": issue.checker, "file": issue.file,
+            "line": issue.line, "function": issue.function}
     if response_format == "detailed":
-        head = {"cid": issue.cid, "stream": issue.stream, "checker": issue.checker, "file": issue.file,
-                "line": issue.line, "function": issue.function, "impact": issue.impact, "category": issue.category,
-                "cwe": issue.cwe}
-    else:
-        head = {"cid": issue.cid, "checker": issue.checker, "file": issue.file, "line": issue.line,
-                "function": issue.function}
-    item = compact({**head, "events": events, "checker_description": detail.checker_description})
+        head.update({"impact": issue.impact, "category": issue.category, "cwe": issue.cwe})
+    others = [s for s in detail.found_in if s != issue.stream]
+    item = compact({**head, "other_streams": others, "events": events,
+                    "checker_description": detail.checker_description})
     item.setdefault("events", [])
     if omitted:
         item["omitted_events"] = omitted
@@ -438,105 +515,159 @@ def _detail_inline(detail: IssueDetail, response_format: ResponseFormat, cap: bo
     return item
 
 
+def _lookup_streams(config: CoverityConfig, client: CoverityClient) -> list[str]:
+    """Every stream the user can see, to look for CIDs whose stream is not given."""
+    try:
+        streams = [s.name for s in client.list_streams()]
+    except CoverityError as exc:
+        if exc.fatal:
+            raise
+        raise ToolFailure(f"ストリームの一覧を取れないので、CID だけでは探せません（{exc}）。stream を渡してください") from None
+    if not streams:
+        raise ToolFailure("見られるストリームが1つもありません。ユーザーにストリームを見る権限があるかを、"
+                          "Coverity の管理者に確かめてください")
+    if len(streams) > MAX_LOOKUP_STREAMS:
+        raise ToolFailure(f"見られるストリームが {len(streams)} 個あり、{MAX_LOOKUP_STREAMS} 個を超えるので、CID だけでは"
+                          "探しません。stream を渡してください（ストリームの名前は coverity_check_connection の streams に"
+                          "あります。警告の検索の結果の各警告にも stream があります）")
+    return streams
+
+
+def _failed_note(config: CoverityConfig, client: CoverityClient, stream: str | None, failed: dict[str, str],
+                 deadline: Deadline) -> str | None:
+    """With a stream given, where else to look for the CIDs in ``failed`` (without one, the message of
+    each CID already says which streams were searched)."""
+    if not failed or stream is None:
+        return None
+    text = f"failed の CID は、ストリーム {stream} で取れませんでした。"
+    streams = visible_streams(config, client, deadline)
+    if streams is not None:
+        names = [s.name for s in streams]
+        others = [n for n in names if n != stream]
+        if stream not in names:
+            text += f"ストリーム {stream} は、見られるストリームにありません。"
+        text += (f"ほかの見られるストリーム（{len(others)} 個）: {_names(others)}。" if others
+                 else "ほかに見られるストリームはありません。")
+    return text + "stream を省いて呼ぶと、見られるすべてのストリームから CID を探します"
+
+
 @guarded
 def get_issue_details(repo_root: str | None = None, stream: str | None = None, cids: list[int] | None = None,
                       response_format: ResponseFormat = "concise", output_dir: str | None = None) -> dict[str, Any]:
     deadline = Deadline()
-    if stream is None or not str(stream).strip():
-        raise ToolFailure(STREAM_MISSING)
-    stream = str(stream).strip()
+    stream = str(stream).strip() or None if stream is not None else None
     config = config_of(repo_root)
     wanted = list(dict.fromkeys(cids or []))
     most = MAX_CIDS if output_dir is not None else MAX_INLINE_CIDS
     if not wanted or len(wanted) > most:
         raise ToolFailure(f"cids は 1〜{most} 件で渡してください（{len(wanted)} 件）"
                           + ("。分けて呼んでください" if output_dir is not None else "。もっと多いときは output_dir を渡してください"))
-    if output_dir is None:
-        return _details_inline(config, stream, wanted, response_format, deadline)
-    target = absolute(output_dir, "output_dir")
-    if not target.is_dir():
-        if not target.parent.is_dir():
-            raise ToolFailure(f"output_dir を作るフォルダがありません: {target.parent}")
-        target.mkdir(exist_ok=True)
-    return _details_files(config, stream, wanted, target, deadline)
+    target = None
+    if output_dir is not None:
+        target = absolute(output_dir, "output_dir")
+        if not target.is_dir():
+            if not target.parent.is_dir():
+                raise ToolFailure(f"output_dir を作るフォルダがありません: {target.parent}")
+            target.mkdir(exist_ok=True)
+    client = make_client(config)
+    try:
+        if target is None:
+            out = _details_inline(config, client, stream, wanted, response_format, deadline)
+        else:
+            out = _details_files(config, client, stream, wanted, target, deadline)
+        note = _failed_note(config, client, stream, out["failed"], deadline)
+    finally:
+        client.close()
+    if note:
+        out["failed_note"] = note
+    return out
 
 
-def _details_inline(config: CoverityConfig, stream: str, cids: list[int], response_format: ResponseFormat,
-                    deadline: Deadline) -> dict[str, Any]:
+def _where(stream: str | None, streams: list[str] | None) -> dict[str, Any]:
+    """The stream given, or how many streams were searched for CIDs without one (none: no lookup)."""
+    if stream is not None:
+        return {"stream": stream}
+    return {"streams_searched": len(streams)} if streams else {}
+
+
+def _fetch(client: CoverityClient, cid: int, streams: list[str], masker: Masker) -> IssueDetail | str:
+    """The warning path, or why this CID failed (a failure of the whole call is raised)."""
+    try:
+        return client.issue_detail(cid, streams)
+    except CoverityError as exc:
+        if exc.fatal:
+            raise  # nothing is written, so the CID can be fetched later
+        return masker.text(str(exc))
+
+
+def _details_inline(config: CoverityConfig, client: CoverityClient, stream: str | None, cids: list[int],
+                    response_format: ResponseFormat, deadline: Deadline) -> dict[str, Any]:
     masker = masker_for(config)
+    streams = [stream] if stream is not None else _lookup_streams(config, client)
     issues: list[dict[str, Any]] = []
     failed: dict[str, str] = {}
     remaining: list[int] = []
     too_big = False
     used = 0
-    client = make_client(config)
-    try:
-        for cid in cids:
-            if too_big or not deadline.allows(client):
-                remaining.append(cid)
-                continue
-            try:
-                detail = client.issue_detail(cid, stream)
-            except CoverityError as exc:
-                if exc.fatal:
-                    raise
-                failed[str(cid)] = masker.text(str(exc))
-                continue
-            item = _detail_inline(detail, response_format, cap=response_format == "concise")
-            if size(item) > CHARACTER_LIMIT - 2_000:
-                item = _detail_inline(detail, "concise", cap=True)
-            if issues and used + size(item) > CHARACTER_LIMIT - 2_000:
-                too_big = True
-                remaining.append(cid)
-                continue
-            used += size(item)
-            issues.append(item)
-    finally:
-        client.close()
+    for cid in cids:
+        if too_big or not deadline.allows(client):
+            remaining.append(cid)
+            continue
+        detail = _fetch(client, cid, streams, masker)
+        if isinstance(detail, str):
+            failed[str(cid)] = detail
+            continue
+        item = _detail_inline(detail, response_format, cap=response_format == "concise")
+        if size(item) > CHARACTER_LIMIT - 2_000:
+            item = _detail_inline(detail, "concise", cap=True)
+        if issues and used + size(item) > CHARACTER_LIMIT - 2_000:
+            too_big = True
+            remaining.append(cid)
+            continue
+        used += size(item)
+        issues.append(item)
     if too_big:
         note = "結果が大きいので区切りました。remaining の CID だけを cids に渡して呼び直してください"
     elif remaining:
         note = "時間が足りず、remaining の CID は取っていません。その CID だけを cids に渡して呼び直してください"
     else:
         note = None
-    return {"stream": stream, "issues": issues, "failed": failed, "remaining": remaining,
+    return {**_where(stream, streams), "issues": issues, "failed": failed, "remaining": remaining,
             "seconds": round(deadline.elapsed(), 1), "next": note}
 
 
-def _details_files(config: CoverityConfig, stream: str, cids: list[int], target: Path,
-                   deadline: Deadline) -> dict[str, Any]:
+def _details_files(config: CoverityConfig, client: CoverityClient, stream: str | None, cids: list[int],
+                   target: Path, deadline: Deadline) -> dict[str, Any]:
     masker = masker_for(config)
+    streams: list[str] | None = [stream] if stream is not None else None
     saved: list[int] = []
     already: list[int] = []
     failed: dict[str, str] = {}
     remaining: list[int] = []
-    client = make_client(config)
-    try:
-        for cid in cids:
-            file = target / f"issue-{cid}.json"
-            with lock_for(file):
-                if file.is_file():
-                    already.append(cid)
-                elif not deadline.allows(client):
-                    remaining.append(cid)
-                else:
-                    try:
-                        detail = client.issue_detail(cid, stream)
-                    except CoverityError as exc:
-                        if exc.fatal:
-                            raise  # nothing is written, so the CID can be fetched later
-                        failed[str(cid)] = masker.text(str(exc))
-                        write_json(file, {"cid": cid, "stream": stream, "fetched_at": now(), "error": failed[str(cid)]})
-                        continue
-                    write_json(file, {"fetched_at": now(), "issue": detail.issue.model_dump(exclude_none=True),
-                                      "events": [e.model_dump(exclude_none=True) for e in detail.events],
-                                      "checker_description": detail.checker_description})
-                    saved.append(cid)
-    finally:
-        client.close()
+    for cid in cids:
+        file = target / f"issue-{cid}.json"
+        with lock_for(file):
+            if file.is_file():
+                already.append(cid)
+                continue
+            if streams is None:
+                streams = _lookup_streams(config, client)  # only when a CID is still to fetch
+            if not deadline.allows(client):
+                remaining.append(cid)
+                continue
+            detail = _fetch(client, cid, streams, masker)
+            if isinstance(detail, str):
+                failed[str(cid)] = detail
+                write_json(file, {"cid": cid, "stream": stream, "fetched_at": now(), "error": detail})
+                continue
+            write_json(file, {"fetched_at": now(), "issue": detail.issue.model_dump(exclude_none=True),
+                              "events": [e.model_dump(exclude_none=True) for e in detail.events],
+                              "checker_description": detail.checker_description})
+            saved.append(cid)
     done = not remaining
-    return {"done": done, "saved": saved, "already_saved": already, "failed": failed, "remaining": remaining,
-            "output_dir": str(target), "seconds": round(deadline.elapsed(), 1), "next": None if done else CALL_AGAIN}
+    return {"done": done, **_where(stream, streams), "saved": saved, "already_saved": already,
+            "failed": failed, "remaining": remaining, "output_dir": str(target),
+            "seconds": round(deadline.elapsed(), 1), "next": None if done else CALL_AGAIN}
 
 
 # ---- write-back --------------------------------------------------------------------------------

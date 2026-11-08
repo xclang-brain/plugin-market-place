@@ -109,6 +109,38 @@ if not MISSING:
             self.assertEqual(out["issues"][0]["events"][1], {"file": "src/reader.c", "line": 42, "tag": "dereference",
                                                              "description": "NULL かもしれない値を使う。", "main": True})
             self.assertIn("20003", out["failed"])
+            self.assertIn("ほかの見られるストリーム（1 個）: app-release", out["failed_note"])
+
+        def test_check_connection_lists_the_streams_of_the_file(self) -> None:
+            out = self.tools.check_connection(repo_root=str(self.repo))
+            self.assertEqual((out["streams"], out["streams_total"]), (["app-main", "app-release"], 2))
+            out = self.tools.check_connection(repo_root=str(self.repo), response_format="detailed")
+            self.assertEqual(out["streams"], [
+                {"name": "app-main", "project": "app", "triage_store": "Default Triage Store"},
+                {"name": "app-release", "project": "app", "triage_store": "Release Triage Store"}])
+
+        def test_details_without_stream_find_the_stream(self) -> None:
+            out = self.tools.get_issue_details(repo_root=str(self.repo), cids=[20003, 20001, 29999])
+            self.assertEqual([(i["cid"], i["stream"]) for i in out["issues"]], [(20003, "app-release"), (20001, "app-main")])
+            self.assertEqual(out["streams_searched"], 2)
+            self.assertIn("app-main, app-release", out["failed"]["29999"])
+
+        def test_a_cid_in_two_streams_names_the_other_one(self) -> None:
+            path = self.repo / ".coverity-triage" / "fake-issues.yaml"
+            path.write_text(FAKE + "  - {cid: 20001, stream: app-release, checker: NULL_RETURNS, file: src/reader.c,"
+                                   " events: [{file: src/reader.c, line: 9, tag: dereference, description: d, main: true}]}\n",
+                            encoding="utf-8")
+            first = self.tools.get_issue_details(repo_root=str(self.repo), cids=[20001])["issues"][0]
+            self.assertEqual((first["stream"], first["other_streams"], first["events"][-1]["line"]),
+                             ("app-main", ["app-release"], 42))
+            other = self.tools.get_issue_details(repo_root=str(self.repo), stream="app-release", cids=[20001])
+            self.assertEqual(other["issues"][0]["events"][0]["line"], 9)
+            self.assertNotIn("other_streams", other["issues"][0])
+
+        def test_search_of_a_stream_that_is_not_there_says_so(self) -> None:
+            message = self.assertFailure(self.search, filter={"streams": ["app-dev"]})
+            self.assertIn("app-dev は、見られるストリームにありません", message)
+            self.assertIn("app-main, app-release", message)
 
         def test_files_have_the_contract_shapes(self) -> None:
             issues = self.run_dir / "issues.json"

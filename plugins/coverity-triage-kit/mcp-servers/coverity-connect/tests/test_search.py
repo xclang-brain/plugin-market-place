@@ -25,8 +25,8 @@ if not MISSING:
             self.assertEqual([i["cid"] for i in out["issues"]], [10001, 10002])
             self.assertEqual(out["issues"][0], {
                 "cid": 10001, "checker": "USE_AFTER_FREE", "file": "/builddir/build/BUILD/libev-4.33/ev_iouring.c",
-                "line": 261, "function": "iouring_sqe_get", "impact": "High", "classification": "Unclassified",
-                "action": "Undecided", "status": "New", "stream": STREAM})
+                "line": 261, "function": "iouring_sqe_get", "impact": "High", "cwe": 416,
+                "classification": "Unclassified", "action": "Undecided", "status": "New", "stream": STREAM})
             for key in ("stream", "count", "offset", "total", "has_more", "next_offset", "excluded"):
                 self.assertIn(key, out)
             self.assertEqual((out["count"], out["total"], out["has_more"], out["next_offset"]), (2, 2, False, None))
@@ -105,6 +105,35 @@ if not MISSING:
                                                        filter={"streams": [STREAM]}))
             self.assertIn("ストリーム", self.assertFailure(self.search, filter={"streams": [STREAM, "other"]}))
             self.assertIn("streams", self.assertFailure(self.search, filter={"impacts": ["High"]}))
+            self.assertIn("coverity_check_connection", self.assertFailure(self.search, filter={"impacts": ["High"]}))
+
+        def test_concise_leaves_out_fields_without_value(self) -> None:
+            self.cov.items.append(issue(10003, checker="MISRA C-2012 Rule 10.4", cwe=""))
+            out = self.search(filter={"streams": [STREAM]})
+            self.assertNotIn("cwe", out["issues"][2])
+
+        def test_a_stream_that_is_not_visible_is_an_error_not_zero_issues(self) -> None:
+            message = self.assertFailure(self.search, filter={"streams": ["libev-dev"]})
+            self.assertIn("libev-dev は、見られるストリームにありません", message)
+            self.assertIn(f"{STREAM}, libev-release", message)
+            # a stream without issues is not an error
+            self.assertEqual(self.search(filter={"streams": ["libev-release"]})["count"], 0)
+            # the server may answer an unknown stream with 404 instead
+            self.cov.rest_override = lambda request: (
+                cov.json_response(404, {"code": 1300, "message": "No stream found for name libev-dev."})
+                if request.url.path.endswith("/search") else None)
+            self.assertIn("見られるストリーム（2 個）", self.assertFailure(self.search, filter={"streams": ["libev-dev"]}))
+
+        def test_a_failing_stream_list_never_fails_a_search(self) -> None:
+            self.cov.rest_override = lambda request: (cov.json_response(500, {"code": 1004, "message": "Internal error"})
+                                                      if request.url.path == "/api/v2/streams" else None)
+            self.assertEqual(self.search(filter={"streams": ["libev-release"]})["count"], 0)
+            self.assertIn("GET /api/v2/streams", self.cov.requests)
+
+        def test_an_empty_page_after_the_first_does_not_list_streams(self) -> None:
+            out = self.search(filter={"streams": ["libev-dev"]}, offset=5)
+            self.assertEqual(out["count"], 0)
+            self.assertNotIn("GET /api/v2/streams", self.cov.requests)
 
         def test_offset_is_only_for_inline(self) -> None:
             self.assertFailure(self.search, filter_file=self.filter_file(), output_file=str(self.run_dir / "i.json"),
@@ -271,6 +300,12 @@ if not MISSING:
             self.cov.columns_queue.append(lambda: cov.json_response(200, []))
             self.assertIn("cid", self.assertFailure(self.search, filter={"streams": [STREAM]}))
             self.assertEqual(len(self.search(filter={"streams": [STREAM]})["issues"]), 2)
+
+        def test_a_stream_that_is_not_visible_is_an_error_in_file_mode_too(self) -> None:
+            path = self.run_dir / "filter-dev.json"
+            path.write_text(json.dumps({"streams": ["libev-dev"]}), encoding="utf-8")
+            message = self.assertFailure(self.search, filter_file=str(path), output_file=str(self.run_dir / "i.json"))
+            self.assertIn("libev-dev は、見られるストリームにありません", message)
 
         def test_output_folder_must_exist(self) -> None:
             message = self.assertFailure(self.search, filter_file=self.filter_file(),
