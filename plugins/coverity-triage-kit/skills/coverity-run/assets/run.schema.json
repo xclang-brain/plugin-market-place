@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run.schema.json",
+  "title": "実行の状態（run.json）",
+  "description": "一括実行だけが書く。ほかの部品が読む項目だけを決め、ほかの項目は許す（一括実行のための項目で、版によって変わる）。",
+  "type": "object",
+  "required": ["format", "tool_version", "run_id", "repo_root", "created_at", "filter_name", "review", "integration",
+               "items", "stopped"],
+  "properties": {
+    "format": {"const": 2, "description": "この形の版。違う値の実行フォルダは、別の形で作られたもの"},
+    "tool_version": {"type": "string", "pattern": "\\S", "description": "実行フォルダを作った一括実行のスクリプトの版"},
+    "run_id": {"type": "string", "pattern": "^[0-9]{8}-[0-9]{6}(-[0-9]+)?$", "description": "実行の ID（フォルダの名前）"},
+    "repo_root": {"type": "string", "pattern": "\\S", "description": "調べたリポジトリの一番上のフォルダ（絶対パス）"},
+    "created_at": {"type": "string", "pattern": "\\S", "description": "実行を作った日時（ISO）"},
+    "filter_name": {"type": "string", "description": "条件の名前"},
+    "review": {"type": "boolean", "description": "結果の確かめ（検証役）を使う実行か"},
+    "integration": {"type": "boolean", "description": "同じ原因の統合（統合役）を使う実行か"},
+    "stopped": {"type": "boolean", "description": "止められた実行か"},
+    "items": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["id", "cids", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^([0-9]+|G[0-9]+)$", "description": "作業の ID（CID か、グループの G1 など）"},
+        "cids": {"type": "array", "items": {"type": "integer"}},
+        "status": {"enum": ["pending", "in_progress", "done", "error", "merged"],
+                   "description": "pending＝まだ、in_progress＝作業中、done＝終わった、error＝処理できなかった、merged＝ほかの作業にまとめた"},
+        "merged_into": {"type": ["string", "null"], "description": "まとめた先の作業の ID（merged のとき）"},
+        "review": {"enum": ["pass", "flag", "rework", "unverified", null],
+                   "description": "確かめの結果（pass＝合格、flag＝要確認、rework＝差し戻し中、unverified＝未検証、null＝まだ）"},
+        "applied": {"type": "object", "description": "反映したもの"}
+      }
+    }
+  }
+}

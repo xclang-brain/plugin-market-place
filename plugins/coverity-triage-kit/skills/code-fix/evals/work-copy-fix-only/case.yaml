@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: work-copy-fix-only
+expected_outcome: |
+  最新のリビジョン（work/w1/）では関数が1つ増えて行がずれており、load_table() の短い読みの枝は 23〜25 行にある。
+  そこで fp を閉じてから LOADER_ERR_SHORT を返すように、work/w1/src/loader.c だけを最小に直す
+  （ファイルの書き方 (void)fclose(fp); とタブの字下げに合わせる）。repo/ は変えない。
+  out/fix.json に指定の7項目だけを書く：already_fixed_on_latest は false、exceeded_constraints は空、
+  classification は Bug、action は Fix Required、severity は Impact High に合わせて Major。質問はせず、1行だけを返す。
+context:
+  scaffold_script: place-files.sh

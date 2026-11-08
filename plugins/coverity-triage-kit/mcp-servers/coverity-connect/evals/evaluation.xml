@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>ストリーム app-main の警告のうち、Impact が High で、まだ分類されていない（Classification が Unclassified の）ものを調べてください。警告経路のイベントの数がいちばん多い警告の CID を、数字だけで答えてください。</question>
+    <answer>31021</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main と app-release の両方の最新のスナップショットにある警告（同じ CID）のうち、2つのストリームで Classification が違うものはいくつありますか。数字だけで答えてください。</question>
+    <answer>5</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main の「MISRA C-2012 Rule 10.4」の警告のうち、src/core/ の下のファイルで出ているものの関数の名前を答えてください。名前だけを答えてください。</question>
+    <answer>timer_elapsed</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main で、すでに直った（Status が Fixed の）警告が出ていた関数の名前を答えてください。名前だけを答えてください。</question>
+    <answer>config_get</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-release の最新のスナップショットにあって、ストリーム app-main にはない警告のうち、Impact が High のものはいくつありますか。数字だけで答えてください。</question>
+    <answer>4</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main の USE_AFTER_FREE の警告で、メモリを解放しているイベントは、ファイルの何行目にありますか。数字だけで答えてください。</question>
+    <answer>70</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main で Action が Fix Required の警告のうち、CWE の番号がいちばん大きい警告のチェッカーの名前を、Coverity の表記のまま答えてください。</question>
+    <answer>CERT EXP33-C</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main の最新のスナップショットで、警告がいちばん多く出ているファイルはどれですか。Coverity のパスのまま答えてください。</question>
+    <answer>src/net/socket.c</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>CID 31026 の警告経路で、問題が起きる場所のイベント（main のイベント）の1つ前のイベントのタグ（tag）を、そのまま答えてください。</question>
+    <answer>cond_true</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>ストリーム app-main の最新のスナップショットにある警告のうち、警告経路に、その警告のファイルとは違うファイルのイベントを含むものが1つだけあります。その CID を、数字だけで答えてください。</question>
+    <answer>31005</answer>
+  </qa_pair>
+</evaluation>

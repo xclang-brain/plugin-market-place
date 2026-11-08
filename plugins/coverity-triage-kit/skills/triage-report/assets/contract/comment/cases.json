@@ -1,0 +1,357 @@
+{
+  "version": 1,
+  "contract": "comment",
+  "cases": [
+    {
+      "name": "false_positive_example_passes",
+      "input": {
+        "comment": "誤検知。get_buf() の戻り値は NULL になりうるが、呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いてから渡しているため、NULL を参照することはない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "intentional_example_passes",
+      "input": {
+        "comment": "意図的。case 2 から case 3 へのフォールスルーは、状態 2 の処理のあと状態 3 の処理を続けて行う設計（src/fsm.c:88 のコメントに記載）であり、break の書き忘れではない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "true_bug_not_executed_fact_passes",
+      "input": {
+        "comment": "本物の不具合。この機能は今の製品では無効（config.h:12）で、この処理は実行されない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "true_bug_with_tadashi_fails",
+      "input": {
+        "comment": "本物の不具合。ただし、この機能は今の製品では無効（config.h:12）で、この処理は実行されない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "tadashi_in_kanji_fails",
+      "input": {
+        "comment": "本物の不具合。但し、この機能は今の製品では無効（config.h:12）である。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "exactly_200_chars_passes",
+      "input": {
+        "comment": "誤検知。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "201_chars_fails",
+      "input": {
+        "comment": "誤検知。ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "astral_char_counts_as_one_char",
+      "input": {
+        "comment": "誤検知。ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ😀。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "leading_space_fails",
+      "input": {
+        "comment": " 誤検知。get_buf() の戻り値は NULL になりうるが、呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いてから渡しているため、NULL を参照することはない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "trailing_newline_fails",
+      "input": {
+        "comment": "誤検知。get_buf() の戻り値は NULL になりうるが、呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いてから渡しているため、NULL を参照することはない。\n"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "trailing_fullwidth_space_fails",
+      "input": {
+        "comment": "誤検知。get_buf() の戻り値は NULL になりうるが、呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いてから渡しているため、NULL を参照することはない。　"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "empty_fails",
+      "input": {
+        "comment": ""
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "whitespace_only_fails",
+      "input": {
+        "comment": "   "
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "no_category_fails",
+      "input": {
+        "comment": "get_buf() の戻り値は、呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いている。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "halfwidth_period_after_category_fails",
+      "input": {
+        "comment": "誤検知.get_buf() の戻り値は呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いている。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "other_category_word_fails",
+      "input": {
+        "comment": "対象外。この関数はテストのときだけビルドする（CMakeLists.txt:12）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "heading_mark_fails",
+      "input": {
+        "comment": "# 誤検知。呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いている。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "category_only_fails",
+      "input": {
+        "comment": "誤検知。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "two_sentences_after_category_pass",
+      "input": {
+        "comment": "誤検知。index は parse_header()（src/reader.c:55〜60）で 0〜7 に制限している。配列 buf は 8 要素で、外を読むことはない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "three_sentences_after_category_fail",
+      "input": {
+        "comment": "誤検知。index は 0〜7 に制限している（src/reader.c:55）。配列 buf は 8 要素である。外を読むことはない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "last_sentence_without_period_passes",
+      "input": {
+        "comment": "誤検知。呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いているため、NULL を参照することはない"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "period_inside_quotes_not_counted",
+      "input": {
+        "comment": "意図的。フォールスルーは設計どおり（src/fsm.c:88 のコメント「状態 3 の処理を続ける。」に記載）であり、break の書き忘れではない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "limited_condition_fails",
+      "input": {
+        "comment": "誤検知。len が 0 の場合に限り、buf は参照されない（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "checked_case_condition_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元を確認した場合は、NULL にならない（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "ni_taishite_fails",
+      "input": {
+        "comment": "誤検知。NULL に対して src/a.c:10 で検査している。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "hedge_word_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元で NULL を除いているので、おそらく問題にならない（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "thought_hedge_fails",
+      "input": {
+        "comment": "誤検知。NULL は渡されないと思われる（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "request_word_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元で NULL を除いている（src/a.c:10）。念のため確認してください。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "recommendation_fails",
+      "input": {
+        "comment": "本物の不具合。src/a.c:42 で戻り値を確かめていないため、修正を推奨。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "should_fails",
+      "input": {
+        "comment": "本物の不具合。src/a.c:42 で戻り値を確かめていないので直すべきである。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "recommended_value_noun_passes",
+      "input": {
+        "comment": "意図的。タイムアウトは推奨値の 30 秒（src/net.c:44）に固定しており、0 になることはない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "investigation_process_fails",
+      "input": {
+        "comment": "誤検知。解析したリビジョンが分からなかったが、手元のコードでは src/a.c:10 で NULL を除いている。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "line_break_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元で NULL を除いている（src/a.c:10）。\nNULL を参照することはない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "bullet_list_fails",
+      "input": {
+        "comment": "誤検知。\n- 呼び出し元で NULL を除いている（src/a.c:10）"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "backtick_markup_fails",
+      "input": {
+        "comment": "誤検知。`get_buf()` の戻り値は呼び出し元 read_all()（src/io/reader.c:120）で確かめている。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "bold_markup_fails",
+      "input": {
+        "comment": "誤検知。**呼び出し元で** NULL を除いている（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "pointer_asterisks_pass",
+      "input": {
+        "comment": "誤検知。引数 char **argv は main()（src/main.c:20）から必ず NULL でない値で渡される。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "range_location_passes",
+      "input": {
+        "comment": "誤検知。index は 0〜7 に収まる（src/reader.c:55〜60）ため、配列の外を読むことはない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "cannot_state_unconditionally_form_passes",
+      "input": {
+        "comment": "本物の不具合。src/reader.c:42 で fgets の戻り値を確かめずに使っており、直さない理由は説明できない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: planted-wrong-evidence-line-rework
+expected_outcome: |
+  コードを読むと、18 行の return は fclose を通らずに戻るので本物のバグ。結果の根拠 src/config.c:17 には fclose がなく
+  （parse_line() の if がある）、判定も逆。review.json は outcome が rework で、C-12（根拠の場所）と C-02（判定）が
+  ok: false、rework に「根拠の行を直す」「判定を true_bug にする」などの直す点が書かれる。findings は scope が item の
+  20個の基準を1回ずつ。result.json とコードは変えない。
+context:
+  scaffold_script: place-files.sh

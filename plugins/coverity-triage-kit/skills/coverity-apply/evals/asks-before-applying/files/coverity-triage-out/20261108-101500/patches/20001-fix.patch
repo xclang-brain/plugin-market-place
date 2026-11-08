@@ -1,0 +1,14 @@
+diff --git a/src/reader.c b/src/reader.c
+index 1ef11d3..43e9c80 100644
+--- a/src/reader.c
++++ b/src/reader.c
+@@ -3,6 +3,9 @@
+ int read_header(const char *path, char *buf, int size)
+ {
+     FILE *fp = fopen(path, "r");
++    if (fp == NULL) {
++        return -1;
++    }
+     if (fgets(buf, size, fp) == NULL) {
+         return -1;
+     }

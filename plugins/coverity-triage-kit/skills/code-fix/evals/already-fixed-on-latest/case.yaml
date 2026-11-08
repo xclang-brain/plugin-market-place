@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: already-fixed-on-latest
+expected_outcome: |
+  最新のリビジョン（work/w1/）の load_table() は、fread の直後（23 行）で fp を閉じてから got を確かめるように
+  もう直っている。だから何も変えず、out/fix.json の already_fixed_on_latest を true にし、
+  summary か impact に、最新で直っている場所（src/loader.c の 23 行あたり）を書く。repo/ も work/w1/ も変えない。
+  質問はせず、1行だけを返す。
+context:
+  scaffold_script: place-files.sh

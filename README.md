@@ -21,12 +21,15 @@ copilot plugin install <プラグインの名前>@plugin-market-place
 | [weekly-sales-report](plugins/weekly-sales-report/) | 毎週の売上データ（sales.csv）から、部長に出す週報 weekly_report.md を作る | 0.1.0 |
 | [embedded-debug-loop](plugins/embedded-debug-loop/) | 組み込み機器の C/C++ の不具合を、スキルを使って機器で試すことを繰り返して調べ、直す。スキルだけ、作業エージェントだけ、統括エージェントと Web管理画面つき、の3つの段階で使える | 0.4.0 |
 | [coverity-warning-triage](plugins/coverity-warning-triage/) | Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作る（C / C++、標準・MISRA・CERT）。既存のプラグイン coverity-triage を plugin-creator で作り直したもの | 0.1.0 |
+| [coverity-triage-kit](plugins/coverity-triage-kit/) | Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作る（C / C++、標準・MISRA・CERT）。スキルや MCP サーバー1つ、作業エージェント1つ、一括のトリアージ、Web管理画面つき、の4つの段階で使える | 0.1.0 |
 | [ng-repro-pick](plugins/ng-repro-pick/) | 試験部門から毎週届く試験結果の Excel と試験仕様書の Word から、最初に実機の台で再現させる NG を1つ選び、pick.md のメモにする | 0.1.0 |
 | [handoff-compare-report](plugins/handoff-compare-report/) | 病棟の申し送りの3つの形（AI なし／AI が全体を下書き／事実の欄だけ AI）の机上の比較で、形ごとに漏れや時間を数え、結論つきの比較報告 compare_report.md を作る | 0.1.0 |
 
 weekly-sales-report は、plugin-creator の試験で作った見本です。AI が演じたユーザー（営業チームのリーダー）と plugin-creator が会話して作りました。中に出てくる人の名前や売上の数字は、架空のものです。
 
 coverity-warning-triage は、plugin-creator の作り直しの試験で作りました。元のプラグイン coverity-triage（[coverity-triage-agent](https://github.com/xclang-brain/coverity-triage-agent)、MIT License）の部品を流用しています。plugin-creator の問いには、利用者の代わりに AI（Claude）が、元のプラグインの資料をもとに答えました。
+
+coverity-triage-kit は、coverity-warning-triage を、embedded-debug-loop の作り方にならって作り直したものです。利用者から見た使い方は同じにし、部品（スキル、MCP サーバー、エージェント、Web管理画面）を、スキル1つ・作業エージェント1つ・一括のトリアージ・Web管理画面つきの4つの段階で、それぞれ取り出して使えるようにしました。スキルの名前が同じなので、coverity-warning-triage とは、どちらか一方だけを入れてください。
 
 ng-repro-pick は、plugin-creator のアイデア創出スキル（make-idea）で作ったアイデアを題材にした、plugin-creator の試験で作りました。AI が演じたユーザー（組み込みファームウェアの担当者）と plugin-creator が会話して作りました。中に出てくる人の名前、試験の項目、数は、架空のものです。
 

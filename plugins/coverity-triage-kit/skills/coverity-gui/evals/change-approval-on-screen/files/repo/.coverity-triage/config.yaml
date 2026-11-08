@@ -1,0 +1,8 @@
+# チームの設定
+coverity:
+  url: https://coverity.example.com:8443
+  api: fake
+vcs:
+  type: git
+  base_branch: main
+parallel: 2

@@ -1,0 +1,99 @@
+---
+name: coverity-setup
+description: Coverity Connect の警告をトリアージするための準備を、対話で1つずつ行う。リポジトリの設定（.coverity-triage/ の config.yaml・条件ファイル・knowledge.md）を作り、PC ごとの認証情報（ユーザー名と、伏せ字で入れる認証キー）を環境変数に保存する手順を示し、uv がなければ入れ方を示し、設定を確かめる。config.yaml の値は、人が書いた注釈を残して書き換える。ビルドでの検証・初回解析・統合と確かめなどのオプションも最後に設定する。「Coverity のトリアージの準備をして」「Coverity の設定ファイルを作って」「認証キーを登録したい」「config.yaml の max_items を変えて」「ビルドでの検証も使いたい」のように頼まれたとき、またはトリアージを始めようとして設定がないときに使う。何度使ってもよく、足りないものだけを補う。
+allowed-tools: ["shell(uv run:*)"]
+---
+
+# Coverity トリアージの準備
+
+利用者は仕組みを知らない前提で、**一度に1つずつ**、短く、ふつうの言葉で案内する。返事は日本語（利用者が別の言語で書いたら、その言語）。
+何度使われてもよい。`check` で足りないものを調べ、それだけを補う。
+
+## 守ること
+
+- コマンドを動かす前に、何のためかを1行で伝える。
+- **認証キーをチャットで聞かない・受け取らない。** チャットに貼られたら、その値を使わず、どこにも書かず、「漏れたおそれがあるので、認証キーを作り直してください」と伝えてから、伏せ字で入れる手順（手順 5）を示す。
+- 設定ファイルを書く前に、書く値を表で見せて同意を得る（`--check` で表を作る）。
+- git・svn・VS Code・Coverity の設定は変えない。足りない道具（git、Coverity の解析のツール、PATH など）は、社内の手順で入れてもらう。
+- 確かめられることは推測しない。`check` で確かめる。
+- スクリプトが `"ok": false` を返したら、手で書き換えるなど別のやり方でしない。`error` と `problems` を短く伝え、直し方を案内する。
+- config.yaml の値を変えるときは、いつも `set`（か `set-verify`）を使う。人が書いた注釈を残すためである。
+
+## スクリプト
+
+次の形で動かす（RUN する。中を読む必要はない）。`<このスキルのフォルダ>` は、このスキルのフォルダの絶対パス、`<リポジトリ>` は `detect` が返した `repo_root`。結果は JSON 1つ。
+
+```
+uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/setup.py" <コマンド> --repo "<リポジトリ>" ...
+```
+
+| コマンド | すること |
+| --- | --- |
+| `detect` | リポジトリの根、git か svn、修正の元にするブランチ、設定があるか（読むだけ） |
+| `init --url U --project P --stream S [--check]` | config.yaml（項目ごとの注釈つき）、`filters/untriaged.yaml`、`filters/all.yaml`、`knowledge.md` を作る。`--check` は何も書かずに表を返す |
+| `check` | 設定・条件ファイル・認証情報の環境変数（値は出さない）・結果を置くフォルダ・uv を確かめる（読むだけ。ファイルを作らない） |
+| `set --value 項目=値 [--unset 項目] [--check]` | config.yaml の値を変える。注釈は元の場所に残る。`--check` は何も書かない |
+| `set-verify --build-command C [...] [--check]` | ビルドでの検証と初回解析の値（[references/options.md](references/options.md)） |
+| `credentials [--user 名前]` | ユーザー名と認証キーを保存するコマンドを返す（キーは受け取らない） |
+| `trial-build` | 修正の元にするブランチの最新を、リポジトリの外のコピーで1回ビルドする |
+
+## 手順
+
+### 1. uv
+
+`uv --version` を動かす。見つからなければ「uv（Python を用意する道具）を入れます」と伝えて、OS に合うほうを動かす。
+
+- Windows（PowerShell）：`powershell -ExecutionPolicy ByPass -NoProfile -Command "irm https://astral.sh/uv/install.ps1 | iex"`
+- Linux・macOS：`curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+入れた直後に `uv` が見つからないときは、Windows は `%USERPROFILE%/.local/bin/uv.exe`、Linux・macOS は `~/.local/bin/uv` のフルパスで動かす。社内のプロキシで失敗したら、環境変数 `HTTPS_PROXY` の設定が要るか、社内の担当に確かめるよう伝える。
+
+### 2. リポジトリ
+
+`detect` を動かす（`--repo` は開いているフォルダ）。`vcs` が null なら、調べたいリポジトリの一番上のフォルダ（`.git` か `.svn` があるフォルダ）を聞く。
+
+### 3. いまの状況
+
+`check` を動かし、できていることと足りないこと（`missing`）を短く伝える。足りないものを、上から順に 4〜6 で補う。
+
+### 4. 設定ファイル（まだないときだけ）
+
+チームで最初に使う人だけが作る。ほかの人は、コミットされた `.coverity-triage/` を pull して使う。
+
+1. 次の3つを、1つずつ聞く：Coverity Connect の URL（ブラウザーで開くアドレス。例 `https://coverity.example.co.jp:8443`）、プロジェクトの名前、ストリームの名前。
+2. `init --url "<URL>" --project "<プロジェクト>" --stream "<ストリーム>" --check` を動かし、返った `table` を表で見せて「この内容で作りますか？」と聞く。変えたい値があれば、引数（`--base-branch`、`--output-dir`）で渡して、もう一度 `--check` から。
+3. 同意を得たら、`--check` を付けずに同じ引数で動かす。
+4. 「`.coverity-triage/` をコミットして、チームで共有してください（認証情報は入っていません）」と伝える。`knowledge.md` は AI が調べる前に読むので、チームの判断の方針を書いておけることも1行で伝える。
+
+### 5. 認証情報（PC ごと）
+
+`check` で ng の環境変数だけを用意する。
+
+1. Coverity のユーザー名を聞く（チャットで聞いてよいのはユーザー名だけ）。
+2. `credentials --user "<ユーザー名>"` を動かす。`platform` に合うほうを使う。
+   - ユーザー名：`windows.user`（Windows。PowerShell で動く）か `posix.user`（Linux・macOS）を、目的を伝えてから動かす。
+   - 認証キー：`windows.key` か `posix.key` を利用者に示し、**利用者が自分のターミナルに貼って実行する**よう頼む（Windows は PowerShell の窓。コマンド プロンプトなら `windows.key_from_cmd`）。入力は伏せ字の欄で、チャットにもファイルにも出ない。こちらでは動かさない。
+   - 認証キーの作り方を聞かれたら、Coverity Connect の画面のユーザーのメニューから作れること（社内の案内があればそれ）を伝える。
+3. 「保存したら知らせてください」と伝え、知らせを受けたら `check` で「あり」になったかを確かめる。Linux・macOS では、新しいターミナルを開いて、そこから Copilot CLI などを起動し直すと使えることも伝える。
+
+GitHub のトークンは要らない（聞かない）。
+
+### 6. Coverity との通信
+
+Coverity と通信できる道具（接続を確かめるもの）があれば、`repo_root` を渡して接続と認証を確かめ、結果を伝える。失敗したら、返った理由と直すところ（URL、ユーザー名、認証キー、社内のネットワーク）を伝える。道具がなければ、ブラウザーで Coverity Connect の URL を開いてログインできるかを、利用者に確かめてもらう。
+
+### 7. オプション（最後に）
+
+「ほかに、次のオプションも設定できます。どれも使わなくてかまいません（あとからでも設定できます）」と伝え、使いたいものだけを1つずつ進める。
+
+| オプション | 中身と進め方 |
+| --- | --- |
+| ビルドでの検証・初回解析 | 修正案をビルドで確かめる（`verify.default`）、最初に解析して Coverity に登録する（`verify.initial`）。聞くこと・試しのビルド・保存は [references/options.md](references/options.md) |
+| 統合と確かめ | 同じ原因の警告を1つにまとめる（`agents.integration`）、結果を別の AI が確かめる（`agents.review`）。どちらも時間が延び、一覧ができるまで承認を選べない |
+| 差し戻しの回数 | 確かめで差し戻した警告を作り直す回数の上限（`agents.max_rework`、0〜2、既定 1）。確かめを使うときだけ聞く |
+
+値を変えるときは、`set --value 項目=値 ... --check` で変わる項目（`changes`）を表で見せ、`notice` があればその文もそのまま伝えてから同意を得て、`--check` を付けずに動かす。`comments` が `lost` のとき、続けても値は正しく保存される。ほかの項目は [references/options.md](references/options.md) にある。保存したら、config.yaml をコミットして共有するよう伝える。
+
+### 8. 終わり
+
+「準備ができました。Coverity の警告のトリアージを始められます。最初は件数の少ない条件で試すのがおすすめです」と伝える。初回解析を使う設定にしたときは、「トリアージの最初に、ビルド・解析・Coverity への登録をします（数十分かかることがあります）」とも伝える。

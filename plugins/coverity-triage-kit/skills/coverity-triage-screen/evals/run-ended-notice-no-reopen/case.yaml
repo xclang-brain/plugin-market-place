@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: run-ended-notice-no-reopen
+expected_outcome: |
+  実行が終わったことと、結果（各エージェントの結果、検証の結果、まとめ、終わった理由、課題と Issue の案）が
+  Web管理画面にあることだけを短く伝える。画面を開き直さない。統括エージェントの返事にある書き戻しや push はしない。

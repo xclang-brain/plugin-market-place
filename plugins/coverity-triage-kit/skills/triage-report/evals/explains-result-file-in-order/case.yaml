@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: explains-result-file-in-order
+expected_outcome: |
+  チャットで、見立て（唯一の呼び出し元 read_all() で NULL を除いている）と判定（誤検知）を最初に示し、
+  続けて推奨（逸脱）と確信度（高）と理由、調べた経過と根拠の場所（src/io/reader.c:15、:32）、
+  逸脱案（False Positive / Ignore / Unspecified とコメント）、修正案（内容と影響）、リビジョンのずれ（なし）を示す。
+  グループの外した CID は「なし」。ファイルは作らず、result.json も変えない。
+context:
+  scaffold_script: place-files.sh

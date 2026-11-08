@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: same-lines-different-cause-conflict
+expected_outcome: |
+  20021 は malloc の戻り値の確かめ忘れ（src/io.c:19〜20）、20030 は name の大きさを超えるコピー（src/io.c:22）で、
+  原因が違うのでまとめない。修正はどちらも同じ範囲（19〜22 行）を変えるので、ぶつかる修正（conflicts）として
+  20021 と 20030 を挙げ、人が反映するときの注意として伝える。チャットで返し、ファイルを作らず、コードも変えない。
+context:
+  scaffold_script: place-files.sh

@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: creates-settings-after-showing-table
+expected_outcome: |
+  リポジトリの .coverity-triage/ に、config.yaml（URL https://coverity.example.co.jp:8443、git、
+  結果を置くフォルダはリポジトリの外）、filters/untriaged.yaml（ストリーム envmon-main、
+  プロジェクト envmon）、knowledge.md（3つの見出し）ができる。書く前に、書く値を表で示している。
+  認証情報はどのファイルにも書かれない。
+context:
+  scaffold_script: place-files.sh

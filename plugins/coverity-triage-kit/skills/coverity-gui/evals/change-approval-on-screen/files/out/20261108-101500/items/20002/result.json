@@ -1,0 +1,37 @@
+{
+ "item": "20002",
+ "verdict": {
+  "judgement": "false_positive",
+  "summary": "20002 の要約",
+  "rationale": "根拠の説明",
+  "evidence": [
+   {
+    "file": "src/reader.c",
+    "line": 42,
+    "note": "fgets が NULL を返す"
+   }
+  ]
+ },
+ "recommendation": "deviation",
+ "confidence": "medium",
+ "confidence_reason": "呼び出し元を確かめた",
+ "deviation": {
+  "classification": "False Positive",
+  "action": "Ignore",
+  "severity": "Unspecified",
+  "comment": "誤検知。呼び出し元で NULL を確かめている（src/main.c:10）。"
+ },
+ "fix": {
+  "classification": "Bug",
+  "action": "Fix Required",
+  "severity": "Moderate",
+  "summary": "NULL を確かめる",
+  "impact": "なし",
+  "exceeded_constraints": [],
+  "already_fixed_on_latest": false
+ },
+ "revision_drift": {
+  "status": "none",
+  "detail": ""
+ }
+}

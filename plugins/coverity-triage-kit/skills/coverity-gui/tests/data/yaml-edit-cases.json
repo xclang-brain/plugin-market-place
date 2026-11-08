@@ -1,0 +1,243 @@
+{
+ "version": 1,
+ "contract": "yaml-edit",
+ "cases": [
+  {
+   "name": "changes-only-the-value-and-keeps-every-comment",
+   "input": {
+    "original": "# 先頭の注釈\ncoverity:\n  # URL の注釈\n  url: https://a.example.com   # 行末\n  api: auto\nparallel: 3   # 同時\n",
+    "values": {
+     "coverity": {
+      "url": "https://b.example.com",
+      "api": "auto"
+     },
+     "parallel": 4
+    }
+   },
+   "expect": {
+    "text": "# 先頭の注釈\ncoverity:\n  # URL の注釈\n  url: https://b.example.com   # 行末\n  api: auto\nparallel: 4   # 同時\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "a-removed-key-takes-its-comments-along",
+   "input": {
+    "original": "coverity:\n  url: https://a   # u\n  # api の注釈\n  api: fake   # 偽\n  user_env: COV_USER\n",
+    "values": {
+     "coverity": {
+      "url": "https://a",
+      "user_env": "COV_USER"
+     }
+    }
+   },
+   "expect": {
+    "text": "coverity:\n  url: https://a   # u\n  user_env: COV_USER\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "an-emptied-list-becomes-brackets-and-keeps-the-key-comment",
+   "input": {
+    "original": "coverity:\n  path_strip_prefixes:   # 外す先頭\n  # 一つ目\n  - C:/build/   # ビルド\n  - D:/x/\n  url: https://a\n",
+    "values": {
+     "coverity": {
+      "path_strip_prefixes": [],
+      "url": "https://a"
+     }
+    }
+   },
+   "expect": {
+    "text": "coverity:\n  path_strip_prefixes: []   # 外す先頭\n  url: https://a\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "list-values-move-with-their-comments",
+   "input": {
+    "original": "checkers:\n- A   # a の注釈\n- B   # b の注釈\n",
+    "values": {
+     "checkers": [
+      "B",
+      "A"
+     ]
+    }
+   },
+   "expect": {
+    "text": "checkers:\n- B   # b の注釈\n- A   # a の注釈\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "a-changed-list-value-keeps-the-others",
+   "input": {
+    "original": "impacts:\n- High   # 高\n- Low\n",
+    "values": {
+     "impacts": [
+      "High",
+      "Medium"
+     ]
+    }
+   },
+   "expect": {
+    "text": "impacts:\n- High   # 高\n- Medium\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "an-absent-key-is-added-at-the-end-of-its-section",
+   "input": {
+    "original": "coverity:\n  url: https://a\nparallel: 3\n",
+    "values": {
+     "coverity": {
+      "url": "https://a",
+      "api": "fake"
+     },
+     "parallel": 3
+    }
+   },
+   "expect": {
+    "text": "coverity:\n  url: https://a\n  api: fake\nparallel: 3\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "an-absent-section-is-added-at-the-end",
+   "input": {
+    "original": "coverity:\n  url: x   # u\n",
+    "values": {
+     "coverity": {
+      "url": "x"
+     },
+     "agents": {
+      "review": true
+     }
+    }
+   },
+   "expect": {
+    "text": "coverity:\n  url: x   # u\nagents:\n  review: true\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "an-empty-value-in-the-file-stays-when-unchanged",
+   "input": {
+    "original": "coverity:\n  ca_file:   # 証明書\n  url: https://a\n",
+    "values": {
+     "coverity": {
+      "ca_file": null,
+      "url": "https://b"
+     }
+    }
+   },
+   "expect": {
+    "text": "coverity:\n  ca_file:   # 証明書\n  url: https://b\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "values-go-into-an-empty-flow-list",
+   "input": {
+    "original": "streams: []   # 注釈\nlimit: 20\n",
+    "values": {
+     "streams": [
+      "a",
+      "b"
+     ],
+     "limit": 20
+    }
+   },
+   "expect": {
+    "text": "streams:   # 注釈\n  - a\n  - b\nlimit: 20\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "nothing-changes-when-the-values-are-the-same",
+   "input": {
+    "original": "# 注釈\nparallel: 3   # 行末\n\nverify:\n  default: none\n",
+    "values": {
+     "parallel": 3,
+     "verify": {
+      "default": "none"
+     }
+    }
+   },
+   "expect": {
+    "text": "# 注釈\nparallel: 3   # 行末\n\nverify:\n  default: none\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "a-bom-is-kept",
+   "input": {
+    "original": "﻿# 注釈\nparallel: 3\n",
+    "values": {
+     "parallel": 5
+    }
+   },
+   "expect": {
+    "text": "﻿# 注釈\nparallel: 5\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "types-are-strict-a-quoted-number-becomes-a-number",
+   "input": {
+    "original": "parallel: \"3\"   # 文字列だった\nreview: yes\n",
+    "values": {
+     "parallel": 3,
+     "review": true
+    }
+   },
+   "expect": {
+    "text": "parallel: 3   # 文字列だった\nreview: yes\n",
+    "notice": false
+   }
+  },
+  {
+   "name": "a-block-value-cannot-keep-comments-and-is-written-whole",
+   "input": {
+    "original": "# 先頭\nnote: |\n  a\n  b\nparallel: 3   # 行末\n",
+    "values": {
+     "note": "a\nb\n",
+     "parallel": 4
+    }
+   },
+   "expect": {
+    "text": "# 先頭\nnote: 'a\n\n  b\n\n  '\nparallel: 4\n",
+    "notice": true
+   }
+  },
+  {
+   "name": "anchors-cannot-keep-comments-and-are-written-whole",
+   "input": {
+    "original": "a: &base\n  x: 1   # 一\nb:\n  <<: *base\n",
+    "values": {
+     "a": {
+      "x": 1
+     },
+     "b": {
+      "x": 2
+     }
+    }
+   },
+   "expect": {
+    "text": "a:\n  x: 1\nb:\n  x: 2\n",
+    "notice": true
+   }
+  },
+  {
+   "name": "a-file-with-only-top-comments-loses-nothing-when-written-whole",
+   "input": {
+    "original": "# 先頭だけ\nnote: >\n  folded\n",
+    "values": {
+     "note": "x"
+    }
+   },
+   "expect": {
+    "text": "# 先頭だけ\nnote: x\n",
+    "notice": false
+   }
+  }
+ ]
+}

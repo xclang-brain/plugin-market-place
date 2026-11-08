@@ -1,0 +1,38 @@
+{
+  "item": "20001",
+  "verdict": {
+    "judgement": "true_bug",
+    "summary": "fopen の失敗を確かめていない",
+    "rationale": "fopen が NULL を返すと fgets に NULL が渡る",
+    "evidence": [
+      {
+        "file": "src/reader.c",
+        "line": 5,
+        "note": ""
+      }
+    ]
+  },
+  "recommendation": "fix",
+  "confidence": "high",
+  "confidence_reason": "経路をたどって確かめた",
+  "deviation": {
+    "classification": "False Positive",
+    "action": "Ignore",
+    "severity": "Unspecified",
+    "comment": "誤検知。呼び出し元で path を検証している（src/main.c:10）。"
+  },
+  "fix": {
+    "classification": "Bug",
+    "action": "Fix Required",
+    "severity": "Moderate",
+    "summary": "fopen の失敗を確かめる",
+    "impact": "read_header の呼び出し元だけ",
+    "exceeded_constraints": [],
+    "already_fixed_on_latest": false
+  },
+  "revision_drift": {
+    "status": "none",
+    "detail": ""
+  },
+  "group_excluded_cids": []
+}

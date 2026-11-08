@@ -1,0 +1,42 @@
+{
+  "item": "20011",
+  "verdict": {
+    "judgement": "true_bug",
+    "summary": "BUF_LEN（17）が head[16] より大きく、配列の外を書く",
+    "rationale": "set_head() は i を BUF_LEN（include/buf.h:10、17）まで回し、20 行で head[i] に書く。head は 16 要素なので、src が 16 文字以上のとき head[16] に書く。",
+    "evidence": [
+      {
+        "file": "include/buf.h",
+        "line": 10,
+        "note": "BUF_LEN は 17"
+      },
+      {
+        "file": "src/buf.c",
+        "line": 20,
+        "note": "head[i] に書く"
+      }
+    ]
+  },
+  "recommendation": "fix",
+  "confidence": "high",
+  "confidence_reason": "経路をコードで最後まで追え、根拠がすべてコードにある",
+  "deviation": {
+    "classification": "Bug",
+    "action": "Ignore",
+    "severity": "Major",
+    "comment": "本物の不具合。BUF_LEN（include/buf.h:10）が head の大きさ 16 より大きく、src/buf.c:20 で配列の外を書くため、直さない理由は説明できない。"
+  },
+  "fix": {
+    "classification": "Bug",
+    "action": "Fix Required",
+    "severity": "Major",
+    "summary": "BUF_LEN を 16 にする",
+    "impact": "BUF_LEN を使うループの上限が 1 小さくなる。16 文字を超える部分は書かれなくなる",
+    "exceeded_constraints": [],
+    "already_fixed_on_latest": false
+  },
+  "revision_drift": {
+    "status": "none",
+    "detail": ""
+  }
+}

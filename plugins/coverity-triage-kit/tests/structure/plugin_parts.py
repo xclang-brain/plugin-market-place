@@ -1,0 +1,847 @@
+"""プラグイン全体の試験が使う道具（標準ライブラリだけ。Python 3.10 以上）。
+
+部品の名前は、ここにも書かない。名前は、次のところから読む（憲章 第25条3項）。
+- スキル：skills/ の下の、SKILL.md があるフォルダ（フォルダの名前がスキルの名前）
+- MCP サーバー：mcp-servers/ の下のフォルダと、mcp.json の mcpServers の鍵（登録名）。
+  ツールの名前は、MCP サーバーのソースの @….tool の付いた関数から読む
+- エージェント：com.github.copilot/agents/<名前>.agent.md
+- プラグイン全体のスキルと役割：エクステンションの defaults.json（pluginSkills・roles・orchestrator）
+- 部品の組：エージェントとプラグイン全体のスキルの「## 使う部品」の表
+- 役割と今の名前の対応：docs/replace.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
+- 設定の項目：設計書 4.1 の config.yaml の表（取り決め）
+
+structure・independence・contracts・docs の試験が、このファイルを読み込む。
+"""
+
+from __future__ import annotations
+
+import ast
+import functools
+import json
+import re
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+
+TESTS = Path(__file__).resolve().parents[1]
+ROOT = TESTS.parent
+PLUGIN_NAME = ROOT.name
+SKILLS_DIR = ROOT / "skills"
+MCP_DIR = ROOT / "mcp-servers"
+COPILOT_DIR = ROOT / "com.github.copilot"
+AGENTS_DIR = COPILOT_DIR / "agents"
+EXTENSIONS_DIR = COPILOT_DIR / "extensions"
+EXT_DIR = EXTENSIONS_DIR / PLUGIN_NAME
+DEFAULTS = EXT_DIR / "defaults.json"
+DOCS_DIR = ROOT / "docs"
+SPEC = DOCS_DIR / "specs" / "requirements.md"
+DESIGN = DOCS_DIR / "design" / "design.md"
+REPLACE_DOC = DOCS_DIR / "replace.md"
+GUIDE_DIR = DOCS_DIR / "guide"
+SCHEMAS_DIR = TESTS / "structure" / "schemas" / "agent-plugins-1.0.0"
+
+AGENT_SUFFIX = ".agent.md"
+AGENT_README_SUFFIX = ".README.markdown"
+PARTS_HEADING = "使う部品"
+PARTS_HEADER = ["役割", "部品", "使うとき"]
+CURRENT_PARTS_HEADING = "今の部品"
+CURRENT_PARTS_HEADER = ["役割", "段階", "部品", "置き場所"]
+# 役割の言葉（設計書 4.13 の取り決め）
+ROLE_WORDS = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合役"}
+
+TEXT_SUFFIXES = {
+    ".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".mjs", ".js", ".cjs",
+    ".html", ".css", ".txt", ".sh", ".ps1", ".xml", ".ini", ".cfg", ".patch", ".c", ".h", ".cpp", ".hpp",
+}
+# 作られたもの・他者のもの（言葉の確かめから外す）
+SKIP_DIR_NAMES = {"__pycache__", ".venv", "node_modules", ".pytest_cache", ".ruff_cache", ".mypy_cache", "vendor"}
+SKIP_FILE_NAMES = {"uv.lock", "package-lock.json"}
+
+
+# ---------------------------------------------------------------------------
+# ファイル
+# ---------------------------------------------------------------------------
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8-sig", errors="replace")
+
+
+def rel(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def skipped(path: Path, base: Path) -> bool:
+    parts = path.relative_to(base).parts
+    if any(p in SKIP_DIR_NAMES for p in parts[:-1]):
+        return True
+    # evals/results/ などは、試験の道具が作る記録
+    return len(parts) >= 2 and parts[0] == "evals" and parts[1] == "results"
+
+
+def text_files(folder: Path):
+    """フォルダの中の文のファイル（作られたもの・同梱した他者のものを除く）"""
+    if not folder.exists():
+        return []
+    if folder.is_file():
+        return [folder]
+    files = []
+    for path in sorted(folder.rglob("*")):
+        if not path.is_file() or skipped(path, folder) or path.name in SKIP_FILE_NAMES:
+            continue
+        if path.suffix.lower() in TEXT_SUFFIXES:
+            files.append(path)
+    return files
+
+
+def copy_ignore(directory, names):
+    """shutil.copytree の ignore：作られたものはコピーしない"""
+    return [n for n in names if n in SKIP_DIR_NAMES - {"vendor"} or n.endswith(".pyc") or n == "results"]
+
+
+# ---------------------------------------------------------------------------
+# 部品を読む
+# ---------------------------------------------------------------------------
+
+def skill_dirs():
+    if not SKILLS_DIR.is_dir():
+        return []
+    return sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir() and not p.name.startswith((".", "_")))
+
+
+def skill_names():
+    return [p.name for p in skill_dirs() if (p / "SKILL.md").is_file()]
+
+
+def mcp_dirs():
+    if not MCP_DIR.is_dir():
+        return []
+    return sorted(p for p in MCP_DIR.iterdir() if p.is_dir() and not p.name.startswith((".", "_")))
+
+
+def load_json(path: Path):
+    try:
+        return json.loads(read(path))
+    except (OSError, ValueError):
+        return None
+
+
+def mcp_config():
+    data = load_json(ROOT / "mcp.json")
+    return data if isinstance(data, dict) else {}
+
+
+def expand_plugin_root(value: str) -> str:
+    return value.replace("${PLUGIN_ROOT}", str(ROOT))
+
+
+def mcp_registrations():
+    """mcp.json の登録名 → そのサーバーのフォルダ（--directory か cwd。分からなければ None）"""
+    out = {}
+    for name, server in (mcp_config().get("mcpServers") or {}).items():
+        folder = None
+        if isinstance(server, dict):
+            args = [a for a in server.get("args") or [] if isinstance(a, str)]
+            for i, arg in enumerate(args):
+                if arg == "--directory" and i + 1 < len(args):
+                    folder = Path(expand_plugin_root(args[i + 1]))
+                elif arg.startswith("--directory="):
+                    folder = Path(expand_plugin_root(arg.split("=", 1)[1]))
+            if folder is None and isinstance(server.get("cwd"), str):
+                folder = Path(expand_plugin_root(server["cwd"]))
+        out[name] = folder
+    return out
+
+
+def _decorated_tools(tree):
+    """ツールとして登録する関数の名前。@<何か>.tool / @tool の付いた関数（name= があればそれ）と、
+    自前の登録の飾り（@register("名前", …)）で、関数と同じ名前の文字列を渡しているもの"""
+    names = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for deco in node.decorator_list:
+            target = deco.func if isinstance(deco, ast.Call) else deco
+            attr = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", None)
+            given = None
+            if isinstance(deco, ast.Call):
+                for kw in deco.keywords:
+                    if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        given = kw.value.value
+                if deco.args and isinstance(deco.args[0], ast.Constant) and deco.args[0].value == node.name:
+                    given = node.name
+            if attr == "tool":
+                names.add(given or node.name)
+            elif given == node.name:
+                names.add(given)
+    return names
+
+
+def _server_names(tree):
+    """FastMCP("名前") の名前"""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            fname = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if fname in ("FastMCP", "MCPServer", "Server") and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    names.add(first.value)
+    return names
+
+
+def console_scripts(folder: Path):
+    """pyproject.toml の [project.scripts] の名前"""
+    path = folder / "pyproject.toml"
+    if not path.is_file():
+        return set()
+    text = read(path)
+    try:
+        import tomllib  # Python 3.11 から
+        data = tomllib.loads(text)
+        return set((data.get("project") or {}).get("scripts") or {})
+    except ImportError:
+        m = re.search(r"(?ms)^\[project\.scripts\]\s*\n(.*?)(?=^\[|\Z)", text)
+        if not m:
+            return set()
+        return set(re.findall(r'(?m)^\s*"?([A-Za-z0-9_.\-]+)"?\s*=', m.group(1)))
+    except ValueError:
+        return set()
+
+
+def mcp_identifiers(folder: Path):
+    """MCP サーバーのフォルダの、ほかの部品が書いてはいけない名前：ツール・サーバー（serverInfo）・起動のコマンド"""
+    tools, servers = set(), set()
+    for path in sorted(folder.rglob("*.py")):
+        if skipped(path, folder) or "tests" in path.relative_to(folder).parts:
+            continue
+        try:
+            tree = ast.parse(read(path))
+        except SyntaxError:
+            continue
+        tools |= _decorated_tools(tree)
+        servers |= _server_names(tree)
+    return {"tools": tools, "servers": servers, "scripts": console_scripts(folder)}
+
+
+@functools.lru_cache(maxsize=None)
+def mcp_names():
+    """MCP サーバーを指す名前（フォルダの名前・登録名）と、その中身の名前（ツール・serverInfo・起動のコマンド）。
+    返す値：{フォルダか登録名: {"folder": Path|None, "names": set, "inner": set}}"""
+    out = {}
+    regs = mcp_registrations()
+    folders = {p.resolve(): p for p in mcp_dirs()}
+    for name, folder in regs.items():
+        resolved = folder.resolve() if folder else None
+        entry = out.setdefault(name, {"folder": folders.get(resolved, folder), "names": set(), "inner": set()})
+        entry["names"].add(name)
+        if resolved in folders:
+            entry["names"].add(folders[resolved].name)
+    for resolved, folder in folders.items():
+        if not any((e["folder"] and e["folder"].resolve() == resolved) for e in out.values()):
+            out[folder.name] = {"folder": folder, "names": {folder.name}, "inner": set()}
+    for entry in out.values():
+        folder = entry["folder"]
+        if folder and folder.is_dir():
+            ids = mcp_identifiers(folder)
+            entry["inner"] = ids["tools"] | ids["servers"] | ids["scripts"]
+            entry["tools"] = ids["tools"]
+        else:
+            entry["tools"] = set()
+    return out
+
+
+def all_mcp_tool_names():
+    names = set()
+    for entry in mcp_names().values():
+        names |= entry["tools"]
+    return names
+
+
+def agent_files():
+    if not AGENTS_DIR.is_dir():
+        return []
+    return sorted(p for p in AGENTS_DIR.iterdir() if p.is_file() and p.name.endswith(AGENT_SUFFIX))
+
+
+def agent_stem(path_or_name) -> str:
+    name = path_or_name.name if isinstance(path_or_name, Path) else str(path_or_name)
+    return name[: -len(AGENT_SUFFIX)] if name.endswith(AGENT_SUFFIX) else name
+
+
+def agent_names():
+    return [agent_stem(p) for p in agent_files()]
+
+
+def agent_path(name: str) -> Path:
+    return AGENTS_DIR / (name + AGENT_SUFFIX)
+
+
+def defaults():
+    data = load_json(DEFAULTS) if DEFAULTS.is_file() else None
+    return data if isinstance(data, dict) else None
+
+
+def id_stem(agent_id: str) -> str:
+    """「<プラグイン>:<名前>」の <名前>"""
+    return str(agent_id).split(":")[-1]
+
+
+def plugin_skill_names():
+    """プラグイン全体のスキル（4段階目）。defaults.json の pluginSkills。defaults.json がなければ、
+    SKILL.md に「## 使う部品」の節があるスキル"""
+    data = defaults()
+    if data is not None and isinstance(data.get("pluginSkills"), list):
+        return sorted(str(n) for n in data["pluginSkills"])
+    return sorted(n for n in skill_names() if section(read(SKILLS_DIR / n / "SKILL.md"), PARTS_HEADING) is not None)
+
+
+def stage1_skill_names():
+    plugin = set(plugin_skill_names())
+    return [n for n in skill_names() if n not in plugin]
+
+
+def entry_scripts(skill_dir: Path):
+    """スキルのスクリプト（scripts/ の直下の .py。中の部品の名前）"""
+    folder = skill_dir / "scripts"
+    if not folder.is_dir():
+        return set()
+    return {p.name for p in folder.glob("*.py") if p.is_file()}
+
+
+def script_owners():
+    """スクリプトの名前 → それを持つスキルの名前の集まり"""
+    owners = {}
+    for skill in skill_dirs():
+        for script in entry_scripts(skill):
+            owners.setdefault(script, set()).add(skill.name)
+    return owners
+
+
+def all_part_names():
+    """すべての部品の名前（スキル・エージェント・MCP サーバーのフォルダと登録名）"""
+    names = set(skill_names()) | set(agent_names())
+    for entry in mcp_names().values():
+        names |= entry["names"]
+    return names
+
+
+# ---------------------------------------------------------------------------
+# Markdown
+# ---------------------------------------------------------------------------
+
+def strip_code_blocks(text: str) -> str:
+    return re.sub(r"(?ms)^\s*```.*?^\s*```[^\n]*$", "", text)
+
+
+def section(text: str, heading: str):
+    """「## 見出し」から、次の「## 」の手前まで。なければ None"""
+    m = re.search(r"(?ms)^## " + re.escape(heading) + r"[ \t]*\n(.*?)(?=^## |\Z)", text)
+    return m.group(1) if m else None
+
+
+def is_table_line(line: str) -> bool:
+    return line.lstrip().startswith("|")
+
+
+def split_cells(line: str):
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|"):
+        body = body[:-1]
+    # バッククォートの中の | は区切りではない
+    cells, current, in_code = [], "", False
+    for ch in body:
+        if ch == "`":
+            in_code = not in_code
+        if ch == "|" and not in_code:
+            cells.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    cells.append(current.strip())
+    return cells
+
+
+def table_in(text: str):
+    """最初の表を、(見出しのセル, 行のセルの並び) で返す。表がなければ (None, [])"""
+    header, rows = None, []
+    started = False
+    for line in text.splitlines():
+        if is_table_line(line):
+            started = True
+            cells = split_cells(line)
+            if all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c) and header is not None:
+                continue
+            if header is None:
+                header = cells
+            else:
+                rows.append(cells)
+        elif started and line.strip():
+            break
+    return header, rows
+
+
+def split_section_table(text: str, heading: str):
+    """本文を、節の表の行と、それ以外（表の外）に分ける。節がなければ (None, text)"""
+    m = re.search(r"(?ms)^## " + re.escape(heading) + r"[ \t]*\n(.*?)(?=^## |\Z)", text)
+    if m is None:
+        return None, text
+    lines = m.group(1).splitlines(keepends=True)
+    table = "".join(line for line in lines if is_table_line(line))
+    rest = "".join(line for line in lines if not is_table_line(line))
+    return table, text[: m.start(1)] + rest + text[m.end(1):]
+
+
+def parts_table(text: str, heading: str = PARTS_HEADING, header=None):
+    """「## 使う部品」の表を [(役割, 名前, 使うとき)] で返す。形が違えば (None, 理由)"""
+    header = header or PARTS_HEADER
+    part = section(text, heading)
+    if part is None:
+        return None, f"「## {heading}」の節がありません"
+    head, rows = table_in(part)
+    if head is None:
+        return None, f"「## {heading}」の節に表がありません"
+    if head != header:
+        return None, f"「## {heading}」の表の見出しが {header} ではありません：{head}"
+    out = []
+    name_col = header.index("部品")
+    for cells in rows:
+        if len(cells) != len(header):
+            return None, f"表の行の列の数が違います：{cells}"
+        m = re.fullmatch(r"`([^`]+)`", cells[name_col])
+        if m is None:
+            return None, f"表の部品の欄が `名前` の形ではありません：{cells[name_col]}"
+        row = list(cells)
+        row[name_col] = m.group(1)
+        out.append(tuple(row))
+    if not out:
+        return None, f"「## {heading}」の表に行がありません"
+    return out, None
+
+
+def current_parts():
+    """docs/replace.md の「## 今の部品」の表：[{role, stage, name, place}]。読めなければ []"""
+    if not REPLACE_DOC.is_file():
+        return []
+    rows, _ = parts_table(read(REPLACE_DOC), CURRENT_PARTS_HEADING, CURRENT_PARTS_HEADER)
+    out = []
+    for role, stage, name, place in rows or []:
+        out.append({"role": role, "stage": stage, "name": name, "place": place.strip("`").rstrip("/")})
+    return out
+
+
+def heading_slugs(path: Path):
+    """GitHub が見出しに付けるアンカー（小文字にし、記号を消し、空白を - にする）"""
+    slugs = set()
+    for m in re.finditer(r"(?m)^#{1,6}\s+(.*?)\s*#*\s*$", strip_code_blocks(read(path))):
+        title = re.sub(r"`", "", m.group(1)).lower()
+        title = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", title)
+        slugs.add(re.sub(r"\s", "-", re.sub(r"[^\w\s\-]", "", title)))
+    return slugs
+
+
+# ---------------------------------------------------------------------------
+# frontmatter（PyYAML があればそれ、なければ小さな読み手）
+# ---------------------------------------------------------------------------
+
+def split_frontmatter(text: str):
+    """(frontmatter の文, 本文)。frontmatter がなければ (None, text)"""
+    text = text.lstrip("﻿")
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", text, re.S)
+    if not m:
+        return None, text
+    return m.group(1), text[m.end():]
+
+
+def _unquote_double(text: str) -> str:
+    inner = text[1:-1]
+    inner = re.sub(r"[ \t]*\n[ \t]*", " ", inner)
+    try:
+        return json.loads('"' + inner.replace('\\\'', "'") + '"')
+    except ValueError:
+        return inner
+
+
+def _scalar(text: str):
+    text = text.strip()
+    if not text:
+        return None
+    if text.startswith('"') and text.endswith('"') and len(text) >= 2:
+        return _unquote_double(text)
+    if text.startswith("'") and text.endswith("'") and len(text) >= 2:
+        return re.sub(r"[ \t]*\n[ \t]*", " ", text[1:-1]).replace("''", "'")
+    text = re.sub(r"\s+#.*$", "", text)
+    # YAML では、引用符のない値に「: 」を入れたり、記号で始めたりできない（Copilot CLI も読めない）
+    if ": " in text or text.endswith(":"):
+        raise ValueError(f"引用符のない値に「: 」があります。値を \"…\" で囲んでください：{text[:60]}")
+    if text[:1] in ("`", "@", "%", "&", "*", "!", "{", "|", ">"):
+        raise ValueError(f"引用符のない値が、YAML の記号「{text[:1]}」で始まっています：{text[:60]}")
+    if text in ("true", "True"):
+        return True
+    if text in ("false", "False"):
+        return False
+    if text in ("null", "~", "Null"):
+        return None
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return text
+
+
+def _flow_list(text: str):
+    inner = text.strip()[1:-1]
+    items, current, quote = [], "", None
+    for ch in inner:
+        if quote:
+            current += ch
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            current += ch
+        elif ch == ",":
+            items.append(current)
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        items.append(current)
+    return [_scalar(i) for i in items if i.strip()]
+
+
+def _block_scalar(indicator: str, block):
+    lines = [l for l in block]
+    indents = [len(l) - len(l.lstrip(" ")) for l in lines if l.strip()]
+    cut = min(indents) if indents else 0
+    body = [l[cut:] if l.strip() else "" for l in lines]
+    while body and not body[-1]:
+        body.pop()
+    if indicator.startswith("|"):
+        value = "\n".join(body)
+    else:
+        value, para = "", []
+        for line in body:
+            if line:
+                para.append(line)
+            else:
+                value += " ".join(para) + "\n"
+                para = []
+        value += " ".join(para)
+    if "-" in indicator:
+        return value
+    return value + "\n" if value else value
+
+
+def parse_simple_yaml(text: str) -> dict:
+    """frontmatter の小さな YAML（鍵: 値、引用符、[…]、- の並び、| と > の複数行、続きの行）を読む"""
+    lines = text.splitlines()
+    data, i = {}, 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            i += 1
+            continue
+        m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.\-]*)\s*:(?:[ \t]+(.*))?$", line)
+        if not m:
+            raise ValueError(f"読めない行です：{line}")
+        key, rest = m.group(1), (m.group(2) or "").strip()
+        i += 1
+        block = []
+        while i < len(lines) and (not lines[i].strip() or lines[i][:1] in (" ", "\t")
+                                  or (not rest and lines[i].startswith("- "))):
+            block.append(lines[i])
+            i += 1
+        if rest[:1] in ("|", ">"):
+            data[key] = _block_scalar(rest, block)
+        elif rest.startswith("["):
+            data[key] = _flow_list(" ".join([rest] + [b.strip() for b in block]))
+        elif not rest and any(b.strip().startswith("- ") or b.strip() == "-" for b in block):
+            data[key] = [_scalar(b.strip()[1:]) for b in block if b.strip().startswith("-")]
+        elif rest[:1] in ('"', "'"):
+            data[key] = _scalar("\n".join([rest] + block))
+        else:
+            continuation = [b.strip() for b in block if b.strip()]
+            data[key] = _scalar(" ".join([rest] + continuation)) if continuation else _scalar(rest)
+    return data
+
+
+def load_yaml(text: str):
+    try:
+        import yaml  # PyYAML（あれば）
+    except ImportError:
+        return parse_simple_yaml(text)
+    return yaml.safe_load(text)
+
+
+def frontmatter(path: Path):
+    """(frontmatter の辞書, 本文, 問題)。問題がなければ None"""
+    raw, body = split_frontmatter(read(path))
+    if raw is None:
+        return None, body, "frontmatter（--- で囲んだ先頭の部分）がありません"
+    try:
+        data = load_yaml(raw)
+    except Exception as error:  # noqa: BLE001 - YAML の読み違いをそのまま返す
+        return None, body, f"frontmatter を読めません：{error}"
+    if not isinstance(data, dict):
+        return None, body, "frontmatter が「鍵: 値」の形ではありません"
+    return data, body, None
+
+
+# ---------------------------------------------------------------------------
+# 言葉を探す
+# ---------------------------------------------------------------------------
+
+def token(word: str, ignore_case: bool = True):
+    """英数字・_・- に挟まれていない、単語としての出現"""
+    return re.compile(r"(?<![A-Za-z0-9_\-])" + re.escape(word) + r"(?![A-Za-z0-9_\-])",
+                      re.IGNORECASE if ignore_case else 0)
+
+
+def name_token(word: str):
+    """部品の名前としての出現（大文字と小文字を分ける。unittest の setUp などを数えない）"""
+    return token(word, ignore_case=False)
+
+
+def script_token(name: str):
+    """スクリプトの名前（run.py など）。プラグインの tests/ の下の同じ名前のファイル（tests/run.py）は数えない"""
+    return re.compile(r"(?<![A-Za-z0-9_\-.])(?<!tests/)(?<!tests\\)" + re.escape(name) + r"(?![A-Za-z0-9_])")
+
+
+def hits_in_text(label: str, text: str, patterns):
+    found = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for word, pattern in patterns:
+            if pattern.search(line):
+                found.append(f"{label}:{lineno}: 「{word}」 … {line.strip()[:140]}")
+    return found
+
+
+def hits(path: Path, patterns):
+    return hits_in_text(rel(path), read(path), patterns)
+
+
+# ---------------------------------------------------------------------------
+# 設計書の取り決め
+# ---------------------------------------------------------------------------
+
+def _config_table_rows():
+    if not DESIGN.is_file():
+        return []
+    text = read(DESIGN)
+    m = re.search(r"(?ms)^### 4\.1 .*?(?=^### )", text)
+    part = m.group(0) if m else ""
+    rows = []
+    for header, table_rows in _tables(part):
+        if header and header[0] == "項目" and "既定" in header:
+            rows += table_rows
+    return rows
+
+
+def _tables(text: str):
+    tables, header, rows = [], None, []
+    for line in text.splitlines() + [""]:
+        if is_table_line(line):
+            cells = split_cells(line)
+            if header is None:
+                header = cells
+            elif all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
+                continue
+            else:
+                rows.append(cells)
+        elif header is not None:
+            tables.append((header, rows))
+            header, rows = None, []
+    return tables
+
+
+def config_keys():
+    """設計書 4.1 の config.yaml の項目。(「節.項目」の並び, 項目の名前の並び)"""
+    dotted, leaves = set(), set()
+    for cells in _config_table_rows():
+        prefix = None
+        for item in [c.strip().strip("`").strip() for c in cells[0].split("/")]:
+            if not item:
+                continue
+            if "." in item:
+                prefix, leaf = item.split(".", 1)
+                dotted.add(item)
+            else:
+                leaf = item
+                if prefix:
+                    dotted.add(f"{prefix}.{leaf}")
+            leaves.add(leaf)
+    return sorted(dotted), sorted(leaves)
+
+
+def output_dir_default():
+    """設計書 4.1 の output_dir の既定の値（例：../<名前>）。なければ None"""
+    for cells in _config_table_rows():
+        if cells and cells[0].strip("` ") == "output_dir" and len(cells) > 1:
+            m = re.search(r"`([^`]+)`", cells[1])
+            if m:
+                return m.group(1)
+    return None
+
+
+def design_defaults_block():
+    """設計書の defaults.json の例（JSON）。読めなければ {}"""
+    if not DESIGN.is_file():
+        return {}
+    text = read(DESIGN)
+    m = re.search(r"(?ms)^#{2,4} [^\n]*defaults\.json[^\n]*\n(.*?)(?=^#{2,4} )", text)
+    if not m:
+        return {}
+    block = re.search(r"(?ms)^```json\s*\n(.*?)^```", m.group(1))
+    if not block:
+        return {}
+    try:
+        return json.loads(block.group(1))
+    except ValueError:
+        return {}
+
+
+def contract_command_scripts():
+    """取り決めのコマンド（defaults.json の …Command）のスクリプトの名前（run.py など）"""
+    names = set()
+    for data in (design_defaults_block(), defaults() or {}):
+        for key, value in data.items():
+            if key.endswith("Command") and isinstance(value, str):
+                names.add(Path(value).name)
+    return names
+
+
+# ---------------------------------------------------------------------------
+# JSON Schema（jsonschema があればそれ、なければ小さな確かめ）
+# ---------------------------------------------------------------------------
+
+_TYPES = {
+    "object": lambda v: isinstance(v, dict),
+    "array": lambda v: isinstance(v, list),
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "null": lambda v: v is None,
+}
+
+
+class MiniValidator:
+    """JSON Schema 2020-12 のよく使う語だけを確かめる（type, enum, const, properties, required,
+    additionalProperties, patternProperties, propertyNames, items, prefixItems, minItems, maxItems, uniqueItems,
+    minLength, maxLength, pattern, minimum, maximum, exclusiveMinimum, exclusiveMaximum, minProperties,
+    maxProperties, anyOf, oneOf, allOf, not, if/then/else, $ref（同じ文書の中）, $defs）"""
+
+    def __init__(self, schema):
+        self.root = schema
+
+    def resolve(self, ref):
+        if not ref.startswith("#"):
+            raise ValueError(f"外の $ref は読めません：{ref}")
+        node = self.root
+        for part in [p for p in ref[1:].split("/") if p]:
+            part = part.replace("~1", "/").replace("~0", "~")
+            node = node[int(part)] if isinstance(node, list) else node[part]
+        return node
+
+    def errors(self, instance, schema=None, path="$"):
+        schema = self.root if schema is None else schema
+        if schema is True:
+            return []
+        if schema is False:
+            return [f"{path}: 何も許されていない場所です"]
+        out = []
+        if "$ref" in schema:
+            out += self.errors(instance, self.resolve(schema["$ref"]), path)
+        if "type" in schema:
+            types = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
+            if not any(_TYPES[t](instance) for t in types):
+                return out + [f"{path}: 型が {types} ではありません"]
+        if "const" in schema and instance != schema["const"]:
+            out.append(f"{path}: 値が {schema['const']!r} ではありません")
+        if "enum" in schema and instance not in schema["enum"]:
+            out.append(f"{path}: 値 {instance!r} は {schema['enum']} のどれでもありません")
+        if isinstance(instance, str):
+            if "minLength" in schema and len(instance) < schema["minLength"]:
+                out.append(f"{path}: 文字数が {schema['minLength']} より少ない")
+            if "maxLength" in schema and len(instance) > schema["maxLength"]:
+                out.append(f"{path}: 文字数が {schema['maxLength']} より多い")
+            if "pattern" in schema and not re.search(schema["pattern"], instance):
+                out.append(f"{path}: 形 {schema['pattern']} に合いません")
+        if isinstance(instance, (int, float)) and not isinstance(instance, bool):
+            for key, ok in (("minimum", lambda a, b: a >= b), ("maximum", lambda a, b: a <= b),
+                            ("exclusiveMinimum", lambda a, b: a > b), ("exclusiveMaximum", lambda a, b: a < b)):
+                if key in schema and not ok(instance, schema[key]):
+                    out.append(f"{path}: {key} {schema[key]} を満たしません")
+        if isinstance(instance, dict):
+            props = schema.get("properties", {})
+            for key in schema.get("required", []):
+                if key not in instance:
+                    out.append(f"{path}: 要る項目 {key} がありません")
+            if "minProperties" in schema and len(instance) < schema["minProperties"]:
+                out.append(f"{path}: 項目が少ない")
+            if "maxProperties" in schema and len(instance) > schema["maxProperties"]:
+                out.append(f"{path}: 項目が多い")
+            for key, value in instance.items():
+                matched = False
+                if key in props:
+                    matched = True
+                    out += self.errors(value, props[key], f"{path}.{key}")
+                for pattern, sub in schema.get("patternProperties", {}).items():
+                    if re.search(pattern, key):
+                        matched = True
+                        out += self.errors(value, sub, f"{path}.{key}")
+                if not matched and "additionalProperties" in schema:
+                    extra = schema["additionalProperties"]
+                    if extra is False:
+                        out.append(f"{path}: 決まっていない項目 {key} があります")
+                    else:
+                        out += self.errors(value, extra, f"{path}.{key}")
+                if "propertyNames" in schema:
+                    out += self.errors(key, schema["propertyNames"], f"{path}（鍵 {key}）")
+        if isinstance(instance, list):
+            prefix = schema.get("prefixItems", [])
+            for i, sub in enumerate(prefix[: len(instance)]):
+                out += self.errors(instance[i], sub, f"{path}[{i}]")
+            if "items" in schema:
+                for i, item in enumerate(instance[len(prefix):], len(prefix)):
+                    out += self.errors(item, schema["items"], f"{path}[{i}]")
+            if "minItems" in schema and len(instance) < schema["minItems"]:
+                out.append(f"{path}: 要素が {schema['minItems']} より少ない")
+            if "maxItems" in schema and len(instance) > schema["maxItems"]:
+                out.append(f"{path}: 要素が {schema['maxItems']} より多い")
+            if schema.get("uniqueItems"):
+                seen = [json.dumps(i, sort_keys=True) for i in instance]
+                if len(seen) != len(set(seen)):
+                    out.append(f"{path}: 同じ要素が2つあります")
+        if "allOf" in schema:
+            for sub in schema["allOf"]:
+                out += self.errors(instance, sub, path)
+        if "anyOf" in schema and not any(not self.errors(instance, sub, path) for sub in schema["anyOf"]):
+            out.append(f"{path}: anyOf のどれにも合いません")
+        if "oneOf" in schema:
+            count = sum(1 for sub in schema["oneOf"] if not self.errors(instance, sub, path))
+            if count != 1:
+                out.append(f"{path}: oneOf のちょうど1つに合いません（{count} 個に合う）")
+        if "not" in schema and not self.errors(instance, schema["not"], path):
+            out.append(f"{path}: not の形に合ってしまいます")
+        if "if" in schema:
+            branch = "then" if not self.errors(instance, schema["if"], path) else "else"
+            if branch in schema:
+                out += self.errors(instance, schema[branch], path)
+        return out
+
+
+def schema_errors(instance, schema):
+    """JSON Schema に合わない点の並び（合えば []）。jsonschema があれば、それで確かめる"""
+    try:
+        import jsonschema  # noqa: F401
+        from jsonschema import Draft202012Validator
+    except ImportError:
+        return MiniValidator(schema).errors(instance)
+    validator = Draft202012Validator(schema)
+    return [f"{'/'.join(str(p) for p in e.absolute_path) or '$'}: {e.message}" for e in validator.iter_errors(instance)]

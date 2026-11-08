@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: change-approval-on-screen
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  Approvals are chosen by the person on the screen, so the agent does not edit approvals.json itself.
+  It opens the screen at the detail of item 20002 of the run 20261108-101500 (gui.py open with --run
+  and --item 20002, without a browser) and gives the URL
+  http://127.0.0.1:<port>/?t=<token>#run=20261108-101500&view=summary&item=20002. It tells the person
+  to choose 却下 in the 承認 select there (it is saved at once) and that the deviation comment can be
+  edited and saved in the same panel.

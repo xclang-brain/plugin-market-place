@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: applies-after-consent
+expected_outcome: |
+  件数と ID を示してから反映する。修正 20001 は、差分から coverity-fix/cid-20001 のブランチを作って
+  origin に push し、プルリクエストの題名（「Coverity CID 20001: …」）と、作成のリンクがないこと
+  （GitHub ではないリモート）からブランチの名前を伝える。逸脱 20002 は、Coverity に書き戻す道具が
+  ないので、書き戻していないことを伝える。却下 G1 の CID 20005・20006 を、注釈を残して
+  no-grouping.yaml に足す。GitHub のトークンを聞かず、approvals.json と作業中のソースを変えない。
+context:
+  scaffold_script: place-files.sh

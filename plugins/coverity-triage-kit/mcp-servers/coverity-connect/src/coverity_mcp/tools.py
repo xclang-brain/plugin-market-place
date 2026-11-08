@@ -1,0 +1,709 @@
+"""What the tools do, as plain functions (the MCP layer in :mod:`.server` runs them in a thread).
+
+Each call returns within about 20 seconds, because MCP clients such as the Copilot runtime stop a
+tool call after 30 seconds. Work that does not fit is reported (``done: false``, ``has_more``,
+``remaining``) and continued by calling again.
+
+Results are passed in one of two ways:
+
+- Files: with ``output_file`` / ``output_dir`` / ``plan_file`` the result is saved in that file, so
+  that large data does not pass through the conversation. When work remains the tool returns
+  ``done: false`` and is called again with the same arguments; work already saved is not repeated.
+- Inline: without them the result is in the tool result, kept small (search: one page of at most
+  100 issues; warning paths: at most 10 CIDs; about 25,000 characters).
+
+Writing triage takes two calls: ``coverity_preview_triage`` returns what will be written and a
+confirmation token, and ``coverity_update_triage`` writes only with that token.
+"""
+
+from __future__ import annotations
+
+import functools
+import getpass
+import hashlib
+import json
+import logging
+import os
+import re
+import tempfile
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from pydantic import ValidationError
+
+from . import connect
+from .coverity import CoverityClient, CoverityError, make_client
+from .envvars import Masker
+from .models import Issue, IssueDetail, PlanEntry, TriageAttributes, TriageEntry
+from .settings import CoverityConfig, FilterArg, FilterSpec, SettingsError, load_config, load_filter, parse_filter
+
+log = logging.getLogger("coverity_mcp")
+
+BUDGET = 20.0  # seconds one tool call may use
+DEFAULT_FILE_LIMIT = 100  # issues saved to a file when the filter has no limit
+DEFAULT_PAGE, MAX_PAGE = 20, 100  # issues returned in one page without a file
+MAX_CIDS = 50  # warning paths saved by one call to files
+MAX_INLINE_CIDS = 10  # warning paths returned by one call without files
+MAX_EXCLUDED_SAMPLES = 50  # rows left out after the search, kept in issues.json to find the cause
+MAX_RECORDS = 500  # request records kept in a file
+CHARACTER_LIMIT = 25_000  # inline results stay below this size (clients cap tool output near 25k tokens)
+CONCISE_EVENTS = 40  # events shown per warning in the concise form (first and last halves)
+CALL_AGAIN = "続きがあります。同じ引数でもう一度呼んでください"
+RESULT_DIR = "coverity-connect-mcp"  # <RESULT_DIR>-<user> in the temporary folder: write-backs passed as entries
+DEFAULT_SECRET_NAMES = ("COV_USER", "COV_AUTH_KEY")
+
+ResponseFormat = Literal["concise", "detailed"]
+CONCISE_FIELDS = ("cid", "checker", "file", "line", "function", "impact", "classification", "action", "status",
+                  "stream")
+DETAILED_FIELDS = tuple(Issue.model_fields)
+
+
+class ToolFailure(Exception):
+    """A failure the agent can act on; the message says what to fix."""
+
+
+# ---- common helpers ---------------------------------------------------------------------------
+
+class Deadline:
+    def __init__(self, budget: float = BUDGET):
+        self.started = time.monotonic()
+        self.budget = budget
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def left(self) -> float:
+        return self.budget - self.elapsed()
+
+    def allows(self, client: CoverityClient, requests: int = 1) -> bool:
+        """Whether ``requests`` more requests are expected to end within the budget."""
+        return self.elapsed() + requests * client.request_seconds() <= self.budget
+
+
+_secret_names: set[str] = set(DEFAULT_SECRET_NAMES)  # also the names of every settings read so far
+
+
+def masker_for(config: CoverityConfig | None) -> Masker:
+    names = set(_secret_names)
+    if config is not None:
+        names |= {config.user_env, config.key_env}
+    return Masker(sorted(names))
+
+
+def guarded(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    """Expected errors become a :class:`ToolFailure` with a message that says what to fix, with the
+    credential values masked; unexpected ones are logged and reported without a traceback."""
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return func(*args, **kwargs)
+        except ToolFailure as exc:
+            raise ToolFailure(_masked(str(exc), kwargs.get("repo_root"))) from None
+        except (SettingsError, CoverityError, ValueError, OSError) as exc:
+            raise ToolFailure(_masked(str(exc), kwargs.get("repo_root"))) from None
+        except Exception as exc:  # noqa: BLE001 - never a traceback to the agent
+            log.error("%s", _masked(f"{func.__name__}: {type(exc).__name__}: {exc}", kwargs.get("repo_root")),
+                      exc_info=False)
+            raise ToolFailure(_masked(f"思わぬエラーで止まりました（{type(exc).__name__}: {exc}）。同じ引数でもう一度呼んでも"
+                                      "直らないときは、サーバーのログ（標準エラー）を確かめてください",
+                                      kwargs.get("repo_root"))) from None
+    return wrapper
+
+
+def _masked(text: str, repo_root: Any) -> str:
+    config = None
+    try:
+        config = load_config(Path(repo_root)) if repo_root and Path(str(repo_root)).is_absolute() else None
+    except Exception:  # noqa: BLE001 - the settings may be what failed
+        config = None
+    return masker_for(config).text(text)
+
+
+def absolute(value: str, name: str) -> Path:
+    # The server runs in its own folder, so a relative path would point there.
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ToolFailure(f"{name} は絶対パスで渡してください（例: C:/work/app や /home/me/app）: {value}")
+    return path
+
+
+def folder(value: str, name: str) -> Path:
+    path = absolute(value, name)
+    if not path.is_dir():
+        raise ToolFailure(f"{name} のフォルダがありません: {path}")
+    return path
+
+
+def config_of(repo_root: str | None) -> CoverityConfig:
+    config = load_config(folder(repo_root, "repo_root") if repo_root else None)
+    _secret_names.update((config.user_env, config.key_env))
+    return config
+
+
+def now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def compact(data: dict[str, Any]) -> dict[str, Any]:
+    """Without the items that have no value (None, empty text, empty list)."""
+    return {k: v for k, v in data.items() if v is not None and v != "" and v != []}
+
+
+def size(data: Any) -> int:
+    return len(json.dumps(data, ensure_ascii=False))
+
+
+def read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except ValueError as exc:
+        raise ToolFailure(f"ファイルを JSON として読めません: {path}: {exc}") from exc
+
+
+def write_json(path: Path, data: Any) -> None:
+    """Write via a temporary file so an interrupted call never leaves half a file."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for attempt in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:  # Windows: another process (a virus scanner, an editor) holds the file
+            if attempt == 9:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.1 * (attempt + 1))
+
+
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def lock_for(path: Path) -> threading.Lock:
+    """One lock per file, so that two calls at the same time on one file take turns."""
+    key = os.path.normcase(str(path.resolve()))
+    with _locks_guard:
+        return _locks.setdefault(key, threading.Lock())
+
+
+def one_of(name_a: str, a: Any, name_b: str, b: Any) -> None:
+    if (a is None) == (b is None):
+        raise ToolFailure(f"{name_a} か {name_b} の、どちらか一方を渡してください")
+
+
+# ---- check -------------------------------------------------------------------------------------
+
+@guarded
+def check_connection(repo_root: str | None = None) -> dict[str, Any]:
+    try:
+        config = config_of(repo_root)
+    except SettingsError as exc:
+        return {"ok": False, "result": str(exc)}
+    out: dict[str, Any] = {"config": config.source, "api": config.api, "url": config.url or None,
+                           "triage_store": config.triage_store}
+    if config.unknown_keys:
+        out["unknown_keys"] = config.unknown_keys
+        out["unknown_keys_note"] = ("coverity の中のこの項目は、このサーバーでは使いません"
+                                    "（書き間違いでなければ、ほかの道具の項目です）")
+    if config.api == "fake":
+        try:
+            client = make_client(config)
+        except CoverityError as exc:
+            return {**out, "ok": False, "result": str(exc)}
+        count = len(getattr(client, "issues", []))
+        client.close()
+        return {**out, "ok": True, "fake_data": config.fake_data,
+                "result": f"偽の Coverity（api: fake）を使う設定です。偽の警告は {count} 件です"}
+    out.update(connect.check_auth(config))
+    if config.url.lower().startswith("http://"):
+        out["warning"] = ("URL が http です。認証キーが暗号化されずに送られます。"
+                          "https が使えるか Coverity の管理者に確認してください")
+    return out
+
+
+# ---- search ------------------------------------------------------------------------------------
+
+def _filter(filter_arg: FilterArg | dict | None, filter_file: str | None) -> tuple[FilterSpec, str, list[str]]:
+    one_of("filter_file", filter_file, "filter", filter_arg)
+    if filter_file is not None:
+        spec, raw, skipped = load_filter(absolute(filter_file, "filter_file"))
+        return spec, sha(raw)[:12], skipped
+    spec = parse_filter(filter_arg)
+    return spec, sha(spec.model_dump_json().encode("utf-8"))[:12], []
+
+
+def _fields(issue: Issue, response_format: ResponseFormat) -> dict[str, Any]:
+    names = DETAILED_FIELDS if response_format == "detailed" else CONCISE_FIELDS
+    return compact({k: getattr(issue, k) for k in names})
+
+
+def _ignored(values: list[dict[str, str]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for value in values:
+        if value not in out:
+            out.append(value)
+    return out
+
+
+IGNORED_NOTE = ("条件の値のうち ignored_values のものは、Coverity にない値なので外して探しました"
+                "（書き間違いなら直して呼び直してください）")
+
+
+@guarded
+def search_issues(repo_root: str | None = None, filter: FilterArg | dict | None = None,  # noqa: A002
+                  filter_file: str | None = None, offset: int = 0, limit: int = DEFAULT_PAGE,
+                  response_format: ResponseFormat = "concise", output_file: str | None = None) -> dict[str, Any]:
+    deadline = Deadline()
+    config = config_of(repo_root)
+    spec, filter_sha, skipped = _filter(filter, filter_file)
+    if offset < 0:
+        raise ToolFailure("offset は 0 以上で渡してください")
+    if output_file is None:
+        if not 1 <= limit <= MAX_PAGE:
+            raise ToolFailure(f"limit は 1〜{MAX_PAGE} で渡してください（{limit}）。もっと多く取るときは、"
+                              "ページを続けて取るか、output_file を渡してファイルに書いてください")
+        out = _search_inline(config, spec, offset, limit, response_format, deadline)
+    else:
+        if offset:
+            raise ToolFailure("offset は output_file を渡さないときだけ使います（output_file を渡したときは、"
+                              "同じ引数で呼び直すと続きから検索します）")
+        out = _search_file(config, spec, filter_sha, absolute(output_file, "output_file"), deadline)
+    if skipped:
+        out["skipped_keys"] = skipped
+    return out
+
+
+def _search_inline(config: CoverityConfig, spec: FilterSpec, offset: int, limit: int,
+                   response_format: ResponseFormat, deadline: Deadline) -> dict[str, Any]:
+    """One page of issues in the tool result. ``offset`` counts the rows Coverity returned."""
+    client = make_client(config)
+    try:
+        page = client.search(spec, limit, offset, deadline.left())
+    finally:
+        client.close()
+    issues, ends, next_offset = page.issues, page.ends, page.next_offset
+    if len(issues) > limit:
+        next_offset = ends[limit - 1]  # continue just after the last issue returned, so none is skipped
+        issues = issues[:limit]
+    rows = [_fields(i, response_format) for i in issues]
+    truncated = None
+    budget, used = CHARACTER_LIMIT - 2_000, 0
+    for count, row in enumerate(rows):
+        used += size(row) + 2
+        if used > budget and count > 0:
+            rows, next_offset = rows[:count], ends[count - 1]
+            truncated = (f"結果が大きいので {count} 件で区切りました。続きは offset に next_offset を渡して取るか、"
+                         "response_format を concise にしてください")
+            break
+    if next_offset is not None and page.total is not None and next_offset >= page.total:
+        next_offset = None
+    excluded = len(page.excluded) if next_offset is None else sum(1 for e in page.excluded_ends if e <= next_offset)
+    out: dict[str, Any] = {
+        "stream": spec.streams[0], "count": len(rows), "offset": offset, "total": page.total,
+        "has_more": next_offset is not None, "next_offset": next_offset, "excluded": excluded,
+        "seconds": round(deadline.elapsed(), 1),
+        "next": None if next_offset is None else f"続きがあります。offset に {next_offset} を渡して呼び直してください"}
+    ignored = _ignored(page.ignored)
+    if ignored:
+        out["ignored_values"], out["ignored_note"] = ignored, IGNORED_NOTE
+    if truncated:
+        out["truncated"] = truncated
+    out["issues"] = rows
+    return out
+
+
+def _new_state(config: CoverityConfig, spec: FilterSpec, filter_sha: str) -> dict[str, Any]:
+    return {"filter_sha": filter_sha, "stream": spec.streams[0], "limit": spec.limit or DEFAULT_FILE_LIMIT,
+            "started_at": now(), "finished_at": None, "coverity_total": None, "next_offset": 0,
+            "limited": False, "revision_field": config.revision_field or None,
+            "revision_checked": not config.revision_field, "analyzed_revision": None,
+            "revision_error": None, "issues": [], "excluded_count": 0, "excluded": [],
+            "excluded_cids": [], "requests": []}
+
+
+def _search_file(config: CoverityConfig, spec: FilterSpec, filter_sha: str, out: Path,
+                 deadline: Deadline) -> dict[str, Any]:
+    if not out.parent.is_dir():
+        raise ToolFailure(f"output_file を書くフォルダがありません: {out.parent}")
+    masker = masker_for(config)
+    with lock_for(out):
+        state = read_json(out) if out.is_file() else None
+        if not isinstance(state, dict) or state.get("filter_sha") != filter_sha or not isinstance(state.get("issues"), list):
+            state = _new_state(config, spec, filter_sha)
+        limit = int(state.get("limit") or DEFAULT_FILE_LIMIT)
+        ignored: list[dict[str, str]] = []
+        client = make_client(config)
+        try:
+            if state["next_offset"] is not None and deadline.allows(client):
+                page = client.search(spec, limit - len(state["issues"]), state["next_offset"], deadline.left())
+                ignored += page.ignored
+                # A new snapshot between calls, or pages that overlap, can return a row again: never keep
+                # a CID twice, neither from an earlier call nor within this one.
+                known = {i["cid"] for i in state["issues"]}
+                for issue in page.issues:
+                    if issue.cid not in known:
+                        known.add(issue.cid)
+                        state["issues"].append(issue.model_dump(exclude_none=True))
+                samples = state.setdefault("excluded", [])
+                left_out = state.setdefault("excluded_cids", [e["cid"] for e in samples])
+                seen = set(left_out)
+                new = []
+                for e in page.excluded:
+                    if e["cid"] not in seen and e["cid"] not in known:
+                        seen.add(e["cid"])
+                        new.append(e)
+                left_out += [e["cid"] for e in new]
+                state["excluded_count"] = int(state.get("excluded_count") or 0) + len(new)
+                samples += new[:max(0, MAX_EXCLUDED_SAMPLES - len(samples))]
+                state["coverity_total"] = page.total
+                if len(state["issues"]) >= limit:
+                    state["limited"] = len(state["issues"]) > limit or page.next_offset is not None
+                    state["issues"] = state["issues"][:limit]
+                    state["next_offset"] = None
+                else:
+                    state["next_offset"] = page.next_offset
+            if state["next_offset"] is None and not state["revision_checked"] and deadline.allows(client, 2):
+                try:
+                    state["analyzed_revision"] = client.snapshot_revision(state["stream"], state["revision_field"])
+                except CoverityError as exc:
+                    if exc.fatal:
+                        raise
+                    state["revision_error"] = masker.text(str(exc))  # the issues are usable without the revision
+                state["revision_checked"] = True
+        finally:
+            state["requests"] = (list(state.get("requests") or []) + masker.data(client.requests))[-MAX_RECORDS:]
+            client.close()
+            done = state["next_offset"] is None and bool(state["revision_checked"])
+            if done and not state.get("finished_at"):
+                state["finished_at"] = now()
+            write_json(out, state)
+    ignored += [{"filter": str(r.get("filter") or ""), "value": str(r.get("value"))} for r in state["requests"]
+                if r.get("status") == "ignored"]
+    excluded = int(state.get("excluded_count") or 0)
+    result: dict[str, Any] = {
+        "done": done, "found": len(state["issues"]), "limit": limit, "limited": state["limited"],
+        "coverity_total": state["coverity_total"], "excluded": excluded,
+        "excluded_note": (f"Coverity が返した警告のうち {excluded} 件が、検索のあとの条件（Status やワイルドカードの"
+                          f"チェッカー）に合わず外れました。合わなかった項目と値は {out} の excluded にあります")
+        if excluded else None,
+        "analyzed_revision": state["analyzed_revision"], "revision_error": state["revision_error"],
+        "seconds": round(deadline.elapsed(), 1), "output_file": str(out), "next": None if done else CALL_AGAIN}
+    ignored = _ignored(ignored)
+    if ignored:
+        result["ignored_values"], result["ignored_note"] = ignored, IGNORED_NOTE
+    return result
+
+
+# ---- warning paths -----------------------------------------------------------------------------
+
+STREAM_MISSING = "stream を渡してください。警告の検索の結果の各警告に stream があります"
+
+
+def _events(detail: IssueDetail, response_format: ResponseFormat, cap: bool) -> tuple[list[dict[str, Any]], int]:
+    events = []
+    for e in detail.events:
+        item = e.model_dump()
+        if response_format == "concise" and not item["main"]:
+            item.pop("main")
+        events.append(compact(item) if response_format == "concise" else {k: v for k, v in item.items() if v is not None})
+    if cap and len(events) > CONCISE_EVENTS:
+        half = CONCISE_EVENTS // 2
+        return events[:half] + events[-half:], len(events) - CONCISE_EVENTS
+    return events, 0
+
+
+def _detail_inline(detail: IssueDetail, response_format: ResponseFormat, cap: bool) -> dict[str, Any]:
+    issue = detail.issue
+    events, omitted = _events(detail, response_format, cap)
+    if response_format == "detailed":
+        head = {"cid": issue.cid, "stream": issue.stream, "checker": issue.checker, "file": issue.file,
+                "line": issue.line, "function": issue.function, "impact": issue.impact, "category": issue.category,
+                "cwe": issue.cwe}
+    else:
+        head = {"cid": issue.cid, "checker": issue.checker, "file": issue.file, "line": issue.line,
+                "function": issue.function}
+    item = compact({**head, "events": events, "checker_description": detail.checker_description})
+    item.setdefault("events", [])
+    if omitted:
+        item["omitted_events"] = omitted
+        item["omitted_note"] = (f"イベントが多いので、間の {omitted} 件を省きました。すべては output_dir に"
+                                "書いて読んでください")
+    return item
+
+
+@guarded
+def get_issue_details(repo_root: str | None = None, stream: str | None = None, cids: list[int] | None = None,
+                      response_format: ResponseFormat = "concise", output_dir: str | None = None) -> dict[str, Any]:
+    deadline = Deadline()
+    if stream is None or not str(stream).strip():
+        raise ToolFailure(STREAM_MISSING)
+    stream = str(stream).strip()
+    config = config_of(repo_root)
+    wanted = list(dict.fromkeys(cids or []))
+    most = MAX_CIDS if output_dir is not None else MAX_INLINE_CIDS
+    if not wanted or len(wanted) > most:
+        raise ToolFailure(f"cids は 1〜{most} 件で渡してください（{len(wanted)} 件）"
+                          + ("。分けて呼んでください" if output_dir is not None else "。もっと多いときは output_dir を渡してください"))
+    if output_dir is None:
+        return _details_inline(config, stream, wanted, response_format, deadline)
+    target = absolute(output_dir, "output_dir")
+    if not target.is_dir():
+        if not target.parent.is_dir():
+            raise ToolFailure(f"output_dir を作るフォルダがありません: {target.parent}")
+        target.mkdir(exist_ok=True)
+    return _details_files(config, stream, wanted, target, deadline)
+
+
+def _details_inline(config: CoverityConfig, stream: str, cids: list[int], response_format: ResponseFormat,
+                    deadline: Deadline) -> dict[str, Any]:
+    masker = masker_for(config)
+    issues: list[dict[str, Any]] = []
+    failed: dict[str, str] = {}
+    remaining: list[int] = []
+    too_big = False
+    used = 0
+    client = make_client(config)
+    try:
+        for cid in cids:
+            if too_big or not deadline.allows(client):
+                remaining.append(cid)
+                continue
+            try:
+                detail = client.issue_detail(cid, stream)
+            except CoverityError as exc:
+                if exc.fatal:
+                    raise
+                failed[str(cid)] = masker.text(str(exc))
+                continue
+            item = _detail_inline(detail, response_format, cap=response_format == "concise")
+            if size(item) > CHARACTER_LIMIT - 2_000:
+                item = _detail_inline(detail, "concise", cap=True)
+            if issues and used + size(item) > CHARACTER_LIMIT - 2_000:
+                too_big = True
+                remaining.append(cid)
+                continue
+            used += size(item)
+            issues.append(item)
+    finally:
+        client.close()
+    if too_big:
+        note = "結果が大きいので区切りました。remaining の CID だけを cids に渡して呼び直してください"
+    elif remaining:
+        note = "時間が足りず、remaining の CID は取っていません。その CID だけを cids に渡して呼び直してください"
+    else:
+        note = None
+    return {"stream": stream, "issues": issues, "failed": failed, "remaining": remaining,
+            "seconds": round(deadline.elapsed(), 1), "next": note}
+
+
+def _details_files(config: CoverityConfig, stream: str, cids: list[int], target: Path,
+                   deadline: Deadline) -> dict[str, Any]:
+    masker = masker_for(config)
+    saved: list[int] = []
+    already: list[int] = []
+    failed: dict[str, str] = {}
+    remaining: list[int] = []
+    client = make_client(config)
+    try:
+        for cid in cids:
+            file = target / f"issue-{cid}.json"
+            with lock_for(file):
+                if file.is_file():
+                    already.append(cid)
+                elif not deadline.allows(client):
+                    remaining.append(cid)
+                else:
+                    try:
+                        detail = client.issue_detail(cid, stream)
+                    except CoverityError as exc:
+                        if exc.fatal:
+                            raise  # nothing is written, so the CID can be fetched later
+                        failed[str(cid)] = masker.text(str(exc))
+                        write_json(file, {"cid": cid, "stream": stream, "fetched_at": now(), "error": failed[str(cid)]})
+                        continue
+                    write_json(file, {"fetched_at": now(), "issue": detail.issue.model_dump(exclude_none=True),
+                                      "events": [e.model_dump(exclude_none=True) for e in detail.events],
+                                      "checker_description": detail.checker_description})
+                    saved.append(cid)
+    finally:
+        client.close()
+    done = not remaining
+    return {"done": done, "saved": saved, "already_saved": already, "failed": failed, "remaining": remaining,
+            "output_dir": str(target), "seconds": round(deadline.elapsed(), 1), "next": None if done else CALL_AGAIN}
+
+
+# ---- write-back --------------------------------------------------------------------------------
+
+def plan_token(raw: bytes) -> str:
+    """Confirmation token of a plan file: SHA-256 of its bytes, the first 12 hex digits."""
+    return sha(raw)[:12]
+
+
+def entry_dict(entry: TriageEntry) -> dict[str, Any]:
+    """An entry as it is shown and confirmed: without a stream when none is given."""
+    return entry.model_dump(exclude_none=True)
+
+
+def entry_key(entry: TriageEntry) -> str:
+    """Key of an entry in the result file, by content."""
+    return sha(entry.model_dump_json(exclude_none=True).encode("utf-8"))[:16]
+
+
+def entries_token(entries: list[TriageEntry]) -> str:
+    """Confirmation token of entries: SHA-256 of {"triage": entries} as compact JSON with sorted keys."""
+    text = json.dumps({"triage": [entry_dict(e) for e in entries]}, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"))
+    return sha(text.encode("utf-8"))[:12]
+
+
+def _entries(entries: list[TriageEntry] | list[dict[str, Any]]) -> list[TriageEntry]:
+    try:
+        items = [e if isinstance(e, TriageEntry) else TriageEntry.model_validate(e) for e in entries]
+    except ValidationError as exc:
+        raise ToolFailure(f"entries が正しくありません: {exc}") from exc
+    if not items:
+        raise ToolFailure("entries に、書き戻す項目を1つ以上入れてください")
+    return items
+
+
+def _plan(plan_file: str) -> tuple[Path, bytes, list[TriageEntry]]:
+    path = absolute(plan_file, "plan_file")
+    if not path.is_file():
+        raise ToolFailure(f"plan_file がありません: {path}")
+    raw = path.read_bytes()
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+        items = [PlanEntry.model_validate(e) for e in (data.get("triage") or [])]
+    except (ValueError, AttributeError, TypeError, ValidationError) as exc:
+        raise ToolFailure(f"書き戻しの内容を読めません（{{\"triage\": [...]}} の JSON にしてください）: {path}: {exc}") from exc
+    return path, raw, items
+
+
+@guarded
+def preview_triage(plan_file: str | None = None,
+                   entries: list[TriageEntry] | list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    one_of("plan_file", plan_file, "entries", entries)
+    if plan_file is not None:
+        _, raw, items = _plan(plan_file)
+        token = plan_token(raw)
+    else:
+        items = _entries(entries or [])
+        token = entries_token(items)
+    no_stream = sum(1 for e in items if not e.stream)
+    out = {"counts": {"entries": len(items), "cids": len({c for e in items for c in e.cids})},
+           "items": [entry_dict(e) for e in items], "confirmation_token": token,
+           "next": ("件数と内容を人に見せ、同意を得てから coverity_update_triage に confirmation_token と、"
+                    "同じ plan_file か entries を渡してください。confirmation_token は自分で作らないでください")}
+    if no_stream:
+        out["note"] = (f"stream のない {no_stream} 項目は、設定のトリアージストア（coverity.triage_store、既定 "
+                       "Default Triage Store）に書きます")
+    return out
+
+
+def _user_name() -> str:
+    try:
+        name = getpass.getuser()
+    except Exception:  # noqa: BLE001 - no name in the environment nor in the user database
+        name = str(os.getuid()) if hasattr(os, "getuid") else ""
+    return re.sub(r"[^\w.-]", "_", name) or "user"
+
+
+def entries_result_path(config: CoverityConfig) -> tuple[Path, dict[str, str]]:
+    """The result file of write-backs passed as entries, and the target it is for.
+
+    One folder per user in the temporary folder (only that user can read it), one file per
+    Coverity and triage store: an entry written there is known by its content, whatever the order
+    of the entries or the confirmation token."""
+    base = Path(tempfile.gettempdir()) / f"{RESULT_DIR}-{_user_name()}"
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if hasattr(os, "getuid"):
+        if base.stat().st_uid != os.getuid():
+            raise ToolFailure(f"書き戻しの記録のフォルダが、ほかのユーザーのものです: {base}。環境変数 TMPDIR に、"
+                              "自分だけが使う一時のフォルダを設定してください")
+        os.chmod(base, 0o700)
+    url = config.url.rstrip("/") if config.api != "fake" else f"fake:{config.fake_data}"
+    target = {"url": url, "triage_store": config.triage_store}
+    name = sha(json.dumps([url, config.triage_store], ensure_ascii=False).encode("utf-8"))[:12]
+    return base / f"triage-{name}.result.json", target
+
+
+@guarded
+def update_triage(confirmation_token: str, repo_root: str | None = None, plan_file: str | None = None,
+                  entries: list[TriageEntry] | list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    deadline = Deadline()
+    one_of("plan_file", plan_file, "entries", entries)
+    if plan_file is not None:
+        plan_path, raw, items = _plan(plan_file)
+        token = plan_token(raw)
+    else:
+        items = _entries(entries or [])
+        token = entries_token(items)
+    if (confirmation_token or "").strip() != token:
+        raise ToolFailure("確認の文字列（confirmation_token）が書き戻しの内容と合いません。何も書いていません。"
+                          "coverity_preview_triage をやり直し、件数と内容を人に見せて同意を得てから呼んでください")
+    config = config_of(repo_root)
+    masker = masker_for(config)
+    if plan_file is not None:
+        result_path, target = plan_path.with_name(plan_path.stem + ".result.json"), None
+    else:
+        result_path, target = entries_result_path(config)
+    with lock_for(result_path):
+        result = read_json(result_path) if result_path.is_file() else {}
+        if not isinstance(result, dict) or (target is not None and {k: result.get(k) for k in target} != target):
+            result = dict(target or {})
+        for key in ("written", "failed"):
+            if not isinstance(result.get(key), dict):
+                result[key] = {}
+        if not isinstance(result.get("requests"), list):
+            result["requests"] = []
+        written_now: list[str] = []
+        remaining: list[str] = []
+        client = make_client(config)
+        try:
+            for entry in items:
+                key = entry_key(entry)  # by content: an entry changed after writing is written again
+                failure = result["failed"].get(key) or {}
+                if key in result["written"] or failure.get("token") == token:
+                    continue
+                # An entry with a stream also asks which triage store the stream uses: two requests.
+                if not deadline.allows(client, 2 if entry.stream else 1):
+                    remaining.append(entry.id)
+                    continue
+                attributes = TriageAttributes(classification=entry.classification, action=entry.action,
+                                              severity=entry.severity)
+                try:
+                    store = client.write_triage(entry.cids, attributes, entry.comment, entry.stream)
+                except CoverityError as exc:
+                    if exc.fatal:
+                        raise  # nothing is recorded for this entry: calling again writes it
+                    # A value Coverity refused is not sent again with this token: correct and confirm again.
+                    result["failed"][key] = {"id": entry.id, "cids": entry.cids, "error": masker.text(str(exc)),
+                                             "token": token, "at": now()}
+                    continue
+                result["written"][key] = compact({"id": entry.id, "cids": entry.cids, "stream": entry.stream,
+                                                  "triage_store": store, "at": now()})
+                result["failed"].pop(key, None)
+                written_now.append(entry.id)
+                write_json(result_path, result)
+        finally:
+            result["requests"] = (result["requests"] + masker.data(client.requests))[-MAX_RECORDS:]
+            client.close()
+            write_json(result_path, result)
+    keys = {entry_key(e) for e in items}
+    failed = [{"id": v["id"], "cids": v["cids"], "error": v["error"]} for k, v in result["failed"].items() if k in keys]
+    done = not remaining
+    out: dict[str, Any] = {
+        "done": done, "written": written_now, "written_total": sum(1 for k in result["written"] if k in keys),
+        "entries": len(items), "failed": failed, "remaining": remaining, "result_file": str(result_path),
+        "seconds": round(deadline.elapsed(), 1), "next": None if done else CALL_AGAIN}
+    if failed:
+        out["failed_note"] = ("failed の項目は Coverity に断られました。同じ確認の文字列では送り直しません。値を直して"
+                              "coverity_preview_triage からやり直してください")
+    return out

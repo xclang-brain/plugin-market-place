@@ -1,0 +1,102 @@
+# coverity-triage-kit の、モデルを使わない試験を、Windows と Linux のマシンで動かす。
+# 利用者の PC は Windows なので、どの試験も windows-latest でも動かす。
+# Linux は ubuntu-24.04 に固定する（ubuntu-latest の版が変わっても、同じ環境で試すため）。
+# 部品の名前は書かない。試験は tests/run.py が、skills/ と mcp-servers/ の下のフォルダから見つけて、
+# その部品の README に書いた動かし方で動かす。部品を足す・消す・置き換えても、この定義は直さずに済む。
+name: coverity-triage-kit
+
+on:
+  push:
+    paths:
+      - 'plugins/coverity-triage-kit/**'
+      - '.github/workflows/coverity-triage-kit.yml'
+  pull_request:
+    paths:
+      - 'plugins/coverity-triage-kit/**'
+      - '.github/workflows/coverity-triage-kit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  parts:
+    name: 部品ごとの試験（${{ matrix.os }}、Python ${{ matrix.python }}）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+        # 3.12 は確かめた版。3.x は、そのときの最新の安定版（Windows の py -3 が選ぶもの）
+        python: ['3.12', '3.x']
+    defaults:
+      run:
+        working-directory: plugins/coverity-triage-kit
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v6
+      # skills/ と mcp-servers/ の下の、tests/ があるフォルダを、すべて動かす
+      - name: 部品ごとの試験
+        run: python tests/run.py --only parts
+
+  checks:
+    name: 独立性・取り決め・構造・結合・文書（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: plugins/coverity-triage-kit
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      # 独立性の試験は、部品のフォルダだけを別の場所にコピーして、その部品の試験も動かす
+      - name: プラグイン全体の試験
+        run: python tests/run.py --only structure --only contracts --only independence --only integration --only docs --only eval
+
+  extension:
+    name: Web管理画面（${{ matrix.os }}、Node ${{ matrix.node }}）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+        # 保守期間中の LTS
+        node: ['22', '24']
+    defaults:
+      run:
+        working-directory: plugins/coverity-triage-kit
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      # 画面をブラウザーで確かめる試験があるときだけ、Playwright とブラウザーを tests/node_modules に入れる（git に入れない）
+      - name: Playwright を入れる
+        shell: bash
+        run: |
+          if grep -rqs "playwright" tests/extension; then
+            npm install --prefix tests --no-save --no-package-lock playwright@1.56.1
+            (cd tests && npx playwright install --with-deps chromium)
+          else
+            echo 'ブラウザーを使う試験はありません。'
+          fi
+      - name: Web管理画面の試験
+        run: python tests/run.py --only extension

@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: true-bug-in-disabled-feature
+expected_outcome: |
+  コードを読み、機能の表で legacy_export が無効（src/config.c:12）で、export_legacy() は 14 行で戻るため
+  18 行の strcpy が実行されないことを確かめる。逸脱コメントは「本物の不具合。」で始まり、200文字以内で、
+  「ただし」などの条件の言い方を使わずに、無効であるという事実と場所（src/config.c:12）を書く。
+  Classification は Bug、Action は Ignore、Severity は Major・Moderate・Minor のどれか（Impact Medium なら Moderate）。
+  ファイルは作らず、コードも変えない。
+context:
+  scaffold_script: place-files.sh

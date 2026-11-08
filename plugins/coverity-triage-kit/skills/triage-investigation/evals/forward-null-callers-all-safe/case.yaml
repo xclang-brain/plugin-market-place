@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: forward-null-callers-all-safe
+expected_outcome: |
+  関数の中だけなら経路が成り立つが、buf_append は static で、呼び出し元は src/textbuf.c の 3 か所
+  （25 行・30 行は文字列の定数、38 行は 35〜37 行で NULL を除いた name）だけなので、s が NULL になる経路はない。
+  判定は誤検知（false_positive）で、根拠に 3 か所の呼び出し元を相対パスと行で挙げる。
+  確信度とその具体的な理由、推奨（逸脱、または小さく安全な修正）を示す。
+  答えはチャットで返し、コードを変えず、結果のファイルも作らない。
+context:
+  scaffold_script: place-files.sh
