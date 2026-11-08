@@ -587,6 +587,601 @@
    "expect": {
     "confidence": "medium"
    }
+  },
+  {
+   "name": "review_unverified_outcome_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "unverified",
+     "confidence_cap": "low"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "review_without_outcome_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "confidence_cap": "low"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "review_unknown_outcome_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "maybe",
+     "confidence_cap": "low"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "review_outcome_other_case_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "FLAG",
+     "confidence_cap": "low"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "flag_cap_key_missing_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "rework_cap_key_missing_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [
+      "根拠の行を直す"
+     ],
+     "note": "根拠の行を確かめた",
+     "outcome": "rework"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "pass_cap_key_missing_keeps",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "pass"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "flag_cap_not_a_string_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": [
+      "medium"
+     ]
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "pass_cap_not_a_string_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "pass",
+     "confidence_cap": {
+      "level": "low"
+     }
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "pass_cap_low_lowers",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "medium"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "pass",
+     "confidence_cap": "low"
+    },
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "worker_confidence_not_a_string_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": [
+      "high"
+     ]
+    },
+    "review": null,
+    "verify": null
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "run_item_not_reviewed_ignores_review",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": "low"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": null
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "run_item_without_review_ignores_review",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": "low"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "run_item_unverified_ignores_review",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": "low"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "unverified"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "run_item_unknown_state_ignores_review",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": "low"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "done"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "run_item_flag_counts_review",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": "medium"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "flag"
+    }
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "run_item_pass_counts_cap",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "pass",
+     "confidence_cap": "medium"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "pass"
+    }
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "run_item_flag_after_rework_limit_is_low",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [
+      "根拠の行を直す"
+     ],
+     "note": "根拠の行を確かめた",
+     "outcome": "rework",
+     "confidence_cap": null
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "flag"
+    }
+   },
+   "expect": {
+    "confidence": "low"
+   }
+  },
+  {
+   "name": "run_item_rework_counts_review",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [
+      "根拠の行を直す"
+     ],
+     "note": "根拠の行を確かめた",
+     "outcome": "rework",
+     "confidence_cap": "medium"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "rework"
+    }
+   },
+   "expect": {
+    "confidence": "medium"
+   }
+  },
+  {
+   "name": "run_item_taken_but_review_unverified_is_ignored",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "unverified",
+     "confidence_cap": "low"
+    },
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "pass"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "run_item_taken_without_review_file_keeps",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": null,
+    "verify": null,
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "flag"
+    }
+   },
+   "expect": {
+    "confidence": "high"
+   }
+  },
+  {
+   "name": "run_item_unverified_still_lowers_for_build",
+   "input": {
+    "result": {
+     "item": "20001",
+     "recommendation": "fix",
+     "confidence_reason": "経路をすべて読んだ",
+     "confidence": "high"
+    },
+    "review": {
+     "item": "20001",
+     "findings": [],
+     "rework": [],
+     "note": "根拠の行を確かめた",
+     "outcome": "flag",
+     "confidence_cap": "medium"
+    },
+    "verify": {
+     "mode": "build",
+     "batch": true,
+     "applied": true,
+     "build_ok": false,
+     "problems": [
+      "ビルドエラーが、この修正案の変えたファイルで出ています"
+     ]
+    },
+    "run_item": {
+     "id": "20001",
+     "cids": [
+      20001
+     ],
+     "status": "done",
+     "review": "unverified"
+    }
+   },
+   "expect": {
+    "confidence": "low"
+   }
   }
  ]
 }

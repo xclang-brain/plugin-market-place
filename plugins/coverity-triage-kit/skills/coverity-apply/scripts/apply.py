@@ -55,7 +55,6 @@ KNOWLEDGE_FILE = "knowledge.md"
 DEFAULT_OUTPUT_DIR = os.pardir + "/coverity-triage-out"  # next to the repository
 LABELS = {"fix": "修正", "deviation": "逸脱", "reject": "却下"}
 CONFIDENCE_JA = {"high": "高", "medium": "中", "low": "低"}
-TAKEN_REVIEWS = ("pass", "flag", "rework")  # run.json items[].review once the run took review.json in
 COMMENT_MAX = 200  # characters of a deviation comment (the rule for the comments written by the AI)
 SERVER_ERROR = re.compile(r"(?:HTTP\s*|[（(]\s*)5\d\d(?!\d)|(?<![0-9A-Za-z])5xx(?![0-9A-Za-z])", re.IGNORECASE)
 KNOWLEDGE_TEMPLATE = """# プロジェクトの知識（Coverity トリアージ）
@@ -627,15 +626,13 @@ def shown_confidence(run: RunFolder, item_id: str, result: dict[str, Any]) -> di
     """The confidence shown to people (the shared rule of scripts/confidence.py, as in the summary):
     {"confidence", "reason", "lowered_by"}.
 
-    The review counts once the run took it in (run.json ``items[].review`` is pass / flag / rework; an
-    unverified item has none); the build check is the item's entry of verify.json."""
-    review = None
-    if run.item(item_id).get("review") in TAKEN_REVIEWS:
-        found = read_json(run.item_dir(item_id) / "review.json", None)
-        review = found if isinstance(found, dict) else None
+    The files go to the rule as they are read: review.json, the item's entry of run.json (the rule decides
+    whether the review counts) and the item's entry of verify.json (the build check)."""
+    review = read_json(run.item_dir(item_id) / "review.json", None)
     verify = read_json(run.dir / "verify.json", {})
     check = verify.get(item_id) if isinstance(verify, dict) else None
-    return confidence.effective_confidence(result, review, check if isinstance(check, dict) else None)
+    return confidence.effective_confidence(result, review, check if isinstance(check, dict) else None,
+                                           run.item(item_id))
 
 
 def pr_text(run: RunFolder, entry: dict[str, Any]) -> tuple[str, str]:

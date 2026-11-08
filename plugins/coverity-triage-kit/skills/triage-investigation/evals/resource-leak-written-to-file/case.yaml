@@ -3,7 +3,5 @@ name: resource-leak-written-to-file
 expected_outcome: |
   load_table() は fread で 256 バイトそろわないとき（src/loader.c の 17〜18 行）、fopen で開いた fp を閉じずに
   LOADER_ERR_SHORT を返す。calib_init() は短いファイルも渡しうるので、本物のバグ（true_bug）、推奨は修正（fix）、
-  確信度は高。Coverity の絶対パス /var/build/fw/src/loader.c は src/loader.c に読み替えて根拠に書く。
-  結果は out/investigation.json に、指定の項目だけで書き、質問はせず、コードは変えず、1行だけを返す。
-context:
-  scaffold_script: place-files.sh
+  確信度は高、revision_drift.status は none。Coverity の絶対パス /var/build/fw/src/loader.c は src/loader.c に読み替えて根拠に書く。
+  結果は out/investigation.json に、指定の8項目だけで書き、質問はせず、コードは変えず、1行だけを返す。

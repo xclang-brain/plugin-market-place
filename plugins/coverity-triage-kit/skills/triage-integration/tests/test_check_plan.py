@@ -22,6 +22,13 @@ def skill_example() -> dict:
     return json.loads(re.search(r"```json\n(.*?)```", text, re.S).group(1))
 
 
+def example_ids() -> tuple[list[str], list[str], str]:
+    """The merged members, the conflicting items and the merged confidence of the SKILL.md example."""
+    plan = skill_example()
+    merge = plan["merges"][0]
+    return list(merge["members"]), list(plan["conflicts"][0]["items"]), merge["result"]["confidence"]
+
+
 class RulesInProcessTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -64,8 +71,13 @@ class CommandTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def members(self) -> list[str]:
-        return ["--member", "20011:20011:high", "--member", "20012:20012:medium",
-                "--member", "20021:20021:high", "--member", "20030:20030:low"]
+        """--member for every item of the example: the first member high, the others at the merged confidence."""
+        merged, conflicting, confidence = example_ids()
+        levels = ["high"] + [confidence] * (len(merged) - 1) + ["high", "low"][:len(conflicting)]
+        args = []
+        for item, level in zip(merged + conflicting, levels):
+            args += ["--member", f"{item}:{item}:{level}"]
+        return args
 
     def test_skill_example_passes_with_members(self) -> None:
         code, out = run_json("check_plan", "--plan", str(self.plan), *self.members(), cwd=self.dir)
@@ -79,19 +91,22 @@ class CommandTest(unittest.TestCase):
         self.assertEqual([w["code"] for w in out["warnings"]], ["items_unchecked"])
 
     def test_no_grouping_option(self) -> None:
-        code, out = run_json("check_plan", "--plan", str(self.plan), *self.members(), "--no-grouping", "20012")
+        second = example_ids()[0][1]
+        code, out = run_json("check_plan", "--plan", str(self.plan), *self.members(), "--no-grouping", second)
         self.assertEqual(code, 1)
         self.assertEqual([p["code"] for p in out["problems"]], ["member_no_grouping"])
         self.assertIn("merges[0].members", out["problems"][0]["message"])
 
     def test_items_file_and_stdin(self) -> None:
-        items = {"20011": {"cids": [20011], "confidence": "medium"}, "20012": {"cids": [20012], "confidence": "medium"},
-                 "20021": {"cids": [20021]}, "20030": {"cids": [20030]}}
+        merged, conflicting, confidence = example_ids()
+        self.assertNotEqual(confidence, "low", "the example's merged confidence must leave room for a lower member")
+        items = {m: {"cids": [int(m)], "confidence": confidence} for m in merged}
+        items.update({c: {"cids": [int(c)]} for c in conflicting})
         path = self.dir / "items.json"
         path.write_text(json.dumps({"items": items}), encoding="utf-8")
         code, out = run_json("check_plan", "--plan", str(self.plan), "--items", str(path))
         self.assertEqual(code, 0, out)
-        items["20011"]["confidence"] = "low"
+        items[merged[0]]["confidence"] = "low"
         code, out = run_json("check_plan", "--stdin",
                              stdin=json.dumps({"plan": skill_example(), "items": items}, ensure_ascii=False))
         self.assertEqual([p["code"] for p in out["problems"]], ["confidence_too_high"])

@@ -1,0 +1,13 @@
+diff --git a/src/io.c b/src/io.c
+--- a/src/io.c
++++ b/src/io.c
+@@ -17,6 +17,9 @@
+         return -1;
+     }
+     data = strchr(line, ':');
++    if (data == NULL) {
++        return -1;
++    }
+     out->size = atoi(data + 1);
+     data = malloc(strlen(line) + 1);
+     strcpy(data, line);

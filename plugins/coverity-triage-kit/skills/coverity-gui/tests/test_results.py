@@ -113,6 +113,50 @@ class ResultsTest(unittest.TestCase):
         self.assertEqual(self.row("20001")["confidence"], "high")  # could not be reviewed: no cap
         self.reviewed("20001", "flag")
         self.assertEqual(self.row("20001")["confidence"], "low")
+        self.reviewed("20001", "pass")  # taken in: the cap counts whatever run.json says of the outcome
+        self.assertEqual(self.row("20001")["confidence"], "low")
+        helpers.write_json(item / "review.json", {"item": "20001", "outcome": "unverified", "confidence_cap": "low"})
+        self.assertEqual(self.row("20001")["confidence"], "high")  # not a review that counts
+
+    def analysis_path(self, item_id: str, cid: int, path: str) -> None:
+        """issue-<CID>.json as the Coverity tool writes it: the path the analysis saw."""
+        issue_file = self.run_dir / "items" / item_id / f"issue-{cid}.json"
+        before = issue_file.read_bytes()
+        self.addCleanup(issue_file.write_bytes, before)
+        data = json.loads(before)
+        data["issue"]["file"] = path
+        helpers.write_json(issue_file, data)
+
+    def test_files_are_shown_as_repository_paths_with_the_analysis_path_as_the_fallback(self) -> None:
+        self.analysis_path("20001", 20001, "/build/app/src/reader.c")
+        self.analysis_path("20002", 20002, "/build/app/src/writer.c")
+        row = self.row("20001")
+        self.assertEqual((row["file"], row["line"]), ("/build/app/src/reader.c", 40))  # no mapped list: Coverity's path
+        mapped = self.run_dir / "issues.mapped.json"
+        self.addCleanup(mapped.unlink)
+        # the batch run's list: each warning with its file mapped to a repository path
+        helpers.write_json(mapped, [
+            {"cid": 20001, "checker": "NULL_RETURNS", "file": "src/reader.c", "function": "read_header", "line": 40,
+             "impact": "High", "stream": "app-main", "path_notes": []},
+            {"cid": 20002, "checker": "NULL_RETURNS", "file": "", "line": 41, "impact": "High", "path_notes": []},
+            {"cid": 20004, "checker": "MISRA C-2012 Rule 10.4", "file": "src/group.c", "line": 7, "impact": "Low",
+             "path_notes": ["パスを自動で対応づけました: /build/app/src/group.c → src/group.c"]}])
+        summary = {r["id"]: r for r in self.srv.get(f"/api/runs/{RUN}/summary")[1]["items"]}
+        self.assertEqual((summary["20001"]["file"], summary["20001"]["line"]), ("src/reader.c", 40))
+        self.assertEqual(summary["20002"]["file"], "/build/app/src/writer.c")  # no mapped path: Coverity's path
+        self.assertEqual(summary["G1"]["file"], "src/group.c")  # a group: its first warning
+        detail = self.srv.get(f"/api/runs/{RUN}/items/20001")[1]
+        self.assertEqual(detail["item"]["file"], "src/reader.c")
+        # without the item's issue file, Coverity's path comes from issues.json
+        issues = self.run_dir / "issues.json"
+        self.addCleanup(issues.unlink)
+        helpers.write_json(issues, {"finished_at": "2026-11-08T10:16:00+09:00", "issues": [
+            {"cid": 20002, "checker": "NULL_RETURNS", "file": "/build/app/src/from-list.c", "line": 41}]})
+        issue_file = self.run_dir / "items" / "20002" / "issue-20002.json"
+        hidden = issue_file.with_name("hidden.json")
+        issue_file.rename(hidden)
+        self.addCleanup(hidden.rename, issue_file)
+        self.assertEqual(self.row("20002")["file"], "/build/app/src/from-list.c")
 
     def test_a_failed_build_does_not_lower_a_deviation_recommendation(self) -> None:
         helpers.write_json(self.run_dir / "verify.json", {"20002": {"mode": "build", "build_ok": False, "problems": ["失敗"]}})

@@ -62,7 +62,7 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
    表の上から順に毎回使うものは、「使うとき」を「毎回」にし、使う順の位置に入れます。
 3. この文書の「今の部品」の表に行を足します。
 4. 利用者が打つコマンドとして使うなら、仕様書の 3.3 の表にも足します（仕様の変更です）。
-5. ほかの部品と同じ取り決めを持つなら、持ち主のファイルを `assets/` にコピーし、設計書の 4.17 の表に足します（「取り決めの写し」）。
+5. ほかの部品と同じ取り決めを持つなら、持ち主のファイルを、下の「取り決めの写し」の置き場所（データは `assets/`、スクリプトは `scripts/`、共通の試験のデータは `assets/contract/<名前>/`）にそのままコピーし、共通の試験のデータのすべての組を動かす試験を `tests/` に足します。設計書の 4.17 の表、下の「取り決めの写し」の表、`tests/contracts/test_contracts.py` の `CONTRACTS` に、その部品（役割）を足します。
 
 ## スキルを消す
 
@@ -77,7 +77,7 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 
 3. `defaults.json` に名前があれば消します（`applySkill`、`setupSkill`、`pluginSkills`、`runCommand`、`guiCommand`）。
 4. この文書の「今の部品」の表から行を消します。
-5. 取り決めの持ち主だったときは、ほかの部品を持ち主にし、設計書の 4.17 の表と、この文書の表を直します。
+5. 取り決めの持ち主だったときは、ほかの部品を持ち主にし、設計書の 4.17 の表と、この文書の表を直します。写しを持っていただけのときは、設計書の 4.17 の表、下の「取り決めの写し」の表、`tests/contracts/test_contracts.py` の `CONTRACTS` から、その部品（役割）を外します。
 
 ## スキルを置き換える
 
@@ -87,7 +87,7 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 2. その名前を書いた表で、`` `code-fix` `` を `` `minimal-fix` `` にします（いまは作業役の表）。
 3. `defaults.json` に名前があれば替えます。一括実行を置き換えるときは `runCommand`、結果と設定の画面を置き換えるときは `guiCommand` の場所も替えます。
 4. この文書の「今の部品」の表の名前と置き場所を替えます。
-5. 古いスキルが取り決めの写しを持っていたら、新しいスキルにも同じ写しを置きます。持ち主だったら、新しいスキルが持ち主になり、ほかの部品の写しは新しい持ち主のものと同じにします。
+5. 古いスキルが取り決めの写しを持っていたら（下の「取り決めの写し」の表で、古いスキルのフォルダが出てくる行）、新しいスキルにも同じ写しを同じ置き場所に置き、写したスクリプトが使うライブラリを PEP 723 の欄に書き、共通の試験のデータのすべての組を動かす試験も持たせます。持ち主だったら、新しいスキルが持ち主になり、ほかの部品の写しは新しい持ち主のものと同じにします。
 6. 利用者が打つコマンドの名前が変わるときは、仕様書の 3.3 の表、プラグインの README、4段階目のガイド、エージェントの README も替えます。
 
 ## MCP サーバーを置き換える
@@ -96,9 +96,23 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 
 1. `mcp-servers/<新しい名前>/` を置き、古いフォルダを消します（`README.md`、`pyproject.toml`、`uv.lock`、`src/`、`tests/`、`evals/`）。
 2. `mcp.json` の `--directory` を `${PLUGIN_ROOT}/mcp-servers/<新しい名前>` にし、起動のコマンドの名前を替えます。登録名の鍵（`coverity-connect`）と `env` は、そのままにします。
-3. 確認の文字列の写しを置きます：`skills/coverity-apply/assets/contract/token/cases.json` を、`mcp-servers/<新しい名前>/tests/contract/token/cases.json` にコピーします。
-4. この文書の「今の部品」の表の置き場所を替えます。
-5. 登録名を変えるときは（取り決めの変更）、`coverity-connect` を書いた表の行、エージェントの `tools` の `coverity-connect/<ツール>`、設計書の 5章、利用者向けの文書も替えます。
+3. 確認の文字列の写しを置きます（設計書の 4.10、4.17。書き戻しのツールは、反映が書いた計画のファイルの確認の文字列を、反映と同じ決まりで確かめます）。
+   - 持ち主のスクリプト `skills/coverity-apply/scripts/plantoken.py` を、新しいサーバーのパッケージ（`src/<パッケージ>/plantoken.py`）にそのままコピーします。書き戻しのツール（`coverity_preview_triage`、`coverity_update_triage`）は、それを読み込んで使います（同じ決まりを書き直しません）。標準ライブラリだけを使うので、`pyproject.toml` に足すライブラリはありません。
+   - 共通の試験のデータ `skills/coverity-apply/assets/contract/token/cases.json` を、`mcp-servers/<新しい名前>/tests/contract/token/cases.json` にコピーし、そのすべての組を、写した `plantoken.py` と書き戻しのツールで動かす試験を `tests/` に置きます。
+
+   ```text
+   # Windows（PowerShell）
+   Copy-Item "skills/coverity-apply/scripts/plantoken.py" "mcp-servers/<新しい名前>/src/<パッケージ>/plantoken.py"
+   Copy-Item "skills/coverity-apply/assets/contract/token/cases.json" "mcp-servers/<新しい名前>/tests/contract/token/cases.json"
+   # Linux（bash）
+   cp "skills/coverity-apply/scripts/plantoken.py" "mcp-servers/<新しい名前>/src/<パッケージ>/plantoken.py"
+   cp "skills/coverity-apply/assets/contract/token/cases.json" "mcp-servers/<新しい名前>/tests/contract/token/cases.json"
+   ```
+
+4. 警告の一覧 `issues.json` と警告経路 `issue-<CID>.json` は、MCP サーバーが持ち主の取り決めです（設計書の 4.3、4.4、4.17）。写すファイルはありませんが、新しいサーバーも同じ形で書きます。一括実行と真偽の調査がそれを読めることは、取り決めの試験が確かめます。
+5. Windows では、認証情報をユーザーの環境変数（`HKCU\Environment`）からも読みます（設計書の 3.2。写しではなく、サーバーが自分で持ちます）。
+6. この文書の「今の部品」の表の置き場所を替えます。
+7. 登録名を変えるときは（取り決めの変更）、`coverity-connect` を書いた表の行、エージェントの `tools` の `coverity-connect/<ツール>`、設計書の 5章、利用者向けの文書も替えます。
 
 ## 作業役のエージェントを置き換える
 
@@ -132,7 +146,7 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 
 同じ取り決めを2つ以上の部品が持つときは、持ち主のファイルが正です（設計書の 4.17）。写しは、持ち主のファイルと**同じバイト列**にします（書き直さず、そのままコピーします）。持ち主を変えたら、すべての写しを持ち主のものに合わせてコピーします。
 
-写しの置き場所は、持ち主と同じ名前で、データは写す側の `assets/`、スクリプトは写す側の `scripts/`、共通の試験のデータは写す側の `assets/contract/<名前>/` です。MCP サーバーは、スクリプトをパッケージ（`src/coverity_mcp/`）に、共通の試験のデータを `tests/contract/<名前>/` に置きます。自分の部品の `assets/` を探すスクリプト（`check_result.py`、`check_review.py`、`check_plan.py`）は、`scripts/` の直下に置き、探すファイルも `assets/` に置きます。写す側は、写したスクリプトを読み込んで使います（同じ決まりを自分で書き直しません）。写したスクリプトが使うライブラリ（`jsonschema`、`pyyaml` など）は、写す側のスクリプトの PEP 723 の欄（MCP サーバーは `pyproject.toml`）にも書きます。
+写しの置き場所は、持ち主と同じ名前で、データは写す側の `assets/`、スクリプトは写す側の `scripts/`、共通の試験のデータは写す側の `assets/contract/<名前>/` です。MCP サーバーは、スクリプトをパッケージ（今は `src/coverity_mcp/`）に、共通の試験のデータを `tests/contract/<名前>/` に置きます。自分の部品の `assets/` を探すスクリプト（`check_result.py`、`check_review.py`、`check_plan.py`）は、`scripts/` の直下に置き、探すファイルも `assets/` に置きます。写す側は、写したスクリプトを読み込んで使います（同じ決まりを自分で書き直しません）。写したスクリプトが使うライブラリ（`jsonschema`、`pyyaml` など）は、写す側のスクリプトの PEP 723 の欄（MCP サーバーは `pyproject.toml`）にも書きます。
 
 | 取り決め | 持ち主のファイル | 写し |
 | --- | --- | --- |
@@ -149,6 +163,9 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 | 確認の文字列 | `skills/coverity-apply/scripts/plantoken.py`、`assets/contract/token/cases.json` | `mcp-servers/coverity-connect/src/coverity_mcp/plantoken.py`、`mcp-servers/coverity-connect/tests/contract/token/cases.json` |
 | 実行フォルダの形 | `skills/coverity-run/assets/run.schema.json` | `skills/coverity-apply/assets/`、`skills/coverity-gui/assets/`、`skills/coverity-selftest/assets/`、`skills/coverity-help/assets/` |
 | 承認の形 | `skills/coverity-run/assets/approvals.schema.json` | `skills/coverity-apply/assets/`、`skills/coverity-gui/assets/`、`skills/coverity-selftest/assets/` |
+| 警告の一覧と警告経路の形（`issues.json`、`issue-<CID>.json`） | `mcp-servers/coverity-connect/`（設計書の 4.3、4.4 の形で書く） | 写すファイルはない。一括実行と真偽の調査が読むだけ（読めることを取り決めの試験が確かめる） |
+
+Windows のユーザーの環境変数（`HKCU\Environment`）の読み方は、写しではありません。`mcp-servers/coverity-connect/`、`skills/coverity-setup/`、`skills/coverity-run/`、`skills/coverity-gui/`、`skills/coverity-help/` が、それぞれ自分で持ちます（設計書の 4.17）。これらを置き換えるときは、新しい部品も自分で持ち、その試験と Windows の CI で確かめます。
 
 コピーのしかた（例：逸脱コメントの決まりを、一括実行に写す）：
 

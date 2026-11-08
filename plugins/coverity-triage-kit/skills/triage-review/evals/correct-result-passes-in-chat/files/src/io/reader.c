@@ -25,7 +25,7 @@ static size_t copy_name(char *dst, const char *src)
     return n;
 }
 
-/* The only caller of copy_name(). */
+/* Reads one name record into a pool buffer. */
 int read_all(const char *name)
 {
     char *buf = get_buf();

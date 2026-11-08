@@ -246,6 +246,150 @@
       }
     },
     {
+      "name": "think_omou_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いているので、問題ないと思う。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "think_omoimasu_fails",
+      "input": {
+        "comment": "誤検知。NULL は渡されないと思います（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "think_omotta_fails",
+      "input": {
+        "comment": "意図的。フォールスルーは設計どおりだと思った（src/fsm.c:88）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "youni_omowareru_fails",
+      "input": {
+        "comment": "誤検知。index は 0〜7 に収まるように思われる（src/reader.c:55）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "consider_kangaeru_fails",
+      "input": {
+        "comment": "誤検知。index は parse_header()（src/reader.c:55〜60）で 0〜7 に制限されていると考える。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "consider_kangaeraremasu_fails",
+      "input": {
+        "comment": "意図的。case 2 のフォールスルーは設計どおりと考えられる（src/fsm.c:88）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "kamoshirenai_fails",
+      "input": {
+        "comment": "本物の不具合。この機能は今の製品では無効（config.h:12）なので、実行されないかもしれない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "kamoshirenai_kanji_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元で NULL を除いているので、NULL を参照することはないかも知れない（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "darou_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元 read_all()（src/io/reader.c:120）が NULL を渡すことはないだろう。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "deshou_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いているので、問題にならないでしょう。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "suisoku_fails",
+      "input": {
+        "comment": "誤検知。buf は main()（src/main.c:20）で確保していると推測される。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "towa_omoenai_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元 read_all()（src/io/reader.c:120）が NULL を渡すとは思えない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "kangaenikui_fails",
+      "input": {
+        "comment": "誤検知。index が 7 を超えることは考えにくい（src/reader.c:55）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "tool_assumes_kangaete_passes",
+      "input": {
+        "comment": "誤検知。fatal_error()（src/app/fault.c:42〜61）は呼び出し元に戻らないが、宣言に noreturn がないため、解析ツールは戻ると考えて警告する。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "tool_does_not_infer_passes",
+      "input": {
+        "comment": "誤検知。index は parse()（src/a.c:10）で 0〜7 に制限しているが、Coverity は関数をまたいで値の範囲を推測しないため警告する。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "tool_minasu_passes",
+      "input": {
+        "comment": "誤検知。宣言に noreturn がないため Coverity は fatal_error() が戻るとみなすが、実際は platform_reset()（src/hal/timer.c:227〜234）で止まり戻らない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
       "name": "request_word_fails",
       "input": {
         "comment": "誤検知。呼び出し元で NULL を除いている（src/a.c:10）。念のため確認してください。"

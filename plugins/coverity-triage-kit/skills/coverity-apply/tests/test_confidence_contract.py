@@ -43,7 +43,8 @@ class ConfidenceContract(unittest.TestCase):
         for case in found:
             with self.subTest(case=case["name"]):
                 given = case["input"]
-                got = rule.effective_confidence(given["result"], given.get("review"), given.get("verify"))
+                got = rule.effective_confidence(given["result"], given.get("review"), given.get("verify"),
+                                                given.get("run_item"))
                 for key, value in case["expect"].items():
                     self.assertEqual(got[key], value)
 
@@ -56,16 +57,21 @@ class ConfidenceContract(unittest.TestCase):
                     given = case["input"]
                     review, verify = given.get("review"), given.get("verify")
                     folder = Path(tmp) / f"20261108-1000{n:02d}"
-                    outcome = review.get("outcome") if isinstance(review, dict) else None
+                    # run.json as the run wrote it: the case's item, else the review taken in as it is
+                    if isinstance(given.get("run_item"), dict):
+                        taken = given["run_item"].get("review")
+                    else:
+                        taken = review.get("outcome") if isinstance(review, dict) else None
                     write_json(folder / "run.json", run_state(folder.name, Path(tmp), [
-                        run_item("20001", [20001], review=outcome)], review=review is not None))
+                        run_item("20001", [20001], review=taken)], review=review is not None))
                     if review is not None:
                         write_json(folder / "items" / "20001" / "review.json", review)
                     if verify is not None:
                         write_json(folder / "verify.json", {"20001": verify})
                     got = apply.shown_confidence(apply.RunFolder(folder), "20001", given["result"])
                     self.assertEqual(got["confidence"], case["expect"]["confidence"])
-                    self.assertEqual(got, apply.confidence.effective_confidence(given["result"], review, verify))
+                    self.assertEqual(got, apply.confidence.effective_confidence(given["result"], review, verify,
+                                                                                given.get("run_item")))
 
     def test_a_review_counts_only_once_the_run_took_it_in(self) -> None:
         apply = load("apply_script_under_test2", SKILL / "scripts" / "apply.py")
@@ -74,12 +80,17 @@ class ConfidenceContract(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="apply-confidence-") as tmp:
             folder = Path(tmp) / "20261108-100000"
             write_json(folder / "items" / "20001" / "review.json", review)
-            for taken, expect in ((None, "high"), ("unverified", "high"), ("flag", "low")):
+            for taken, expect in ((None, "high"), ("unverified", "high"), ("flag", "low"), ("pass", "low")):
                 with self.subTest(review=taken):
                     write_json(folder / "run.json", run_state(folder.name, Path(tmp), [
                         run_item("20001", [20001], review=taken)], review=True))
                     got = apply.shown_confidence(apply.RunFolder(folder), "20001", result)
                     self.assertEqual(got["confidence"], expect)
+
+    def test_the_skill_has_no_review_filter_of_its_own(self) -> None:
+        source = (SKILL / "scripts" / "apply.py").read_text(encoding="utf-8")
+        self.assertNotIn("TAKEN_REVIEWS", source)
+        self.assertNotIn('"unverified"', source)
 
 
 if __name__ == "__main__":

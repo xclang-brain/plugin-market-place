@@ -108,6 +108,7 @@ def plan_check(plan: Any, items: dict[str, dict[str, Any]] | None) -> dict[str, 
 # ---- the confidence shown to people (contract "confidence", owned by this skill) ------------------
 
 
-def effective_confidence(result: Any, review: Any = None, verify: Any = None) -> dict[str, Any]:
-    """``{confidence, reason, lowered_by}``: the lowest of the worker's, the review's cap and the build check's."""
-    return script("confidence").effective_confidence(result, review, verify)
+def effective_confidence(result: Any, review: Any = None, verify: Any = None, run_item: Any = None) -> dict[str, Any]:
+    """``{confidence, reason, lowered_by}``: the lowest of the worker's, the review's cap and the build check's.
+    ``review`` is review.json as read and ``run_item`` the item of run.json: which review counts is the rule's."""
+    return script("confidence").effective_confidence(result, review, verify, run_item)

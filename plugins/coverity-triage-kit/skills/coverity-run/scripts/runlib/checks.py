@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import assess, briefs, report, rules, schema
+from . import briefs, report, rules, schema
 from .common import RunError, file_sha, read_json, try_json
 from .state import RUN_ID, Run
 from .vcs import make_vcs
@@ -80,9 +80,8 @@ def c19(run: Run, rows: list[dict[str, Any]]) -> dict[str, Any]:
         if item.get("result_sha") and file_sha(run.result_file(item["id"])) != item["result_sha"]:
             bad.append(f"{item['id']}（結果ファイルが受け取った後に変わった）")
             continue
-        review = assess.shown_review(item, try_json(run.review_file(item["id"])) if item.get("review") else None)
-        wanted = rules.effective_confidence(raw, assess.review_for_confidence(review),
-                                            verify.get(item["id"]) if isinstance(verify, dict) else None)
+        wanted = rules.effective_confidence(raw, try_json(run.review_file(item["id"])),
+                                            verify.get(item["id"]) if isinstance(verify, dict) else None, item)
         if item["id"] in shown and shown[item["id"]] != wanted["confidence"]:
             bad.append(item["id"])
     if bad:

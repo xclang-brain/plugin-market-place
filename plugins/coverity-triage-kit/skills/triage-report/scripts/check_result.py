@@ -14,7 +14,8 @@ Usage:
 check:  {"ok", "item", "problems": [{"code", "message", "path"?}], "warnings": [...]} (+ "error"); exit 1 when not ok.
 render: {"ok": true, "line", "text", "valid", "problems"}.
 Nothing is written to disk. The extra rules are the shared contract "result"
-(assets/contract/result/cases.json); the comment rules are a copy of the contract "comment".
+(assets/contract/result/cases.json); the comment rules are imported from check_comment.py
+(a byte copy of the contract "comment" in this folder).
 """
 
 from __future__ import annotations
@@ -28,105 +29,28 @@ import re
 import sys
 from pathlib import Path
 
-SCHEMA_FILE = Path(__file__).resolve().parent.parent / "assets" / "result.schema.json"
+SCRIPTS_DIR = Path(__file__).resolve().parent
+SCHEMA_FILE = SCRIPTS_DIR.parent / "assets" / "result.schema.json"
 
 # --- comment rules (contract: comment) -------------------------------------------------------
-COMMENT_MAX = 200  # characters (Unicode code points) after strip; same limit as result.schema.json
-CATEGORIES = ("誤検知。", "意図的。", "本物の不具合。")
-# Conditions and caveats: the comment must say the warning is harmless in every situation.
-CONDITION_WORDS = ("ただし", "但し", "場合に限", "場合のみ", "に限り", "に限って", "に限る",
-                   "た場合は", "た場合には", "た場合のみ", "に対して", "を前提", "仮に")
-# Guesses: the comment states facts read in the code, not likelihoods.
-HEDGE_WORDS = ("おそらく", "恐らく", "たぶん", "多分", "かもしれ", "と思われ", "と考えられ")
-# How it was investigated, or what could not be checked (belongs to the rationale).
-PROCESS_WORDS = ("分からなかった", "確認できなかった", "確かめられなかった", "追えなかった", "追いきれ",
-                 "調べきれ", "再解析", "解析したリビジョン")
-# Requests to people and recommendations.
-REQUEST_WORDS = ("ください", "下さい", "お願い", "てほしい", "て欲しい", "要確認", "確認が必要",
-                 "確認する必要", "すべき", "べきである", "が望ましい")
-# 「推奨」 only as a recommendation; 「推奨値」「推奨範囲」 (a noun follows) are fine.
-RECOMMEND_PATTERNS = (("を推奨", re.compile(r"を推奨(?![々一-鿿゠-ヿ])")),
-                      ("推奨します", re.compile(r"推奨します")),
-                      ("推奨する", re.compile(r"推奨する")))
-_OPENERS = "（(「『【［[｛{〔"
-_CLOSERS = "）)」』】］]｝}〕"
-_SENTENCE_ENDS = "。！？"
-_LIST_LINE = re.compile(r"^\s*(?:#|[-*+>・■●◆□○]|\d+[.)．]\s)")
-_BOLD = re.compile(r"\*\*[^*\s](?:[^*]*[^*\s])?\*\*")
-_LINK = re.compile(r"\[[^\]\n]+\]\([^)\s]+\)")
-
-
-def _count_sentences(body: str) -> int:
-    """Sentences end with 。！？ outside brackets and quotes; a last sentence may lack the end mark."""
-    depth, count, has_text = 0, 0, False
-    for ch in body:
-        if ch in _OPENERS:
-            depth += 1
-            has_text = True
-        elif ch in _CLOSERS:
-            depth = max(0, depth - 1)
-            has_text = True
-        elif ch in _SENTENCE_ENDS and depth == 0:
-            if has_text:
-                count += 1
-            has_text = False
-        elif not ch.isspace():
-            has_text = True
-    return count + (1 if has_text else 0)
-
-
-def _has_markup(text: str) -> bool:
-    if "`" in text or _BOLD.search(text) or _LINK.search(text):
-        return True
-    return any(_LIST_LINE.match(line) for line in text.splitlines())
-
-
-def check_comment(comment: str) -> dict:
-    """Return {"ok", "length", "problems": [{"code", "message"}]} for one deviation comment."""
-    problems: list[dict] = []
-
-    def add(code: str, message: str) -> None:
-        problems.append({"code": code, "message": message})
-
-    text = comment.strip()
-    length = len(text)
-    if not text:
-        add("empty", "逸脱コメントが空です。判定区分・問題にならない理由・根拠の場所を1〜2文で書きます")
-        return {"ok": False, "length": 0, "problems": problems}
-    if text != comment:
-        add("surrounding_whitespace", "前後の空白や改行を消してください")
-    if length > COMMENT_MAX:
-        add("too_long", f"{COMMENT_MAX}文字以内にしてください（今は {length} 文字）。"
-                        "問題にならない理由と根拠の場所だけを残します")
-    category = next((c for c in CATEGORIES if text.startswith(c)), None)
-    if category is None:
-        add("no_category", "「誤検知。」「意図的。」「本物の不具合。」のどれかで始めてください")
-    body = text[len(category):] if category else text
-    sentences = _count_sentences(body)
-    if category and sentences == 0:
-        add("no_reason", "判定区分のあとに、問題にならない理由と根拠の場所（ファイルと行）を書いてください")
-    elif sentences > 2:
-        add("too_many_sentences", f"判定区分のあとは1〜2文にしてください（今は {sentences} 文）")
-    if len(text.splitlines()) > 1:
-        add("line_break", "改行を入れず、続けて書いてください")
-    if _has_markup(text):
-        add("markdown", "見出し・箇条書き・` や ** などの書式を使わず、ふつうの文で書いてください")
-    found = [w for w in CONDITION_WORDS + HEDGE_WORDS if w in text]
-    if found:
-        add("condition_words", "条件・但し書き・推量の言い方（%s）があります。どんな状況でも問題にならないことを、"
-                               "条件を付けずに言い切ります。言い切れないときは、推奨を修正にします"
-            % "、".join(f"「{w}」" for w in found))
-    found = [w for w in PROCESS_WORDS if w in text]
-    if found:
-        add("process_words", "調べた過程や、調べきれなかったことの言い方（%s）があります。それは結果の根拠の説明に書き、"
-                             "逸脱コメントには問題にならない理由だけを書きます" % "、".join(f"「{w}」" for w in found))
-    found = [w for w, pattern in RECOMMEND_PATTERNS if pattern.search(text)]
-    found += [w for w in REQUEST_WORDS if w in text]
-    if found:
-        add("request_words", "推奨や人への依頼の言い方（%s）があります。逸脱コメントには、問題にならない理由だけを書きます"
-            % "、".join(f"「{w}」" for w in found))
-    return {"ok": not problems, "length": length, "problems": problems}
-# --- end of comment rules --------------------------------------------------------------------
+# check_comment.py next to this script is a byte copy of the shared comment rules; use it, never rewrite it.
+# Only this script's own folder goes on sys.path, and the import leaves no __pycache__ in the skill folder.
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+_dont_write_bytecode = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+try:
+    from check_comment import CATEGORIES, check_comment  # noqa: E402
+except Exception as exc:  # noqa: BLE001 - an incomplete folder: one JSON object, never a traceback
+    if __name__ != "__main__":
+        raise
+    _message = ("このスクリプトと同じフォルダの check_comment.py（逸脱コメントの決まり）を読み込めません。"
+                f"スキルのフォルダを、まるごと置き直してください（{type(exc).__name__}: {exc}）")
+    sys.stdout.write(json.dumps({"ok": False, "error": _message,
+                                 "problems": [{"code": "missing_comment_rules", "message": _message}]}) + "\n")
+    sys.exit(1)
+finally:
+    sys.dont_write_bytecode = _dont_write_bytecode
 
 # --- result rules (contract: result) --------------------------------------------------------
 CATEGORY_OF_JUDGEMENT = {"false_positive": "誤検知。", "intentional": "意図的。", "true_bug": "本物の不具合。"}

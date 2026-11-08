@@ -2,8 +2,7 @@ schema_version: "1.1"
 name: writes-result-json-from-notes
 expected_outcome: |
   result.json が決まった形（item・verdict・recommendation・confidence・confidence_reason・deviation・fix・
-  revision_drift・group_excluded_cids だけ）で書かれる。item は文字列 "20001"、判定は true_bug、推奨は fix、
-  根拠に src/reader.c の 18 行がある。逸脱案は Bug / Ignore と、「本物の不具合。」で始まる200文字以内のコメント。
-  修正案は Bug / Fix Required で、18 行の return の前で fclose する内容。src/reader.c は変えない。
-context:
-  scaffold_script: place-files.sh
+  revision_drift・group_excluded_cids だけ）で書かれ、check_result.py check --item 20001 --impact Medium が ok: true を返す。
+  item は文字列 "20001"、判定は true_bug、推奨は fix、確信度は high、revision_drift.status は none、根拠に src/reader.c の 18 行がある。
+  逸脱案は Bug / Ignore と、「本物の不具合。」で始まる200文字以内のコメント。修正案は Bug / Fix Required / Moderate で、
+  18 行の return の前で fclose する内容。src/reader.c は変えない。

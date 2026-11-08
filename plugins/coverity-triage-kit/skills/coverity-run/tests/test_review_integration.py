@@ -112,7 +112,7 @@ class ReviewTest(RunCase):
         run_dir = self.new_run()["run_dir"]
 
         def reviewer(action):
-            review = self.review_as_reviewer(action)
+            review = self.review_as_reviewer(action, "flag", confidence_cap="low")
             path = Path(self.brief_value(self.brief_path(action), "確かめの結果（書く）"))
             old = time.time() - 3600
             os.utime(path, (old, old))  # as if written before this review was asked for
@@ -120,6 +120,13 @@ class ReviewTest(RunCase):
 
         self.assertTrue(self.drive(run_dir, ISSUES[:1], reviewer=reviewer)["done"])
         self.assertEqual(self.state(run_dir)["items"][0]["review"], "unverified")
+        # the review.json left there was not taken in: its cap does not lower the confidence shown (C-19)
+        self.assertTrue((Path(run_dir) / "items" / "20001" / "review.json").is_file())
+        summary = self.run_json("summary", "--run", run_dir)
+        self.assertEqual(summary["results"][0]["confidence"], "high")
+        self.assertTrue({c["id"]: c for c in summary["run_checks"]}["C-19"]["ok"])
+        status = self.run_json("status", "--run", run_dir)
+        self.assertEqual(status["items"][0]["confidence"], "high")
 
     def test_changed_result_during_review_is_unverified(self) -> None:
         run_dir = self.new_run()["run_dir"]

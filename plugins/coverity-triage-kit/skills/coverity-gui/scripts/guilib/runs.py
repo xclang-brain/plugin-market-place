@@ -3,13 +3,15 @@
 Read here: ``run.json`` (the fields of ``assets/run.schema.json``: ``format``, ``run_id``, ``created_at``,
 ``filter_name``, ``review``, ``integration``, ``stage``, ``stopped``, ``halted``, ``halt_reason``,
 ``items[].{id, cids, status, merged_into, merged_from, review, error}``), ``items/<ID>/result.json`` /
-``review.json`` / ``saved.json`` / ``issue-<CID>.json``, ``issues.json``, ``verify.json``, ``approvals.json``,
+``review.json`` / ``saved.json`` / ``issue-<CID>.json``, ``issues.json``, ``issues.mapped.json`` (the warnings
+with the file as a repository path), ``verify.json``, ``approvals.json``,
 ``apply-code.result.json`` (what was applied: its ``applied`` map), ``summary.html``, ``cid/<ID>.html``,
 ``patches/`` and ``fixed/``. A run whose ``format`` is not 2 was made by another tool: it is listed, and
 shown read only.
 
 The confidence shown to the person is the shared rule of ``scripts/confidence.py`` (a byte copy of the
-batch run's file; the contract "confidence").
+batch run's file; the contract "confidence"). It also decides which review counts: review.json and the
+run.json item go to it as they are read.
 
 Reports are never written here: the screen is where the current approvals are seen.
 """
@@ -35,7 +37,6 @@ STATUSES = ("pending", "in_progress", "done", "error", "merged")
 OUTCOMES = ("pass", "flag", "rework", "unverified")
 DECISIONS = ("fix", "deviation", "reject")
 ORDER = {"low": 0, "medium": 1, "high": 2}
-TAKEN_REVIEWS = ("pass", "flag", "rework")  # run.json items[].review once the batch run took review.json in
 APPLY_RECORD = "apply-code.result.json"
 APPLIED_JA = {"fix": "修正", "annotation": "逸脱の注釈", "coverity": "Coverity への逸脱の登録", "reject": "却下"}
 FOREIGN_NOTE = ("この実行は、別の形（ほかの道具や前の版）で作られたため、この画面では見るだけです。"
@@ -290,11 +291,11 @@ def effective_confidence(run: Run, item: dict[str, Any], result: dict[str, Any],
                          verified: dict[str, Any]) -> tuple[str, str]:
     """The confidence shown to the person and its reason (the shared rule of scripts/confidence.py).
 
-    The review counts once the batch run took it in (run.json ``items[].review`` is pass / flag / rework; an
-    unverified item has none), as in the summary; the build check is the item's entry of verify.json."""
-    review = _review_file(run, item["id"]) if item.get("review") in TAKEN_REVIEWS else None
+    review.json and the run.json item go to the rule as they are read (the rule decides whether the review
+    counts, as in the summary); the build check is the item's entry of verify.json."""
+    review = try_json(run.item_dir(item["id"]) / "review.json")
     entry = verified.get(item["id"]) if isinstance(verified, dict) else None
-    shown = CONFIDENCE.effective_confidence(result, review, entry if isinstance(entry, dict) else None)
+    shown = CONFIDENCE.effective_confidence(result, review, entry if isinstance(entry, dict) else None, item)
     return shown["confidence"], shown["reason"]
 
 
@@ -309,23 +310,40 @@ def verify_results(run: Run) -> tuple[dict[str, Any], str | None]:
     return data, None
 
 
-def _issue_of(run: Run, item: dict[str, Any], issues: dict[int, dict[str, Any]]) -> dict[str, Any]:
+def _issue_of(run: Run, item: dict[str, Any], issues: dict[int, dict[str, Any]],
+              mapped: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    """The first warning of an item. Its file is the repository path the batch run mapped it to
+    (issues.mapped.json); Coverity's own path (issue-<CID>.json, else issues.json) only when there is none."""
     if not item["cids"]:
         return {}
     cid = item["cids"][0]
     found = try_json(run.item_dir(item["id"]) / f"issue-{cid}.json")
-    if isinstance(found, dict) and isinstance(found.get("issue"), dict):
-        return found["issue"]
-    return issues.get(cid, {})
+    issue = found["issue"] if isinstance(found, dict) and isinstance(found.get("issue"), dict) else issues.get(cid, {})
+    repo_path = (mapped.get(cid) or {}).get("file")
+    issue = {**(mapped.get(cid) or {}), **issue}
+    if isinstance(repo_path, str) and repo_path.strip():
+        issue["file"] = repo_path
+    return issue
+
+
+def _by_cid(found: Any) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    for issue in found if isinstance(found, list) else []:
+        cid = issue.get("cid") if isinstance(issue, dict) else None
+        if isinstance(cid, int) and not isinstance(cid, bool):
+            out[cid] = issue
+    return out
 
 
 def issues_by_cid(run: Run) -> dict[int, dict[str, Any]]:
+    """The warnings of issues.json by CID (the file is Coverity's own path)."""
     data = try_json(run.dir / "issues.json")
-    out: dict[int, dict[str, Any]] = {}
-    for issue in (data.get("issues") if isinstance(data, dict) else None) or []:
-        if isinstance(issue, dict) and isinstance(issue.get("cid"), int):
-            out[issue["cid"]] = issue
-    return out
+    return _by_cid(data.get("issues") if isinstance(data, dict) else None)
+
+
+def mapped_by_cid(run: Run) -> dict[int, dict[str, Any]]:
+    """The warnings of issues.mapped.json by CID: the batch run's list, each file mapped to a repository path."""
+    return _by_cid(try_json(run.dir / "issues.mapped.json"))
 
 
 def has_fix(run: Run, item_id: str) -> bool:
@@ -351,9 +369,9 @@ def _text(value: Any) -> str:
 
 
 def item_row(run: Run, item: dict[str, Any], issues: dict[int, dict[str, Any]], decided: dict[str, dict[str, Any]],
-             verified: dict[str, Any]) -> dict[str, Any]:
+             verified: dict[str, Any], mapped: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
     result, error = result_of(run, item["id"]) if item["status"] == "done" else (None, None)
-    issue = _issue_of(run, item, issues)
+    issue = _issue_of(run, item, issues, mapped if mapped is not None else mapped_by_cid(run))
     row: dict[str, Any] = {
         "id": item["id"], "title": title(item), "cids": item["cids"], "status": item["status"],
         "checker": _text(issue.get("checker")), "file": _text(issue.get("file")),
@@ -407,13 +425,13 @@ def run_summary(repo: Path, run_id: str) -> dict[str, Any]:
     decided, approvals_error = approvals.load(run)
     if approvals_error:
         out["notes"].append(approvals_error)
-    issues = issues_by_cid(run)
+    issues, mapped = issues_by_cid(run), mapped_by_cid(run)
     verified, verify_note = verify_results(run)
     if verify_note:
         out["notes"].append(verify_note)
     for item in run.items:
         if item["status"] == "done":
-            out["items"].append(item_row(run, item, issues, decided, verified))
+            out["items"].append(item_row(run, item, issues, decided, verified, mapped))
         elif item["status"] == "error":
             out["errors"].append({"id": item["id"], "cids": item["cids"],
                                   "reason": str(item.get("error") or "").strip() or "理由の記録がありません"})

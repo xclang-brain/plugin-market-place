@@ -8,4 +8,4 @@ expected_outcome: |
   and --item 20002, without a browser) and gives the URL
   http://127.0.0.1:<port>/?t=<token>#run=20261108-101500&view=summary&item=20002. It tells the person
   to choose 却下 in the 承認 select there (it is saved at once) and that the deviation comment can be
-  edited and saved in the same panel.
+  edited and saved in the same panel. It does not claim that the approval was already changed.

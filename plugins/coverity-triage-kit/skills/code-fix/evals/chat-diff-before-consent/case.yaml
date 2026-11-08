@@ -2,8 +2,7 @@ schema_version: "1.1"
 name: chat-diff-before-consent
 expected_outcome: |
   まだ同意を得ていないので src/store.c を変えず、差分（unified diff、src/store.c の相対パス）と、直した内容の1行、
-  影響を示して「この差分で直してよいか」を聞く。差分は store_open() の 20 行の malloc の後に、s->buf が NULL のときの
-  確かめを足し、ファイルのほかの経路と同じ STORE_ERR_NOMEM を返す。その前に s を free して、新しい漏れを作らない。
-  引数・戻り値の型を変えず、整形や関係のない変更をしない。
-context:
-  scaffold_script: place-files.sh
+  影響をふつうの言葉で示して「この差分で直してよいか」を聞く。差分はそのまま patch -p1 で当たる。差分は store_open() の
+  20 行の malloc の後に、s->buf が NULL のときの確かめを足し、ファイルのほかの経路と同じ STORE_ERR_NOMEM を返す。
+  その前に s を free して、新しい漏れを作らない。引数・戻り値の型を変えず、整形や関係のない変更をしない。
+  返事に summary や exceeded_constraints のような項目の名前を並べない。

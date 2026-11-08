@@ -4,4 +4,4 @@ focus: trace
 weight: 1
 ---
 
-The response explains that the causes differ: 20021 is the unchecked malloc return value (around src/io.c line 19-20) and 20030 is the copy into the 16-byte name (src/io.c line 22).
+The response explains from the code that the causes differ: for 20021, strchr() at src/io.c line 19 returns NULL when the line read from the file has no ':', and for 20030, malloc() at src/io.c line 21 returns NULL when memory runs out.

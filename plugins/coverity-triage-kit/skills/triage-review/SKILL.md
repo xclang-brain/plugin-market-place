@@ -77,12 +77,13 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/lint_resul
 `scope` が `item` の基準を、**すべて1回ずつ** findings に書きます。`check` は基準の id です。
 
 ```json
-{"check": "C-12", "ok": false, "detail": "根拠の src/reader.c:17 は変数の宣言で、fclose はない", "file": "src/reader.c", "line": 17}
+{"check": "C-12", "ok": false, "detail": "根拠の src/net.c:42 は変数の宣言で、close はない", "file": "src/net.c", "line": 42}
 ```
 
 - `detail` には、確かめたことを場所とともに1〜2文で書きます。
 - `applies_when` があって当てはまらない基準（MISRA でない警告の C-22 など）は、`ok: true`、`detail` を「対象外（理由）」にします。
 - どの基準で何を見るかは [references/criteria-guide.md](references/criteria-guide.md) にあります。初めてのときと、迷ったときに読みます。
+- 結果の形（どの項目がなくてよいか、空でよいか）も criteria-guide.md の C-13 にあります。形を知るために、スクリプトや試験のデータを読む必要はありません。
 
 ### 6. 合格・要確認・差し戻しを決める
 
@@ -101,11 +102,11 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/lint_resul
   "item": "20001",
   "outcome": "rework",
   "findings": [
-    {"check": "C-01", "ok": true, "detail": "呼び出し元 load()（src/load.c:30）はエラーのあとも処理を続ける", "file": "src/load.c", "line": 30},
-    {"check": "C-12", "ok": false, "detail": "根拠の src/reader.c:17 は変数の宣言で、fclose はない", "file": "src/reader.c", "line": 17}
+    {"check": "C-01", "ok": true, "detail": "呼び出し元 connect_all()（src/main.c:55）はエラーのあとも処理を続ける", "file": "src/main.c", "line": 55},
+    {"check": "C-12", "ok": false, "detail": "根拠の src/net.c:42 は変数の宣言で、close はない", "file": "src/net.c", "line": 42}
   ],
   "confidence_cap": null,
-  "rework": ["根拠の場所を、fclose を通らずに戻る src/reader.c:18 に直す"],
+  "rework": ["根拠の場所を、close を通らずに戻る src/net.c:47 に直す"],
   "note": "経路と判定は正しいが、根拠の行が違う。"
 }
 ```
@@ -123,5 +124,5 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/check_revi
 
 返し方：
 
-- 頼みの文や指示ファイルが返す形を決めていれば、それに従います。決まっていなければ、1行で返します：`20001: 差し戻し — 根拠の src/reader.c:17 に fclose がない`
+- 頼みの文や指示ファイルが返す形を決めていれば、それに従います。決まっていなければ、1行で返します：`20001: 差し戻し — 根拠の src/net.c:42 に close がない`
 - チャットで頼まれたときは、ファイルを作らずに、チャットで返します。返すもの：合格・要確認・差し戻しのどれか、`ok: false` の基準とその理由（ファイルと行）、要確認なら確信度の上限、差し戻しなら直す点、人向けの1〜2文のまとめ。ほかの基準は「合格」とまとめてよい。

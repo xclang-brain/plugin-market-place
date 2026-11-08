@@ -36,6 +36,8 @@ allowed-tools: ["shell(uv run:*)"]
 - それぞれの ★ と根拠の場所（`verdict.evidence`）を、コードで読み直す。
 - 原因が同じかを確かめる。例：同じマクロの定義、同じ関数の戻り値の確かめ忘れ、同じ構造体の初期化漏れ。MISRA で、1つのマクロや型定義が原因で何件も出ている違反は、原因の1か所を直せばまとめて片付く。
 - 修正の差分が、その同じ原因を直しているかを確かめる。
+- 同じチェッカー・同じ変数・同じ関数でも、原因が同じとは限らない。例：同じ変数の NULL の警告でも、NULL を返す関数が違う（入力の形で NULL になる `strchr()` と、メモリ不足で NULL になる `malloc()`）なら、確かめを2か所に足す必要があり、原因は別。1か所の修正で片付くかで決める。
+- 頼んだ人が「同じ原因だと思う」と言っていても、コードで確かめて決める。違えば、まとめない理由を伝える。
 
 ### 3. まとめるものを決める
 
@@ -75,35 +77,35 @@ allowed-tools: ["shell(uv run:*)"]
 {
   "merges": [
     {
-      "members": ["20011", "20012"],
-      "reason": "どちらもマクロ BUF_LEN（include/buf.h:10）の定義が配列の大きさと合っていないことが原因",
-      "fix_source": "item:20011",
+      "members": ["30101", "30102"],
+      "reason": "どちらもマクロ NAME_MAX（include/msg.h:8）の定義が配列の大きさと合っていないことが原因",
+      "fix_source": "item:30101",
       "result": {
-        "verdict": {"judgement": "true_bug", "summary": "BUF_LEN が配列より 1 大きい",
-                    "rationale": "20011（src/buf.c:20）と 20012（src/buf.c:35）は、どちらも BUF_LEN を添字の上限に使っており、配列は BUF_LEN - 1 要素しかない。",
-                    "evidence": [{"file": "include/buf.h", "line": 10, "note": "BUF_LEN の定義"},
-                                 {"file": "src/buf.c", "line": 20, "note": "20011 の警告の場所"},
-                                 {"file": "src/buf.c", "line": 35, "note": "20012 の警告の場所"}]},
+        "verdict": {"judgement": "true_bug", "summary": "NAME_MAX が配列より 1 大きい",
+                    "rationale": "30101（src/msg.c:41）と 30102（src/msg.c:58）は、どちらも NAME_MAX を添字の上限に使っており、配列は NAME_MAX - 1 要素しかない。",
+                    "evidence": [{"file": "include/msg.h", "line": 8, "note": "NAME_MAX の定義"},
+                                 {"file": "src/msg.c", "line": 41, "note": "30101 の警告の場所"},
+                                 {"file": "src/msg.c", "line": 58, "note": "30102 の警告の場所"}]},
         "recommendation": "fix",
         "confidence": "medium",
-        "confidence_reason": "2つの警告の経路とマクロの定義をコードで確かめた。20012 の確信度が中なので、それに合わせた",
+        "confidence_reason": "2つの警告の経路とマクロの定義をコードで確かめた。30102 の確信度が中なので、それに合わせた",
         "deviation": {"classification": "Bug", "action": "Ignore", "severity": "Major",
-                      "comment": "本物の不具合。BUF_LEN（include/buf.h:10）が配列の大きさより 1 大きく、src/buf.c:20 と src/buf.c:35 で配列の外を書くため、直さない理由は説明できない。"},
+                      "comment": "本物の不具合。NAME_MAX（include/msg.h:8）が配列の大きさより 1 大きく、src/msg.c:41 と src/msg.c:58 で配列の外を書くため、直さない理由は説明できない。"},
         "fix": {"classification": "Bug", "action": "Fix Required", "severity": "Major",
-                "summary": "BUF_LEN を配列の大きさに合わせる", "impact": "BUF_LEN を使う2か所の上限が 1 小さくなる",
+                "summary": "NAME_MAX を配列の大きさに合わせる", "impact": "NAME_MAX を使う2か所の上限が 1 小さくなる",
                 "exceeded_constraints": [], "already_fixed_on_latest": false},
         "revision_drift": {"status": "none", "detail": ""}
       }
     }
   ],
-  "conflicts": [{"items": ["20021", "20030"], "note": "どちらも src/io.c の 40〜44 行目を変えるが、原因は別"}]
+  "conflicts": [{"items": ["30110", "30115"], "note": "どちらも src/net.c の 40〜44 行目を変えるが、原因は別"}]
 }
 ```
 
 ファイルに書くよう頼まれたときは、書いたあとで確かめます（RUN。中を読む必要はありません）。
 
 ```
-uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/check_plan.py" --plan "<plan.json>" --member "20011:20011:high" --member "20012:20012:medium"
+uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/check_plan.py" --plan "<plan.json>" --member "30101:30101:high" --member "30102:30102:medium"
 ```
 
 - `<このスキルのフォルダ>` は、この SKILL.md があるフォルダです。
@@ -113,5 +115,5 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/check_plan
 
 返し方：
 
-- 頼みの文や指示ファイルが返す形を決めていれば、それに従います。決まっていなければ、1行で返します：`統合: 1つにまとめる（20011, 20012）`、まとめないときは `統合: まとめるものはない`。
+- 頼みの文や指示ファイルが返す形を決めていれば、それに従います。決まっていなければ、1行で返します：`統合: 1つにまとめる（30101, 30102）`、まとめないときは `統合: まとめるものはない`。
 - チャットで頼まれたときは、ファイルを作らずに、チャットで返します。返すもの：まとめるかどうかとその理由、まとめるなら、まとめる作業、同じ原因と言える理由（原因の場所と、それぞれの警告の場所）、修正の作り方（`item:<ID>`・`combine`・`rework` のどれかと理由）、すべての警告に当てはまる1つの逸脱コメント、確信度。ぶつかる修正があれば、それも返します。

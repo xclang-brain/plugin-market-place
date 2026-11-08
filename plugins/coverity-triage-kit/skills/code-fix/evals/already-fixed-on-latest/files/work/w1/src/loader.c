@@ -12,19 +12,26 @@ unsigned int loader_table_bytes(void)
 
 int load_table(const char *path, unsigned char *out)
 {
-	FILE *fp;
+	FILE *file;
 	size_t got;
+	int ret = LOADER_OK;
 
-	fp = fopen(path, "rb");
-	if (fp == NULL) {
+	file = fopen(path, "rb");
+	if (file == NULL) {
 		return LOADER_ERR_OPEN;
 	}
-	got = fread(out, 1U, TABLE_BYTES, fp);
-	(void)fclose(fp);
+	got = fread(out, 1U, TABLE_BYTES, file);
 	if (got != TABLE_BYTES) {
-		return LOADER_ERR_SHORT;
+		ret = LOADER_ERR_SHORT;
+		goto done;
 	}
-	return LOADER_OK;
+	if (out[0] != 0xA5U) {
+		ret = LOADER_ERR_FORMAT;
+		goto done;
+	}
+done:
+	(void)fclose(file);
+	return ret;
 }
 
 int load_header(const char *path, unsigned char *out, unsigned int size)

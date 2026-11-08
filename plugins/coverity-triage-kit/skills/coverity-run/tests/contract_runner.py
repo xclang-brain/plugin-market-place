@@ -63,7 +63,8 @@ def plan(case: dict) -> dict:
 
 def confidence(case: dict) -> dict:
     given = case["input"]
-    return {"confidence": rules.effective_confidence(given["result"], given.get("review"), given.get("verify"))["confidence"]}
+    return {"confidence": rules.effective_confidence(given["result"], given.get("review"), given.get("verify"),
+                                                     given.get("run_item"))["confidence"]}
 
 
 RUNNERS = {"comment": comment, "result": result, "lint": lint, "plan": plan, "confidence": confidence}

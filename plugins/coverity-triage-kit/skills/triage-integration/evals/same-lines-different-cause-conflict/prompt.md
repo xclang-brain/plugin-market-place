@@ -5,11 +5,8 @@ timeout_seconds: 900
 allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
 ---
 
-src/io.c の read_record() に Coverity の警告が2件あり、どちらも調べ終わりました。どちらも 19〜22 行を直す修正案になっています。同じ原因ならまとめたいです。
+src/io.c の read_record() に Coverity の NULL_RETURNS の警告が2件あり（CID 20021 と 20030）、どちらも調べ終わりました。
+結果は results/<CID>.json、修正の差分は patches/<CID>-fix.patch にあります。
+どちらも data の NULL の確かめ忘れなので、同じ原因ならまとめて1つにしたいです。まとめられるかどうかを判断して、チャットで教えてください。ファイルは作らないでください。
 
-- CID 20021（NULL_RETURNS）：19 行の malloc の戻り値を確かめずに、20 行の strcpy で使っている。修正案は、malloc の後に NULL なら -1 を返す行を足す。確信度 高。
-- CID 20030（STRING_OVERFLOW）：22 行で、63 文字までの data を 16 バイトの name に strcpy している。修正案は、22 行を長さを制限したコピーに変える。確信度 高。
-
-まとめられるかどうかを判断して、チャットで教えてください。ファイルは作らないでください。
-
-Input files: src/io.c
+Input files: src/io.c, results/20021.json, results/20030.json, patches/20021-fix.patch, patches/20030-fix.patch

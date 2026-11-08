@@ -7,15 +7,20 @@ cap and the build verification. result.json is never changed; this only lowers w
 
 Usage:
     uv run --native-tls --quiet "<skill>/scripts/confidence.py" --stdin
-        # stdin: {"result": {...result.json...}, "review": {...review.json...} | null, "verify": {...} | null}
+        # stdin: {"result": {...result.json...}, "review": {...review.json...} | null, "verify": {...} | null,
+        #         "run_item": {...the item's entry of run.json items[]...} | null (optional)}
 
-"verify" is the entry of verify.json for the item ({"build_ok": true|false|null, "problems": [...], ...}).
+"review" is review.json as it is in the run folder (or null when there is none): this rule itself decides
+whether it counts. "verify" is the entry of verify.json for the item ({"build_ok": true|false|null,
+"problems": [...], ...}). "run_item" is the item's entry of run.json items[] (only its "review" is read);
+leave it out when there is no run folder.
 Output: {"ok": true, "confidence": "high|medium|low", "reason": "...", "lowered_by": ["...", ...]}
 (+ "error" when ok is false; exit 1). Nothing is written. Never a traceback.
 
 The rule (function effective_confidence) is the shared contract "confidence"; the test data is
 assets/contract/confidence/cases.json. This file uses only the standard library and reads no other
-file, so other parts copy it byte for byte and import it.
+file, so other parts copy it byte for byte and import it. Callers pass the files as they read them and
+filter nothing themselves: which review counts is part of this rule (counted_review).
 """
 
 from __future__ import annotations
@@ -30,18 +35,45 @@ import sys
 # --- confidence rule (contract: confidence) -----------------------------------------------------
 ORDER = {"low": 0, "medium": 1, "high": 2}
 JA = {"high": "高", "medium": "中", "low": "低"}
+COUNTED = ("pass", "flag", "rework")  # review outcomes that count (also run.json items[].review once taken in)
 
 
-def review_cap(review) -> str | None:
-    """The cap a review puts on the confidence: its confidence_cap; a flag or rework without a cap is low."""
-    if not isinstance(review, dict):
+def _level(value) -> str | None:
+    """high / medium / low, or None for anything else (missing, another word, not a string)."""
+    return value if isinstance(value, str) and value in ORDER else None
+
+
+def _counted(value) -> bool:
+    return isinstance(value, str) and value in COUNTED
+
+
+def counted_review(review, run_item=None) -> dict | None:
+    """The review that counts for the confidence, or None.
+
+    - review is review.json as read (or None). It counts only when it is an object whose outcome is pass,
+      flag or rework; any other outcome (unverified, missing, another word) does not count.
+    - run_item is the item's entry of run.json items[] (or None when there is no run folder). When given,
+      the review counts only once the batch run took it in: run_item["review"] is pass, flag or rework.
+      Not reviewed yet (null or missing), unverified, or anything else: review.json does not count.
+    """
+    if not isinstance(review, dict) or not _counted(review.get("outcome")):
         return None
-    cap = review.get("confidence_cap")
-    if cap in ORDER:
+    if run_item is not None and not (isinstance(run_item, dict) and _counted(run_item.get("review"))):
+        return None
+    return review
+
+
+def review_cap(review, run_item=None) -> str | None:
+    """The cap a review puts on the confidence (None: no cap). Only a counted review (counted_review) caps:
+    its confidence_cap when it is high / medium / low; a flag or rework without such a cap (missing, null,
+    another word) is low; a pass without one puts no cap."""
+    review = counted_review(review, run_item)
+    if review is None:
+        return None
+    cap = _level(review.get("confidence_cap"))
+    if cap is not None:
         return cap
-    if review.get("outcome") in ("flag", "rework"):
-        return "low"
-    return None
+    return "low" if review.get("outcome") in ("flag", "rework") else None
 
 
 def verify_failed(verify) -> bool:
@@ -52,25 +84,27 @@ def verify_failed(verify) -> bool:
     return verify.get("build_ok") is False or (isinstance(problems, list) and len(problems) > 0)
 
 
-def effective_confidence(result, review=None, verify=None) -> dict:
+def effective_confidence(result, review=None, verify=None, run_item=None) -> dict:
     """Return {"confidence", "reason", "lowered_by"} for one item.
 
     - the worker's confidence (result.confidence; a missing or unknown value is low),
-    - lowered to the review's cap (review.confidence_cap; flag or rework without a cap is low),
+    - lowered to the cap of the review when it counts (counted_review: outcome pass / flag / rework and,
+      with run_item, taken in by the batch run; review_cap: a flag or rework without a valid cap is low),
     - lowered to low when the recommendation is fix and the build verification found problems
       (a deviation recommendation keeps its confidence: its fix is only the other proposal).
     reason is result.confidence_reason, followed by why it was lowered in （…） (only why, when there is no reason).
     """
     result = result if isinstance(result, dict) else {}
-    worker = result.get("confidence")
-    level = worker if worker in ORDER else "low"
+    worker = _level(result.get("confidence"))
+    level = worker or "low"
     lowered_by: list[str] = []
-    if worker not in ORDER:
+    if worker is None:
         lowered_by.append("作業役の確信度がないため「低」")
+    review = counted_review(review, run_item)
     cap = review_cap(review)
     if cap is not None and ORDER[cap] < ORDER[level]:
         level = cap
-        if review.get("confidence_cap") in ORDER:
+        if _level(review.get("confidence_cap")) is not None:
             note = str(review.get("note") or "").strip() or "要確認"
             lowered_by.append(f"結果の確かめで「{JA[cap]}」まで（{note}）")
         else:
@@ -181,7 +215,8 @@ class _Parser(argparse.ArgumentParser):
 def main(argv: list[str] | None = None) -> int:
     parser = _Parser(description="人に見せる確信度（作業役・確かめ・ビルドでの検証のいちばん低いもの）を出す。結果は JSON。")
     parser.add_argument("--stdin", action="store_true",
-                        help='標準入力から {"result": {...}, "review": {...} か null, "verify": {...} か null} を読む')
+                        help='標準入力から {"result": {...}, "review": {...} か null, "verify": {...} か null,'
+                             ' "run_item": {...} か null（省略可）} を読む')
     try:
         args = parser.parse_args(argv)
         if not args.stdin:
@@ -192,7 +227,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"標準入力の JSON を読めません: {exc}") from None
         if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
             raise ValueError('標準入力には {"result": {...}, "review": ..., "verify": ...} の形の JSON を渡してください')
-        out = {"ok": True, **effective_confidence(payload["result"], payload.get("review"), payload.get("verify"))}
+        out = {"ok": True, **effective_confidence(payload["result"], payload.get("review"), payload.get("verify"),
+                                                  payload.get("run_item"))}
     except ValueError as exc:
         out = {"ok": False, "error": str(exc), "problems": [{"code": "bad_input", "message": str(exc)}]}
     except Exception as exc:  # noqa: BLE001 - one JSON object, never a traceback

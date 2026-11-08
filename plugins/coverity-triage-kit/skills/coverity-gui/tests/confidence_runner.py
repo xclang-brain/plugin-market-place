@@ -3,7 +3,8 @@
 # dependencies = ["pyyaml>=6.0"]
 # ///
 """Run every case of assets/contract/confidence/cases.json through the screen's own path: a run folder
-(run.json with the item's review taken in, items/<ID>/review.json, verify.json) read by guilib.runs, and
+(run.json with the case's item, else with the review taken in as it is; items/<ID>/review.json; verify.json)
+read by guilib.runs, and
 print one JSON object: {"rule_file": "...", "cases": [{"name", "expect", "got", "direct"}]}.
 
 The tests start this with uv (the same libraries as gui.py). Nothing is written outside a temporary folder.
@@ -39,15 +40,18 @@ def main() -> int:
             given = case["input"]
             review, verify = given.get("review"), given.get("verify")
             folder = Path(tmp) / f"20261108-1000{n:02d}"
-            outcome = review.get("outcome") if isinstance(review, dict) else None
+            if isinstance(given.get("run_item"), dict):
+                taken = given["run_item"].get("review")
+            else:
+                taken = review.get("outcome") if isinstance(review, dict) else None
             write(folder / "run.json", {"format": 2, "items": [{"id": ITEM, "cids": [20001], "status": "done",
-                                                                "review": outcome}]})
+                                                                "review": taken}]})
             if review is not None:
                 write(folder / "items" / ITEM / "review.json", review)
             verified = {ITEM: verify} if verify is not None else {}
             run = runs.Run(folder)
             confidence, reason = runs.effective_confidence(run, run.item(ITEM), given["result"], verified)
-            direct = runs.CONFIDENCE.effective_confidence(given["result"], review, verify)
+            direct = runs.CONFIDENCE.effective_confidence(given["result"], review, verify, given.get("run_item"))
             out.append({"name": case["name"], "expect": case["expect"],
                         "got": {"confidence": confidence, "reason": reason}, "direct": direct})
     answer = {"rule_file": str(Path(runs.CONFIDENCE.__file__).resolve()), "cases": out}

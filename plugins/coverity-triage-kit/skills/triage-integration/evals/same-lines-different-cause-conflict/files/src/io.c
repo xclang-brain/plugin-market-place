@@ -16,10 +16,12 @@ int read_record(FILE *fp, struct record *out)
     if (fgets(line, sizeof line, fp) == NULL) {
         return -1;
     }
+    data = strchr(line, ':');
+    out->size = atoi(data + 1);
     data = malloc(strlen(line) + 1);
     strcpy(data, line);
-    out->size = atoi(data);
-    strcpy(out->name, data);
+    (void)strncpy(out->name, data, sizeof out->name - 1);
+    out->name[sizeof out->name - 1] = '\0';
     free(data);
     return 0;
 }

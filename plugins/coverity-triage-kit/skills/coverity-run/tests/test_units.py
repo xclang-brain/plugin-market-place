@@ -238,11 +238,43 @@ class ConfidenceTest(unittest.TestCase):
         self.assertEqual((data["version"], data["contract"]), (1, "confidence"))
         self.assertGreaterEqual(len(data["cases"]), 10)
         for case in data["cases"]:
-            self.assertEqual(set(case["input"]), {"result", "review", "verify"})
+            self.assertEqual(set(case["input"]) - {"run_item"}, {"result", "review", "verify"})
             self.assertIn(case["expect"]["confidence"], ("high", "medium", "low"))
             with self.subTest(case["name"]):
                 got = self.m.effective_confidence(**case["input"])
                 self.assertEqual(got["confidence"], case["expect"]["confidence"])
+
+    def test_which_review_counts_is_the_rule_s_own(self) -> None:
+        """Callers pass review.json as read and the item of run.json; they filter nothing themselves."""
+        result = {"confidence": "high", "recommendation": "fix", "confidence_reason": "経路をすべて読んだ"}
+        capped = {"outcome": "flag", "confidence_cap": "low", "note": "根拠が弱い"}
+        for review in (None, "flag", ["flag"], {"outcome": "unverified", "confidence_cap": "low"},
+                       {"outcome": ["flag"], "confidence_cap": "low"}, {"confidence_cap": "low"}):
+            with self.subTest(review=review):
+                self.assertEqual(self.m.effective_confidence(result, review)["confidence"], "high")
+                self.assertIsNone(self.m.counted_review(review))
+        for state in (None, "unverified", "", ["flag"], {"outcome": "flag"}):
+            with self.subTest(state=state):
+                self.assertEqual(self.m.effective_confidence(result, capped, None, {"id": "1", "review": state})["confidence"], "high")
+        for run_item in ("flag", ["flag"], 1):  # not an item of run.json: the review was not taken in
+            with self.subTest(run_item=run_item):
+                self.assertIsNone(self.m.counted_review(capped, run_item))
+        for state in ("pass", "flag", "rework"):
+            with self.subTest(state=state):
+                self.assertEqual(self.m.effective_confidence(result, capped, None, {"id": "1", "review": state})["confidence"], "low")
+        self.assertEqual(self.m.effective_confidence(result, capped)["confidence"], "low")  # no run folder: by its outcome
+
+    def test_unusual_values_never_raise(self) -> None:
+        for result in (None, [], "x", {"confidence": ["high"]}, {"confidence": {"a": 1}, "recommendation": ["fix"]}):
+            for review in (None, {"outcome": "flag", "confidence_cap": ["low"]}, {"outcome": "pass", "confidence_cap": {}},
+                           {"outcome": "flag", "confidence_cap": "low", "note": {"x": 1}}):
+                for verify in (None, [], {"build_ok": False, "problems": "x"}, {"problems": [None, 1, {"a": 1}]}):
+                    with self.subTest(result=result, review=review, verify=verify):
+                        got = self.m.effective_confidence(result, review, verify, {"review": ["pass"]})
+                        self.assertEqual(got["confidence"], "low")
+                        got = self.m.effective_confidence(result, review, verify)
+                        self.assertIn(got["confidence"], ("high", "medium", "low"))
+                        self.assertIsInstance(got["reason"], str)
 
     def test_stdlib_only_and_reads_no_file(self) -> None:
         text = (SKILL / "scripts" / "confidence.py").read_text(encoding="utf-8")
@@ -271,6 +303,10 @@ class ConfidenceTest(unittest.TestCase):
                               env=env, timeout=60, cwd=tempfile.gettempdir())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout.decode("utf-8"))["confidence"], "low")
+        given["run_item"] = {"id": "20001", "review": "unverified"}  # the run did not take the review in
+        proc = subprocess.run([*command, "--stdin"], input=json.dumps(given).encode("utf-8"), capture_output=True,
+                              env=env, timeout=60, cwd=tempfile.gettempdir())
+        self.assertEqual(json.loads(proc.stdout.decode("utf-8"))["confidence"], "high")
         proc = subprocess.run([*command, "--stdin"], input=b"[1]", capture_output=True, env=env, timeout=60,
                               cwd=tempfile.gettempdir())
         self.assertEqual(proc.returncode, 1)

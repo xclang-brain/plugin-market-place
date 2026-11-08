@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Check a deviation comment (逸脱コメント) against the writing rules of this skill.
+"""Check a deviation comment (逸脱コメント) against the shared writing rules (contract "comment").
 
 Usage:
     uv run --native-tls --quiet "<skill>/scripts/check_comment.py" --comment "<逸脱コメント>"
@@ -13,7 +13,8 @@ Output: exactly one JSON object on stdout:
     (+ "error" when ok is false). Exit code 0 when ok, 1 otherwise. Never a traceback.
 
 The rules (function check_comment) are the shared contract "comment"; the test data is
-assets/contract/comment/cases.json. Keep any copy of these rules identical.
+assets/contract/comment/cases.json. Other scripts import this file (a byte copy in their own scripts/
+folder) instead of writing the rules again: ``from check_comment import CATEGORIES, check_comment``.
 """
 
 from __future__ import annotations
@@ -32,8 +33,13 @@ CATEGORIES = ("誤検知。", "意図的。", "本物の不具合。")
 # Conditions and caveats: the comment must say the warning is harmless in every situation.
 CONDITION_WORDS = ("ただし", "但し", "場合に限", "場合のみ", "に限り", "に限って", "に限る",
                    "た場合は", "た場合には", "た場合のみ", "に対して", "を前提", "仮に")
-# Guesses: the comment states facts read in the code, not likelihoods.
-HEDGE_WORDS = ("おそらく", "恐らく", "たぶん", "多分", "かもしれ", "と思われ", "と考えられ")
+# Guesses: the comment states facts read in the code, not likelihoods: adverbs of guessing, the writer's
+# 「〜と思う」「〜と考える」 (also 「〜とは思えない」「〜とは考えにくい」), 「〜だろう」「〜でしょう」, 「〜と推測・推定する」.
+# Kept narrow on purpose: 「戻ると考えて警告する」「とみなす」「推測しない」 describe what the tool does and are fine.
+HEDGE_WORDS = ("おそらく", "恐らく", "たぶん", "多分", "かもしれ", "かも知れ",
+               "と思う", "と思い", "と思われ", "と思っ", "と思え", "とは思", "ように思",
+               "と考える", "と考えます", "と考えられ", "と考えた", "と考えてい", "とは考え", "考えにく",
+               "と推測", "と推定", "と見られ", "とみられ", "だろう", "でしょう")
 # How it was investigated, or what could not be checked (belongs to the rationale).
 PROCESS_WORDS = ("分からなかった", "確認できなかった", "確かめられなかった", "追えなかった", "追いきれ",
                  "調べきれ", "再解析", "解析したリビジョン")

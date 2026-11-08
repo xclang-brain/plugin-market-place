@@ -40,7 +40,7 @@ CERT ERR33-C（戻り値を使わない）
 
 本物の不具合だが、今は実行されない
 
-> 本物の不具合。この機能は今の製品では無効（config.h:12）で、この処理は実行されない。
+> 本物の不具合。v1 形式の読み込みは今の製品では無効（include/features.h:31）で、この処理は実行されない。
 
 > 本物の不具合。src/legacy/v1_reader.c はビルドの対象から外してあり（CMakeLists.txt:40）、製品に入らない。
 
@@ -52,18 +52,18 @@ CERT ERR33-C（戻り値を使わない）
 
 条件や但し書き（「ただし」）
 
-- だめ：本物の不具合。ただし、この機能は今の製品では無効（config.h:12）で、この処理は実行されない。
-- 直す：本物の不具合。この機能は今の製品では無効（config.h:12）で、この処理は実行されない。
+- だめ：本物の不具合。ただし、v1 形式の読み込みは今の製品では無効（include/features.h:31）で、この処理は実行されない。
+- 直す：本物の不具合。v1 形式の読み込みは今の製品では無効（include/features.h:31）で、この処理は実行されない。
 
 限定の言い方（「〜の場合に限り」）
 
-- だめ：誤検知。len が 0 の場合に限り buf は使われないので問題ない。
-- 直す：誤検知。len は呼び出し元 send_all()（src/net.c:77）で 1 以上に決まっており、buf が空のまま使われることはない。
+- だめ：誤検知。count が 0 の場合に限り items は読まれないので問題ない。
+- 直す：誤検知。count は唯一の呼び出し元 flush_queue()（src/queue.c:41）で 1 以上に決まっており、items が空のまま読まれることはない。
 
 推量（「おそらく」）
 
 - だめ：誤検知。呼び出し元で NULL を除いているので、おそらく問題にならない。
-- 直す：誤検知。呼び出し元 read_all()（src/io/reader.c:120）で NULL を除いてから渡しているため、NULL を参照することはない。
+- 直す：誤検知。呼び出し元 open_session()（src/net/session.c:120）で NULL を除いてから渡しているため、NULL を参照することはない。
 
 依頼・推奨
 
@@ -77,10 +77,10 @@ CERT ERR33-C（戻り値を使わない）
 
 判定区分がない・書式を使っている
 
-- だめ：`get_buf()` の戻り値は呼び出し元で確かめているので NULL にならない。
-- 直す：誤検知。get_buf() の戻り値は呼び出し元 read_all()（src/io/reader.c:120）で確かめているため、NULL のまま使われることはない。
+- だめ：`find_slot()` の戻り値は呼び出し元で確かめているので NULL にならない。
+- 直す：誤検知。find_slot() の戻り値は呼び出し元 open_session()（src/net/session.c:120）で確かめているため、NULL のまま使われることはない。
 
 長すぎる（200文字を超える）
 
-- だめ：誤検知。この警告は get_buf() が NULL を返す経路を指しているが、get_buf() を呼んでいるのは read_all() と read_header() と read_footer() の3か所で、read_all() は src/io/reader.c:120 で、read_header() は src/io/reader.c:210 で、read_footer() は src/io/reader.c:305 で、それぞれ戻り値が NULL かどうかを確かめてから使っており、NULL のときはどれもエラーの値を返して処理をやめるので、NULL を参照することはなく、警告の経路は実際には通らない。
-- 直す：誤検知。get_buf() の呼び出し元3か所（src/io/reader.c:120、210、305）はどれも NULL を確かめてから使っており、NULL を参照することはない。
+- だめ：誤検知。この警告は find_slot() が NULL を返す経路を指しているが、find_slot() を呼んでいるのは open_session() と open_admin() と open_debug() の3か所で、open_session() は src/net/session.c:120 で、open_admin() は src/net/session.c:210 で、open_debug() は src/net/session.c:305 で、それぞれ戻り値が NULL かどうかを確かめてから使っており、NULL のときはどれもエラーの値を返して処理をやめるので、NULL を参照することはなく、警告の経路は実際には通らない。
+- 直す：誤検知。find_slot() の呼び出し元3か所（src/net/session.c:120、210、305）はどれも NULL を確かめてから使っており、NULL を参照することはない。

@@ -75,6 +75,30 @@ class RuleTest(unittest.TestCase):
         problems = self.m.check_comment("誤検知。仮に NULL でも src/a.c:3 で戻る。")["problems"]
         self.assertIn("「仮に」", problems[0]["message"])
 
+    def test_guess_words(self) -> None:
+        """The writer's guesses (「〜と思う」「〜と考える」「〜かもしれない」「〜だろう」 …) are not facts."""
+        base = "誤検知。index は parse()（src/a.c:10）で 0〜7 に制限している"
+        for ending, word in (("と思う。", "と思う"), ("と思います。", "と思い"), ("と思われる。", "と思われ"),
+                             ("と考える。", "と考える"), ("と考えます。", "と考えます"), ("と考えられる。", "と考えられ"),
+                             ("かもしれない。", "かもしれ"), ("かも知れない。", "かも知れ"), ("だろう。", "だろう"),
+                             ("でしょう。", "でしょう"), ("と推測される。", "と推測"), ("と推定される。", "と推定"),
+                             ("ように思われる。", "ように思"), ("とみられる。", "とみられ")):
+            with self.subTest(ending):
+                problems = self.m.check_comment(base + ending)["problems"]
+                self.assertEqual([p["code"] for p in problems], ["condition_words"])
+                self.assertIn(f"「{word}」", problems[0]["message"])
+        for word in ("おそらく", "たぶん"):
+            with self.subTest(word):
+                self.assertEqual(self.codes(f"誤検知。{word} NULL は渡されない（src/a.c:10）。"), ["condition_words"])
+
+    def test_what_the_tool_does_is_not_a_guess(self) -> None:
+        for text in ("誤検知。fatal_error()（src/fault.c:42）は戻らないが、noreturn がないため解析ツールは戻ると考えて警告する。",
+                     "誤検知。Coverity は関数をまたいで範囲を推測しないが、index は parse()（src/a.c:10）で 0〜7 に制限している。",
+                     "誤検知。Coverity は fatal_error() が戻るとみなすが、platform_reset()（src/timer.c:227）で止まり戻らない。",
+                     "意図的。値 0 を未設定として扱う設計の考え方（docs/design.md:12）どおりで、取り違えではない。"):
+            with self.subTest(text):
+                self.assertEqual(self.codes(text), [])
+
 
 @unittest.skipUnless(UV, "uv がないので、コマンドの試験を飛ばす")
 class CommandTest(unittest.TestCase):

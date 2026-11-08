@@ -1,8 +1,7 @@
 schema_version: "1.1"
 name: correct-result-passes-in-chat
 expected_outcome: |
-  コードを読み、copy_name() の呼び出し元が read_all() だけで、32 行で NULL を除いていることを確かめ、
-  合格（pass）と答える。根拠の場所（src/io/reader.c:32 など）を示す。チャットで返し、review.json などのファイルを作らず、
-  result.json もコードも変えない。推奨を変えない。
-context:
-  scaffold_script: place-files.sh
+  コードを読み、reader.c の copy_name() は static で、呼び出し元は read_all()（35 行）だけで、32 行で NULL を除いていることを確かめ、
+  合格（pass）と答える。src/io/writer.c にも copy_name() の呼び出しがあるが、それは writer.c の中の別の static の関数なので、
+  呼び出し元に数えない。根拠の場所（src/io/reader.c:32 など）を示す。推奨・判定・確信度・逸脱コメントを変える指摘をしない。
+  チャットで返し、review.json などのファイルを作らず、result.json もコードも変えない。

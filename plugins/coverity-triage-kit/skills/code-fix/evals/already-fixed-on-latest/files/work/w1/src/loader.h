@@ -4,6 +4,7 @@
 #define LOADER_OK        0
 #define LOADER_ERR_OPEN  (-1)
 #define LOADER_ERR_SHORT (-2)
+#define LOADER_ERR_FORMAT (-3)
 
 unsigned int loader_table_bytes(void);
 int load_table(const char *path, unsigned char *out);

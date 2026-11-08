@@ -19,6 +19,7 @@ python3 tests/run.py
 ```
 
 終わると、試験の組ごとに「○ 合格」「△ 飛ばしたものがある」「× 不合格（理由）」が出ます。
+件数は、組の記録の最後の `Ran N tests` の行とその後の行から数えます（試験の中で動かした別の試験の記録は数えません）。
 終了コードは、0 がすべて合格（要る道具がなくて飛ばしたものはあってよい）、1 が不合格あり、2 が要る道具なしです。
 結果は `tests/results/latest.json` にも書きます（git に入れません）。
 
@@ -127,8 +128,11 @@ python3 tests/run.py --only docs --only structure
 | ジョブ | 動かすもの |
 | --- | --- |
 | 部品ごとの試験 | `tests/run.py --only parts`（Python 3.12 と最新） |
-| プラグイン全体の試験 | `structure`、`contracts`、`independence`、`integration`、`docs`、`eval` |
+| プラグイン全体の試験 | `structure`、`contracts`、`independence`、`integration`、`docs`、`eval`。最初に、`tests/run.py --list` のどの組も、どれかのジョブで動くことを確かめる（Linux だけ） |
+| 結果と設定の画面 | `ui`（Node 22。Playwright と Chromium を入れ、あることを確かめてから動かす） |
 | Web管理画面 | `extension`（Node 22 と 24） |
+
+`tests/` に試験の組を足したら、どれかのジョブの `--only` に足します。足し忘れると、プラグイン全体の試験のジョブが不合格になります。
 
 ## EVAL（実際のモデル）
 

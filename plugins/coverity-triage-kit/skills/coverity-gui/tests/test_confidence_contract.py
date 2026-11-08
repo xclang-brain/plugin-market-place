@@ -44,7 +44,8 @@ class ConfidenceContractTest(unittest.TestCase):
         for case in found:
             with self.subTest(case["name"]):
                 given = case["input"]
-                got = rule.effective_confidence(given["result"], given.get("review"), given.get("verify"))
+                got = rule.effective_confidence(given["result"], given.get("review"), given.get("verify"),
+                                                given.get("run_item"))
                 for key, value in case["expect"].items():
                     self.assertEqual(got[key], value)
 
@@ -61,6 +62,12 @@ class ConfidenceContractTest(unittest.TestCase):
             with self.subTest(case["name"]):
                 self.assertEqual(case["got"]["confidence"], case["expect"]["confidence"])
                 self.assertEqual(case["got"]["reason"], case["direct"]["reason"])
+
+    def test_the_screen_has_no_review_filter_of_its_own(self) -> None:
+        source = (helpers.SKILL / "scripts" / "guilib" / "runs.py").read_text(encoding="utf-8")
+        self.assertNotIn("TAKEN_REVIEWS", source)
+        body = source.split("def effective_confidence(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn('item.get("review")', body)  # the rule decides which review counts
 
     def test_the_copy_is_self_contained(self) -> None:
         text = RULE.read_text(encoding="utf-8")

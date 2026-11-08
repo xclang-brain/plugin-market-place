@@ -3,6 +3,7 @@
 # Linux は ubuntu-24.04 に固定する（ubuntu-latest の版が変わっても、同じ環境で試すため）。
 # 部品の名前は書かない。試験は tests/run.py が、skills/ と mcp-servers/ の下のフォルダから見つけて、
 # その部品の README に書いた動かし方で動かす。部品を足す・消す・置き換えても、この定義は直さずに済む。
+# tests/run.py が知っている試験の組は、どれもどこかのジョブの --only に入れる（checks のジョブの最初で確かめる）。
 name: coverity-triage-kit
 
 on:
@@ -63,9 +64,68 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v6
+      # tests/ に試験の組を足したのに、この定義のどのジョブにも入れ忘れたときに、ここで不合格にする。
+      # 部品ごとの試験（名前に / があるもの）は parts で動く。OS によらないので Linux だけで確かめる
+      - name: どの試験の組も、どれかのジョブで動くか確かめる
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'EOF'
+          import os, re, subprocess, sys
+          from pathlib import Path
+          workflow = Path(os.environ["GITHUB_WORKSPACE"], ".github", "workflows", "coverity-triage-kit.yml")
+          lines = workflow.read_text(encoding="utf-8").splitlines()
+          covered = {word for line in lines if line.strip().startswith("run: python tests/run.py") for word in re.findall(r"--only\s(\S+)", line)}
+          listed = subprocess.run([sys.executable, "tests/run.py", "--list"], stdout=subprocess.PIPE, encoding="utf-8", check=True).stdout
+          names = [line.split("（")[0].strip() for line in listed.splitlines() if line.strip()]
+          missing = [name for name in names if ("parts" if "/" in name else name) not in covered]
+          if missing:
+              print("::error::どのジョブも動かさない試験の組があります：" + "、".join(missing))
+              sys.exit(1)
+          print("どの試験の組も、どれかのジョブで動きます（" + "、".join(sorted(covered)) + "）")
+          EOF
       # 独立性の試験は、部品のフォルダだけを別の場所にコピーして、その部品の試験も動かす
       - name: プラグイン全体の試験
         run: python tests/run.py --only structure --only contracts --only independence --only integration --only docs --only eval
+
+  ui:
+    name: 結果と設定の画面（${{ matrix.os }}、Chromium）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 利用者の PC は Windows なので、Windows でも動かす（Playwright は windows-latest に Chromium を入れられる）
+        os: [windows-latest, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: plugins/coverity-triage-kit
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      # Playwright を tests/node_modules に入れる（git に入れない）。Chromium は Playwright の置き場所（利用者のキャッシュ）に入る。
+      # --with-deps は、Linux ではブラウザーに要るパッケージも入れる
+      - name: Playwright と Chromium を入れる
+        shell: bash
+        run: |
+          npm install --prefix tests --no-save --no-package-lock playwright@1.56.1
+          (cd tests && npx playwright install --with-deps chromium)
+      # 入れそこなうと、画面の試験は「飛ばした」になって合格に見えるので、先に確かめる
+      - name: Playwright と Chromium があるか確かめる
+        shell: bash
+        working-directory: plugins/coverity-triage-kit/tests
+        run: node -e "const fs = require('fs'); const { chromium } = require('playwright'); if (!fs.existsSync(chromium.executablePath())) { console.error('Chromium がありません'); process.exit(1); } console.log(chromium.executablePath());"
+      # 一括実行で作った実行フォルダを、結果と設定の画面で開き、幅 390 px と 1280 px、ライトとダークで確かめる
+      - name: 結果と設定の画面の試験
+        run: python tests/run.py --only ui
 
   extension:
     name: Web管理画面（${{ matrix.os }}、Node ${{ matrix.node }}）
