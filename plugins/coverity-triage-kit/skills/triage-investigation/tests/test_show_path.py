@@ -317,6 +317,36 @@ class ShowPathTest(unittest.TestCase):
         self.assertIn(needle, data["error"])
         self.assertIsInstance(data["problems"], list)
 
+    # ------------------------------------------------------------------ files written by the Coverity tool
+
+    def test_issue_file_written_by_the_coverity_tool(self) -> None:
+        """tests/data/details/issue-20001.json has the exact shape (design 4.4) the tool that fetches warning
+        paths writes into its output_dir: Coverity's paths as they are, the keys without a value left out
+        (here an event without a line), UTF-8 with an indent of 2."""
+        path = HERE / "data" / "details" / "issue-20001.json"
+        code, data, _ = run(["show", "--repo", str(self.repo), "--issue-file", str(path)], self.tmp)
+        self.assertEqual(code, 0, data)
+        issue = data["issues"][0]
+        self.assertEqual((issue["cid"], issue["checker"], issue["stream"], issue["impact"]),
+                         (20001, "NULL_RETURNS", "app-main", "High"))
+        self.assertEqual((issue["file"], issue["reported_file"]), ("src/reader.c", "/work/build/app/src/reader.c"))
+        self.assertEqual([(e["n"], e["line"], e["main"]) for e in issue["events"]],
+                         [(1, 40, False), (2, None, False), (3, 42, True)])
+        self.assertTrue(all(e["file"] == "src/reader.c" for e in issue["events"]))
+        text = data["text"]
+        self.assertIn(f"{STAR} 3. src/reader.c:42 dereference", text)
+        self.assertIn("2. src/reader.c（行の番号なし） path", text)
+        self.assertIn(f"{STAR}3 42 | \tlen = strlen(line);", text)
+        self.assertIn("チェッカーの説明: fgets の戻り値を確かめずに使っている。", text)
+        self.assertEqual(data["drift_hints"], [])
+        self.assertTrue(data["notes"])  # the build path was matched by its end: said so
+
+    def test_failure_file_written_by_the_coverity_tool(self) -> None:
+        path = HERE / "data" / "details" / "issue-20002.json"
+        code, data, _ = run(["show", "--repo", str(self.repo), "--issue-file", str(path)], self.tmp)
+        self.assertFailure(code, data, "警告経路は取れていません")
+        self.assertIn("ストリーム app-main にありません", data["error"])
+
     def test_failed_fetch_file(self) -> None:
         path = self.issue_file({"cid": 20001, "stream": "app-main", "fetched_at": "x", "error": "SOAP の失敗"})
         code, data, _ = run(["show", "--repo", str(self.repo), "--issue-file", str(path)], self.tmp)

@@ -267,7 +267,7 @@ class SectionOneAndTwoTest(SelftestBase):
 
     def test_record_and_report(self):
         self.call("record", "--dir", str(self.dir), "--id", "1-3", "--status", "pass",
-                  "--actual", "triage-worker があり、説明に作業役")
+                  "--actual", "作業役のエージェントがあり、説明もある")
         stdin = json.dumps({"id": "1-2", "status": "review", "actual": "分からないと言われた"}, ensure_ascii=False)
         self.call("record", "--dir", str(self.dir), "--stdin", stdin=stdin.encode("utf-8"))
         self.assertFalse(self.call("record", "--dir", str(self.dir), "--id", "9-9", "--status", "pass",

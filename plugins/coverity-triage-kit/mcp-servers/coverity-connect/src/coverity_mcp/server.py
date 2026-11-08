@@ -27,13 +27,16 @@ from .settings import FilterArg
 log = logging.getLogger("coverity_mcp")
 
 INSTRUCTIONS = """\
-Coverity Connect の警告を検索し、警告経路を取り、トリアージ（分類・対応・重大度・コメント）を書き戻すツールです。
+Coverity Connect の警告を検索し、警告経路を取り、トリアージ（分類・対応・重大度・コメント）を書き戻すためのツールです。
+- 使えるツールだけを使います。クライアントの設定によっては、読むツール（接続の確認・警告の検索・警告経路の取得）だけが\
+使え、書き戻しのツールは使えません。そのときは、書き戻していないことを伝えます（ほかの方法で Coverity に書き込もうとしません）。
 - 設定：repo_root（リポジトリの絶対パス）を渡すと <repo_root>/.coverity-triage/config.yaml の coverity の項目を読みます。\
 渡さないときは環境変数 COVERITY_URL などを読みます。ユーザ名と認証キーは環境変数（既定 COV_USER と COV_AUTH_KEY）から読みます。
 - パスの引数は、どれも絶対パスで渡します。
-- 流れ：coverity_check_connection で確かめる → coverity_search_issues で警告を探す（各警告に cid と stream がある）→ \
-coverity_get_issue_details で警告経路を取る → coverity_preview_triage で書き戻す内容と確認の文字列を出し、人に見せて同意を得る → \
-coverity_update_triage で書き戻す。
+- 読むとき：coverity_check_connection で接続を確かめる。coverity_search_issues で警告を探す（各警告に cid と stream がある）。\
+coverity_get_issue_details で警告経路を取る（stream が要る）。
+- 書き戻すとき（coverity_preview_triage と coverity_update_triage が使えるときだけ）：coverity_preview_triage で\
+書き戻す件数・内容と確認の文字列を出し、人に見せて同意を得てから、coverity_update_triage に同じ内容と確認の文字列を渡します。
 - 続き：has_more が true なら offset に next_offset を渡して呼び直します。done が false なら同じ引数でもう一度呼びます。\
 remaining があれば、その CID だけで呼び直します。
 - 書き戻しは、人が件数と内容を見て同意したときだけ行います。confirmation_token は自分で作りません。"""

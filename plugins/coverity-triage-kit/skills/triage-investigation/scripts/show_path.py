@@ -273,14 +273,15 @@ def normalize_issue(raw: Any, label: str) -> dict[str, Any]:
         if not isinstance(file, str) or not file.strip():
             problems.append(f"events の {i} 番目に file がありません")
             continue
-        try:
-            line = int(line)
-        except (TypeError, ValueError):
-            problems.append(f"events の {i} 番目の line が数ではありません")
-            continue
-        if line < 1:
-            problems.append(f"events の {i} 番目の line は 1 以上にします")
-            continue
+        if line is not None:  # Coverity gives some events no line: such an event is listed without code
+            try:
+                line = int(line)
+            except (TypeError, ValueError):
+                problems.append(f"events の {i} 番目の line が数ではありません")
+                continue
+            if line < 1:
+                problems.append(f"events の {i} 番目の line は 1 以上にします")
+                continue
         events.append({"file": file.strip(), "line": line, "tag": str(_pick(ev, "tag") or ""),
                        "description": str(_pick(ev, "description") or ""), "main": bool(_pick(ev, "main"))})
     if problems:
@@ -385,7 +386,7 @@ def plan_blocks(events: list[dict[str, Any]], sources: dict[str, list[str]], con
     windows: dict[str, list[list[Any]]] = {}
     for ev in events:
         lines = sources.get(ev["file"])
-        if not lines:
+        if not lines or ev["line"] is None:
             continue
         lo, hi = max(1, ev["line"] - context), min(len(lines), ev["line"] + context)
         if lo > hi:
@@ -450,7 +451,7 @@ def build(repo: Path, issues: list[dict[str, Any]], context: int, max_lines: int
             if rel != ev["file"]:
                 item["reported_file"] = ev["file"]
             lines = source(rel)
-            if lines is not None and ev["line"] > len(lines):
+            if lines is not None and ev["line"] is not None and ev["line"] > len(lines):
                 hint = f"{rel}:{ev['line']} はファイルの行数（{len(lines)} 行）を超えています（コードがずれています）"
                 if hint not in drift:
                     drift.append(hint)
@@ -513,7 +514,8 @@ def build(repo: Path, issues: list[dict[str, Any]], context: int, max_lines: int
         for ev in events:
             mark = STAR if ev["main"] else " "
             desc = " — ".join(x for x in (ev["tag"], ev["description"]) if x)
-            text.append(f" {mark} {ev['n']:>{width}}. {ev['file']}:{ev['line']}" + (f" {desc}" if desc else ""))
+            where = f"{ev['file']}:{ev['line']}" if ev["line"] is not None else f"{ev['file']}（行の番号なし）"
+            text.append(f" {mark} {ev['n']:>{width}}. {where}" + (f" {desc}" if desc else ""))
         text.append("")
         for rel, lo, hi, marks in blocks:
             marks = {ln: labels for ln, labels in marks.items() if lo <= ln <= hi}  # a cut block keeps its own marks

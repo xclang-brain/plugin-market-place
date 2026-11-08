@@ -117,6 +117,12 @@ class StdioTest(unittest.TestCase):
         self.assertEqual(info["version"], __version__)
         self.assertIn("coverity_search_issues", self.init["result"]["instructions"])
 
+    def test_instructions_do_not_assume_every_tool_is_there(self) -> None:
+        text = self.init["result"]["instructions"]
+        self.assertIn("使えるツールだけを使います", text)
+        self.assertIn("読むツール", text)  # a client may expose only the read tools
+        self.assertIn("coverity_update_triage が使えるときだけ", text)
+
     def test_the_five_tools_and_their_annotations(self) -> None:
         self.assertEqual(set(self.tools), TOOLS)
         hints = {n: t["annotations"] for n, t in self.tools.items()}

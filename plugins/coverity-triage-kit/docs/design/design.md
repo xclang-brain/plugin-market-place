@@ -361,12 +361,12 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 
 | ファイル | 書く | 読む部品 | 読む項目 |
 | --- | --- | --- | --- |
-| `run.json` | 一括実行 | 画面、反映、困ったとき、自己診断 | `format`、`tool_version`、`run_id`、`repo_root`、`created_at`、`filter_name`、`stream`、`stage`、`stopped`、`finished`、`review`、`integration`、`integrated`、`parallel`、`initial`、`items[].{id, cids, status, merged_into, review, started, seconds, attempts, review_rounds, slot, stage, error}` |
+| `run.json` | 一括実行 | 画面、反映、困ったとき、自己診断 | `format`、`tool_version`、`run_id`、`repo_root`、`created_at`、`filter_name`、`stream`、`stage`、`stopped`、`halted`、`halt_reason`、`finished`、`review`、`integration`、`integrated`、`parallel`、`initial`、`items[].{id, cids, status, merged_into, review, started, seconds, attempts, review_rounds, slot, stage, error}` |
 | `jobs/<名前>.json` | 一括実行 | 画面 | `name`、`kind`、`status`、`pid`、`started`、`args.item` |
 | `agents/<役>/progress.json`、`agents/reviewer/<ID>.progress.json` | 検証役・統合役 | 画面 | 4.8 |
 | `apply-code.result.json` | 反映 | 反映、画面 | 反映の README（何を反映したか、確認の文字列ごとの結果、効果の記録） |
 | `items/<ID>/result.json` | 作業役 | 画面、反映、自己診断 | 4.5 のすべて |
-| `items/<ID>/review.json` | 検証役 | 画面 | 4.6 |
+| `items/<ID>/review.json` | 検証役 | 画面、反映 | 4.6 |
 | `items/<ID>/saved.json` | 一括実行 | 反映、画面 | `fix.{files, patch, branch, commit}`、`annotation.{…}` |
 | `items/<ID>/progress.json` | 作業役など | 画面 | 4.8 |
 | `approvals.json` | 一括実行・画面 | 反映、画面 | 4.9 |
@@ -374,7 +374,7 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 | `operations.log` | 一括実行 | 画面 | `time`、`event`、`level`、`item`、`message` |
 | `verify.json` | 一括実行 | 反映、画面 | 一括実行の README |
 
-JSON Schema：一括実行の `assets/run.schema.json`（上の項目だけを決め、ほかは許す）。読む部品に同じ写し。
+JSON Schema：一括実行の `assets/run.schema.json`（上の項目だけを決め、ほかは許す。いつも書く項目だけを必須にする）。読む部品に同じ写し。反映したかどうかは `run.json` に書かない（反映が `apply-code.result.json` に書き、画面はそれを読む）。
 
 ### 4.12 一括実行のコマンド（統括エージェントとエクステンションが使う）
 

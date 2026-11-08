@@ -226,6 +226,7 @@ CID ごとの警告経路（イベント）とチェッカーの説明を返し�
 
 - `plan_file`：ファイルのバイト列の SHA-256 の16進の先頭12文字。
 - `entries`：各項目を `id, cids（整数）, classification, action, severity（既定 ""）, comment（既定 ""）` と、あるときだけ `stream` にそろえ、`{"triage": [項目…]}` を、鍵の順に並べ、区切り `(",", ":")`、`ensure_ascii=False` で JSON にした UTF-8 の SHA-256 の先頭12文字。
+- この決まりは `src/coverity_mcp/plantoken.py` にあります。計画のファイルを書く側（承認を反映する部品）のスクリプトと同じバイト列の写しで、サーバーはそれをそのまま使います。知らない鍵や空の `entries` を断るのは、ツールの入力の確かめです（決まりの外）。
 
 ### 続きの取り方
 
@@ -333,6 +334,6 @@ uv run --native-tls --frozen --directory "<このフォルダ>" python -B -m uni
 
 - サーバーのライブラリのない Python で `python3 -B -m unittest discover -s tests` を動かしたときは、uv の一時の環境で同じ試験を動かします（このフォルダに `.venv` を作りません）。`-B` を付けると `__pycache__` も残りません。
 - リポジトリの中で動かすときは、`UV_PROJECT_ENVIRONMENT` を一時のフォルダにすると、このフォルダに `.venv` を作りません。
-- 確認の文字列の取り決めの試験は、共通の試験のデータ（`tests/contract/token/cases.json`）があるときだけ動きます。
+- 確認の文字列の取り決めの試験は、共通の試験のデータ（`tests/contract/token/cases.json`）があるときだけ動きます。すべての組を `plantoken.py` の関数で確かめ、ツールが受け付ける組では、ツールの確認の文字列も同じになることを確かめます。
 
 モデルに課題を解かせて採点する試験（mcp-builder の形）は [evals/README.md](evals/README.md) にあります。

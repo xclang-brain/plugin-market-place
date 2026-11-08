@@ -34,7 +34,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import ValidationError
 
-from . import connect
+from . import connect, plantoken
 from .coverity import CoverityClient, CoverityError, make_client
 from .envvars import Masker
 from .models import Issue, IssueDetail, PlanEntry, TriageAttributes, TriageEntry
@@ -542,8 +542,8 @@ def _details_files(config: CoverityConfig, stream: str, cids: list[int], target:
 # ---- write-back --------------------------------------------------------------------------------
 
 def plan_token(raw: bytes) -> str:
-    """Confirmation token of a plan file: SHA-256 of its bytes, the first 12 hex digits."""
-    return sha(raw)[:12]
+    """Confirmation token of a plan file (the shared rule of plantoken.py: SHA-256 of its bytes, 12 hex digits)."""
+    return plantoken.token_for_bytes(raw)
 
 
 def entry_dict(entry: TriageEntry) -> dict[str, Any]:
@@ -557,10 +557,8 @@ def entry_key(entry: TriageEntry) -> str:
 
 
 def entries_token(entries: list[TriageEntry]) -> str:
-    """Confirmation token of entries: SHA-256 of {"triage": entries} as compact JSON with sorted keys."""
-    text = json.dumps({"triage": [entry_dict(e) for e in entries]}, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"))
-    return sha(text.encode("utf-8"))[:12]
+    """Confirmation token of entries already checked at the tool boundary (the shared rule of plantoken.py)."""
+    return plantoken.token_for_entries([entry_dict(e) for e in entries])
 
 
 def _entries(entries: list[TriageEntry] | list[dict[str, Any]]) -> list[TriageEntry]:
