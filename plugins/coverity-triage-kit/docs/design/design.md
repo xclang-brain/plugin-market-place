@@ -238,7 +238,7 @@ MCP サーバーの警告経路の取得を、`output_dir` を付けて呼んだ
  "checker_description": "…"}
 ```
 
-失敗した CID は `{"cid": 20001, "stream": "app-main", "fetched_at": "ISO", "error": "…"}`。認証の失敗など、全体が止まる失敗では、ファイルを書かない。
+失敗した CID は `{"cid": 20001, "stream": "app-main", "fetched_at": "ISO", "error": "…"}`（ストリームを省いて呼んだときは `stream` が null のことがある。読む部品は `error` を見る）。認証の失敗など、全体が止まる失敗では、ファイルを書かない。
 
 ### 4.5 1件の結果 `result.json`（結果の記録のスキルが形を持つ）
 
@@ -517,9 +517,9 @@ status の出力（画面のため。読むだけ）：
 
 | ツール | 注釈 | すること |
 | --- | --- | --- |
-| `coverity_check_connection(repo_root?)` | readOnly・idempotent | 接続と認証を確かめる。URL、ユーザー名、認証キーがあるか（値は出さない）、http なら注意、設定の知らない項目 |
-| `coverity_search_issues(repo_root?, filter?, filter_file?, offset=0, limit=20, response_format="concise", output_file?)` | readOnly でない・破壊しない・idempotent | 条件に合う警告。会話に返すときは1ページ最大100件で `has_more`・`next_offset` を返す。`output_file` を渡すと 4.3 の形で書き、途中なら `done: false` |
-| `coverity_get_issue_details(repo_root?, stream, cids, response_format="concise", output_dir?)` | readOnly でない・破壊しない・idempotent | CID ごとの警告経路とチェッカーの説明。会話には10件まで、`output_dir` には50件まで（4.4）。`stream` は必須（なければ「stream を渡してください。警告の検索の結果の各警告に stream があります」と返す） |
+| `coverity_check_connection(repo_root?, response_format="concise")` | readOnly・idempotent | 接続と認証を確かめる（`GET /api/v2/streams`）。URL、ユーザー名、認証キーがあるか（値は出さない）、http なら注意、設定の知らない項目、見えるストリームの一覧（名前の順に100まで、全体の数。detailed ではプロジェクトとトリアージストアも） |
+| `coverity_search_issues(repo_root?, filter?, filter_file?, offset=0, limit=20, response_format="concise", output_file?)` | readOnly でない・破壊しない・idempotent | 条件に合う警告。会話に返すときは1ページ最大100件で `has_more`・`next_offset` を返す（concise にも `cwe` を入れる。値のない項目は省く）。`output_file` を渡すと 4.3 の形で書き、途中なら `done: false`。見えないストリームを渡すと、見えるストリームを挙げてエラーにする |
+| `coverity_get_issue_details(cids, repo_root?, stream?, response_format="concise", output_dir?)` | readOnly でない・破壊しない・idempotent | CID ごとの警告経路とチェッカーの説明。会話には10件まで、`output_dir` には50件まで（4.4）。`stream` を省くと、見えるストリームから CID を探す（CID ごとに SOAP の1回の問い合わせで、ストリームを渡したときと同じ数。名前の順で最初に見つかったストリームの経路を返し、ほかは `other_streams` に挙げる。見えるストリームが100を超えるときは、ストリームを渡すよう頼む）。渡したストリームに CID がないときは、ほかのストリームと、省けることを示す |
 | `coverity_preview_triage(plan_file?, entries?)` | readOnly・通信しない | 書き戻す件数・内容・確認の文字列 |
 | `coverity_update_triage(confirmation_token, repo_root?, plan_file?, entries?)` | 書き込む・idempotent | 確認の文字列が合うときだけ書き戻す。ストリームからトリアージストアを決める（`GET /api/v2/streams/{name}`） |
 
