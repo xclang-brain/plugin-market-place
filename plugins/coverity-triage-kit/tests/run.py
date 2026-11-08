@@ -164,16 +164,19 @@ def run_command(command, cwd, env, timeout, encoding=None):
 # ---------------------------------------------------------------------------
 
 def unittest_counts(out, code):
-    m = re.search(r"^Ran (\d+) tests?", out, re.M)
-    total = int(m.group(1)) if m else 0
+    # A test that runs another suite and prints its output (independence, selftest) leaves earlier "Ran N tests"
+    # and "OK"/"FAILED" lines: the suite's own summary is the last "Ran" line and the lines after it.
+    runs = list(re.finditer(r"^Ran (\d+) tests?", out, re.M))
+    total = int(runs[-1].group(1)) if runs else 0
+    tail = out[runs[-1].end():] if runs else out
     bad = 0
-    m = re.search(r"^FAILED \((.*)\)", out, re.M)
+    m = re.search(r"^FAILED \((.*)\)", tail, re.M)
     if m:
         for _, value in re.findall(r"(failures|errors|unexpected successes)=(\d+)", m.group(1)):
             bad += int(value)
     if code != 0 and bad == 0:
         bad = 1  # 数えられない失敗（読み込みの失敗、時間切れなど）
-    m = re.search(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", out, re.M)
+    m = re.search(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", tail, re.M)
     skipped = int(m.group(1)) if m else 0
     return total, bad, skipped
 
