@@ -45,8 +45,9 @@ function filterNames(data) {
 function initialConditions(ctx) {
   const req = ctx.request.values;
   const filters = ctx.setup?.settings.filters ?? [];
+  const suggested = ctx.setup?.settings.defaultFilter;
   return {
-    filter: req.filter ?? (filters.length === 0 || filters.includes(DEFAULT_FILTER) ? DEFAULT_FILTER : filters[0]),
+    filter: req.filter ?? suggested ?? (filters.length === 0 || filters.includes(DEFAULT_FILTER) ? DEFAULT_FILTER : filters[0]),
     impact: req.impact ?? IMPACT_CHOICES[0],
     limit: req.limit ?? null,
     initial: req.initial ?? INITIAL_CHOICES[0],
@@ -60,7 +61,14 @@ async function loadSettings(ctx) {
   if (r.ok) {
     const values = {};
     for (const key of SETTING_KEYS) if (r.data[key] !== undefined) values[key] = clone(r.data[key]);
-    setup.settings = { state: 'ok', values, filters: filterNames(r.data), problems: (Array.isArray(r.data.problems) ? r.data.problems : []).map(String), error: null };
+    setup.settings = {
+      state: 'ok',
+      values,
+      filters: filterNames(r.data),
+      defaultFilter: typeof r.data.default_filter === 'string' && r.data.default_filter ? r.data.default_filter : null,
+      problems: (Array.isArray(r.data.problems) ? r.data.problems : []).map(String),
+      error: null,
+    };
     if (Number.isInteger(values.max_rework) && values.max_rework >= REWORK_MIN && values.max_rework <= REWORK_MAX) setup.maxReworkDefault = values.max_rework;
   } else {
     setup.settings = { state: 'error', values: {}, filters: [], problems: r.problems ?? [], error: r.error };

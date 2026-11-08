@@ -113,11 +113,11 @@ export function summaryOf(over = {}) {
   return {
     ok: true,
     summary_html: path.join(RUN_DIR, 'summary.html'),
-    counts: { issues: 3, items: 2, fix: 1, deviation: 1, low: 1, error: 0, unprocessed: 0 },
+    counts: { warnings: 3, items: 2, groups: 1, fix: 1, deviation: 1, low: 1, errors: 0, unprocessed: 0 },
     approvals_counts: { fix: 1, deviation: 1, reject: 0, none: 0, changed: 0 },
     results: [
-      { id: 'G1', cids: [20004, 20005], decision: 'deviation', recommendation: 'deviation', confidence: 'low', summary: '意図的な NULL の確かめ' },
-      { id: '20001', cids: [20001], decision: 'fix', recommendation: 'fix', confidence: 'medium', summary: 'fgets の戻り値を見ていない' },
+      { id: 'G1', title: 'G1（2 件）', cids: [20004, 20005], checker: 'NULL_RETURNS', approval: 'deviation', edited: false, recommendation: 'deviation', confidence: 'low', judgement: 'intentional', summary: '意図的な NULL の確かめ', report: path.join(RUN_DIR, 'cid', 'G1.html'), review: 'pass', already_fixed: false },
+      { id: '20001', title: '20001', cids: [20001], checker: 'NULL_RETURNS', approval: 'fix', edited: false, recommendation: 'fix', confidence: 'medium', judgement: 'true_bug', summary: 'fgets の戻り値を見ていない', report: path.join(RUN_DIR, 'cid', '20001.html'), review: 'pass', already_fixed: false },
     ],
     unprocessed: [],
     run_checks: [{ id: 'C-25', ok: true, detail: '形は正しい' }],

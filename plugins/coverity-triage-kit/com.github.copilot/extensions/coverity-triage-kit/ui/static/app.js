@@ -70,13 +70,16 @@
   };
   const ISSUE_SOURCES = { mechanical: '実行の記録から自動で見つけた課題', orchestrator: '統括エージェントが振り返って足した課題' };
   const ITEM_STATUS = { pending: ['待ち', 'standby'], in_progress: ['作業中', 'running'], done: ['終わった', 'completed'], error: ['エラー', 'failed'], merged: ['まとめた', 'neutral'] };
-  const ITEM_PHASE = { read: '読む', judge: '判定', fix: '修正', deviation: '逸脱コメント', result: '結果を書く', check: '確かめ', write: '書く', compare: '比べる' };
-  const REVIEW_OUTCOME = { pass: ['合格', 'completed'], flag: ['要確認', 'waiting'], rework: ['差し戻し', 'failed'] };
+  const ITEM_PHASE = {
+    read: '読む', judge: '判定', fix: '修正', deviation: '逸脱コメント', result: '結果を書く', check: '確かめ', write: '書く', compare: '比べる',
+    copy: 'コピーの用意', save: '修正の保存', merge: 'まとめた修正',
+  };
+  const REVIEW_OUTCOME = { pass: ['合格', 'completed'], flag: ['要確認', 'waiting'], rework: ['差し戻し', 'failed'], unverified: ['未検証', 'standby'] };
   const DECISION = { fix: '修正', deviation: '逸脱', reject: '却下' };
   const CONFIDENCE = { high: '高', medium: '中', low: '低' };
   const CONFIDENCE_ORDER = { low: 0, medium: 1, high: 2 };
   const COUNT_LABELS = {
-    issues: '警告', cids: '警告', warnings: '警告', items: '作業', tasks: '作業', fix: '修正の推奨', deviation: '逸脱の推奨',
+    issues: '警告', cids: '警告', warnings: '警告', items: '作業', tasks: '作業', groups: 'グループ', fix: '修正の推奨', deviation: '逸脱の推奨',
     low: '確信度 低', low_confidence: '確信度 低', error: 'エラー', errors: 'エラー', unprocessed: '未処理',
   };
   const APPROVAL_LABELS = { fix: '承認 修正', deviation: '承認 逸脱', reject: '承認 却下', none: '承認 （空）', null: '承認 （空）', empty: '承認 （空）', changed: '推奨から変えたもの' };
@@ -805,7 +808,7 @@
       return [
         itemLabel(item),
         ITEM_PHASE[item.phase] ?? text(item.phase || '—'),
-        item.status === 'pending' ? '—' : elapsedText(item.elapsed_seconds),
+        item.status === 'pending' || item.elapsed_seconds == null ? '—' : elapsedText(item.elapsed_seconds),
         String(item.rework_rounds ?? 0),
         state,
       ];
@@ -874,7 +877,7 @@
         const decision = r.decision === undefined ? r.approval : r.decision;
         return [
           decision == null || decision === '' ? '（空）' : (DECISION[decision] ?? text(decision)),
-          itemLabel(r),
+          text(r.title) || itemLabel(r),
           DECISION[r.recommendation] ?? text(r.recommendation),
           CONFIDENCE[r.confidence] ?? text(r.confidence),
           text(r.summary ?? r.judgement ?? ''),
@@ -960,7 +963,7 @@
                 { dataset: { check: f.check } },
                 h('span', { class: 'criterion-id' }, text(f.check)),
                 ' ',
-                badge(f.ok ? '合格' : '不合格', f.ok ? 'completed' : 'failed'),
+                f.ok === null || f.ok === undefined ? badge('対象外', 'neutral') : badge(f.ok ? '合格' : '不合格', f.ok ? 'completed' : 'failed'),
                 ' ',
                 text(f.detail),
                 f.file ? h('span', { class: 'help' }, `（${text(f.file)}${f.line ? `:${f.line}` : ''}）`) : null,

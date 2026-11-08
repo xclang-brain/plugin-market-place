@@ -188,7 +188,7 @@ test('REQ-421 REQ-422 finished: end reason, counts, list (low confidence first),
   assert.equal(textOf($('run-status')), '終了（上限の回数に達した）');
   assert.match(textOf($('end-reason')), /終わった理由：\s?上限の回数に達した（要確認 1 件）/);
   assert.match(textOf($('s-end')), /2 件の作業を終えました。/);
-  assert.match(textOf($('counts')), /警告 3 作業 2 修正の推奨 1 逸脱の推奨 1 確信度 低 1 エラー 0 未処理 0 承認 修正 1 承認 逸脱 1 承認 却下 0 承認 （空） 0 推奨から変えたもの 0/);
+  assert.match(textOf($('counts')), /警告 3 作業 2 グループ 1 修正の推奨 1 逸脱の推奨 1 確信度 低 1 エラー 0 未処理 0 承認 修正 1 承認 逸脱 1 承認 却下 0 承認 （空） 0 推奨から変えたもの 0/);
   const rows = $('results').querySelectorAll('tr').map(textOf);
   assert.equal(rows[0], '承認 ID 推奨 確信度 見立て 詳細');
   assert.match(rows[1], /^逸脱 G1（2 件） 逸脱 低 /);

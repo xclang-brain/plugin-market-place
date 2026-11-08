@@ -21,7 +21,7 @@ export function finishedOutcome(st, summaryData) {
     else if (UNPROCESSED.has(item.status)) unprocessed += 1;
     else if (item.status === 'done' && reviewOn) {
       const outcome = item.review?.outcome;
-      if (!outcome) unreviewed += 1;
+      if (!outcome || outcome === 'unverified') unreviewed += 1;
       else if (outcome !== 'pass') flagged += 1;
     }
   }

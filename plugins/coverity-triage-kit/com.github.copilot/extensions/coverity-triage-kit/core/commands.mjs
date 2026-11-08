@@ -62,7 +62,8 @@ export function createCommands({ runner, pluginRoot, defaults, clock, env = proc
         ok: false,
         kind: 'failed',
         error: typeof data.error === 'string' && data.error ? data.error : COMMAND_FAILED,
-        problems: (Array.isArray(data.problems) ? data.problems : []).map(problemText),
+        // `how_to_fix` is an optional hint some commands add to a failure
+        problems: [...(Array.isArray(data.problems) ? data.problems : []).map(problemText), ...(typeof data.how_to_fix === 'string' && data.how_to_fix ? [data.how_to_fix] : [])],
         data,
       };
     }
