@@ -4,12 +4,13 @@ status, and the commands around a run (settings, runs, new-run checks, foreign r
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import unittest
 from pathlib import Path
 
-from support import SKILL, RunCase, import_runlib, issue
+from support import RunCase, import_runlib, issue
 
 ISSUES = [issue(20001, line=6), issue(20002, checker="RESOURCE_LEAK", function="open_file", line=12),
           issue(20003, checker="INTEGER_OVERFLOW", function="parse", line=21),
@@ -29,28 +30,37 @@ def validate(value, schema_name: str) -> list[str]:
     return schema.validate(value, schema_name)
 
 
-class FinishedRunTest(RunCase):
-    """One finished run (markdown and metrics on), checked from several sides."""
+class FinishedRunTest(unittest.TestCase):
+    """One finished run (markdown and metrics on), checked from several sides. The tests that change the run
+    folder come last (the names are ordered)."""
 
-    settings = {"markdown": "true", "metrics": "true"}
+    @classmethod
+    def setUpClass(cls) -> None:
+        class Helper(RunCase):
+            settings = {"markdown": "true", "metrics": "true"}
 
-    def setUp(self) -> None:
-        super().setUp()
-        self.run_dir = self.new_run()["run_dir"]
+        h = Helper("runTest")
+        h.setUp()
+        cls.addClassCleanup(h.doCleanups)
+        cls.h = h
+        cls.run_dir = h.new_run()["run_dir"]
 
         def worker(action):
             if action["item"] == "20002":
-                return self.work_as_worker(action, "deviation", change=True, confidence="low",
-                                           verdict={"judgement": "false_positive", "summary": "<script>alert(1)</script> 誤検知",
-                                                    "rationale": "呼び出し元で閉じている & 問題ない",
-                                                    "evidence": [{"file": "src/reader.c", "line": 12, "note": "<b>ここ</b>"}]})
-            return self.work_as_worker(action)
+                return h.work_as_worker(action, "deviation", change=True, confidence="low",
+                                        verdict={"judgement": "false_positive", "summary": "<script>alert(1)</script> 誤検知",
+                                                 "rationale": "呼び出し元で閉じている & 問題ない",
+                                                 "evidence": [{"file": "src/reader.c", "line": 12, "note": "<b>ここ</b>"}]})
+            return h.work_as_worker(action)
 
-        self.assertTrue(self.drive(self.run_dir, ISSUES, worker=worker)["done"])
-        self.summary = self.run_json("summary", "--run", self.run_dir)
-        self.folder = Path(self.run_dir)
+        assert h.drive(cls.run_dir, ISSUES, worker=worker)["done"]
+        cls.summary = h.run_json("summary", "--run", cls.run_dir)
+        cls.folder = Path(cls.run_dir)
 
-    def test_summary_html_layout(self) -> None:
+    def run_json(self, *args, **kwargs):
+        return self.h.run_json(*args, **kwargs)
+
+    def test_1_summary_html_layout(self) -> None:
         text = (self.folder / "summary.html").read_text(encoding="utf-8")
         self.assertRegex(text, r"<h1>トリアージ結果 \d{4}-\d{2}-\d{2} \d{2}:\d{2}</h1>")
         self.assertIn("条件: 分類がまだの警告 ／ 警告 4 件（作業 3、うちグループ 1）", text)
@@ -69,14 +79,16 @@ class FinishedRunTest(RunCase):
         md = (self.folder / "summary.md").read_text(encoding="utf-8")
         self.assertIn("| 承認 | ID | 推奨 | 確信度 | 見立て | 詳細 |", md)
 
-    def test_item_report_layout(self) -> None:
+    def test_2_item_report_layout(self) -> None:
         text = (self.folder / "cid" / "20001.html").read_text(encoding="utf-8")
         self.assertIn("<h1>20001 — NULL_RETURNS（High）</h1>", text)
         heads = re.findall(r"<h2>(\d\. [^<]*?)(?: <span|</h2>)", text)
         self.assertEqual(heads, ["1. 結論", "2. 警告の概要", "3. 真偽の根拠", "4. 案A: 逸脱", "5. 案B: 修正", "6. 処理情報"])
         self.assertIn('<pre class="diff">', text)
-        self.assertIn('href="../patches/20001-fix.patch"', text)
-        self.assertIn('href="../fixed/20001/fix/src/reader.c"', text)
+        up = os.pardir
+        self.assertIn(f'href="{up}/patches/20001-fix.patch"', text)
+        self.assertIn(f'href="{up}/fixed/20001/fix/src/reader.c"', text)
+        self.assertIn(f'href="{up}/summary.html"', text)
         self.assertIn("coverity-fix/cid-20001", text)
         self.assertIn("★", text)
         self.assertNotIn("<script", text.lower())
@@ -87,7 +99,7 @@ class FinishedRunTest(RunCase):
         self.assertIn("&amp; 問題ない", escaped)
         self.assertTrue((self.folder / "cid" / "20001.md").is_file())
 
-    def test_approvals_defaults_keep_human_choices(self) -> None:
+    def test_8_approvals_defaults_keep_human_choices(self) -> None:
         path = self.folder / "approvals.json"
         data = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(validate(data, "approvals.schema.json"), [])
@@ -109,7 +121,7 @@ class FinishedRunTest(RunCase):
         self.assertIn("意図的。人が直した。", report)
         self.assertIn("人が直した内容", report)
 
-    def test_run_json_and_status_shapes(self) -> None:
+    def test_3_run_json_and_status_shapes(self) -> None:
         state = json.loads((self.folder / "run.json").read_text(encoding="utf-8"))
         self.assertEqual(validate(state, "run.schema.json"), [])
         self.assertEqual(state["format"], 2)
@@ -130,7 +142,7 @@ class FinishedRunTest(RunCase):
         low = next(i for i in status["items"] if i["id"] == "20002")
         self.assertEqual((low["recommendation"], low["confidence"]), ("deviation", "low"))
 
-    def test_metrics_and_layout_check(self) -> None:
+    def test_9_metrics_and_layout_check(self) -> None:
         metrics = json.loads((self.folder / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["totals"]["items"], 3)
         self.assertEqual({c["id"]: c["ok"] for c in self.summary["run_checks"]}["C-27"], True)
@@ -140,7 +152,7 @@ class FinishedRunTest(RunCase):
         again = self.run_json("summary", "--run", self.run_dir)
         self.assertFalse({c["id"]: c["ok"] for c in again["run_checks"]}["C-27"])
 
-    def test_note_issue(self) -> None:
+    def test_4_note_issue(self) -> None:
         self.run_json("note-issue", "--run", self.run_dir, "--title", "経路が取れない", "--body", "2 回失敗した")
         out = self.run_json("note-issue", "--run", self.run_dir, "--stdin",
                             stdin='﻿{"title": "題", "body": "本文\\r\\n2 行目"}')
@@ -185,7 +197,7 @@ class CommandsTest(RunCase):
 
     def test_output_dir_inside_repo_is_refused(self) -> None:
         config = self.repo / ".coverity-triage" / "config.yaml"
-        config.write_text(config.read_text(encoding="utf-8").replace("output_dir: ../out", "output_dir: out"), encoding="utf-8")
+        config.write_text(config.read_text(encoding="utf-8").replace(f"output_dir: {os.pardir}/out", "output_dir: out"), encoding="utf-8")
         out = self.new_run_failing()
         self.assertIn("リポジトリの中", out["error"])
         self.assertFalse((self.repo / "out").exists())
@@ -229,17 +241,18 @@ class CommandsTest(RunCase):
         self.run_json("resume", "--run", first, ok=False)
         self.run_json("status", "--run", first)  # reading is fine
 
-    def test_issues_file_without_a_coverity_tool(self) -> None:
+    def test_issues_file_given_instead_of_fetching(self) -> None:
         given = self.tmp / "given"
         self.write_issues(given / "issues.json", ISSUES[:2])
         self.write_details(given, ISSUES[0])
         out = self.new_run("--issues-file", str(given / "issues.json"))
         run_dir = out["run_dir"]
         first = self.tick(run_dir)
-        self.assertEqual([a["type"] for a in first["actions"]], ["launch", "launch"])
-        brief = self.brief_path(first["actions"][0]).read_text(encoding="utf-8")
-        self.assertIn("ここで問題", brief)
+        self.assertEqual(first["actions"][0]["type"], "launch")  # no fetch: the warnings were given
         self.assertTrue(self.drive(run_dir, ISSUES[:2], out=first)["done"])
+        self.assertIn("ここで問題", (Path(run_dir) / "items" / "20001" / "brief.md").read_text(encoding="utf-8"))
+        self.assertIn("取ってある警告経路のファイルがありません",
+                      (Path(run_dir) / "items" / "20002" / "brief.md").read_text(encoding="utf-8"))
         status = self.run_json("status", "--run", run_dir)
         self.assertTrue(any("取ってある警告経路" in (e["detail"] or "") or e["kind"] == "取得" for e in status["errors"]))
         self.write_issues(given / "half.json", ISSUES[:1], finished=False)

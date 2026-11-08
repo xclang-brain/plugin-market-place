@@ -1,0 +1,184 @@
+{
+  "format": 2,
+  "tool_version": "fixture-for-eval",
+  "run_id": "20261101-090000",
+  "created_at": "2026-11-01T09:00:00",
+  "stopped": false,
+  "stopped_at": null,
+  "finished": false,
+  "finished_at": null,
+  "repo_root": "/work/app",
+  "filter_name": "分類がまだの警告",
+  "filter_file": "/work/app/.coverity-triage/filters/untriaged.yaml",
+  "stream": "app-main",
+  "limit": 20,
+  "verify_mode": "none",
+  "initial": false,
+  "review": false,
+  "integration": false,
+  "max_rework": 1,
+  "parallel": 2,
+  "offline": false,
+  "settings": {
+    "coverity": {
+      "url": "https://coverity.example.com",
+      "api": "auto",
+      "user_env": "COV_USER",
+      "key_env": "COV_AUTH_KEY",
+      "triage_store": "Default Triage Store",
+      "revision_field": "sourceVersion",
+      "path_strip_prefixes": [],
+      "ca_file": null,
+      "fake_data": null
+    },
+    "vcs": {
+      "type": "git",
+      "base_branch": "main",
+      "branch_prefix": "coverity-fix/"
+    },
+    "output_dir": "/work/out",
+    "max_items": 100,
+    "parallel": 2,
+    "options": {
+      "annotation": false,
+      "per_run_branch": false,
+      "knowledge_suggestions": false,
+      "metrics": false,
+      "markdown": false
+    },
+    "verify": {
+      "default": "none",
+      "initial": false,
+      "setup_command": "",
+      "build_dir": "",
+      "build_command": "",
+      "cov_build_args": "--dir idir",
+      "cov_analyze_args": "--dir idir --all",
+      "cov_commit_args": "",
+      "timeout_minutes": 180
+    },
+    "agents": {
+      "integration": false,
+      "review": false,
+      "max_rework": 1
+    }
+  },
+  "planned": true,
+  "found": 4,
+  "limited": false,
+  "latest_revision": "4f2a9c1d0b7e6a5f4c3b2a1908f7e6d5c4b3a291",
+  "analyzed_revision": null,
+  "details_done": true,
+  "items": [
+    {
+      "id": "20001",
+      "cids": [
+        20001
+      ],
+      "status": "done",
+      "merged_into": null,
+      "review": null,
+      "applied": {},
+      "slot": null,
+      "stage": null,
+      "attempts": 1,
+      "stale_retries": 0,
+      "error": "",
+      "started": 1793500900.0,
+      "seconds": 412.0,
+      "split_from": null,
+      "cluster": null,
+      "fix_rounds": 0,
+      "merged_from": [],
+      "review_rounds": 0,
+      "review_gen": 0,
+      "review_fix_rounds": 0,
+      "rework": [],
+      "warnings": [],
+      "repo_fingerprint": null,
+      "result_sha": "x"
+    },
+    {
+      "id": "20002",
+      "cids": [
+        20002
+      ],
+      "status": "error",
+      "merged_into": null,
+      "review": null,
+      "applied": {},
+      "slot": null,
+      "stage": null,
+      "attempts": 1,
+      "stale_retries": 0,
+      "error": "作業役が途中で止まりました（30 分のあいだ、出力も進み具合もありませんでした）",
+      "started": 1793500900.0,
+      "seconds": 1830.0,
+      "split_from": null,
+      "cluster": null,
+      "fix_rounds": 0,
+      "merged_from": [],
+      "review_rounds": 0,
+      "review_gen": 0,
+      "review_fix_rounds": 0,
+      "rework": [],
+      "warnings": [],
+      "repo_fingerprint": null,
+      "result_sha": null
+    },
+    {
+      "id": "G1",
+      "cids": [
+        20003,
+        20004
+      ],
+      "status": "in_progress",
+      "merged_into": null,
+      "review": null,
+      "applied": {},
+      "slot": 1,
+      "stage": "work",
+      "attempts": 1,
+      "stale_retries": 0,
+      "error": "",
+      "started": 1793501500.0,
+      "seconds": null,
+      "split_from": null,
+      "cluster": null,
+      "fix_rounds": 0,
+      "merged_from": [],
+      "review_rounds": 0,
+      "review_gen": 0,
+      "review_fix_rounds": 0,
+      "rework": [],
+      "warnings": [],
+      "repo_fingerprint": null,
+      "result_sha": null
+    }
+  ],
+  "tasks": {
+    "worker:G1": {
+      "task": "worker:G1@1",
+      "role": "worker",
+      "item": "G1",
+      "description": "G1 の作業",
+      "launched_at": 1793501510.0
+    }
+  },
+  "fetch": {
+    "issues_attempts": 1,
+    "details_rounds": 1
+  },
+  "alerts": [
+    {
+      "item": "20002",
+      "kind": "作業",
+      "detail": "作業役が途中で止まりました（30 分のあいだ、出力も進み具合もありませんでした）",
+      "level": "critical",
+      "at": "2026-11-01T09:41:20"
+    }
+  ],
+  "notes": [],
+  "stage": "items",
+  "last_tick": "2026-11-01T09:45:00"
+}

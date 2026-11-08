@@ -7,6 +7,7 @@ A key that is present but empty takes the default value.
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ FILTERS_DIR = "filters"
 KNOWLEDGE_FILE = "knowledge.md"
 NO_GROUPING_FILE = "no-grouping.yaml"
 DEFAULT_FILTER = "untriaged.yaml"
+DEFAULT_OUTPUT_DIR = os.pardir + "/coverity-triage-out"  # beside the repository (never inside it)
 VERIFY_MODES = ("none", "build", "build+analyze")
 IMPACTS = ("High", "Medium", "Low", "Unspecified")
 TRIAGE_VALUES = {
@@ -41,7 +43,7 @@ SPEC: list[tuple[str, str, Any, Any]] = [
     ("vcs.type", "enum", "auto", ("auto", "git", "svn")),
     ("vcs.base_branch", "opt", None, None),
     ("vcs.branch_prefix", "text", "coverity-fix/", None),
-    ("output_dir", "text", "../coverity-triage-out", None),
+    ("output_dir", "text", DEFAULT_OUTPUT_DIR, None),
     ("max_items", "int", 100, (1, None)),
     ("parallel", "int", 3, (1, 8)),
     ("options.annotation", "bool", False, None),

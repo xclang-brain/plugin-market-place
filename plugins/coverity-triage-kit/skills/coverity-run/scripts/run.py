@@ -17,9 +17,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any, NoReturn
 
-sys.dont_write_bytecode = True  # never leave __pycache__ in the skill's folder
+# The compiled modules go to a cache in the temporary folder, never into the skill's folder (which may be
+# read-only, and is often inside a repository); each command then starts without compiling the scripts.
+sys.pycache_prefix = str(Path(tempfile.gettempdir()) / f"{Path(__file__).resolve().parents[1].name}-pycache")
+sys.dont_write_bytecode = False
 
 from runlib.common import RunError, emit_json, read_stdin_text  # noqa: E402
 

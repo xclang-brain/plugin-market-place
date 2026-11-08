@@ -64,10 +64,21 @@ def detail(run: Run, item_id: str, cid: int) -> dict[str, Any]:
     return data
 
 
+_MAPPERS: dict[tuple[str, tuple[str, ...]], PathMapper] = {}
+
+
+def mapper_for(run: Run) -> PathMapper:
+    """One mapper per repository and prefixes in this process (its file index is made once)."""
+    key = (str(run.repo), tuple(run.settings["coverity"]["path_strip_prefixes"]))
+    if key not in _MAPPERS:
+        _MAPPERS[key] = PathMapper(run.repo, list(key[1]))
+    return _MAPPERS[key]
+
+
 def view(run: Run, item: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]], str, list[str]]:
     """(issues, events by CID, checker description, notes) with repository-relative paths."""
     issues_by_cid = mapped(run)
-    mapper = PathMapper(run.repo, run.settings["coverity"]["path_strip_prefixes"])
+    mapper = mapper_for(run)
     notes: list[str] = []
     events: dict[int, list[dict[str, Any]]] = {}
     description = ""

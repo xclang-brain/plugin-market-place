@@ -121,15 +121,9 @@ def _line_count(text: str) -> int:
 
 
 def lint_points(result: dict[str, Any], read_file: Callable[[str], str | None]) -> list[dict[str, str]]:
-    """Points found by fixed rules: ``[{code, message}]``, one per code, sorted by code.
-    ``read_file(path)`` gives the text of a repository file, or None when it is not there."""
-    found: dict[str, list[str]] = {}
-
-    def add(code: str, detail: str = "") -> None:
-        found.setdefault(code, [])
-        if detail and detail not in found[code]:
-            found[code].append(detail)
-
+    """Points found by fixed rules: ``[{code, message}]``, one per finding (an evidence entry gives its own),
+    sorted by code. ``read_file(path)`` gives the text of a repository file, or None when it is not there."""
+    found: list[tuple[str, str]] = []
     verdict = result.get("verdict") if isinstance(result.get("verdict"), dict) else {}
     evidence = verdict.get("evidence") if isinstance(verdict.get("evidence"), list) else []
     for ev in evidence:
@@ -137,24 +131,24 @@ def lint_points(result: dict[str, Any], read_file: Callable[[str], str | None]) 
             continue
         text = read_file(ev["file"])
         if text is None:
-            add("evidence_missing_file", ev["file"])
-        elif isinstance(ev.get("line"), int) and ev["line"] > _line_count(text):
-            add("evidence_line_out_of_range", f"{ev['file']}:{ev['line']}（{_line_count(text)} 行まで）")
+            found.append(("evidence_missing_file", ev["file"]))
+        elif isinstance(ev.get("line"), int) and not isinstance(ev.get("line"), bool) and ev["line"] > _line_count(text):
+            found.append(("evidence_line_out_of_range", f"{ev['file']}:{ev['line']}（{_line_count(text)} 行まで）"))
     judgement, confidence = verdict.get("judgement"), result.get("confidence")
     recommendation = result.get("recommendation")
     drift = (result.get("revision_drift") or {}).get("status") if isinstance(result.get("revision_drift"), dict) else None
     if judgement == "undetermined" and confidence == "high":
-        add("undetermined_high")
+        found.append(("undetermined_high", ""))
     if drift == "detected" and confidence == "high":
-        add("drift_high")
+        found.append(("drift_high", ""))
     if judgement == "true_bug" and recommendation == "deviation":
-        add("true_bug_deviation")
+        found.append(("true_bug_deviation", ""))
     if judgement in ("false_positive", "intentional") and recommendation == "fix":
-        add("not_bug_fix")
+        found.append(("not_bug_fix", ""))
     if not evidence:
-        add("no_evidence")
-    return [{"code": code, "message": LINT_TEXT[code] + (f": {'、'.join(details)}" if details else "")}
-            for code, details in sorted(found.items())]
+        found.append(("no_evidence", ""))
+    return [{"code": code, "message": LINT_TEXT[code] + (f": {detail}" if detail else "")}
+            for code, detail in sorted(found, key=lambda x: x[0])]
 
 
 # ---- integration/plan.json (contract "plan") ----------------------------------------------------

@@ -41,6 +41,7 @@ STAGE_JA = {"initial": "初回解析", "fetch": "警告の取得", "details": "�
             "integrate": "同じ原因の統合", "review": "結果の確かめ", "verify": "ビルドでの検証", "done": "終わった",
             "stopped": "止めた"}
 ROLE_JA = {"worker": "作業", "reviewer": "確かめ", "integrator": "統合"}
+FATAL = re.compile(r"(?<!\d)(401|403|5\d\d)(?!\d)|認証|unauthori[sz]ed|forbidden|certificate|証明書", re.IGNORECASE)
 TASK = re.compile(r"^(?P<base>[^@#]+?)(?:@(?P<gen>\d+))?(?:#(?P<round>\d+))?$")
 
 
@@ -147,6 +148,10 @@ def _report(run: Run, task: str, failed: bool, reason: str, say: list[str], acti
         if failed:
             run.log("fetch-details-failed", f"警告経路の取得がうまくいきませんでした（{reason or '理由なし'}）",
                     level="warning")
+            if FATAL.search(reason or ""):  # authentication, TLS or server errors do not go away by trying again
+                with run.update() as st:
+                    st["fatal"] = f"警告経路を取れませんでした（{reason}）"
+                    _alert(st, None, "取得", st["fatal"], "critical")
     elif role == "worker":
         _worker_ended(run, current["item"], failed, reason, say, actions)
     elif role == "reviewer":
@@ -233,6 +238,10 @@ def _step(run: Run, say: list[str], carried: list[dict[str, Any]]) -> Step:
             _finish(run, say)
             return Step("done", [], done=True)
 
+    if run.state.get("fatal"):
+        say.append(run.state["fatal"] + "。トリアージを続けられないため止めます。直してから再開してください。")
+        return Step("details", [], stop=True, error=run.state["fatal"])
+
     # 3. the warning paths
     if not run.state.get("details_done"):
         result = _details(run, say, actions)
@@ -266,6 +275,10 @@ def _step(run: Run, say: list[str], carried: list[dict[str, Any]]) -> Step:
         launch = _start_integration(run, say)
         if launch:
             return Step("integrate", actions + [launch])
+        if st.get("review") and not any(t["role"] == "reviewer" for t in (run.state.get("tasks") or {}).values()):
+            launch = _start_review(run, say)  # nothing to merge: the reviews start at once
+            if launch:
+                actions.append(launch)
     st = run.state
     tasks = st.get("tasks") or {}
     if st.get("review"):
@@ -324,8 +337,9 @@ def _fetch_issues_ended(run: Run, base: str, failed: bool, reason: str, say: lis
         return
     why = reason or ("警告の一覧のファイルが最後まで書かれていません" if not failed else "理由なし")
     with run.update() as st:
-        st.setdefault("fetch", {})["issues_failures"] = st.get("fetch", {}).get("issues_failures", 0) + 1
-        _alert(st, None, "取得", f"警告の取得に失敗しました: {why}")
+        fetch = st.setdefault("fetch", {})
+        fetch["issues_failures"] = FETCH_TRIES if FATAL.search(why) else fetch.get("issues_failures", 0) + 1
+        _alert(st, None, "取得", f"警告の取得に失敗しました: {why}", "critical" if FATAL.search(why) else "warning")
     run.log("fetch-issues-failed", f"警告の取得に失敗した: {why}", level="warning")
     say.append(f"警告の取得に失敗しました（{why}）。")
 
@@ -346,6 +360,9 @@ def _plan(run: Run, say: list[str]) -> Step | None:
         issue["file"] = mapper.mapped(issue["file"], notes)
         cleaned.append(issue)
         mapped.append({**issue, "path_notes": notes})
+    limit = int(run.state.get("limit") or len(cleaned))
+    limited = bool(found.get("limited")) or len(cleaned) > limit
+    cleaned, mapped = cleaned[:limit], mapped[:limit]  # never more than the run's limit
     write_json(run.dir / "issues.mapped.json", mapped)
     items = build_work_items(cleaned, load_no_grouping(run.repo))
     notes = []
@@ -372,12 +389,12 @@ def _plan(run: Run, say: list[str]) -> Step | None:
         st["items"] = [new_item(i["id"], i["cids"], cluster=i["cluster"]) for i in items]
         st["planned"] = True
         st["found"] = len(cleaned)
-        st["limited"] = bool(found.get("limited"))
+        st["limited"] = limited
         st["latest_revision"] = latest
         st["analyzed_revision"] = str(analyzed) if analyzed else None
         st["revision_notes"] = notes
     groups = [i for i in items if i["id"].startswith("G")]
-    message = (f"警告が {len(cleaned)} 件見つかった" + ("（上限の件数で止めた）" if found.get("limited") else "")
+    message = (f"警告が {len(cleaned)} 件見つかった" + ("（上限の件数で止めた）" if limited else "")
                + f"。作業は {len(items)} 件（グループ {len(groups)} 件）")
     run.log("plan", message, issues=len(cleaned), items=len(items), groups=[g["id"] for g in groups],
             latest=latest, analyzed=analyzed)
@@ -444,8 +461,8 @@ def _details(run: Run, say: list[str], actions: list[dict[str, Any]]) -> Step | 
             path = run.item_dir(item["id"]) / f"issue-{cid}.json"
             if not path.is_file():
                 write_json(path, {"cid": cid, "stream": run.state["stream"], "fetched_at": now_iso(),
-                                  "error": "警告経路を取れませんでした" + ("（2 回試しました）" if not st.get("offline") else
-                                                                 "（取ってある警告経路のファイルがありません）")})
+                                  "error": "取ってある警告経路のファイルがありません" if st.get("offline")
+                                  else "2 回試しても取れませんでした"})
             if not _detail_ok(path):
                 unfetched.append(cid)
     with run.update() as s:
@@ -606,7 +623,8 @@ def _fill_slots(run: Run, say: list[str]) -> list[dict[str, Any]]:
     if st.get("copy_failed"):
         return []
     busy = {i["slot"] for i in st["items"] if i["status"] == "in_progress" and i.get("slot")}
-    free = [s for s in range(1, int(st.get("parallel") or 1) + 1) if s not in busy]
+    copying = {j["name"] for j in jobs.running(run.dir)}
+    free = [s for s in range(1, int(st.get("parallel") or 1) + 1) if s not in busy and f"copy-w{s}" not in copying]
     pending = [i["id"] for i in st["items"] if i["status"] == "pending"]
     if not free or not pending:
         return []
@@ -656,7 +674,7 @@ def _launch_worker(run: Run, item_id: str, problems: list[str] | None = None) ->
     with run.update() as st:
         run.item(item_id, st)["stage"] = "work"
     _add_task(run, f"worker:{item_id}", task, "worker", item_id, description)
-    run.log("launch", f"作業役に {description} を頼んだ", item=item_id, role="worker", task=task)
+    run.log("launch", f"作業役に「{description}」を頼んだ", item=item_id, role="worker", task=task)
     return {"type": "launch", "task": task, "role": "worker", "item": item_id, "description": description,
             "prompt": briefs.prompt(brief), "background": True}
 
@@ -746,7 +764,7 @@ def _launch_reviewer(run: Run, item_id: str, gen: int, round_: int, problems: li
         current["result_sha"] = file_sha(run.result_file(item_id))
         current["patch_sha"] = file_sha(Path(patch)) if patch else None
         current["fingerprint"] = _fingerprint(run)
-    run.log("launch", f"検証役に {description} を頼んだ", item=item_id, role="reviewer", task=task)
+    run.log("launch", f"検証役に「{description}」を頼んだ", item=item_id, role="reviewer", task=task)
     return {"type": "launch", "task": task, "role": "reviewer", "item": item_id, "description": description,
             "prompt": briefs.prompt(brief), "background": True}
 
@@ -835,7 +853,7 @@ def _launch_integrator(run: Run, found: list[dict[str, Any]], problems: list[str
     task = task_name("integrator", run.state.get("integration_gen") or 1, (run.state.get("integration_fix_rounds") or 0) + 1)
     description = "同じ原因の統合" + ("の直し" if problems else "")
     _add_task(run, "integrator", task, "integrator", None, description)
-    run.log("launch", f"統合役に {description} を頼んだ", role="integrator", task=task)
+    run.log("launch", f"統合役に「{description}」を頼んだ", role="integrator", task=task)
     return {"type": "launch", "task": task, "role": "integrator", "item": None, "description": description,
             "prompt": briefs.prompt(brief), "background": True}
 

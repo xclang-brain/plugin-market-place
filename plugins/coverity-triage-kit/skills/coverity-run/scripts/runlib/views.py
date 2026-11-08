@@ -217,6 +217,9 @@ def resume(run_dir: str) -> dict[str, Any]:
     if problems:
         raise RunError("設定に直すところがあります", problems=problems)
     running = {j["name"] for j in jobs.running(run.dir)}
+    for job in jobs.all_jobs(run.dir):  # what ended in the earlier session is not this session's to finish
+        if job["name"] not in running and not job.get("reaped"):
+            jobs.update(run.dir, job["name"], reaped=True)
     back = {"in_progress": 0, "error": 0}
     with run.update() as st:
         st["settings"] = values
@@ -234,6 +237,7 @@ def resume(run_dir: str) -> dict[str, Any]:
         st["finished"] = False
         st["finished_at"] = None
         st.pop("copy_failed", None)
+        st.pop("fatal", None)
         if not st.get("planned"):
             st.setdefault("fetch", {})["issues_failures"] = 0
         if st.get("verify_started") and not st.get("verified") and "verify" not in running:

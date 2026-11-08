@@ -9,6 +9,7 @@ things: approvals are chosen on a screen and kept in approvals.json. With the op
 from __future__ import annotations
 
 import html
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -219,8 +220,11 @@ def _event_list(events: list[dict[str, Any]]) -> str:
 
 
 def _rel(run: Run, path: str) -> str:
+    """A link from cid/<ID>.html to a file of the run folder (relative, so the folder can be moved)."""
     try:
-        return "../" + Path(path).resolve().relative_to(run.dir.resolve()).as_posix()
+        target = Path(path).resolve()
+        target.relative_to(run.dir.resolve())
+        return Path(os.path.relpath(target, (run.dir / "cid").resolve())).as_posix()
     except (ValueError, OSError):
         return Path(path).as_posix()
 
@@ -241,7 +245,7 @@ def render_item_html(run: Run, d: dict[str, Any]) -> str:
         if decision.get("edited"):
             badges.append(_badge("人が変更", "edited"))
     where = f"{main.get('file')}:{main.get('line') or '-'}" + (f" {main['function']}()" if main.get("function") else "")
-    body = ['<header class="head">', '<p class="crumbs"><a href="../summary.html">← 一覧</a></p>',
+    body = ['<header class="head">', f'<p class="crumbs"><a href="{_href(_rel(run, str(run.summary_file())))}">← 一覧</a></p>',
             f"<h1>{_e(title)}</h1>", f'<p class="where"><code>{_e(where)}</code></p>',
             '<div class="badges">' + "".join(badges) + "</div>", "</header>"]
     notes = []

@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 
-from support import RunCase, issue, result_json, review_json
+from support import RunCase, issue
 
 ISSUES = [issue(20001, line=6), issue(20002, checker="RESOURCE_LEAK", function="open_file", line=12),
           issue(20003, checker="INTEGER_OVERFLOW", function="parse", line=21),
@@ -97,7 +97,7 @@ class BasicFlowTest(RunCase):
                 return "fail"
             return self.work_as_worker(action)
 
-        out = self.drive(run_dir, ISSUES, worker=flaky)
+        out = self.drive(run_dir, ISSUES[:2], worker=flaky)
         self.assertTrue(out["done"])
         state = self.state(run_dir)
         failed = next(i for i in state["items"] if i["id"] == "20002")
@@ -112,7 +112,7 @@ class BasicFlowTest(RunCase):
 
         resumed = self.run_json("resume", "--run", run_dir)
         self.assertEqual(resumed["back_to_pending"]["error"], 1)
-        out = self.drive(run_dir, ISSUES)
+        out = self.drive(run_dir, ISSUES[:2])
         self.assertTrue(out["done"])
         self.assertEqual(next(i for i in self.state(run_dir)["items"] if i["id"] == "20002")["status"], "done")
 
@@ -126,7 +126,7 @@ class BasicFlowTest(RunCase):
                 return self.work_as_worker(action, comment="この警告は問題ないと思います。修正を推奨します。")
             return self.work_as_worker(action)
 
-        out = self.drive(run_dir, ISSUES, worker=bad_then_good)
+        out = self.drive(run_dir, ISSUES[:1], worker=bad_then_good)
         self.assertTrue(out["done"])
         self.assertIn("worker:20001@1#2", seen)
         brief = (Path(run_dir) / "items" / "20001" / "brief.md").read_text(encoding="utf-8")
@@ -141,7 +141,7 @@ class BasicFlowTest(RunCase):
                 return self.work_as_worker(action, comment="")
             return self.work_as_worker(action)
 
-        out = self.drive(run_dir, ISSUES, worker=always_bad)
+        out = self.drive(run_dir, ISSUES[:1], worker=always_bad)
         self.assertTrue(out["done"])
         item = next(i for i in self.state(run_dir)["items"] if i["id"] == "20001")
         self.assertEqual(item["status"], "error")
@@ -157,7 +157,7 @@ class BasicFlowTest(RunCase):
                 return self.work_as_worker(action, change=False)
             return self.work_as_worker(action)
 
-        self.assertTrue(self.drive(run_dir, ISSUES, worker=lazy)["done"])
+        self.assertTrue(self.drive(run_dir, ISSUES[1:2], worker=lazy)["done"])
         self.assertIn("worker:20002@1#2", tries)
         self.assertEqual(next(i for i in self.state(run_dir)["items"] if i["id"] == "20002")["status"], "done")
 
@@ -171,7 +171,7 @@ class GroupSplitTest(RunCase):
                 return self.work_as_worker(action, excluded=[20004])
             return self.work_as_worker(action)
 
-        self.assertTrue(self.drive(run_dir, ISSUES, worker=worker)["done"])
+        self.assertTrue(self.drive(run_dir, ISSUES[2:], worker=worker)["done"])
         state = self.state(run_dir)
         items = {i["id"]: i for i in state["items"]}
         self.assertEqual(items["G1"]["cids"], [20003])
@@ -240,11 +240,19 @@ class FetchFailureTest(RunCase):
     def test_two_failed_searches_stop_the_run(self) -> None:
         run_dir = self.new_run()["run_dir"]
         out = self.tick(run_dir)
-        out = self.tick(run_dir, "--failed", out["actions"][0]["task"], "--reason", "401")
+        out = self.tick(run_dir, "--failed", out["actions"][0]["task"], "--reason", "接続できませんでした")
         self.assertEqual(out["actions"][0]["task"], "fetch:issues@2")
-        out = self.tick(run_dir, "--failed", out["actions"][0]["task"], "--reason", "401")
+        out = self.tick(run_dir, "--failed", out["actions"][0]["task"], "--reason", "接続できませんでした")
         self.assertTrue(out["stop"])
         self.assertIn("error", out)
+
+    def test_authentication_failure_stops_at_once(self) -> None:
+        run_dir = self.new_run()["run_dir"]
+        out = self.tick(run_dir)
+        out = self.tick(run_dir, "--failed", out["actions"][0]["task"], "--reason", "HTTP 401: 認証に失敗しました")
+        self.assertTrue(out["stop"], out)
+        self.run_json("resume", "--run", run_dir)
+        self.assertEqual(self.tick(run_dir)["actions"][0]["type"], "fetch_issues")
 
     def test_paths_fetched_twice_then_the_work_goes_on(self) -> None:
         run_dir = self.new_run()["run_dir"]

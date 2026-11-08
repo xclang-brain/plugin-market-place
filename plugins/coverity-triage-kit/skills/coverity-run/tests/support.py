@@ -71,6 +71,7 @@ def runner() -> list[str]:
 
 def import_runlib() -> None:
     """Make ``import runlib`` work in the tests (the package of this skill's scripts)."""
+    sys.dont_write_bytecode = True  # no __pycache__ in the skill's folder
     if str(SCRIPTS) not in sys.path:
         sys.path.insert(0, str(SCRIPTS))
 
@@ -100,7 +101,7 @@ coverity:
 vcs:
   type: git
   base_branch: main
-output_dir: ../out
+output_dir: {parent}/out
 parallel: {parallel}
 options:
   markdown: {markdown}
@@ -146,7 +147,7 @@ class RunCase(unittest.TestCase):
         git(self.repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init", env=self.env)
 
     def write_config(self, **values: Any) -> None:
-        defaults = {"parallel": 2, "markdown": "false", "metrics": "false", "verify": "none", "initial": "false",
+        defaults = {"parent": os.pardir, "parallel": 2, "markdown": "false", "metrics": "false", "verify": "none", "initial": "false",
                     "build_command": '""', "review": "false", "integration": "false", "max_rework": 1}
         defaults.update(values)
         folder = self.repo / ".coverity-triage"

@@ -134,6 +134,7 @@ coverity-triage-kit/
 | Python | すべて `uv run --native-tls` で動かす（Python の版を uv がそろえる）。`--native-tls` は省かない（社内の証明書を使うため。uv 0.11 では `--system-certs` が新しい名前で、`--native-tls` は警告つきで使える。uv の最低の版を上げるときに、すべての部品で一緒に替える） |
 | 文字コード | 3.1 のとおり |
 | ファイル | UTF-8。BOM があっても読める。書くときは、一時ファイルに書いてから `os.replace`（Windows の PermissionError は少し待ってやり直す） |
+| 既定の置き場所 | `output_dir` の既定 `../coverity-triage-out` は取り決めの値なので、部品のフォルダに書いてよい（ほかの `../` は書かない） |
 | 長いパス | git は `core.longpaths=true`。作業用のコピーのフォルダの名前は短くする（`work/w<n>`）。パスが 240 文字を超えそうなら、output_dir を短くするよう伝えて止める |
 | 環境変数 | 認証情報は、Windows ではユーザーの環境変数（`HKCU\Environment`）も読む |
 
@@ -258,7 +259,8 @@ MCP サーバーの警告経路の取得を、`output_dir` を付けて呼んだ
 ```
 
 - 値：`judgement` は `true_bug` / `false_positive` / `intentional` / `undetermined`。`recommendation` は `fix` / `deviation`。`confidence` は `high` / `medium` / `low`。`revision_drift.status` は `none` / `detected` / `unknown`。
-- Classification・Action・Severity の組：誤検知 → False Positive / Ignore / Unspecified。意図的 → Intentional / Ignore / Unspecified。本物で直さない → Bug / Ignore / Major・Moderate・Minor。修正の案 → Bug / Fix Required / 警告の Impact に合わせた重さ。
+- Classification・Action・Severity の組：誤検知 → False Positive / Ignore / Unspecified。意図的 → Intentional / Ignore / Unspecified。本物で直さない → Bug / Ignore / Major・Moderate・Minor。修正の案 → Bug / Fix Required / 警告の Impact に合わせた重さ（High → Major、Medium → Moderate、Low → Minor、ほか → Unspecified）。組が違うときは、形の確かめで注意として示す（不合格にはしない）。
+- アノテーション（`options.annotation`）の文は、逸脱コメントをそのまま使う。誤検知は `/* coverity[<tag>:FALSE] <逸脱コメント> */`、それ以外は `/* coverity[<tag>] <逸脱コメント> */`。警告の行のすぐ上に入れる。
 - 決まった項目のほかを書かない。文字列は空にしない（`detail` と `note` は空でよい）。`deviation.comment` は前後に空白を入れず200文字以内。`group_excluded_cids` は、グループのときだけ、グループの CID の一部（全部は外さない）。
 - JSON Schema：結果の記録のスキルの `assets/result.schema.json`。一括実行に同じ写し（4.17）。
 
@@ -311,6 +313,7 @@ MCP サーバーの警告経路の取得を、`output_dir` を付けて呼んだ
 - `decision`：`fix`（修正）/ `deviation`（逸脱）/ `reject`（却下）/ `null`（反映しない）。既定は推奨（最新で直っていて差分がないものは `null`）。
 - `deviation` は、人が逸脱コメントなどを直したときだけある。AI は `approvals.json` を書き換えない。一括実行は、人の選択を変えない（ない鍵だけを足す）。
 - 終わった作業（`done`）のほかは承認できない。統合か確かめを使う実行では、一覧ができるまで承認できない。
+- 書くときは、`approvals.json.lock`（`<ファイル>.lock`。作るときに O_EXCL で作り、30秒より古いものは捨てる）を取る。読めない `approvals.json` は、上書きせず、直すよう伝える（人の選択を消さないため）。
 - JSON Schema：一括実行の `assets/approvals.schema.json`。画面と反映に同じ写し。
 
 ### 4.10 反映の計画 `apply-plan.json` と確認の文字列（反映が書き、MCP サーバーが読む）
@@ -340,7 +343,8 @@ items/<ID>/              brief.md、issue-<CID>.json、progress.json、result.js
 agents/                  検証と統合の指示（reviewer/<ID>.md、integrator/brief.md）と進み具合
 integration/             candidates.json、plan.json、merged.json
 analysis/                初回解析の記録（status.json、initial.log）
-jobs/                    切り離して動かす処理の記録（<名前>.json：pid、状態、始めた時刻）
+jobs/                    切り離して動かす処理の記録（<名前>.json：name、kind、status、pid、started、args。ログは <名前>.log）
+details/                 警告経路の取得の受け皿（50件ずつ取り、items/<ID>/ に写す）
 work/w<n>/               作業用のコピー（git worktree か svn checkout）。一覧を作るときに消す
 cid/<ID>.html            詳細レポート（オプションで .md も）
 summary.html             一覧（オプションで summary.md も）
@@ -351,13 +355,16 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 ```
 
 - `<ID>` は CID か、グループの `G1`、`G2`…。
-- `run.json` には `format: 2`（この形の版）と `tool_version`（一括実行のスクリプトの版）を入れる。`format` が違う実行フォルダ（元のプラグインのものなど）は、一覧に `foreign: true` で出し、続きからはしない。
+- `run.json` には `format: 2`（この形の版）と `tool_version`（一括実行のスクリプトの版。実行フォルダの形や意味を変えたときだけ上げる手書きの値）を入れる。`format` が違う実行フォルダ（元のプラグインのものなど）は、一覧に `foreign: true` で出し、続きからはしない。
 
 #### 4.11.1 実行フォルダを読む部品と、読む項目
 
 | ファイル | 書く | 読む部品 | 読む項目 |
 | --- | --- | --- | --- |
-| `run.json` | 一括実行 | 画面、反映、困ったとき、自己診断 | `format`、`run_id`、`repo_root`、`created_at`、`filter_name`、`review`、`integration`、`items[].{id, cids, status, merged_into, review, applied}`、`stopped` |
+| `run.json` | 一括実行 | 画面、反映、困ったとき、自己診断 | `format`、`tool_version`、`run_id`、`repo_root`、`created_at`、`filter_name`、`stream`、`stage`、`stopped`、`finished`、`review`、`integration`、`integrated`、`parallel`、`initial`、`items[].{id, cids, status, merged_into, review, started, seconds, attempts, review_rounds, slot, stage, error}` |
+| `jobs/<名前>.json` | 一括実行 | 画面 | `name`、`kind`、`status`、`pid`、`started`、`args.item` |
+| `agents/<役>/progress.json`、`agents/reviewer/<ID>.progress.json` | 検証役・統合役 | 画面 | 4.8 |
+| `apply-code.result.json` | 反映 | 反映、画面 | 反映の README（何を反映したか、確認の文字列ごとの結果、効果の記録） |
 | `items/<ID>/result.json` | 作業役 | 画面、反映、自己診断 | 4.5 のすべて |
 | `items/<ID>/review.json` | 検証役 | 画面 | 4.6 |
 | `items/<ID>/saved.json` | 一括実行 | 反映、画面 | `fix.{files, patch, branch, commit}`、`annotation.{…}` |
@@ -365,7 +372,7 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 | `approvals.json` | 一括実行・画面 | 反映、画面 | 4.9 |
 | `patches/`、`fixed/`、`cid/`、`summary.html` | 一括実行 | 画面、反映 | ファイルの有無と中身 |
 | `operations.log` | 一括実行 | 画面 | `time`、`event`、`level`、`item`、`message` |
-| `verify.json`、`metrics.json` | 一括実行 | 反映、画面 | 一括実行の README |
+| `verify.json` | 一括実行 | 反映、画面 | 一括実行の README |
 
 JSON Schema：一括実行の `assets/run.schema.json`（上の項目だけを決め、ほかは許す）。読む部品に同じ写し。
 
@@ -375,13 +382,13 @@ JSON Schema：一括実行の `assets/run.schema.json`（上の項目だけを�
 
 | コマンド | 使う部品 | 出力の主な項目 |
 | --- | --- | --- |
-| `settings --repo R` | 統括、エクステンション | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）と条件ファイルの名前の一覧、設定の問題。読むだけ |
+| `settings --repo R` | 統括、エクステンション | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）、条件ファイルの名前の一覧 `filters[]` と既定の `default_filter`、設定の問題 `problems[]`。読むだけ |
 | `runs --repo R` | 統括、エクステンション | `runs[{run_id, run_dir, created_at, filter_name, counts, unfinished, has_summary, foreign}]` |
 | `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N]` | 統括、エクステンション | `run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps` |
 | `resume --run D` | 統括 | `run_dir, counts` |
 | `tick --run D [--finished T] [--failed T --reason R] [--wait S]` | 統括 | 下の「tick の出力」 |
 | `status --run D` | 統括、エクステンション | 下の「status の出力」。読むだけで、鍵を取らない |
-| `summary --run D` | 統括、エクステンション | `summary_html, counts, approvals_counts, results[], unprocessed[], run_checks[], say[]` |
+| `summary --run D` | 統括、エクステンション | `summary_html, counts{warnings, items, groups, fix, deviation, low, error, unprocessed}, approvals_counts{fix, deviation, reject, none, changed}, results[{id, cids, checker, recommendation, confidence, judgement, summary, approval, detail}], unprocessed[{id, reason}], run_checks[], criteria[], criteria_results[], say[]`。終わった実行では何度動かしてもよい（作業用のコピーは、未処理の作業がないときだけ消す） |
 | `stop --run D` | 統括、エクステンション | 切り離した処理（初回解析・ビルド）を止め、`run.json` に `stopped` を書く。`stopped_jobs[]`、`unstopped[{name, pid, how}]` |
 | `note-issue --run D (--title T --body B \| --stdin)` | 統括 | `issues_found`（件数） |
 | `initial-status --run D` | 統括 | 初回解析の段と進み |
@@ -393,6 +400,8 @@ tick の決まり：
 - エージェントが終わるたびに、その出力を決まった確かめ（形、逸脱コメントの決まり、機械的な確かめ）にかけ、通らなければ直す点を書いて作り直しを頼む（作業の形の直しは2回まで）。確かめの指示ファイルには、スクリプトが見つけた点を書く（C-17）。
 - `review.json` は、その確かめの `launch` の後にできたものだけを受け付ける（前からあるものは消して、未検証にする）。
 - 時間のかかる処理（初回解析・ビルドでの検証・作業用のコピーの用意）は、`run.py` が切り離したプロセスで動かし、`jobs/` に pid と状態を書く。`tick` はその状態を見て進める。`--wait` は既定 20 秒、上限 25 秒。`command` の action は、20 秒以内に終わるものだけ。
+- 統合を使わないときは、作業の終わった警告から順に確かめを始める（作業がまだ動いていても）。統合を使うときは、統合の後に確かめる。
+- `command` の action は、今の一括実行は出さない（時間のかかる処理は jobs で動かす）。統括エージェントは、来たときのために扱い方を知っている。
 - `stop: true` は、続けられない（理由は `say` と `error`。認証の失敗、5xx、初回解析の失敗、output_dir がリポジトリの中、警告の取得の2回の失敗など）。`done: true` は、`summary` を動かす時。
 
 `actions` の形：
@@ -408,7 +417,7 @@ status の出力（画面のため。読むだけ）：
 
 ```json
 {"ok": true, "run_id": "…", "run_dir": "…", "repo_root": "…", "stage": "items", "stage_label": "警告ごとの作業",
- "finished": false, "stopped": false, "has_summary": false, "review": true, "integration": false, "max_rework": 1, "parallel": 3,
+ "finished": false, "stopped": false, "halted": false, "halt_reason": null, "has_summary": false, "review": true, "integration": false, "max_rework": 1, "parallel": 3,
  "counts": {"pending": 3, "in_progress": 2, "done": 5, "error": 0, "merged": 0, "total": 10},
  "items": [{"id": "20001", "cids": [20001], "checker": "NULL_RETURNS", "status": "done", "phase": "result",
             "note": "…", "elapsed_seconds": 312, "stalled": false, "preparing_copy": false, "attempts": 1, "rework_rounds": 0,
@@ -425,6 +434,7 @@ status の出力（画面のため。読むだけ）：
  "issues_found": [{"title": "…", "body": "…", "at": "ISO"}]}
 ```
 
+- `halted` は、tick が `stop: true` を返した（続けられない）とき真で、理由は `halt_reason`。
 - `stalled` は、10分（初回解析は30分）動きがない作業で真。修正用のコピーを用意している作業（`preparing_copy`）では偽。
 - `confidence` は、作業・確かめ・ビルドでの検証のいちばん低いもの（人に見せる確信度）。`result.json` は書き換えない。
 - `recent` は新しい順に10行まで。`run_checks` は一覧ができてから入る。
@@ -476,22 +486,30 @@ status の出力（画面のため。読むだけ）：
 
 ### 4.17 写しの一覧
 
-同じ取り決めを2つ以上の部品が持つもの（憲章 第25条5項）。持ち主の写しが正で、ほかは同じバイト列の写しにする。決まりをコードで持つものは、持ち主が共通の試験のデータ（`assets/contract/<名前>/cases.json`：入力と期待する答えの組）を持ち、写しの部品もそれを自分の試験で動かす。`tests/contracts/` が、写しが同じことと、書く部品の出力を読む部品が受け付けることを確かめる。
+同じ取り決めを2つ以上の部品が持つもの（憲章 第25条5項）。持ち主の写しが正で、ほかは**同じバイト列の写し**にする。
 
-| 取り決め | 持ち主 | 写しを持つ部品 | 確かめ方 |
-| --- | --- | --- | --- |
-| `result.schema.json` | 結果の記録 | 一括実行、結果と設定の画面 | 同じバイト列。`plan.schema.json` の中の定義とも同じ |
-| `review.schema.json`、`criteria.json` | 結果の確かめ | 一括実行 | 同じバイト列 |
-| `plan.schema.json` | 同じ原因の統合 | 一括実行 | 同じバイト列 |
-| 逸脱コメントの決まり（`contract/comment`） | 逸脱コメント | 結果の記録、一括実行 | 共通の試験のデータ |
-| 結果の決まり（`contract/result`。形のほかに、組・グループの CID） | 結果の記録 | 一括実行 | 共通の試験のデータ |
-| 機械的な確かめ（`contract/lint`） | 結果の確かめ | 一括実行 | 共通の試験のデータ |
-| 統合の計画の決まり（`contract/plan`） | 同じ原因の統合 | 一括実行 | 共通の試験のデータ |
-| 注釈を残す書き換え（`contract/yaml-edit`） | 準備 | 結果と設定の画面 | 共通の試験のデータ |
-| 確認の文字列（`contract/token`） | 反映 | MCP サーバー | 共通の試験のデータ |
-| `run.schema.json`、`approvals.schema.json` | 一括実行 | 反映、結果と設定の画面、困ったとき、自己診断 | 同じバイト列 |
-| Windows のユーザーの環境変数の読み方 | MCP サーバー | 準備、結果と設定の画面、困ったとき | 各部品の試験（Windows の CI） |
-| `issues.json`・`issue-<CID>.json` | MCP サーバー | 一括実行 | MCP サーバーの偽の Coverity で書いたファイルを、一括実行が読む（`tests/contracts/`） |
+- データ（JSON Schema、評価基準）は、ファイルをそのまま写す。
+- 決まりをコードで持つものは、持ち主のスクリプトのファイル（標準ライブラリか、写す側も持てるライブラリだけを使い、ほかのファイルを読み込まないもの）を、そのまま写す。写す側は、写しを読み込んで使い、自分で書き直さない。
+- 持ち主は、共通の試験のデータ（`assets/contract/<名前>/cases.json`：入力と期待する答えの組）も持ち、写しを持つ部品もそれを自分の試験で動かす。
+- `tests/contracts/` が、写しが同じバイト列であることと、書く部品の出力を読む部品が受け付けることを確かめる。持ち主を直したら、写しも同じに直す（手順は `docs/replace.md`）。
+
+| 取り決め | 持ち主（ファイル） | 写しを持つ部品 |
+| --- | --- | --- |
+| 結果の形 | 結果の記録（`assets/result.schema.json`） | 一括実行、同じ原因の統合、結果と設定の画面 |
+| 確かめの形と評価基準 | 結果の確かめ（`assets/review.schema.json`、`assets/criteria.json`） | 一括実行 |
+| 統合の計画の形 | 同じ原因の統合（`assets/plan.schema.json`。中の result の定義は `result.schema.json` の `$defs` と同じ） | 一括実行 |
+| 逸脱コメントの決まり | 逸脱コメント（`scripts/check_comment.py`、`contract/comment`） | 結果の記録、同じ原因の統合、一括実行 |
+| 結果の決まり | 結果の記録（`scripts/check_result.py`、`contract/result`） | 一括実行 |
+| 確かめの決まり | 結果の確かめ（`scripts/check_review.py`）、機械的な確かめ（`scripts/lint_result.py`、`contract/lint`） | 一括実行 |
+| 統合の計画の決まり | 同じ原因の統合（`scripts/check_plan.py`、`contract/plan`） | 一括実行 |
+| 人に見せる確信度 | 一括実行（`contract/confidence`：作業・確かめ・ビルドでの検証から、いちばん低いもの） | 反映、結果と設定の画面 |
+| 注釈を残す書き換え | 準備（`scripts/yamledit.py`、`contract/yaml-edit`） | 結果と設定の画面 |
+| 確認の文字列 | 反映（`scripts/plantoken.py`、`contract/token`） | MCP サーバー |
+| 実行フォルダと承認の形 | 一括実行（`assets/run.schema.json`、`assets/approvals.schema.json`） | 反映、結果と設定の画面、自己診断（困ったときは `run.schema.json` だけ） |
+| `issues.json`・`issue-<CID>.json` | MCP サーバー | 一括実行、真偽の調査（読むだけ） |
+
+- Windows のユーザーの環境変数の読み方は、MCP サーバー・準備・一括実行・結果と設定の画面・困ったときが、それぞれ持つ（写しではない。各部品の試験と Windows の CI で確かめる）。
+- 写しのファイルは、持ち主と同じ名前で、スクリプトは写す側の `scripts/`（MCP サーバーはパッケージ `src/coverity_mcp/`）、データは `assets/` に置く（スクリプトは自分のフォルダの `assets/` を `Path(__file__).parents[1]` で探すので、同じ場所に置けば同じに動く）。人に見せる確信度の決まりは、一括実行が `scripts/confidence.py` に持つ。
 
 ## 5. MCP サーバー（Coverity との通信）
 
@@ -565,7 +583,7 @@ status の出力（画面のため。読むだけ）：
    3. 統括エージェントを、4.15 の頼みの文で始める（`rpc.tasks.startAgent`、バックグラウンド）。
 3. 実行中は、`run.py status` を、前の呼び出しが終わってから次を呼ぶ（重ねない）。状態が変わっているあいだは2秒ごと、変わらないときと画面が見られていないときは5秒ごと。10秒で打ち切り、プロセスの木を止める。Copilot CLI のイベントから、エージェントの状態・確認の待ち・課題を作る。
 4. 統括エージェントが、`status.finished` が偽のまま止まったら（止めるボタンのときを除く）、同じ実行フォルダで、続きからの頼みの文で始め直す（2回まで。REQ-415）。
-5. 統括エージェントが終わったら、`summary`（一覧がなければエクステンションが動かす）と `status` から、結果の画面を作る。結果と設定の画面へのリンクは、4.16 のコマンドを `--no-browser` で動かして作る。
+5. 統括エージェントが終わり、実行が終わっていれば（`finished`）、`summary` を動かして、その出力と `status` から結果の画面を作る（一覧は作り直されるが、中身は同じ）。止めた実行と途中で終わった実行では `summary` を動かさず（作業用のコピーを残し、続きからできるように）、`status` から作る。結果と設定の画面へのリンクは、4.16 のコマンドを `--no-browser` で動かして作る。
 6. 課題は、イベントから機械的に分かるものと、`status.issues_found`（統括エージェントが書いたもの）から作る。止めた実行と途中で終わった実行では、機械的に分かるものだけ。
 
 ### 8.2 見せ方
@@ -614,11 +632,14 @@ status の出力（画面のため。読むだけ）：
  "guiCommand": "skills/coverity-gui/scripts/gui.py",
  "applySkill": "coverity-apply", "setupSkill": "coverity-setup",
  "pluginSkills": ["coverity-triage-screen", "coverity-help", "coverity-selftest"],
+ "coverityReadTools": ["coverity-connect/coverity_check_connection", "coverity-connect/coverity_search_issues",
+                       "coverity-connect/coverity_get_issue_details", "coverity-connect/coverity_preview_triage"],
  "port": 8731, "issueRepo": "xclang-brain/plugin-market-place"}
 ```
 
 - `roles` と `orchestrator` の `:` の後ろは、統括エージェントの「使う部品」の表の名前と同じ（`tests/contracts/` で確かめる）。
 - コマンドの場所は、プラグインのフォルダからの相対パス。
+- `coverityReadTools` は、守り（8.3）で統括エージェントに許す、Coverity との通信の読むツール。
 - Issue の起票先は `issueRepo`。起票には `gh` とログインが要る。起票できないときは、案を並べ、手順（`gh` を入れて `gh auth login`、起票先のリポジトリに書き込めること）を示す。
 
 ## 9. 試験
@@ -653,6 +674,7 @@ status の出力（画面のため。読むだけ）：
 - エージェントの定義は、試験の道具（`tests/eval/claude_adapter.py`）が Claude Code の形に置き換える。tools の読み替え：read → Read・Glob・Grep、search → Grep・Glob、edit → Edit・Write、execute → Bash、agent → Agent、skill → Skill、ask_user → AskUserQuestion、`<登録名>/<ツール>` → `mcp__<登録名>__<ツール>`。frontmatter に `skills:`（表のスキル）を足す。本文は変えず、先頭に読み替えの1段落を足す。
 - 動かし方：`claude -p --agent <名前> --agents <変換した JSON> --mcp-config <EVAL の mcp.json> --strict-mcp-config --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run:*)" "mcp__coverity-connect__*" --add-dir <output_dir>`。`--add-dir` は Copilot CLI の `/add-dir` の代わり。
 - Claude Code のサブエージェントは、さらにサブエージェントを呼べないので、3段階目は統括エージェントをメイン（`--agent`）にする。
+- Claude Code 2.1.319 の既定のツールには Glob と Grep がないので、`--tools` に、使うエージェントの組み込みのツールを合わせたものを渡す。エージェントのツールは、始まりの記録では `Task` と出る。`claude -p` では AskUserQuestion は出ない。Claude Code の中から動かすときは、環境変数 `CLAUDECODE` を外す。
 - Claude Code で再現しないもの：ask_user がサブエージェントにないこと（`claude -p` ではメインにもない）、`agents/` の `.md` の読み込み、エクステンション、モデルの名前、Copilot CLI の許可の確認。これらは 9.4。
 
 ### 9.4 Copilot CLI で実測すること

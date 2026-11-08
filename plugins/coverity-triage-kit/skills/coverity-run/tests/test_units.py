@@ -271,7 +271,7 @@ class ConfigTest(unittest.TestCase):
                                                 "vcs": {"base_branch": None}, "output_dir": "", "future": {"x": 1}})
         self.assertEqual(problems, [])
         self.assertEqual(values["coverity"]["url"], "https://c.example")
-        self.assertEqual(values["output_dir"], "../coverity-triage-out")
+        self.assertEqual(values["output_dir"], config.DEFAULT_OUTPUT_DIR)
         self.assertEqual(values["parallel"], 3)
         self.assertEqual(values["agents"]["max_rework"], 1)
         self.assertEqual(values["verify"]["cov_analyze_args"], "--dir idir --all")

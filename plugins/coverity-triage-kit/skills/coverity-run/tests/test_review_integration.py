@@ -214,5 +214,42 @@ class IntegrationTest(RunCase):
         self.assertTrue(any("同じ箇所" in w for w in items["20001"]["warnings"]))
 
 
+
+class AllOptionsTest(RunCase):
+    """Integration, review, build verification and markdown together: every stage in its order."""
+
+    def test_every_stage(self) -> None:
+        import sys
+
+        script = self.tmp / "build.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        self.write_config(integration="true", review="true", verify="build", markdown="true", parallel=3,
+                          build_command=json.dumps(f'"{sys.executable}" "{script}"'))
+        run_dir = self.new_run()["run_dir"]
+        stages: list[str] = []
+        original = self.tick
+
+        def tick(run_dir_, *extra, wait=10):
+            out = original(run_dir_, *extra, wait=wait)
+            if not stages or stages[-1] != out["stage"]:
+                stages.append(out["stage"])
+            return out
+
+        self.tick = tick
+        out = self.drive(run_dir, ISSUES, integrator=IntegrationTest.plan_writer(self, run_dir, "combine"))
+        self.assertTrue(out["done"], out)
+        self.assertEqual(stages[:3], ["fetch", "details", "items"])
+        self.assertLess(stages.index("integrate"), stages.index("review"))  # the reviews wait for the integration
+        self.assertEqual(stages[-1], "done")
+        state = self.state(run_dir)
+        self.assertTrue(state["verified"])  # the build verification ran after the reviews
+        self.assertTrue(json.loads((Path(run_dir) / "verify.json").read_text(encoding="utf-8"))["G1"]["build_ok"])
+        g1 = next(i for i in state["items"] if i["id"] == "G1")
+        self.assertEqual((g1["status"], g1["review"]), ("done", "pass"))
+        summary = self.run_json("summary", "--run", run_dir)
+        self.assertTrue(all(c["ok"] is not False for c in summary["run_checks"]), summary["run_checks"])
+        self.assertTrue((Path(run_dir) / "cid" / "G1.md").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
