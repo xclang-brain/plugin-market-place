@@ -1,0 +1,7 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "coverity-triage-kit",
+  "version": "0.1.0",
+  "description": "Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作るプラグイン（C / C++、標準・MISRA・CERT）。スキルや MCP サーバー1つ、作業エージェント1つ、一括のトリアージ、Web管理画面つき、の4つの段階で使える。",
+  "license": "MIT"
+}

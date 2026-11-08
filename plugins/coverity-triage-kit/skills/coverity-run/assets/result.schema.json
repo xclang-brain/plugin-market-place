@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "result.schema.json",
+  "title": "1件の警告のトリアージの結果（result.json）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["item", "verdict", "recommendation", "confidence", "confidence_reason", "deviation", "fix", "revision_drift"],
+  "properties": {
+    "item": {"$ref": "#/$defs/text", "description": "作業の ID（CID か G1 などのグループの ID）"},
+    "verdict": {"$ref": "#/$defs/verdict"},
+    "recommendation": {"$ref": "#/$defs/recommendation"},
+    "confidence": {"$ref": "#/$defs/confidence"},
+    "confidence_reason": {"$ref": "#/$defs/text"},
+    "deviation": {"$ref": "#/$defs/deviation"},
+    "fix": {"$ref": "#/$defs/fix"},
+    "revision_drift": {"$ref": "#/$defs/revision_drift"},
+    "group_excluded_cids": {"type": "array", "items": {"type": "integer"}, "description": "グループの中で、同じ理由に当たらず外した CID（グループのときだけ）"}
+  },
+  "$defs": {
+    "text": {"type": "string", "pattern": "\\S", "description": "空白だけでない文字列"},
+    "recommendation": {"enum": ["fix", "deviation"]},
+    "confidence": {"enum": ["high", "medium", "low"]},
+    "evidence": {
+      "type": "object", "additionalProperties": false, "required": ["file"],
+      "properties": {
+        "file": {"$ref": "#/$defs/text", "description": "リポジトリからのパス"},
+        "line": {"type": ["integer", "null"], "minimum": 1},
+        "note": {"type": "string"}
+      }
+    },
+    "verdict": {
+      "type": "object", "additionalProperties": false, "required": ["judgement", "summary", "rationale"],
+      "properties": {
+        "judgement": {"enum": ["false_positive", "true_bug", "intentional", "undetermined"]},
+        "summary": {"$ref": "#/$defs/text", "description": "40文字ほどの要約"},
+        "rationale": {"$ref": "#/$defs/text"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "deviation": {
+      "type": "object", "additionalProperties": false, "required": ["classification", "action", "comment"],
+      "properties": {
+        "classification": {"$ref": "#/$defs/text"},
+        "action": {"$ref": "#/$defs/text"},
+        "severity": {"type": "string", "default": "Unspecified"},
+        "comment": {"$ref": "#/$defs/text", "maxLength": 200, "description": "逸脱コメント（前後の空白を除いて200文字以内）"}
+      }
+    },
+    "fix": {
+      "type": "object", "additionalProperties": false, "required": ["classification", "action", "summary", "impact"],
+      "properties": {
+        "classification": {"$ref": "#/$defs/text"},
+        "action": {"$ref": "#/$defs/text"},
+        "severity": {"type": "string", "default": "Unspecified"},
+        "summary": {"$ref": "#/$defs/text"},
+        "impact": {"$ref": "#/$defs/text"},
+        "exceeded_constraints": {"type": "array", "items": {"type": "string"}},
+        "already_fixed_on_latest": {"type": "boolean", "default": false}
+      }
+    },
+    "revision_drift": {
+      "type": "object", "additionalProperties": false, "required": ["status"],
+      "properties": {
+        "status": {"enum": ["none", "detected", "unknown"]},
+        "detail": {"type": "string"}
+      }
+    }
+  }
+}
