@@ -9,7 +9,7 @@ Coverity の警告を「直さない」ときに登録する逸脱コメント�
 
 - 「誤検知。」「意図的。」「本物の不具合。」のどれかで始め、判定区分のあと1〜2文、200文字以内。前後に空白を入れない。
 - 理由 → コードの場所（ファイルと行）の順に、条件を付けずに言い切る。
-- 条件・但し書き（「ただし」「〜の場合に限る」）、推量（「おそらく」）、調べた過程、推奨や依頼（「修正を推奨」「確認してください」）を書かない。
+- 条件・前提・但し書き（「ただし」「〜の場合は」「〜の間だけ」「この判断の前提」）、推量（「おそらく」）、調べた過程、推奨・依頼・指示（「修正を推奨」「確認してください」「見直すこと。」）を書かない。
 - 言い切れないときは、推奨を修正にする。本物の不具合でも、今は実行されないことをコードで示せるときは、その事実をそのまま書く（例「本物の不具合。v1 形式の読み込みは今の製品では無効（include/features.h:31）で、この処理は実行されない。」）。
 
 ## 必要なもの
@@ -55,7 +55,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/check_comment.py" --co
 
 ```json
 {"ok": false, "error": "逸脱コメントに直すところがあります", "length": 51,
- "problems": [{"code": "condition_words", "message": "条件・但し書き・推量の言い方（「ただし」）があります。…"}]}
+ "problems": [{"code": "condition_words", "message": "条件・前提・但し書き・推量の言い方（「ただし」）があります。…"}]}
 ```
 
 | 項目 | 意味 |
@@ -64,7 +64,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/check_comment.py" --co
 | `length` | 前後の空白を除いた文字の数 |
 | `problems` | 直すところ。`code` は種類、`message` は直し方 |
 
-`code` の種類：`empty`（空）、`surrounding_whitespace`（前後の空白）、`too_long`（200文字を超える）、`no_category`（判定区分で始まらない）、`no_reason`（理由がない）、`too_many_sentences`（3文以上）、`line_break`（改行）、`markdown`（見出し・箇条書き・書式）、`condition_words`（条件・但し書き・推量）、`process_words`（調べた過程）、`request_words`（推奨・依頼）、`bad_input`（渡し方の誤り）。
+`code` の種類：`empty`（空）、`surrounding_whitespace`（前後の空白）、`too_long`（200文字を超える）、`no_category`（判定区分で始まらない）、`no_reason`（理由がない）、`too_many_sentences`（3文以上）、`line_break`（改行）、`markdown`（見出し・箇条書き・書式）、`condition_words`（条件・前提・但し書き・推量）、`process_words`（調べた過程）、`request_words`（推奨・依頼・見直しなどの指示。「〜こと。」で終わる文も）、`bad_input`（渡し方の誤り）。
 
 この決まりは、ほかの部品と共有する取り決めです。試験のデータは `assets/contract/comment/cases.json`（入力のコメントと、合うかどうかの組）にあります。
 
@@ -74,7 +74,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/check_comment.py" --co
 | --- | --- |
 | `uv` が見つからない | uv を入れます（Windows は `winget install --id=astral-sh.uv -e`）。スクリプトを使わずに、SKILL.md の確かめる点を見て進めることもできます |
 | 日本語が文字化けする | 新しい版の PowerShell を使うか、`PYTHONIOENCODING=utf-8` を付けて動かします |
-| 正しいはずの文が `condition_words` で通らない | 書かれた言い方（「に対して」など）を、条件に読めない言い方に直します。決まりは曲げません |
+| 正しいはずの文が `condition_words` で通らない | 書かれた言い方（「に対して」「〜の場合は」など）を、条件に読めない言い方に直します（例「失敗した場合は -1 を返す」→「失敗すると -1 を返す」）。決まりは曲げません |
 
 ## テストの動かし方
 

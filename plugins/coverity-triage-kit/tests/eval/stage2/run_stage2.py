@@ -62,7 +62,9 @@ SOURCE_EXT = r"(?:c|h|cc|cpp|cxx|hpp|hh|hxx|inc)"
 EVIDENCE_RE = re.compile(r"(?P<path>[A-Za-z0-9_./\\-]+\." + SOURCE_EXT + r")\s*[:：]\s*L?(?P<line>\d+)"
                          r"(?:\s*[-–〜~]\s*L?(?P<end>\d+))?")
 _LABEL_ALT = "|".join(LABELS)
-LABEL_LINE_RE = re.compile(r"^\s*(?:[-*>#]+\s*)?(?:\*\*)?(" + _LABEL_ALT + r")(?:\*\*)?\s*[：:]\s*(?:\*\*)?\s*(.*)$")
+# 見出しの後ろに括弧の補足が付くことがある（例「修正案（差分。まだ適用していません）：」）
+LABEL_NOTE = r"(?:\s*[（(][^）)\n]{0,40}[）)])?"
+LABEL_LINE_RE = re.compile(r"^\s*(?:[-*>#]+\s*)?(?:\*\*)?(" + _LABEL_ALT + r")(?:\*\*)?" + LABEL_NOTE + r"(?:\*\*)?\s*[：:]\s*(?:\*\*)?\s*(.*)$")
 LABEL_ROW_RE = re.compile(r"^\s*\|\s*(?:\*\*)?(" + _LABEL_ALT + r")(?:\*\*)?\s*\|\s*(.*?)\s*\|?\s*$")
 ONE_LINE_RE = re.compile(r"^(?P<id>[A-Za-z0-9]+)\s*[:：]\s*(?P<rec>修正|逸脱)(?:を推奨)?\s*[（(]\s*確信度\s*(?P<conf>高|中|低)\s*[）)]"
                          r"\s*[—―–\-ー]+\s*(?P<summary>\S.*)$")
@@ -136,6 +138,10 @@ def comment_of(section: str) -> str | None:
         if not line or line.startswith("```"):
             continue
         line = re.split(r"[（(]\s*Classification", line, maxsplit=1)[0]
+        # 「…」の後ろに補足が付くことがある（例「…」（98 字、確認スクリプトで ok））
+        quoted = re.match(r"^\s*(?:[-*>]\s*)?(?:\*\*)?[「『](.+?)[」』]", line)
+        if quoted:
+            return quoted.group(1).strip()
         line = strip_markup(line)
         if line:
             return line
@@ -323,7 +329,9 @@ def brief_checks(case: dict, ctx: dict, run: dict, summary: dict) -> tuple[list[
     checks = [finished_check(run, summary)]
     reply = one_line_reply(ek.final_text(summary))
     checks.append(ek.check("one_line_reply", reply["match"] and reply["lines"] == 1 and reply.get("id") == item,
-                           f"{reply['lines']} 行: {reply['text'][:160]}"))
+                           f"{reply['lines']} 行: {reply['text'][:160]}",
+                           # 一括実行は返事ではなく結果のファイルで判断するので、返事の形は「読むべき」にとどめる
+                           level="should"))
     result = ek.read_json(result_file) if result_file.is_file() else None
     if not isinstance(result, dict):
         checks.append(ek.check("result_written", False, f"結果ファイルがないか、JSON ではありません: {result_file}"))

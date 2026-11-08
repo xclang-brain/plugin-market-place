@@ -496,6 +496,132 @@
       "expect": {
         "ok": true
       }
+    },
+    {
+      "name": "precondition_and_review_instruction_fails",
+      "input": {
+        "comment": "誤検知。send_all()（src/net.c:18）が len が 0 の呼び出しを除くため範囲外を読まない。この判断の前提は呼び出し元が1つであることで、呼び出し元を変えたら見直すこと。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "zentei_label_fails",
+      "input": {
+        "comment": "本物の不具合。この判断の前提: legacy_export は無効（src/config.c:12）で、src/export.c:18 の strcpy は実行されない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "zentei_without_wo_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元は read_all()（src/io/reader.c:120）だけという前提で、NULL は渡されない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "minaosu_without_koto_fails",
+      "input": {
+        "comment": "誤検知。index は parse_header()（src/reader.c:55）で 0〜7 に制限している。呼び出し元を足すときは、この判断を見直す。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "instruction_koto_end_fails",
+      "input": {
+        "comment": "本物の不具合。legacy_export は無効（src/config.c:12）で、src/export.c:18 の strcpy は実行されない。有効にする前に直すこと。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "instruction_koto_without_period_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元 init()（src/a.c:10）で NULL を除いている。呼び出し元を足すときは len の確認をこの関数に入れること"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "suru_baai_wa_fails",
+      "input": {
+        "comment": "本物の不具合。legacy_export を有効にする場合は src/export.c:18 の strcpy が実行される（src/config.c:12）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "noun_no_baai_niwa_fails",
+      "input": {
+        "comment": "誤検知。呼び出し元が増えた場合には、NULL が渡ることがある（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "aida_dake_fails",
+      "input": {
+        "comment": "本物の不具合。legacy_export が無効（src/config.c:12）である間だけ、src/export.c:18 の strcpy は実行されない。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "aida_nomi_fails",
+      "input": {
+        "comment": "誤検知。初期化が済むまでの間のみ、buf は NULL のまま使われない（src/a.c:10）。"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "koto_ga_nai_end_passes",
+      "input": {
+        "comment": "誤検知。index は parse_header()（src/reader.c:55〜60）で 0〜7 に制限しており、配列の外を読むことがない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "quoted_code_comment_with_koto_passes",
+      "input": {
+        "comment": "意図的。レジスタを書く順は決まっており、src/hal/reg.c:40 のコメント「REG_A のあとに REG_B を書くこと。」のとおりに書いている。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "baai_no_shori_passes",
+      "input": {
+        "comment": "誤検知。fopen が失敗した場合の処理は read_config()（src/config.c:20）にあり、fp を NULL のまま使うことはない。"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "aida_ni_passes",
+      "input": {
+        "comment": "意図的。wdt_force_reset()（src/fatal.c:9）のあと、止まるまでの間にウォッチドッグが再起動するため、fatal() から戻ることはない。"
+      },
+      "expect": {
+        "ok": true
+      }
     }
   ]
 }

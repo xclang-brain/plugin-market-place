@@ -30,9 +30,12 @@ import sys
 # --- comment rules (contract: comment) -------------------------------------------------------
 COMMENT_MAX = 200  # characters (Unicode code points) after strip; same limit as result.schema.json
 CATEGORIES = ("誤検知。", "意図的。", "本物の不具合。")
-# Conditions and caveats: the comment must say the warning is harmless in every situation.
+# Conditions, caveats and preconditions: the comment must say the warning is harmless in every situation.
+# 「〜場合は」「〜場合には」 open a condition whatever comes before them (「した場合は」「する場合は」「NULL の場合は」);
+# a fact about the code is written without them (「失敗すると -1 を返す」). 「前提」 in any form is a precondition, and
+# 「〜の間だけ」「〜の間のみ」 limit the verdict to a time. 「場合の処理」「その間に」 are not caught.
 CONDITION_WORDS = ("ただし", "但し", "場合に限", "場合のみ", "に限り", "に限って", "に限る",
-                   "た場合は", "た場合には", "た場合のみ", "に対して", "を前提", "仮に")
+                   "場合は", "場合には", "に対して", "前提", "間だけ", "間のみ", "仮に")
 # Guesses: the comment states facts read in the code, not likelihoods: adverbs of guessing, the writer's
 # 「〜と思う」「〜と考える」 (also 「〜とは思えない」「〜とは考えにくい」), 「〜だろう」「〜でしょう」, 「〜と推測・推定する」.
 # Kept narrow on purpose: 「戻ると考えて警告する」「とみなす」「推測しない」 describe what the tool does and are fine.
@@ -43,9 +46,12 @@ HEDGE_WORDS = ("おそらく", "恐らく", "たぶん", "多分", "かもしれ
 # How it was investigated, or what could not be checked (belongs to the rationale).
 PROCESS_WORDS = ("分からなかった", "確認できなかった", "確かめられなかった", "追えなかった", "追いきれ",
                  "調べきれ", "再解析", "解析したリビジョン")
-# Requests to people and recommendations.
+# Requests to people, recommendations and review instructions (「見直す」「見直し」 in any form).
 REQUEST_WORDS = ("ください", "下さい", "お願い", "てほしい", "て欲しい", "要確認", "確認が必要",
-                 "確認する必要", "すべき", "べきである", "が望ましい")
+                 "確認する必要", "すべき", "べきである", "が望ましい", "見直")
+# A sentence that ends in 「〜こと」 is an instruction (「直すこと。」「入れないこと。」). Only sentence ends outside
+# brackets count, so a code comment quoted in 「」 or （） is not read as one; 「〜ことはない。」 does not end in こと.
+INSTRUCTION_END = "こと"
 # 「推奨」 only as a recommendation; 「推奨値」「推奨範囲」 (a noun follows) are fine.
 RECOMMEND_PATTERNS = (("を推奨", re.compile(r"を推奨(?![々一-鿿゠-ヿ])")),
                       ("推奨します", re.compile(r"推奨します")),
@@ -58,9 +64,11 @@ _BOLD = re.compile(r"\*\*[^*\s](?:[^*]*[^*\s])?\*\*")
 _LINK = re.compile(r"\[[^\]\n]+\]\([^)\s]+\)")
 
 
-def _count_sentences(body: str) -> int:
-    """Sentences end with 。！？ outside brackets and quotes; a last sentence may lack the end mark."""
-    depth, count, has_text = 0, 0, False
+def _sentences(body: str) -> list[str]:
+    """Sentences end with 。！？ outside brackets and quotes; a last sentence may lack the end mark.
+
+    Returns the text of each sentence without its end mark."""
+    depth, sentences, current, has_text = 0, [], [], False
     for ch in body:
         if ch in _OPENERS:
             depth += 1
@@ -70,11 +78,19 @@ def _count_sentences(body: str) -> int:
             has_text = True
         elif ch in _SENTENCE_ENDS and depth == 0:
             if has_text:
-                count += 1
-            has_text = False
+                sentences.append("".join(current).strip())
+            current, has_text = [], False
+            continue
         elif not ch.isspace():
             has_text = True
-    return count + (1 if has_text else 0)
+        current.append(ch)
+    if has_text:
+        sentences.append("".join(current).strip())
+    return sentences
+
+
+def _count_sentences(body: str) -> int:
+    return len(_sentences(body))
 
 
 def _has_markup(text: str) -> bool:
@@ -104,7 +120,8 @@ def check_comment(comment: str) -> dict:
     if category is None:
         add("no_category", "「誤検知。」「意図的。」「本物の不具合。」のどれかで始めてください")
     body = text[len(category):] if category else text
-    sentences = _count_sentences(body)
+    sentence_texts = _sentences(body)
+    sentences = len(sentence_texts)
     if category and sentences == 0:
         add("no_reason", "判定区分のあとに、問題にならない理由と根拠の場所（ファイルと行）を書いてください")
     elif sentences > 2:
@@ -115,7 +132,7 @@ def check_comment(comment: str) -> dict:
         add("markdown", "見出し・箇条書き・` や ** などの書式を使わず、ふつうの文で書いてください")
     found = [w for w in CONDITION_WORDS + HEDGE_WORDS if w in text]
     if found:
-        add("condition_words", "条件・但し書き・推量の言い方（%s）があります。どんな状況でも問題にならないことを、"
+        add("condition_words", "条件・前提・但し書き・推量の言い方（%s）があります。どんな状況でも問題にならないことを、"
                                "条件を付けずに言い切ります。言い切れないときは、推奨を修正にします"
             % "、".join(f"「{w}」" for w in found))
     found = [w for w in PROCESS_WORDS if w in text]
@@ -124,9 +141,12 @@ def check_comment(comment: str) -> dict:
                              "逸脱コメントには問題にならない理由だけを書きます" % "、".join(f"「{w}」" for w in found))
     found = [w for w, pattern in RECOMMEND_PATTERNS if pattern.search(text)]
     found += [w for w in REQUEST_WORDS if w in text]
-    if found:
-        add("request_words", "推奨や人への依頼の言い方（%s）があります。逸脱コメントには、問題にならない理由だけを書きます"
-            % "、".join(f"「{w}」" for w in found))
+    labels = [f"「{w}」" for w in found]
+    if any(s.endswith(INSTRUCTION_END) for s in sentence_texts):
+        labels.append(f"文の終わりの「〜{INSTRUCTION_END}」")
+    if labels:
+        add("request_words", "推奨・人への依頼・見直しなどの指示の言い方（%s）があります。逸脱コメントには、"
+                             "問題にならない理由だけを書きます" % "、".join(labels))
     return {"ok": not problems, "length": length, "problems": problems}
 # --- end of comment rules --------------------------------------------------------------------
 
