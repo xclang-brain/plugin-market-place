@@ -28,7 +28,7 @@
     <answer>CERT EXP33-C</answer>
   </qa_pair>
   <qa_pair>
-    <question>ストリーム app-main の最新のスナップショットで、警告がいちばん多く出ているファイルはどれですか（Status が Dismissed の警告も数えます）。Coverity のパスのまま答えてください。</question>
+    <question>ストリーム app-main の最新のスナップショットで、警告がいちばん多く出ているファイルはどれですか（Status が Dismissed の警告も数えます）。Coverity のパスのまま、パスだけを答えてください。</question>
     <answer>src/net/socket.c</answer>
   </qa_pair>
   <qa_pair>
