@@ -112,9 +112,11 @@
           "default": "Unspecified"
         },
         "comment": {
-          "$ref": "#/$defs/text",
           "maxLength": 200,
-          "description": "逸脱コメント（前後の空白を除いて200文字以内）"
+          "description": "逸脱コメント。前後に空白を入れず、200文字以内",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
         }
       }
     },
