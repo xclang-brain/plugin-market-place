@@ -268,6 +268,7 @@ Web管理画面で替えたときは、替えた作業エージェントの準�
 | スキル | `skills/<スキル名>/tests/` | スクリプトの振る舞い。フォルダだけをコピーしても、`python -m unittest discover -s tests` で動く |
 | 独立性 | `tests/independence/` | 段階をまたぐ依存がない。スキルのフォルダが 3.4 の決まりを守る。スキルのフォルダ1つだけをコピーしても、そのスキルのテストが通る（データの置き場所などは、各スキルのテストで確かめる）。上の段の文書に下の段の中身がない（3.7）。スキルの一覧は `skills/` の下のフォルダから、作業エージェントは `defaults.json` から、設定のスキルと作業のスキルは「使うスキル」の表から読む（テストに部品の名前を書かない） |
 | エクステンション | `tests/extension/` | 模擬のセッションで、ツール・開始・イベント・停止・API・`onPreToolUse` の拒否。模擬の DOM で、画面（`app.js`）。3段階目の独立性（作業の中身を参照せず、`defaults.json` の作業エージェントの名前を置き換えても動く） |
+| EVAL | `tests/eval/` | 実際のモデルで、答えの決まった不具合の課題を解かせ、合否の基準（`eval.json`）で採点する。模擬の機器（`tests/eval/device_sim.py`：FTP と bash のコンソール）を起動して流す。AI クレジットを使うので、CI では動かさない。エージェントの定義・スキル・モデルを変えたときに流す |
 | 文書 | `tests/docs/` | 版の一致（`plugin.json`・仕様書・設計書・変更履歴・マーケットプレイスの一覧）。設計書とテストが挙げる要求の番号が仕様書にあり、仕様書の要求がどれも 6章の表にある |
 
 GitHub Actions（リポジトリの根の `.github/workflows/embedded-debug-loop.yml`）でも、次のテストを自動で動かす。
@@ -308,13 +309,13 @@ GitHub Actions（リポジトリの根の `.github/workflows/embedded-debug-loop
 | REQ-110 | 2.1、3.7 | `tests/independence/` |
 | REQ-111 | 3.3 | 各スキルの `tests/` |
 | REQ-201 | 2.1 | `tests/independence/` |
-| REQ-202〜REQ-206 | 3.1 | 作業エージェントの定義。振る舞いは手動の確認 |
+| REQ-202〜REQ-206 | 3.1 | 作業エージェントの定義。振る舞いは EVAL（`tests/eval/`） |
 | REQ-207 | 3.5 | `tests/independence/`（返事の形は統括エージェントの頼みの文で決める） |
-| REQ-208 | 2.1 | 作業エージェントの定義。振る舞いは手動の確認 |
+| REQ-208 | 2.1 | 作業エージェントの定義。振る舞いは EVAL（`tests/eval/`） |
 | REQ-301〜REQ-303 | 3.5、3.6 | `tests/extension/tools.test.mjs` |
 | REQ-304・REQ-305 | 3.6 | `tests/extension/tools.test.mjs`・`events.test.mjs` |
 | REQ-306・REQ-309 | 3.6 | `tests/extension/guard.test.mjs` |
-| REQ-307 | 2.1 | 検証エージェントの定義。振る舞いは手動の確認 |
+| REQ-307 | 2.1 | 検証エージェントの定義。振る舞いは EVAL（`tests/eval/`、3段階目で流す） |
 | REQ-308 | 3.6 | `tests/extension/tools.test.mjs` |
 | REQ-311 | 4 | `tests/extension/server.test.mjs` |
 | REQ-312〜REQ-314 | 3.5、4 | `tests/extension/server.test.mjs`・`ui.test.mjs` |
