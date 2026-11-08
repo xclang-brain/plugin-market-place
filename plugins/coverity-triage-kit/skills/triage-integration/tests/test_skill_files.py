@@ -21,7 +21,9 @@ class SkillFileTest(unittest.TestCase):
 
     def test_frontmatter(self) -> None:
         self.assertEqual(set(self.fields), {"name", "description", "allowed-tools"})
-        self.assertEqual(self.fields["name"], NAME)
+        # the shipped folder keeps its name; a renamed copy (REQ-002) may keep the original name field
+        self.assertRegex(self.fields["name"], r"^[a-z0-9]+(-[a-z0-9]+)*$")
+        self.assertLessEqual(len(self.fields["name"]), 64)
         self.assertEqual(self.fields["allowed-tools"], '["shell(uv run:*)"]')
         description = self.fields["description"]
         self.assertLessEqual(len(description), 1024)

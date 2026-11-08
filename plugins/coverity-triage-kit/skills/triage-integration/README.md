@@ -27,18 +27,18 @@
 
 チャットで頼みます。
 
-- 「CID 20011、20012、20013 の結果がこのフォルダにある。同じ原因ならまとめて」
+- 「CID 30101、30102、30103 の結果がこのフォルダにある。同じ原因ならまとめて」
 - 「この警告たちは同じ原因？」
 
-チャットでは、まとめるかどうかと理由、まとめ方、まとめた逸脱コメント、確信度、ぶつかる修正をチャットに返し、ファイルは作りません。ほかのエージェントから、書く場所（`integration/plan.json`）と返す形を決めて頼まれたときは、それに従います。
+チャットでは、まとめるかどうかと理由、まとめ方、まとめた逸脱コメント、確信度、ぶつかる修正をチャットに返し、ファイルは作りません。ほかのエージェントから、書く場所（`integration/plan.json`）と返す形を決めて頼まれたときは、それに従います。返す形が決まっていなければ1行で返し（`統合: 1つにまとめる（30101, 30102）／まとめない: 30103（原因が違う：…）`）、まとめなかった候補とその理由もその行に書きます。
 
 スクリプトだけを動かすこともできます。
 
 ```
 # Windows（PowerShell）
-uv run --native-tls --quiet "<このフォルダ>/scripts/check_plan.py" --plan "C:\work\plan.json" --member "20011:20011:high" --member "20012:20012:medium"
+uv run --native-tls --quiet "<このフォルダ>/scripts/check_plan.py" --plan "C:\work\plan.json" --member "30101:30101:high" --member "30102:30102:medium"
 # Linux（bash）
-uv run --native-tls --quiet "<このフォルダ>/scripts/check_plan.py" --plan "/work/plan.json" --member "20011:20011:high" --member "20012:20012:medium"
+uv run --native-tls --quiet "<このフォルダ>/scripts/check_plan.py" --plan "/work/plan.json" --member "30101:30101:high" --member "30102:30102:medium"
 ```
 
 | 引数 | 意味 |
@@ -46,7 +46,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/check_plan.py" --plan 
 | `--plan <ファイル>` | 確かめる計画 |
 | `--member <ID>:<CID,…>[:<確信度>]` | まとめる候補の作業（くり返す）。グループなら `G1:30001,30002:high` |
 | `--no-grouping <CID>` | グループにしない CID（くり返す） |
-| `--items <ファイル>` | 候補の作業の JSON（`{"<ID>": {"cids": [20011], "status": "done", "confidence": "high", "no_grouping": false}}`）。`--member` の代わり |
+| `--items <ファイル>` | 候補の作業の JSON（`{"<ID>": {"cids": [30101], "status": "done", "confidence": "high", "no_grouping": false}}`）。`--member` の代わり |
 | `--stdin` | 標準入力から `{"plan": {…}, "items": {…}}` を読む |
 
 候補の作業を渡さないと、作業の有無・CID の数・確信度は確かめません（`warnings` に出ます）。ファイルは作りません。

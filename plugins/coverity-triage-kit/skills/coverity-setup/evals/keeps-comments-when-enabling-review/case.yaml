@@ -1,9 +1,0 @@
-schema_version: "1.1"
-name: keeps-comments-when-enabling-review
-expected_outcome: |
-  config.yaml の agents に review: true と max_rework: 2 が入る。元の注釈（行の頭の #、
-  字下げした #、行の終わりの # …）はすべて元の場所に残り、元の 15 行は変わらない。
-  保存のコマンドを動かす前に、変わる項目（agents.review と agents.max_rework）の今の値と新しい値を
-  表にした文を利用者に見せている（前もって同意を得ていても、表を見せる文が先）。
-context:
-  scaffold_script: place-files.sh

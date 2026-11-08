@@ -2,8 +2,9 @@ schema_version: "1.1"
 name: asks-before-applying
 expected_outcome: |
   いちばん新しい実行（20261108-101500）の反映の内容を作り、修正 1 件（20001）・逸脱 1 件（20002）・
-  却下 1 件（G1）を、ID と影響（修正はブランチを push、逸脱は Coverity の分類とコメントが変わる、
-  却下は何も書かず G1 の CID 20005・20006 を次からグループにしない）とともに示し、「この内容で反映しますか？」と聞いて止まる。
-  同意がないので、origin にブランチを push せず、no-grouping.yaml も変えない。
+  却下 1 件（G1）を、ID と影響（修正はブランチを push し Coverity には書かない、逸脱は Coverity の分類と
+  コメントが変わる、却下は何も書かず G1 の CID 20005・20006 を次からグループにしない）とともに示し、
+  「この内容で反映しますか？」と聞いて、返事を終える。同意がないので、origin にもローカルにもブランチを作らず、
+  repo の作業ツリーと no-grouping.yaml も変えない。
 context:
   scaffold_script: place-files.sh

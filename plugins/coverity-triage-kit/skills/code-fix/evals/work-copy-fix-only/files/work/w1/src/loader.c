@@ -4,10 +4,20 @@
 
 #define TABLE_BYTES 256U
 
-/* Added in the latest revision: size of a table file in bytes. */
-unsigned int loader_table_bytes(void)
+int loader_check_size(const char *path)
 {
-	return TABLE_BYTES;
+	FILE *fp = fopen(path, "rb");
+	long size;
+
+	if (fp == NULL) {
+		return LOADER_ERR_OPEN;
+	}
+	size = (fseek(fp, 0L, SEEK_END) == 0) ? ftell(fp) : -1L;
+	(void)fclose(fp);
+	if (size != (long)TABLE_BYTES) {
+		return LOADER_ERR_SHORT;
+	}
+	return LOADER_OK;
 }
 
 int load_table(const char *path, unsigned char *out)

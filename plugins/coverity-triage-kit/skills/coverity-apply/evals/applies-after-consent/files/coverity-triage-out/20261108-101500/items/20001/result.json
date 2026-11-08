@@ -2,31 +2,36 @@
   "item": "20001",
   "verdict": {
     "judgement": "true_bug",
-    "summary": "fopen の失敗を確かめていない",
-    "rationale": "fopen が NULL を返すと fgets に NULL が渡る",
+    "summary": "fopen の失敗を確かめずに fgets に渡している",
+    "rationale": "read_header() は fopen の戻り値（src/reader.c:5）を確かめずに fgets（src/reader.c:6）へ渡しており、ファイルを開けないと NULL を参照する。",
     "evidence": [
       {
         "file": "src/reader.c",
         "line": 5,
-        "note": ""
+        "note": "fopen の戻り値を確かめていない"
+      },
+      {
+        "file": "src/reader.c",
+        "line": 6,
+        "note": "NULL のまま fgets に渡る"
       }
     ]
   },
   "recommendation": "fix",
   "confidence": "high",
-  "confidence_reason": "経路をたどって確かめた",
+  "confidence_reason": "経路と前後のコードを最後までたどって確かめた",
   "deviation": {
-    "classification": "False Positive",
+    "classification": "Bug",
     "action": "Ignore",
-    "severity": "Unspecified",
-    "comment": "誤検知。呼び出し元で path を検証している（src/main.c:10）。"
+    "severity": "Moderate",
+    "comment": "本物の不具合。src/reader.c:5 で fopen の戻り値を確かめずに fgets に渡しており、直さない理由は説明できない。"
   },
   "fix": {
     "classification": "Bug",
     "action": "Fix Required",
     "severity": "Moderate",
-    "summary": "fopen の失敗を確かめる",
-    "impact": "read_header の呼び出し元だけ",
+    "summary": "fopen の失敗を確かめてから読む",
+    "impact": "read_header() の呼び出し元だけ",
     "exceeded_constraints": [],
     "already_fixed_on_latest": false
   },

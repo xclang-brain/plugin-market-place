@@ -113,7 +113,7 @@
       "stale_retries": 0,
       "error": "作業役が途中で止まりました（30 分のあいだ、出力も進み具合もありませんでした）",
       "started": 1793500900.0,
-      "seconds": 1830.0,
+      "seconds": 2379.0,
       "split_from": null,
       "cluster": null,
       "fix_rounds": 0,

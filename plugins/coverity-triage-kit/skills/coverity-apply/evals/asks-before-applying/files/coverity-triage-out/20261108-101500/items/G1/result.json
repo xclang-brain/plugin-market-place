@@ -1,32 +1,37 @@
 {
   "item": "G1",
   "verdict": {
-    "judgement": "false_positive",
-    "summary": "呼び出し元で検証済み",
-    "rationale": "fopen が NULL を返すと fgets に NULL が渡る",
+    "judgement": "intentional",
+    "summary": "size を size_t に変えるのは設計どおり",
+    "rationale": "20005 と 20006 は、copy_name() の size（int）を snprintf の size_t に変える箇所（src/reader.c:18）への同じ指摘である。src/reader.c:15 で size が 0 以下なら戻るので、変える値は正の数だけである。",
     "evidence": [
       {
         "file": "src/reader.c",
-        "line": 5,
-        "note": ""
+        "line": 15,
+        "note": "size が 0 以下なら戻る"
+      },
+      {
+        "file": "src/reader.c",
+        "line": 18,
+        "note": "size を size_t に変える"
       }
     ]
   },
   "recommendation": "deviation",
   "confidence": "high",
-  "confidence_reason": "経路をたどって確かめた",
+  "confidence_reason": "経路と前後のコードを最後までたどって確かめた",
   "deviation": {
-    "classification": "False Positive",
+    "classification": "Intentional",
     "action": "Ignore",
     "severity": "Unspecified",
-    "comment": "誤検知。呼び出し元で path を検証している（src/main.c:10）。"
+    "comment": "意図的。size は src/reader.c:15 で 0 以下を除いてから src/reader.c:18 で size_t に変えており、負の値が渡ることはない。"
   },
   "fix": {
     "classification": "Bug",
     "action": "Fix Required",
     "severity": "Moderate",
-    "summary": "fopen の失敗を確かめる",
-    "impact": "read_header の呼び出し元だけ",
+    "summary": "src の NULL の確かめを残したまま、書き方を変えない",
+    "impact": "なし（コードは変えない）",
     "exceeded_constraints": [],
     "already_fixed_on_latest": false
   },

@@ -1,11 +1,13 @@
 schema_version: "1.1"
 name: work-copy-fix-only
 expected_outcome: |
-  最新のリビジョン（work/w1/）では関数が1つ増えて行がずれており、load_table() の短い読みの枝は 23〜25 行にある。
-  そこで fp を閉じてから LOADER_ERR_SHORT を返すように、work/w1/src/loader.c だけを最小に直す
+  最新のリビジョン（work/w1/）では、先頭に関数 loader_check_size() が増えて行がずれており、load_table() の短い読みの
+  枝は 33〜35 行にある。調べたコードの 18 行と同じ番号の work/w1/src/loader.c の 18 行は、loader_check_size() の
+  return LOADER_ERR_SHORT; で、そこでは fp はもう 16 行で閉じてある（ここに fclose を足すと2回閉じる罠）。
+  load_table() の 33〜35 行の枝で fp を閉じてから LOADER_ERR_SHORT を返すように、work/w1/src/loader.c だけを最小に直す
   （ファイルの書き方 (void)fclose(fp); とタブの字下げに合わせる）。repo/ は変えず、work/w1/ と out/ の外に写しも作らない。
   out/fix.json に指定の7項目だけを書く：already_fixed_on_latest は false、exceeded_constraints は空、
-  classification は Bug、action は Fix Required、severity は Impact High に合わせて Major。場所を行で書くなら最新の行（23〜25 行）。
+  classification は Bug、action は Fix Required、severity は Impact High に合わせて Major。場所を行で書くなら最新の行（33〜35 行）。
   質問はせず、1行だけを返す。
 context:
   scaffold_script: place-files.sh

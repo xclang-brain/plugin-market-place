@@ -2,31 +2,36 @@
   "item": "20002",
   "verdict": {
     "judgement": "false_positive",
-    "summary": "呼び出し元で検証済み",
-    "rationale": "fopen が NULL を返すと fgets に NULL が渡る",
+    "summary": "src は NULL のとき先に戻っている",
+    "rationale": "Coverity は copy_name() の src が NULL のまま snprintf に渡ると見たが、src/reader.c:15 で src が NULL なら -1 を返して終わるので、snprintf（src/reader.c:18）に NULL は渡らない。",
     "evidence": [
       {
         "file": "src/reader.c",
-        "line": 5,
-        "note": ""
+        "line": 15,
+        "note": "src が NULL なら戻る"
+      },
+      {
+        "file": "src/reader.c",
+        "line": 18,
+        "note": "警告の行"
       }
     ]
   },
   "recommendation": "deviation",
   "confidence": "high",
-  "confidence_reason": "経路をたどって確かめた",
+  "confidence_reason": "経路と前後のコードを最後までたどって確かめた",
   "deviation": {
     "classification": "False Positive",
     "action": "Ignore",
     "severity": "Unspecified",
-    "comment": "誤検知。呼び出し元で path を検証している（src/main.c:10）。"
+    "comment": "誤検知。copy_name() は src が NULL のとき src/reader.c:15 で -1 を返して終わるため、snprintf に NULL が渡ることはない。"
   },
   "fix": {
     "classification": "Bug",
     "action": "Fix Required",
     "severity": "Moderate",
-    "summary": "fopen の失敗を確かめる",
-    "impact": "read_header の呼び出し元だけ",
+    "summary": "src の NULL の確かめを残したまま、書き方を変えない",
+    "impact": "なし（コードは変えない）",
     "exceeded_constraints": [],
     "already_fixed_on_latest": false
   },

@@ -87,7 +87,7 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/run.py" <�
 - いくつも終わっていたら、1 つずつ知らせ、そのたびに返る `actions` を先に行います。
 - 道具がエラーを返したら、呼び直さずに `--failed <task> --reason "<エラーの文>"` で知らせます。
 - 結果を直す頼み（作り直し・形の直し）も、tick が `launch` で返します。直す点を自分で考えません。
-- 5 件ほど終わるごとに、進み具合（`counts`。`done` / `total`）を 1 行で伝えます。
+- 5 件ほど終わるごとに、進み具合（`counts`。`done` / `total`）を 1 行で伝えます（内部の値はふつうの言葉にします。下の「実行の様子を聞かれたとき」の表）。
 
 Coverity との通信の道具がないときは、利用者に伝えて止めます。取ってある警告の一覧（issues.json の形）があれば、
 `new-run --issues-file "<ファイル>"` で、それを使って始められます（同じフォルダの `issue-<CID>.json` も使います）。
@@ -123,9 +123,19 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/run.py" no
 動かします（読むだけで、何も変えません。実行フォルダが分からなければ `runs` で探します）。次を短く伝えます。
 
 - 段（`stage_label`）と、処理した件数 / 全体（`progress.label`）、`counts`
-- 作業中の作業（`items` の `status: in_progress`）と、その段（`phase`・`note`）。`stalled: true` なら「10 分以上動きがない」
+- 作業中の作業（`items` の `status: in_progress`）と、その段（`phase`・`note`）。`stalled: true` なら「10 分以上動きがない（止まっているかもしれない）」と、最後に動いた時刻か経った時間を添える
 - 処理できなかった作業（`status: error`）と、その理由（`error`）。重大なエラー（`errors` の `level: critical`）
 - 終わった作業の推奨と、人に見せる確信度（`recommendation`・`confidence`）
+
+伝えるときは、内部の値（`judge`、`in_progress`、`fix`、`high` などの英語の値や項目の名前）をそのまま書かず、ふつうの言葉にします。秒は分か時間にします。
+
+| 値 | 伝える言葉 |
+|---|---|
+| 段 `read` / `judge` / `fix` / `deviation` / `result` | 警告経路とコードを読んでいる / 本物かどうかを決めている / 修正を作っている / 逸脱コメントを書いている / 結果を書いている |
+| 段 `copy` / `save` / `merge` | 作業用のコピーを用意している / 修正を保存している / まとめた修正を作っている |
+| 段 `check` / `write`（確かめ）、`compare`（統合） | 結果を確かめている / 確かめた結果を書いている、結果を比べている |
+| 状態 `pending` / `in_progress` / `done` / `error` | まだ / 作業中 / 終わった / 処理できなかった |
+| 推奨 `fix` / `deviation`、確信度 `high` / `medium` / `low` | 修正 / 逸脱、高 / 中 / 低 |
 
 一覧を作り直してと頼まれたときは、`summary --run "<run_dir>"` を動かします（人が選んだ承認は変わりません）。
 

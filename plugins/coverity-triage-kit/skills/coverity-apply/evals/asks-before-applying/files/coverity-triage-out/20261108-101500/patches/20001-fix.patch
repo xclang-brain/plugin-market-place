@@ -1,5 +1,5 @@
 diff --git a/src/reader.c b/src/reader.c
-index 1ef11d3..43e9c80 100644
+index 2af82b4..b8b3cd8 100644
 --- a/src/reader.c
 +++ b/src/reader.c
 @@ -3,6 +3,9 @@

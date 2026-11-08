@@ -18,5 +18,6 @@
           "summary": "copy_name() の先頭で dst が NULL なら 0 を返す",
           "impact": "dst が NULL のときだけ何もせず戻る。今の呼び出し元では動きは変わらない",
           "exceeded_constraints": [], "already_fixed_on_latest": false},
-  "revision_drift": {"status": "none", "detail": ""}
+  "revision_drift": {"status": "none", "detail": ""},
+  "group_excluded_cids": []
 }
