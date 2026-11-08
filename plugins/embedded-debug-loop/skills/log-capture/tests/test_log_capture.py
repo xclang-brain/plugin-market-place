@@ -46,7 +46,6 @@ SCRIPT = os.path.join(SKILL_DIR, "scripts", "capture.py")
 VENDOR_DIR = os.path.join(SKILL_DIR, "scripts", "vendor")
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
-README = os.path.join(SKILL_DIR, "README.md")
 
 IS_WINDOWS = os.name == "nt"
 IS_LINUX = sys.platform.startswith("linux")
@@ -1942,7 +1941,7 @@ class SelfContained(unittest.TestCase):
     def test_skill_files_are_only_its_own(self):
         rel = sorted(os.path.relpath(p, SKILL_DIR) for p in skill_files())
         self.assertEqual(rel, sorted([
-            "README.md", "SKILL.md", "config-template.yaml",
+            "SKILL.md", "config-template.yaml",
             os.path.join("scripts", "capture.py"),
             os.path.join("tests", "__init__.py"),
             os.path.join("tests", "fake_console.py"),
@@ -1963,58 +1962,6 @@ class SelfContained(unittest.TestCase):
             self.assertIn(sub, text)
         self.assertIn("config.yaml", text)
 
-    def test_readme_covers_the_settings_and_the_test_command(self):
-        with open(README, encoding="utf-8") as f:
-            text = f.read()
-        for key in TEMPLATE_KEYS:
-            self.assertIn("`%s`" % key, text, key)
-        for word in ("/skills reload", ".github/skills/", "~/.copilot/skills/", "config.yaml",
-                     "py -3 -m unittest discover -s tests", "python3 -m unittest discover -s tests",
-                     "Python 3.8", "pyserial 3.5", "COM3", "/dev/ttyUSB0"):
-            self.assertIn(word, text, word)
-        # Windows を先に書く
-        self.assertLess(text.index("COM3"), text.index("/dev/ttyUSB0"))
-        self.assertLess(text.index("py -3"), text.index("python3"))
-        self.assertLess(text.index("%USERPROFILE%\\.copilot\\skills\\"), text.index("~/.copilot/skills/"))
-        self.assertIn("Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。", text)
-        self.assertIn("設定ファイルを作って", text)
-        self.assertNotRegex(text, r"\d+ ?分ほど")   # テストの時間は、OS で違うので書かない
-
-    def test_layout_shared_with_other_skills(self):
-        """スキルの README でそろえる書き方：節の並び、インストールの確認、名前を変えたコピー、コマンドの書き方。"""
-        with open(README, encoding="utf-8") as f:
-            text = f.read()
-        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
-        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方", "設定ファイル",
-                                    "結果とログ", "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
-        # README に書いた名前（フォルダの名前を変えても、README は書き換えない）
-        self.assertIn("\n3. `/skills list` に `log-capture` が出れば完了です。\n", text)
-        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("\n- GitHub Copilot CLI\n", needs)
-        # できることの箇条は、言い切りの形（「…する。」）
-        can = text.split("## できること", 1)[1].split("\n## ", 1)[0]
-        for line in can.splitlines():
-            if line.startswith("- "):
-                self.assertFalse(line.endswith("ます。"), line)
-        # うまくいかないときの表の見出し
-        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
-        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
-        self.assertNotIn("$env:USERPROFILE", text)
-        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
-                      "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
-                      "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
-        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
-        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]\n"
-                      "# Linux（bash）\npython3 <このフォルダ>/scripts/capture.py <サブコマンド> [オプション]\n```", text)
-        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
-                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
-        for line in text.splitlines():
-            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
-        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n", text)
-        # パスワードを環境変数で渡す例は、Windows（PowerShell）と Linux（bash）の2つ
-        part = text.split("### パスワードを環境変数で渡す", 1)[1].split("\n## ", 1)[0]
-        self.assertRegex(part, r"\n   - Windows（PowerShell）：`\$env:[A-Z_]+ = '[^']+'`\n"
-                               r"   - Linux（bash）：`export [A-Z_]+='[^']+'`\n")
 
     def test_template_comments(self):
         with open(TEMPLATE, encoding="utf-8") as f:

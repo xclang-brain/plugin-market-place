@@ -38,7 +38,6 @@ DATA_DIR = "." + SKILL_NAME  # 作業フォルダの中の、設定とログの�
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "build.py")
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
-README = os.path.join(SKILL_DIR, "README.md")
 FAKE = os.path.join(HERE, "fake_build.py")
 SDK_ENV = "/opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi"
 IS_WINDOWS = os.name == "nt"
@@ -2173,88 +2172,6 @@ class SkillDocTest(unittest.TestCase):
         for word in ("<<", "source ", "$(", "&&"):
             self.assertNotIn(word, self.text)
 
-
-class ReadmeTest(unittest.TestCase):
-
-    @property
-    def text(self):
-        with open(README, encoding="utf-8") as f:
-            return f.read()
-
-    def test_every_config_item_is_in_the_table(self):
-        for key in TEMPLATE_KEYS:
-            self.assertRegex(self.text, r"(?m)^\| `{}` \|".format(key), key)
-
-    def test_windows_comes_first(self):
-        needs = self.text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
-        self.assertLess(needs.index("Windows"), needs.index("Linux"))
-        self.assertIn("wsl", self.text)
-        # 個人のフォルダの場所も、Windows を先に書く
-        self.assertLess(self.text.index("`%USERPROFILE%\\.copilot\\skills\\cross-compile\\`"),
-                        self.text.index("`~/.copilot/skills/cross-compile/`"))
-
-    def test_windows_status_is_at_the_end_of_needs(self):
-        needs = self.text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
-        self.assertTrue(needs.rstrip().endswith(
-            "Windows では GitHub Actions でテストしています（Copilot CLI との組み合わせは未確認）。"), needs)
-
-    def test_output_encoding_is_one_sentence(self):
-        self.assertIn("Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。",
-                      self.text)
-        self.assertNotIn("Python の既定", self.text)
-
-    def test_request_to_make_the_config_file(self):
-        self.assertIn("`/cross-compile 設定ファイルを作って`", self.text)
-        self.assertNotIn("どこ？", self.text)
-
-    def test_check_creates_no_files(self):
-        config = self.text.split("## 設定ファイル", 1)[1].split("\n### ", 1)[0]
-        self.assertIn("設定の確認では、ファイルを作りません。", config)
-        self.assertNotIn("を除く", config)
-        self.assertIn("| 設定ファイル … がありません（`check`） |", self.text)
-        # check は、思わぬエラーでもログを作らない
-        self.assertIn("| スクリプトの中で思わぬエラーが起きました | ログ（`check` では標準エラー出力）を確認します |",
-                      self.text)
-        self.assertNotIn("そこに新しい設定ファイルができます", self.text)
-
-    def test_layout_shared_with_other_skills(self):
-        """スキルの README でそろえる書き方：節の並び、インストールの確認、名前を変えたコピー、コマンドの書き方。"""
-        text = self.text
-        headings = re.findall(r"(?m)^## (.+)$", re.sub(r"```.*?```", "", text, flags=re.S))
-        self.assertEqual(headings, ["できること", "必要なもの", "インストールする", "使い方", "設定ファイル",
-                                    "結果とログ", "うまくいかないとき", "スクリプトを直接実行する", "テストを実行する"])
-        # README に書いた名前（フォルダの名前を変えても、README は書き換えない）
-        self.assertIn("\n3. `/skills list` に `cross-compile` が出れば完了です。\n", text)
-        needs = text.split("## 必要なもの", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("\n- GitHub Copilot CLI\n", needs)
-        # できることの箇条は、言い切りの形（「…する。」）
-        can = text.split("## できること", 1)[1].split("\n## ", 1)[0]
-        for line in can.splitlines():
-            if line.startswith("- "):
-                self.assertFalse(line.endswith("ます。"), line)
-        # うまくいかないときの表の見出し
-        self.assertIn("\n| 症状・メッセージ | 対処 |\n", text)
-        # 個人のフォルダは、エクスプローラーや cmd でもそのまま使える %USERPROFILE% の書き方（ほかの文書と同じ）
-        self.assertNotIn("$env:USERPROFILE", text)
-        self.assertIn("フォルダの名前を変えてコピーするときは、`SKILL.md` の `name:` も、フォルダと同じ名前に変えます。\n"
-                      "呼び出しは `/<新しい名前>`、設定とログのフォルダは `.<新しい名前>/`、"
-                      "ログファイルの名前の先頭は `<新しい名前>-` になります。", text)
-        # check は注意を「ただし、」の後に続ける。その読み方を、ほかのスキルと同じ文で書く
-        self.assertIn("と入力します（ビルドはしません）。「ただし、」の後に注意が出たら、その内容を確認します。\n",
-                      text)
-        # 直接実行とテストのコマンドは、1つの囲みに Windows（PowerShell）と Linux（bash）の行を分けて書く
-        self.assertIn("```\n# Windows（PowerShell）\npy -3 <このフォルダ>/scripts/build.py <サブコマンド>\n"
-                      "# Linux（bash）\npython3 <このフォルダ>/scripts/build.py <サブコマンド>\n```", text)
-        self.assertIn("```\n# Windows（PowerShell）\npy -3 -m unittest discover -s tests\n"
-                      "# Linux（bash）\npython3 -m unittest discover -s tests\n```", text)
-        for line in text.splitlines():
-            self.assertFalse(line.startswith(("```powershell", "```bash")), line)
-        self.assertIn("\nWindows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。\n", text)
-
-    def test_no_test_duration(self):
-        """テストの時間は OS で違うので書かない。"""
-        tests = self.text.split("## テストを実行する", 1)[1]
-        self.assertNotRegex(tests, r"\d+ ?(分|秒)")
 
 
 class ConsoleCodePageTest(unittest.TestCase):

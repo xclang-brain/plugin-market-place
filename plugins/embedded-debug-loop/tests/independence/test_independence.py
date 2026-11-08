@@ -14,8 +14,9 @@
   - フォルダの中に、プラグインの名前（とその略）・ほかのスキル・エージェント・Web管理画面・
     エクステンションを書いていない。フォルダの外を指していない。互いのファイルを読み込まない。
     同梱した他者のコード（scripts/vendor/）は中身を変えないので、言葉の確認からは外す。
-  - 人向けの使い方（README.md）とテスト（tests/）が、フォルダの中にある。設定のひな形を持つスキルは、
-    README に、データの置き場所 .<フォルダの名前>/ を書く。
+  - テスト（tests/）が、フォルダの中にある。README.md はフォルダに置かない（Anthropic のスキル作成ガイド）。
+    人向けの使い方は docs/guide/1-<スキルの名前>.md にあり、設定のひな形を持つスキルは、
+    そこにデータの置き場所 .<フォルダの名前>/ と、ひな形のすべての項目を書く。
   - フォルダだけを別の場所にコピーしても、そのスキルのテストが通る。
     コピーしたフォルダ（名前を変えたコピーも）で設定ファイルの用意と設定の確認が動き、データが作業フォルダの
     .<フォルダの名前>/ にだけできることは、コマンドがスキルごとに違うので、各スキルのテスト（tests/）で確かめる。
@@ -104,6 +105,11 @@ def agent_path(key):
 def worker_path():
     """作業エージェントの定義。defaults.json の worker から決める"""
     return agent_path("worker")
+
+
+def skill_guide(skill):
+    """スキルの人向けの使い方（スキルのフォルダの外に置く）"""
+    return GUIDE_DIR / f"1-{skill}.md"
 
 
 def worker_guide():
@@ -330,17 +336,22 @@ class SkillIndependence(unittest.TestCase):
                 problems += hits(path, patterns)
         self.assertEqual(problems, [], "スキルが、フォルダの外を指しています：\n" + "\n".join(problems))
 
-    def test_readme_and_tests_inside(self):
-        """人向けの使い方とテストが、スキルのフォルダの中にある。設定のひな形を持つスキルは、データの置き場所を書く"""
+    def test_tests_inside_and_guide_outside(self):
+        """テストはスキルのフォルダの中にあり、README.md は置かない。人向けの使い方は docs/guide/1-<名前>.md にある。
+        設定のひな形を持つスキルのガイドには、データの置き場所と、ひな形のすべての項目を書く"""
         for skill in skill_names():
             with self.subTest(skill=skill):
-                readme = SKILLS_DIR / skill / "README.md"
-                self.assertTrue(readme.is_file(), f"スキル {skill} に README.md がありません")
-                text = readme.read_text(encoding="utf-8")
                 self.assertTrue(list((SKILLS_DIR / skill / "tests").glob("test_*.py")),
                                 f"スキル {skill} のテストが、フォルダの中（tests/）にありません")
+                self.assertFalse((SKILLS_DIR / skill / "README.md").exists(),
+                                 f"スキル {skill} のフォルダに README.md があります（人向けの使い方は docs/guide/ に置く）")
+                guide = skill_guide(skill)
+                self.assertTrue(guide.is_file(), f"スキル {skill} の使い方（{guide.relative_to(ROOT)}）がありません")
+                text = guide.read_text(encoding="utf-8")
                 if templates(skill):
-                    self.assertIn(f".{skill}", text, f"{skill} の README.md に、データの置き場所 .{skill}/ がありません")
+                    self.assertIn(f".{skill}", text, f"{guide.name} に、データの置き場所 .{skill}/ がありません")
+                    for key in template_keys(skill):
+                        self.assertIn(f"`{key}`", text, f"{guide.name} に、設定の項目 {key} がありません")
 
     def test_no_shared_code(self):
         names = skill_names()
@@ -359,7 +370,7 @@ class SkillIndependence(unittest.TestCase):
         self.assertEqual(problems, [], "\n".join(problems))
 
     def test_each_skill_tests_pass_alone(self):
-        """スキルのフォルダだけをコピーした場所で、README に書いた動かし方で、そのスキルのテストが通る"""
+        """スキルのフォルダだけをコピーした場所で、使い方の文書に書いた動かし方で、そのスキルのテストが通る"""
         for skill in skill_names():
             with self.subTest(skill=skill), tempfile.TemporaryDirectory() as tmp:
                 lone = Path(tmp) / "lone" / skill
@@ -528,11 +539,11 @@ class DocumentIndependence(unittest.TestCase):
         for path in AGENTS_DIR.iterdir():
             self.assertTrue(path.name.endswith(".agent.md"), f"agents/ に、エージェントの定義でない {path.name} があります")
 
-    def test_old_guides_are_gone(self):
-        # 1・2段階目の使い方は、各部品の README にある。ガイドに置かない
-        # 1段階目の使い方は、各スキルの README にある。2段階目のガイドは、既定の作業エージェントのものだけ
+    def test_guides_match_the_parts(self):
+        # 1段階目のガイドは skills/ の下のスキルのものだけ、2段階目のガイドは既定の作業エージェントのものだけ
         guides = sorted(p.name for p in GUIDE_DIR.iterdir() if re.match(r"[12]-", p.name))
-        self.assertEqual(guides, [worker_guide().name], "docs/guide/ の 1・2段階目のガイドが、既定の作業エージェントのものだけではありません")
+        expected = sorted([skill_guide(s).name for s in skill_names()] + [worker_guide().name])
+        self.assertEqual(guides, expected, "docs/guide/ の 1・2段階目のガイドが、今の部品と合いません")
         # 部品の置き換えはプラグインの設計変更。利用者向けのガイドに置かない
         self.assertFalse((GUIDE_DIR / REPLACE_DOC.name).exists(), "部品を変える手順書が、利用者向けのガイドの中にあります")
         self.assertTrue(REPLACE_DOC.is_file(), "部品を変える手順書（docs/replace.md）がありません")
@@ -540,7 +551,6 @@ class DocumentIndependence(unittest.TestCase):
     def test_links_resolve(self):
         """プラグインの文書の相対リンクが、あるファイルと見出しを指す"""
         docs = [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md"))
-        docs += sorted(SKILLS_DIR.glob("*/README.md"))
         problems = []
         for doc in docs:
             text = re.sub(r"```.*?```", "", doc.read_text(encoding="utf-8"), flags=re.S)

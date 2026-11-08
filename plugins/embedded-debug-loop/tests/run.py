@@ -40,7 +40,7 @@ def python_groups():
     if skills.is_dir():
         for skill in sorted(p for p in skills.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))):
             if any((skill / "tests").glob("test_*.py")):
-                # スキルの README に書いた動かし方と同じ（スキルのフォルダで discover -s tests）
+                # スキルのガイドに書いた動かし方と同じ（スキルのフォルダで discover -s tests）
                 groups.append(("スキル {} のテスト".format(skill.name), skill, "tests"))
     independence = TESTS / "independence"
     if independence.is_dir() and any(independence.rglob("test_*.py")):

@@ -9,19 +9,20 @@
 1. `skills/power-control/` に、新しいスキルのフォルダを置きます。テストに要るパッケージがあれば、`skills/power-control/tests/requirements.txt` に書きます。
    SKILL.md の description には、何をするかと、いつ使うか（例：機器が応答しないとき）を書きます。作業エージェントは、これを見て使うときを決めます。
 2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の一覧に、`` `power-control` `` を足します。
+3. 人向けの使い方を、`docs/guide/1-power-control.md` に書きます（スキルのフォルダには README.md を置きません）。
 
 ## スキルを消す
 
 例：`log-capture` を消す。
 
-1. `skills/log-capture/` を消します。
+1. `skills/log-capture/` と `docs/guide/1-log-capture.md` を消します。
 2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の一覧から、`` `log-capture` `` を消します。
 
 ## スキルを置き換える
 
 例：`deploy` を、同じ役割の `flash` に置き換える。
 
-1. `skills/deploy/` を消し、`skills/flash/` を置きます。
+1. `skills/deploy/` と `docs/guide/1-deploy.md` を消し、`skills/flash/` と `docs/guide/1-flash.md` を置きます。
 2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の一覧で、`` `deploy` `` を `` `flash` `` にします。
 
 ## 作業エージェントを置き換える
@@ -45,4 +46,4 @@ py -3 tests/run.py
 python3 tests/run.py
 ```
 
-新しいスキルが守ること（フォルダだけで完結する、README とテストを持つ など）は、[仕様書](specs/requirements.md) の REQ-108 と [設計書](design/design.md) の 3.4 にあります。
+新しいスキルが守ること（フォルダだけで完結する、テストを持つ、README.md を置かない など）は、[仕様書](specs/requirements.md) の REQ-108 と [設計書](design/design.md) の 3.4 にあります。

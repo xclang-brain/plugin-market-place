@@ -1,6 +1,6 @@
 # deploy：機器にファイルを送るスキル
 
-PC にあるファイルを、FTP で組み込み機器に送る GitHub Copilot CLI のスキルです。このフォルダだけで動きます。
+PC にあるファイルを、FTP で組み込み機器に送る GitHub Copilot CLI のスキルです。スキルのフォルダだけで動きます。
 設定ファイルに送り先と送るファイルを書いて、`/deploy 機器に送って` と入力します。
 
 ## できること
@@ -25,7 +25,7 @@ Windows では GitHub Actions でテストしています（Copilot CLI との�
 
 プラグインと一緒にインストールしたときは、この手順は要りません。
 
-1. このフォルダを、次のどちらかにコピーします。
+1. スキルのフォルダ（`skills/deploy/`）を、次のどちらかにコピーします。
    - 1つの作業フォルダ（ふつうは、Copilot CLI を起動したフォルダ）で使う：`<作業フォルダ>/.github/skills/deploy/`
    - すべての作業フォルダで使う：`%USERPROFILE%\.copilot\skills\deploy\`（Linux では `~/.copilot/skills/deploy/`）
 2. Copilot CLI を起動したままコピーしたときは、`/skills reload` を実行します。
@@ -48,7 +48,7 @@ Windows では GitHub Actions でテストしています（Copilot CLI との�
 場所は `<作業フォルダ>/.deploy/config.yaml` です。
 親フォルダはさかのぼって探しません。
 
-設定ファイルがなければ、ひな形（このフォルダの `config-template.yaml`）から作ります。
+設定ファイルがなければ、ひな形（スキルのフォルダの `config-template.yaml`）から作ります。
 `.deploy/` には `.gitignore`（中身は `*`）も作り、パスワードやログを Git から外します。
 設定の確認では、ファイルを作りません。設定ファイルも変更しません。
 スキルの更新でひな形に項目が増えたら、送るときと設定の確認で、足りない項目を注意として知らせます。
@@ -97,7 +97,7 @@ Windows では GitHub Actions でテストしています（Copilot CLI との�
 ### スクリプトの出力
 
 標準出力に、結果の JSON が1つ出ます。
-途中経過は、標準エラー出力に `[deploy]`（このフォルダの名前）で始まる行で出ます。
+途中経過は、標準エラー出力に `[deploy]`（スキルのフォルダの名前）で始まる行で出ます。
 Windows では、コンソールの文字コード（日本語の Windows では cp932 など）で書きます。
 
 `run` と `check` の JSON の主な項目です。
@@ -110,7 +110,7 @@ Windows では、コンソールの文字コード（日本語の Windows では
 | `notes` | エラーではない注意（設定ファイルに足りない項目があることなど） |
 | `summary` | `check` の設定のまとめ（パスワードは `＊＊＊` でマスク） |
 | `remote_dir`・`created_dirs` | 送り先・機器に新しく作ったフォルダ |
-| `config`・`log`・`skill` | 設定ファイル・ログ（`run` だけ）の場所、このフォルダの名前 |
+| `config`・`log`・`skill` | 設定ファイル・ログ（`run` だけ）の場所、スキルのフォルダの名前 |
 | `files` | ファイルごとの結果。`local`・`remote`（PC・機器のファイル）、`size`・`remote_size`（そのバイト数）、`mode`（設定した権限。なければ null）、`checksum`（サム値）、`checksum_file`・`checksum_local_file`（機器・PC のサム値のファイル） |
 
 `config-path` の JSON は、`config`（場所）、`created`（今回作ったら `true`）、`missing`（必須なのに空の項目）、`added`（設定ファイルに追加した項目）です。
@@ -167,12 +167,12 @@ Windows では、コンソールの文字コード（日本語の Windows では
 
 ```
 # Windows（PowerShell）
-py -3 <このフォルダ>/scripts/deploy.py <サブコマンド>
+py -3 <スキルのフォルダ>/scripts/deploy.py <サブコマンド>
 # Linux（bash）
-python3 <このフォルダ>/scripts/deploy.py <サブコマンド>
+python3 <スキルのフォルダ>/scripts/deploy.py <サブコマンド>
 ```
 
-`<このフォルダ>` は、このフォルダのパスです（例：`.github/skills/deploy`）。`py` がないときは `python` を使います。
+`<スキルのフォルダ>` は、スキルのフォルダのパスです（例：`.github/skills/deploy`）。`py` がないときは `python` を使います。
 
 `<サブコマンド>` は次のどれかです。
 
@@ -187,7 +187,7 @@ python3 <このフォルダ>/scripts/deploy.py <サブコマンド>
 
 ## テストを実行する
 
-このフォルダで、次を実行します。
+スキルのフォルダで、次を実行します。
 
 ```
 # Windows（PowerShell）
