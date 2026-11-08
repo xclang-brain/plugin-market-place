@@ -22,7 +22,7 @@ Coverity の警告のトリアージの実行で、人が選んだ承認（修�
 - Windows の PC（Linux・macOS でも動きます）
 - git か svn のリポジトリと、その `.coverity-triage/config.yaml`
 - [uv](https://docs.astral.sh/uv/)
-- トリアージの実行が残した実行フォルダ（`run.json`、`summary.html`、`approvals.json`、`items/<ID>/result.json`、`saved.json`、`patches/<ID>-fix.patch`）
+- トリアージの実行が残した実行フォルダ（`run.json`、`summary.html`、`approvals.json`、`items/<ID>/result.json`、`saved.json`、`patches/<ID>-fix.patch`。あれば `items/<ID>/review.json` と `verify.json` も読む）
 - 逸脱を書き戻すとき：Coverity にトリアージを書き戻せる道具（なくても修正と却下は反映できます）
 - git で push するとき：origin に書き込めること
 
@@ -102,4 +102,6 @@ py -3 -m unittest discover -s tests
 python3 -m unittest discover -s tests
 ```
 
-`assets/contract/token/cases.json` は、確認の文字列の共通の試験のデータです。同じ文字列を作るほかの部品も、このデータで同じ答えを出します。`assets/run.schema.json` と `assets/approvals.schema.json`（実行フォルダの取り決めの写し）があれば、試験の実行フォルダがその形に合うかも確かめます。
+`assets/contract/token/cases.json` は、確認の文字列の共通の試験のデータです。同じ文字列を作るほかの部品も、このデータで同じ答えを出します。
+
+プルリクエストの本文と効果の記録の確信度は、人に見せる確信度（作業役の確信度を、結果の確かめの上限とビルドでの検証の問題で下げたもの。一覧と同じ答え）です。決まりは `scripts/confidence.py`（一括実行のスクリプトの写し）にあり、`assets/contract/confidence/cases.json`（その共通の試験のデータの写し）で確かめます。`assets/run.schema.json` と `assets/approvals.schema.json`（実行フォルダの取り決めの写し）があれば、試験の実行フォルダがその形に合うかも確かめます。

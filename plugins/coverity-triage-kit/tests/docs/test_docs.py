@@ -140,6 +140,10 @@ class PartNamesTest(unittest.TestCase):
         text = re.sub(r"(?ms)(^#{2,4} [^\n]*defaults\.json[^\n]*\n.*?)(^```json\s*\n.*?^```)",
                       lambda m: m.group(1) + "\n" * m.group(2).count("\n"), text)  # 行の番号は変えない
         allowed_scripts = pp.contract_command_scripts()
+        # 写しの一覧（4.17）に挙げた持ち主のスクリプトは、取り決めのファイルの名前なので書いてよい
+        section = re.search(r"(?ms)^### 4\.17 .*?(?=^## |^### 4\.18 |\Z)", text)
+        if section:
+            allowed_scripts |= set(re.findall(r"scripts/([A-Za-z0-9_.-]+\.py)", section.group(0)))
         patterns = [(f"スキル {n}", pp.name_token(n)) for n in skills] + [(f"エージェント {n}", pp.name_token(n)) for n in agents]
         patterns += [(f"スクリプト {n}", pp.script_token(n)) for n in scripts if n not in allowed_scripts]
         problems = pp.hits_in_text("設計書", text, patterns)

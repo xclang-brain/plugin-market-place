@@ -139,6 +139,28 @@ def result_of(item: str, recommendation: str, confidence: str = "high", already_
     }
 
 
+def run_item(item_id: str, cids: list[int], status: str = "done", **fields) -> dict:
+    """One run.json item as the triage run writes it (every field of assets/run.schema.json is there)."""
+    item = {"id": item_id, "cids": list(cids), "status": status, "merged_into": None, "merged_from": [], "review": None,
+            "slot": None, "stage": None, "attempts": 1 if status != "pending" else 0, "review_rounds": 0, "error": "",
+            "started": 1762564500.0 if status != "pending" else None,
+            "seconds": 120.0 if status in ("done", "error") else None}
+    item.update(fields)
+    return item
+
+
+def run_state(run_id: str, repo: Path, items: list[dict], *, run_format: int = 2, review: bool = False,
+              summary: bool = True, stream: str = "app-main") -> dict:
+    """run.json as the triage run writes it (format 2)."""
+    finished = summary and not any(i["status"] in ("pending", "in_progress") for i in items)
+    return {"format": run_format, "tool_version": "1", "run_id": run_id, "repo_root": str(repo),
+            "created_at": "2026-11-08T10:15:00", "filter_name": "untriaged", "stream": stream, "limit": 20,
+            "initial": False, "review": review, "integration": False, "max_rework": 1, "parallel": 2,
+            "stage": "done" if finished else "items", "stopped": False, "stopped_at": None, "finished": finished,
+            "finished_at": "2026-11-08T11:00:00" if finished else None, "halted": False, "halt_reason": None,
+            "items": items}
+
+
 class Fixture:
     """A repository (with origin) and an output folder with run folders."""
 
@@ -212,18 +234,16 @@ class Fixture:
             write_json(run_dir / "items" / item_id / "saved.json", saved)
             if spec.get("review"):
                 write_json(run_dir / "items" / item_id / "review.json", spec["review"])
-            state_items.append({"id": item_id, "cids": spec["cids"], "status": spec.get("status", "done"),
-                                "merged_into": None, "review": None, "applied": {}, "seconds": 120.0})
+            state_items.append(run_item(item_id, spec["cids"], spec.get("status", "done"),
+                                        review=(spec.get("review") or {}).get("outcome")))
             entry = {"decision": spec.get("decision", spec["recommendation"]), "edited": False,
                      "updated_at": "2026-11-08T11:00:00"}
             if spec.get("edit"):
                 entry["deviation"] = spec["edit"]
                 entry["edited"] = True
             decisions[item_id] = entry
-        state = {"format": run_format, "tool_version": "test", "run_id": run_id, "repo_root": str(self.repo),
-                 "created_at": "2026-11-08T10:15:00", "filter_name": "untriaged.yaml", "stream": "app-main",
-                 "review": False, "integration": False, "items": state_items, "stopped": False}
-        write_json(run_dir / "run.json", state)
+        write_json(run_dir / "run.json", run_state(run_id, self.repo, state_items, run_format=run_format,
+                                                   review=any(spec.get("review") for spec in items), summary=summary))
         if summary:
             (run_dir / "summary.html").write_text("<!doctype html><title>一覧</title>", encoding="utf-8")
         if approvals:

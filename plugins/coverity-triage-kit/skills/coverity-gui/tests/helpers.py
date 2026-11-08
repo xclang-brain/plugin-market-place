@@ -109,20 +109,54 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def run_item(item_id: str, cids: list[int], status: str = "pending", **fields: Any) -> dict[str, Any]:
+    """One run.json item as the batch run writes it (every field of assets/run.schema.json is there)."""
+    item = {"id": item_id, "cids": list(cids), "status": status, "merged_into": None, "merged_from": [], "review": None,
+            "slot": None, "stage": None, "attempts": 0, "review_rounds": 0, "error": "", "started": None, "seconds": None}
+    if status in ("in_progress", "done", "error"):
+        item.update(attempts=1, started=time.time() - 3600)
+    if status in ("done", "error"):
+        item["seconds"] = 120.0
+    item.update(fields)
+    return item
+
+
+def _stage(items: list[dict[str, Any]], review: bool, summary: bool, initial: bool) -> str:
+    """The stage the batch run would have written last for such a run."""
+    if initial and not items:
+        return "initial"
+    if not items:
+        return "done" if summary else "fetch"
+    if any(i["status"] in ("pending", "in_progress") for i in items):
+        return "items"
+    if summary:
+        return "done"
+    return "review" if review else "verify"
+
+
 def make_run(out: Path, run_id: str = "20261108-101500", items: list[dict[str, Any]] | None = None, *,
              review: bool = False, integration: bool = False, summary: bool = True, fmt: Any = 2,
              extra: dict[str, Any] | None = None) -> Path:
-    """A run folder in the shape of the contract (design 4.11). ``items``: run.json items; for each done
-    item a result.json, an issue file, a report, a patch and a fixed file are written."""
+    """A run folder in the shape the batch run writes (design 4.11, assets/run.schema.json). ``items``: the
+    fields that differ from a fresh item (see run_item); for each done item a result.json, an issue file, a
+    report, a patch and a fixed file are written."""
     folder = out / run_id
     folder.mkdir(parents=True)
-    items = items if items is not None else [
+    given = items if items is not None else [
         {"id": "20001", "cids": [20001], "status": "done"},
         {"id": "20002", "cids": [20002], "status": "done"},
     ]
-    data = {"format": fmt, "tool_version": "test", "run_id": run_id, "repo_root": str(out.parent / "repo"),
-            "created_at": "2026-11-08T10:15:00+09:00", "filter_name": "untriaged", "review": review,
-            "integration": integration, "items": items, **(extra or {})}
+    items = [run_item(i["id"], i["cids"], i.get("status", "pending"),
+                      **{k: v for k, v in i.items() if k not in ("id", "cids", "status")}) for i in given]
+    extra = dict(extra or {})
+    finished = summary and not any(i["status"] in ("pending", "in_progress") for i in items)
+    data = {"format": fmt, "tool_version": "1", "run_id": run_id, "repo_root": str(out.parent / "repo"),
+            "created_at": "2026-11-08T10:15:00+09:00", "filter_name": "untriaged", "stream": "app-main", "limit": 20,
+            "initial": False, "review": review, "integration": integration, "max_rework": 1, "parallel": 2,
+            "stage": _stage(items, review, summary, bool(extra.get("initial"))),
+            "stopped": False, "stopped_at": None, "finished": finished,
+            "finished_at": "2026-11-08T11:00:00+09:00" if finished else None, "halted": False, "halt_reason": None,
+            "items": items, **extra}
     write_json(folder / "run.json", data)
     for n, item in enumerate(items):
         cid = (item.get("cids") or [0])[0]

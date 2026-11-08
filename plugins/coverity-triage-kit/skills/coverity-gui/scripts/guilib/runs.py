@@ -1,17 +1,22 @@
 """The run folders (``<output_dir>/<YYYYmmdd-HHMMSS>[-n]/``): read only, through the fields of the contract.
 
-Read here: ``run.json`` (``format``, ``run_id``, ``created_at``, ``filter_name``, ``review``,
-``integration``, ``items[].{id, cids, status, merged_into, review, applied}``, ``stopped``; other
-fields are used only when present), ``items/<ID>/result.json`` / ``review.json`` / ``saved.json`` /
-``issue-<CID>.json``, ``issues.json``, ``verify.json``, ``approvals.json``, ``summary.html``,
-``cid/<ID>.html``, ``patches/`` and ``fixed/``. A run whose ``format`` is not 2 was made by another
-tool: it is listed, and shown read only.
+Read here: ``run.json`` (the fields of ``assets/run.schema.json``: ``format``, ``run_id``, ``created_at``,
+``filter_name``, ``review``, ``integration``, ``stage``, ``stopped``, ``halted``, ``halt_reason``,
+``items[].{id, cids, status, merged_into, merged_from, review, error}``), ``items/<ID>/result.json`` /
+``review.json`` / ``saved.json`` / ``issue-<CID>.json``, ``issues.json``, ``verify.json``, ``approvals.json``,
+``apply-code.result.json`` (what was applied: its ``applied`` map), ``summary.html``, ``cid/<ID>.html``,
+``patches/`` and ``fixed/``. A run whose ``format`` is not 2 was made by another tool: it is listed, and
+shown read only.
+
+The confidence shown to the person is the shared rule of ``scripts/confidence.py`` (a byte copy of the
+batch run's file; the contract "confidence").
 
 Reports are never written here: the screen is where the current approvals are seen.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 from pathlib import Path
@@ -30,7 +35,8 @@ STATUSES = ("pending", "in_progress", "done", "error", "merged")
 OUTCOMES = ("pass", "flag", "rework", "unverified")
 DECISIONS = ("fix", "deviation", "reject")
 ORDER = {"low": 0, "medium": 1, "high": 2}
-CONF_JA = {"high": "高", "medium": "中", "low": "低"}
+TAKEN_REVIEWS = ("pass", "flag", "rework")  # run.json items[].review once the batch run took review.json in
+APPLY_RECORD = "apply-code.result.json"
 APPLIED_JA = {"fix": "修正", "annotation": "逸脱の注釈", "coverity": "Coverity への逸脱の登録", "reject": "却下"}
 FOREIGN_NOTE = ("この実行は、別の形（ほかの道具や前の版）で作られたため、この画面では見るだけです。"
                 "承認は選べません。一覧のページがあれば、そこで結果を見られます。")
@@ -50,6 +56,20 @@ STAGE_JA = {
     "foreign": "別の形の実行（見るだけ）",
 }
 RESULT_SCHEMA = schema.load(ASSETS / "result.schema.json")
+
+
+def _load_confidence() -> Any:
+    """scripts/confidence.py (stdlib only, reads no file): the rule of the confidence shown to people."""
+    path = Path(__file__).resolve().parents[1] / "confidence.py"
+    spec = importlib.util.spec_from_file_location("gui_confidence_rule", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CONFIDENCE = _load_confidence()
 
 
 # ---- one run -------------------------------------------------------------------------------
@@ -88,6 +108,7 @@ class Run:
         self.data = data
         self.foreign = data.get("format") != FORMAT
         self.items = [] if self.foreign else [i for i in map(_item, data.get("items") or []) if i]
+        self._applied: dict[str, Any] | None = None
 
     @property
     def run_id(self) -> str:
@@ -113,6 +134,16 @@ class Run:
     @property
     def integration_on(self) -> bool:
         return bool(self.data.get("integration"))
+
+    def applied_parts(self, item_id: str) -> list[str]:
+        """What the apply skill applied for an item (``applied`` of apply-code.result.json): fix / annotation /
+        coverity / reject, in that order."""
+        if self._applied is None:
+            record = try_json(self.dir / APPLY_RECORD)
+            applied = record.get("applied") if isinstance(record, dict) else None
+            self._applied = applied if isinstance(applied, dict) else {}
+        entry = self._applied.get(item_id)
+        return [part for part in APPLIED_JA if isinstance(entry, dict) and entry.get(part)]
 
     def counts(self) -> dict[str, int]:
         counts = {status: 0 for status in STATUSES}
@@ -153,7 +184,7 @@ def stage(run: Run) -> tuple[str, str]:
     if data.get("stopped"):
         return "stopped", STAGE_JA["stopped"]
     if run.summary_made and not any(i["status"] in ("pending", "in_progress") for i in run.items):
-        applied = any(i.get("applied") for i in run.items)
+        applied = any(run.applied_parts(i["id"]) for i in run.items)
         return "done", "反映まで終わりました" if applied else "一覧ができました（承認を待っています）"
     if isinstance(data.get("stage"), str) and data["stage"]:
         label = data.get("stage_label") if isinstance(data.get("stage_label"), str) else None
@@ -191,7 +222,7 @@ def run_info(run: Run) -> dict[str, Any]:
     counts = run.counts()
     key, label = stage(run)
     return {**info, "counts": counts, "total": len(run.items) - counts["merged"], "unfinished": unfinished(run),
-            "stopped": bool(data.get("stopped")), "applied": sum(1 for i in run.items if i.get("applied")),
+            "stopped": bool(data.get("stopped")), "applied": sum(1 for i in run.items if run.applied_parts(i["id"])),
             "stage": key, "stage_label": label, "review": run.review_on, "integration": run.integration_on}
 
 
@@ -257,25 +288,14 @@ def review_outcome(run: Run, item: dict[str, Any]) -> str | None:
 
 def effective_confidence(run: Run, item: dict[str, Any], result: dict[str, Any],
                          verified: dict[str, Any]) -> tuple[str, str]:
-    """The confidence shown to the person: the lowest of the worker's, the review's and the build's."""
-    confidence = result.get("confidence") if result.get("confidence") in ORDER else "low"
-    reasons = []
-    outcome = review_outcome(run, item)
-    review = _review_file(run, item["id"])
-    cap = review.get("confidence_cap") if review and review.get("outcome") == outcome else None
-    if outcome in ("flag", "rework") and cap not in ORDER:
-        cap = "low"
-    if cap in ORDER and ORDER[cap] < ORDER[confidence]:
-        confidence = cap
-        note = str((review or {}).get("note") or "").strip() or "要確認"
-        reasons.append(f"結果の確かめで「{CONF_JA[cap]}」まで（{note}）")
+    """The confidence shown to the person and its reason (the shared rule of scripts/confidence.py).
+
+    The review counts once the batch run took it in (run.json ``items[].review`` is pass / flag / rework; an
+    unverified item has none), as in the summary; the build check is the item's entry of verify.json."""
+    review = _review_file(run, item["id"]) if item.get("review") in TAKEN_REVIEWS else None
     entry = verified.get(item["id"]) if isinstance(verified, dict) else None
-    problems = entry.get("problems") if isinstance(entry, dict) else None
-    if problems and result.get("recommendation") == "fix" and confidence != "low":
-        confidence = "low"
-        reasons.append("ビルドでの検証で問題: " + "、".join(str(p) for p in problems))
-    reason = str(result.get("confidence_reason") or "")
-    return confidence, reason + (f"（{'。'.join(reasons)}）" if reasons else "")
+    shown = CONFIDENCE.effective_confidence(result, review, entry if isinstance(entry, dict) else None)
+    return shown["confidence"], shown["reason"]
 
 
 def verify_results(run: Run) -> tuple[dict[str, Any], str | None]:
@@ -341,8 +361,8 @@ def item_row(run: Run, item: dict[str, Any], issues: dict[int, dict[str, Any]], 
         "recommendation": None, "confidence": None, "confidence_reason": "", "judgement": None, "summary": "",
         "default_decision": None, "already_fixed": False, "decision": None, "edited": False, "saved": False,
         "review": review_outcome(run, item) if item["status"] == "done" else None,
-        "applied": bool(item.get("applied")),
-        "applied_parts": [APPLIED_JA[p] for p in APPLIED_JA if isinstance(item.get("applied"), dict) and p in item["applied"]],
+        "applied": bool(run.applied_parts(item["id"])),
+        "applied_parts": [APPLIED_JA[p] for p in run.applied_parts(item["id"])],
         "merged_from": [str(x) for x in item.get("merged_from") or []] if isinstance(item.get("merged_from"), list) else [],
         "report": f"cid/{item['id']}.html" if (run.dir / "cid" / f"{item['id']}.html").is_file() else None,
         "result_error": error,

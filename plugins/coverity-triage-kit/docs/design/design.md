@@ -672,7 +672,7 @@ status の出力（画面のため。読むだけ）：
 ### 9.3 Copilot CLI の代わりに Claude Code で試すとき
 
 - エージェントの定義は、試験の道具（`tests/eval/claude_adapter.py`）が Claude Code の形に置き換える。tools の読み替え：read → Read・Glob・Grep、search → Grep・Glob、edit → Edit・Write、execute → Bash、agent → Agent、skill → Skill、ask_user → AskUserQuestion、`<登録名>/<ツール>` → `mcp__<登録名>__<ツール>`。frontmatter に `skills:`（表のスキル）を足す。本文は変えず、先頭に読み替えの1段落を足す。
-- 動かし方：`claude -p --agent <名前> --agents <変換した JSON> --mcp-config <EVAL の mcp.json> --strict-mcp-config --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run:*)" "mcp__coverity-connect__*" --add-dir <output_dir>`。`--add-dir` は Copilot CLI の `/add-dir` の代わり。
+- 動かし方：`claude -p --agent <名前> --agents <変換した JSON> --mcp-config <EVAL の mcp.json> --strict-mcp-config --setting-sources project --permission-mode acceptEdits --allowedTools Skill "Bash(uv run:*)" "mcp__coverity-connect__*" --add-dir <output_dir>`（`Skill` を許さないと、`allowed-tools` を持つスキルを `-p` で読めない）。`--add-dir` は Copilot CLI の `/add-dir` の代わり。
 - Claude Code のサブエージェントは、さらにサブエージェントを呼べないので、3段階目は統括エージェントをメイン（`--agent`）にする。
 - Claude Code 2.1.319 の既定のツールには Glob と Grep がないので、`--tools` に、使うエージェントの組み込みのツールを合わせたものを渡す。エージェントのツールは、始まりの記録では `Task` と出る。`claude -p` では AskUserQuestion は出ない。Claude Code の中から動かすときは、環境変数 `CLAUDECODE` を外す。
 - Claude Code で再現しないもの：ask_user がサブエージェントにないこと（`claude -p` ではメインにもない）、`agents/` の `.md` の読み込み、エクステンション、モデルの名前、Copilot CLI の許可の確認。これらは 9.4。

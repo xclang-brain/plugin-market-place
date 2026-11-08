@@ -37,7 +37,7 @@
 | 1-7 | uv と git がある | スクリプト |
 | 1-8 | Web管理画面を開くツールがある（画面を使わないなら要らない） | エージェント |
 | 2-1 | 偽の Coverity の見本のリポジトリを作れる | スクリプト |
-| 2-2 | 一括実行が最後まで進み、一覧（`summary.html`）と承認（`approvals.json`）ができる。`assets/run.schema.json`・`assets/approvals.schema.json`（一括実行の形の写し）があれば、`run.json` と `approvals.json` の形も確かめる | スクリプト |
+| 2-2 | 一括実行が最後まで進み（`run.json` の `finished` が true。止められた `stopped` や、続けられずに止まった `halted` はその理由と一緒に失敗）、一覧（`summary.html`）と承認（`approvals.json`）ができる。`assets/run.schema.json`・`assets/approvals.schema.json`（一括実行の形の写し）があれば、`run.json` と `approvals.json` の形も確かめる | スクリプト |
 | 2-3 | すべての作業が終わる（エラーと未処理がない） | スクリプト |
 | 2-4 | 推奨が想定（`assets/expected.yaml`）と合う。合わなくても要確認（AI の結論は実行ごとに揺れる） | スクリプト |
 | 2-5 | CID 20004〜20006 が1つのグループになる。一部が外れたら要確認 | スクリプト |

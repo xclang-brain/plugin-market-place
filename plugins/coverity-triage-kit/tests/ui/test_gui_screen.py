@@ -36,14 +36,15 @@ SCRIPT = HERE / "gui_screen.mjs"
 COMMENT = "意図的。hal_write は書いた数だけを返し、失敗の値を返さないため、戻り値を使わなくてよい（src/uart.c:1）。"
 
 
-def playwright_available() -> bool:
+def browser_state() -> dict:
+    """{"playwright": bool, "chromium": bool} as gui_screen.mjs finds them"""
     if NODE is None:
-        return False
+        return {}
     try:
         done = subprocess.run([NODE, str(SCRIPT), "--check"], capture_output=True, timeout=60, cwd=str(HERE))
-        return json.loads(done.stdout.decode("utf-8") or "{}").get("playwright") is True
+        return json.loads(done.stdout.decode("utf-8") or "{}")
     except (OSError, ValueError, subprocess.SubprocessError):
-        return False
+        return {}
 
 
 def skip_reason() -> str | None:
@@ -56,8 +57,11 @@ def skip_reason() -> str | None:
         return "結果と設定の画面のコマンド（defaults.json の guiCommand）がまだありません"
     if NODE is None:
         return "Node.js がありません"
-    if not playwright_available():
+    state = browser_state()
+    if not state.get("playwright"):
         return "Playwright がありません（npm install --prefix tests --no-save --no-package-lock playwright で入れると動きます）"
+    if not state.get("chromium"):
+        return "Playwright の Chromium がありません（npx --prefix tests playwright install chromium で入れると動きます）"
     return None
 
 

@@ -200,12 +200,21 @@ class DoctorCheckTest(unittest.TestCase):
     def make_runs(self):
         out = self.tmp / "coverity-triage-out"
         new = out / "20261108-101500"
+        def item(item_id, cids, status, **fields):  # a run.json item as the batch run writes it
+            return {"id": item_id, "cids": cids, "status": status, "merged_into": None, "merged_from": [],
+                    "review": None, "slot": None, "stage": None, "attempts": 0 if status == "pending" else 1,
+                    "review_rounds": 0, "error": "", "started": None if status == "pending" else 1762564500.0,
+                    "seconds": 120.0 if status in ("done", "error") else None, **fields}
+
         write(new / "run.json", json.dumps({
-            "format": 2, "run_id": "20261108-101500", "created_at": "2026-11-08T10:15:00",
-            "filter_name": "all.yaml", "review": True, "integration": False,
-            "items": [{"id": "20001", "cids": [20001], "status": "done"},
-                      {"id": "G1", "cids": [20004, 20005], "status": "error", "error": "結果の形が直らない"},
-                      {"id": "20003", "cids": [20003], "status": "pending"}]}))
+            "format": 2, "tool_version": "1", "run_id": "20261108-101500", "repo_root": str(self.tmp / "repo"),
+            "created_at": "2026-11-08T10:15:00", "filter_name": "all", "stream": "app-main", "limit": 20,
+            "initial": False, "review": True, "integration": False, "max_rework": 1, "parallel": 2,
+            "stage": "fetch", "stopped": False, "stopped_at": None, "finished": False, "finished_at": None,
+            "halted": True, "halt_reason": "Coverity の認証に失敗しました（401）",
+            "items": [item("20001", [20001], "done", review="pass"),
+                      item("G1", [20004, 20005], "error", error="結果の形が直らない"),
+                      item("20003", [20003], "pending")]}))
         write(new / "summary.html", "<html></html>")
         old = out / "20261107-090000"
         write(old / "run.json", json.dumps({"format": 1, "items": []}))
@@ -225,6 +234,12 @@ class DoctorCheckTest(unittest.TestCase):
         self.assertTrue(second["foreign"])
         self.assertFalse(second["has_summary"])
         self.assertFalse(first["schema_checked"] and not (SKILL_DIR / "assets" / "run.schema.json").is_file())
+        if (SKILL_DIR / "assets" / "run.schema.json").is_file():
+            self.assertTrue(first["schema_checked"])
+            self.assertNotIn("schema_problems", first)  # the fixture has the shape the batch run writes
+            self.assertFalse(second["schema_checked"])  # another form: listed only
+        self.assertEqual((first["halted"], first["halt_reason"]), (True, "Coverity の認証に失敗しました（401）"))
+        self.assertEqual((first["stage"], first["finished"]), ("fetch", False))
 
     def test_run_details(self):
         _, run_dir = self.make_runs()
@@ -241,14 +256,18 @@ class DoctorCheckTest(unittest.TestCase):
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__", "evals"))
         write(copy / "assets" / "run.schema.json", json.dumps({
             "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object",
-            "required": ["format", "run_id"], "properties": {"format": {"type": "integer"}}}))
+            "required": ["format", "run_id"], "properties": {"review": {"type": "boolean"}}}))
         _, run_dir = self.make_runs()
-        write(run_dir / "run.json", json.dumps({"format": "two", "items": []}))
+        write(run_dir / "run.json", json.dumps({"format": 2, "review": "yes", "items": []}))
         _, result, _ = run_doctor("run", "--run", str(run_dir), script=copy / "scripts" / "doctor.py")
         self.assertTrue(result["schema_checked"])
         joined = " ".join(result["schema_problems"])
-        self.assertIn("format", joined)
+        self.assertIn("review", joined)
         self.assertIn("run_id", joined)
+        write(run_dir / "run.json", json.dumps({"format": "two", "items": []}))  # another form: not checked
+        _, result, _ = run_doctor("run", "--run", str(run_dir), script=copy / "scripts" / "doctor.py")
+        self.assertTrue(result["foreign"])
+        self.assertFalse(result["schema_checked"])
 
     def test_help_and_bad_arguments(self):
         code, result, _ = run_doctor()

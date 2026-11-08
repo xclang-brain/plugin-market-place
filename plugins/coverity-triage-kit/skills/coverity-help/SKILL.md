@@ -38,7 +38,7 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/doctor.py"
 
 - `<リポジトリ>` は、調べたいリポジトリの一番上のフォルダ（`.coverity-triage/` があるところ）。分からなければ、開いているフォルダ。
 - 結果の `checks[]` は、確かめたことごとの `check`・`status`（`ok` / `ng` / `warning` / `info`）・`detail`・`fix`（直し方）。`ready` が true なら ng はない。
-- ほかに `settings`（既定の値を足した設定の今の値）、`output_dir`、`runs[]`（新しい順に10件：`run_id`、`run_dir`、`counts`、`has_summary`、`stopped`、`foreign`）。
+- ほかに `settings`（既定の値を足した設定の今の値）、`output_dir`、`runs[]`（新しい順に10件：`run_id`、`run_dir`、`counts`、`has_summary`、`stopped`、`halted` と `halt_reason`（続けられずに止まっている実行と、その理由）、`foreign`）。
 - 認証情報の値は出しません（あるかどうかだけ）。
 
 1つの実行を詳しく見るとき：
@@ -47,7 +47,7 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/doctor.py"
 uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/doctor.py" run --run "<実行フォルダ>"
 ```
 
-結果の `items[]` は作業ごとの `id`・`cids`・`status`、`errors[]` はエラーになった作業です。
+結果の `items[]` は作業ごとの `id`・`cids`・`status`、`errors[]` はエラーになった作業です。`halted` が true なら、`halt_reason`（止まった理由。認証の失敗など）を伝え、直してから再開するよう伝えます。
 
 `ok` が false なら、`error` を伝えます。同じことを、手で代わりに確かめたり直したりしません。
 

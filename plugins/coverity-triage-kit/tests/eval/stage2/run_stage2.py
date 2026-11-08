@@ -472,15 +472,19 @@ def render_brief(case: dict, issues: dict, repo: Path, work: Path, item_dir: Pat
 
 
 def judge_prompt(case: dict, ctx: dict, found: dict, text: str) -> str:
-    code = (ctx["repo"] / "src" / "reader.c")
-    code_lines = code.read_text(encoding="utf-8", errors="replace").splitlines() if code.is_file() else []
+    files = sorted({str((ctx["issues"].get(c) or {}).get("file")) for c in case["cids"]} - {"None"})
+    code: list[str] = []
+    for rel in files:
+        path = ctx["repo"] / rel
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.is_file() else []
+        code += [f"## コード（{rel}、行番号つき）", "", "```c", *[f"{n:4d}  {t}" for n, t in enumerate(lines, 1)], "```", ""]
     want = ctx["expected"]
     answer = text if case["mode"] == "user" else json.dumps(found.get("result"), ensure_ascii=False, indent=2) + \
         "\n\n修正の差分:\n" + (found.get("diff") or "（なし）")
     return "\n".join([
         "あなたは Coverity の警告のトリアージの結果を採点する人です。次の警告について、作業エージェントの答えを採点してください。",
         "", "## 警告", "", *warning_lines(ctx["issues"], case["cids"], ctx["repo"]),
-        "## コード（src/reader.c、行番号つき）", "", "```c", *[f"{n:4d}  {t}" for n, t in enumerate(code_lines, 1)], "```", "",
+        *code,
         "## 想定（人が決めた答え）", "",
         f"- 推奨: {want.get('recommendation') or '（決めていない）'} — {want.get('reason') or ''}", "",
         "## 作業エージェントの答え", "", answer[:12000], "",
@@ -592,7 +596,7 @@ def run_case(case: dict, args: argparse.Namespace, data: dict, root: Path, out: 
         return record
     ek.progress(TAG, f"{case['name']}: claude -p（{case['mode']}）")
     run = ek.run_claude(ctx["argv"], ctx["cwd"], args.timeout, ctx["case_dir"] / "transcript.jsonl")
-    summary = ek.summarize(run["events"])
+    summary = ek.summarize(run["events"], ctx["prompt"])
     checks, found = (user_checks if case["mode"] == "user" else brief_checks)(case, ctx, run, summary)
     record.update({
         "checks": checks, "passed": ek.verdict_of(checks), "found": found,

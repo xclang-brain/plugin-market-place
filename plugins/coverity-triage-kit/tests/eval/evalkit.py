@@ -270,7 +270,13 @@ def run_command(argv: list[str], cwd: Path | None = None, env: dict | None = Non
 
 
 def run_json(argv: list[str], **kw) -> tuple[dict | None, dict]:
-    """Run a command that prints one JSON object (the scripts of the parts)."""
+    """Run a command that prints one JSON object (the scripts of the parts).
+
+    The scripts write in the console code page on Windows when stdout is a pipe, unless
+    PYTHONIOENCODING is set (design 3.1), so they get PYTHONIOENCODING=utf-8 here.
+    """
+    if kw.get("env") is None:
+        kw["env"] = claude_env({"PYTHONIOENCODING": "utf-8"})
     res = run_command(argv, **kw)
     data = None
     text = res["stdout"].strip()
@@ -334,6 +340,8 @@ def run_claude(argv: list[str], cwd: Path, timeout: float, transcript: Path, env
             except subprocess.TimeoutExpired:
                 pass
         reader.join(timeout=10)
+        if proc.stdout is not None:
+            proc.stdout.close()
     seconds = round(time.monotonic() - started, 1)
     stderr_tail = stderr_file.read_text(encoding="utf-8", errors="replace")[-3000:] if stderr_file.is_file() else ""
     return {"exit_code": proc.returncode, "timed_out": timed_out, "seconds": seconds, "events": events,
@@ -373,6 +381,7 @@ def _block_text(content: Any) -> str:
 
 SKILL_DIR_RE = re.compile(r"Base directory for this skill:\s*(\S+)")
 COMMAND_NAME_RE = re.compile(r"<command-name>/?([^<\s]+)</command-name>")
+SKILL_PATH_RE = re.compile(r"[/\\]\.claude[/\\]skills[/\\]([A-Za-z0-9_.-]+)[/\\]")
 
 
 def skill_of_tool_input(data: dict) -> str | None:
@@ -383,8 +392,23 @@ def skill_of_tool_input(data: dict) -> str | None:
     return None
 
 
-def summarize(events: list[dict]) -> dict:
-    """What a stream-json run did: init, tool calls (main and in subagents), skills, agents, result."""
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def summarize(events: list[dict], prompt: str | None = None) -> dict:
+    """What a stream-json run did: init, tool calls (main and in subagents), skills, agents, result.
+
+    A skill counts as loaded when the Skill tool was called with it, when a tool input points into
+    its folder (.claude/skills/<name>/), or when the prompt starts with /<name> and <name> is one of
+    the init event's slash commands (claude -p does not show the expansion of a slash command).
+    """
     init: dict = {}
     final: dict = {}
     tool_uses: list[dict] = []
@@ -429,6 +453,10 @@ def summarize(events: list[dict]) -> dict:
                     skills_loaded.append(m.group(1).split(":")[-1])
                 for m in SKILL_DIR_RE.finditer(text):
                     skills_loaded.append(Path(m.group(1).rstrip("/\\")).name)
+    if prompt and prompt.strip().startswith("/") and init:
+        word = prompt.strip()[1:].split()[0] if prompt.strip()[1:] else ""
+        if word and word in (init.get("slash_commands") or []):
+            skills_loaded.insert(0, word.split(":")[-1])
     for use in tool_uses:
         res = results.get(use["id"])
         use["is_error"] = bool(res and res["is_error"])
@@ -437,6 +465,8 @@ def summarize(events: list[dict]) -> dict:
             name = skill_of_tool_input(use["input"])
             if name:
                 skills_loaded.append(name.split(":")[-1])
+        for value in _strings(use["input"]):
+            skills_loaded += [m.group(1) for m in SKILL_PATH_RE.finditer(value)]
     main = [u for u in tool_uses if u["parent"] is None]
     counts: dict[str, int] = {}
     for u in main:
@@ -450,7 +480,8 @@ def summarize(events: list[dict]) -> dict:
     return {
         "init": {"tools": init.get("tools") or [], "skills": init.get("skills") or [],
                  "agents": init.get("agents") or [], "mcp_servers": init.get("mcp_servers") or [],
-                 "model": init.get("model"), "permission_mode": init.get("permissionMode")} if init else {},
+                 "model": init.get("model"), "permission_mode": init.get("permissionMode"),
+                 "slash_commands": init.get("slash_commands") or []} if init else {},
         "has_result": bool(final),
         "result_text": final.get("result") if isinstance(final.get("result"), str) else None,
         "is_error": bool(final.get("is_error")) if final else None,
@@ -608,6 +639,16 @@ def mcp_list_tools(config: dict, cwd: Path | None = None, timeout: float = 120) 
         except OSError:
             pass
         kill_tree(proc)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                if stream:
+                    stream.close()
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------------------- LLM judge

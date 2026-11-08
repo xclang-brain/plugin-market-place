@@ -1,7 +1,7 @@
 // The results and settings screen in Chromium (Playwright). Started by test_gui_screen.py, which prepares the
 // repository, the run folder and the screen's server, and checks the files afterwards.
 //
-//   node gui_screen.mjs --check          {"playwright": true|false}
+//   node gui_screen.mjs --check          {"playwright": true|false, "chromium": true|false}
 //   node gui_screen.mjs --selftest       the problems the page checks find on small pages made to fail (and to pass)
 //   node gui_screen.mjs <config.json>    writes {"checks": [{"name", "problems": [...]}], "fatal": null|"..."} to config.out
 //
@@ -30,7 +30,13 @@ function loadPlaywright() {
 
 const playwright = loadPlaywright();
 if (process.argv[2] === '--check') {
-  process.stdout.write(JSON.stringify({ playwright: !!playwright }) + '\n');
+  let chromium = false;
+  try {
+    chromium = !!playwright && fs.existsSync(playwright.chromium.executablePath());
+  } catch {
+    chromium = false;
+  }
+  process.stdout.write(JSON.stringify({ playwright: !!playwright, chromium }) + '\n');
   process.exit(0);
 }
 const config = process.argv[2] === '--selftest' ? {} : JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));

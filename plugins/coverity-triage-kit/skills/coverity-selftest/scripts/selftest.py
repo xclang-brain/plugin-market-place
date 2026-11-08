@@ -529,6 +529,13 @@ def cmd_check_run(folder: str, run_arg: str) -> dict[str, Any]:
     missing = [name for name in ("summary.html", "approvals.json") if not (run_dir / name).is_file()]
     problems = [f"{name} がありません" for name in missing]
     problems += [f"run.json の形: {p}" for p in schema_problems(RUN_SCHEMA, data) or []]
+    if data.get("halted"):
+        problems.append("実行が止まっています（続けられない理由: "
+                        f"{str(data.get('halt_reason') or '').strip() or '記録がありません'}）")  # record() masks it
+    if data.get("stopped"):
+        problems.append("実行が途中で止められています（run.json の stopped が true）")
+    elif data.get("finished") is not True and not data.get("halted"):
+        problems.append("実行が最後まで進んでいません（run.json の finished が true ではありません）")
     if "approvals.json" not in missing:
         approvals = read_json(run_dir / "approvals.json")
         problems += [f"approvals.json の形: {p}" for p in schema_problems(APPROVALS_SCHEMA, approvals) or []]

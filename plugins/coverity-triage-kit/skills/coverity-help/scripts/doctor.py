@@ -515,10 +515,14 @@ def summarize_run(run_dir: Path, schema: dict[str, Any] | None) -> dict[str, Any
         "created_at": data.get("created_at"), "filter_name": data.get("filter_name"),
         "format": data.get("format"), "foreign": data.get("format") != RUN_FORMAT,
         "review": data.get("review"), "integration": data.get("integration"),
-        "stopped": bool(data.get("stopped")), "has_summary": has_summary,
-        "unfinished": not has_summary, "counts": counts,
+        "stage": data.get("stage") if isinstance(data.get("stage"), str) else None,
+        "stopped": bool(data.get("stopped")), "finished": bool(data.get("finished")),
+        "halted": bool(data.get("halted")),
+        "halt_reason": (str(data.get("halt_reason") or "").strip() or None) if data.get("halted") else None,
+        "has_summary": has_summary, "unfinished": not has_summary, "counts": counts,
     }
-    problems = schema_problems(data, schema)
+    # a run folder of another form (format other than 2) is only listed: its shape is not this contract's
+    problems = schema_problems(data, schema) if not result["foreign"] else None
     result["schema_checked"] = problems is not None
     if problems:
         result["schema_problems"] = problems
@@ -580,7 +584,7 @@ def cmd_run(run_arg: str) -> dict[str, Any]:
     except ValueError as exc:
         raise CliError(f"run.json を読めません: {exc}") from exc
     items = run.pop("_items")
-    keep = ("id", "cids", "status", "merged_into", "review", "applied", "error")
+    keep = ("id", "cids", "status", "merged_into", "review", "error")
     run["items"] = [{k: i[k] for k in keep if k in i} for i in items]
     run["errors"] = [i for i in run["items"] if i.get("status") == "error"]
     return {"ok": True, **run}

@@ -54,11 +54,12 @@ uv run --native-tls --quiet "<フォルダ>/scripts/gui.py" stop --repo "<リポ
 | `.coverity-triage/config.yaml` | 読む・書く。変えた値の行だけを書き換え、注釈を残す。ファイルにない項目は、既定から変えたときだけ足す。知らない項目はそのまま残す |
 | `.coverity-triage/filters/*.yaml` | 読む・作る・書く・消す（少なくとも 1 つ残す） |
 | `.coverity-triage/knowledge.md`、`no-grouping.yaml` | 読む・書く |
-| 実行フォルダ（`<output_dir>/<年月日-時分秒>/`） | `run.json`・`items/<ID>/`（`result.json`・`review.json`・`progress.json`・`saved.json`・`issue-<CID>.json`）・`operations.log`・`analysis/`・`jobs/`・`verify.json`・`summary.html`・`cid/`・`patches/`・`fixed/` を読む。書くのは `approvals.json` だけ |
+| 実行フォルダ（`<output_dir>/<年月日-時分秒>/`） | `run.json`・`items/<ID>/`（`result.json`・`review.json`・`progress.json`・`saved.json`・`issue-<CID>.json`）・`operations.log`・`analysis/`・`jobs/`・`verify.json`・`apply-code.result.json`（反映したもの）・`summary.html`・`cid/`・`patches/`・`fixed/` を読む。書くのは `approvals.json` だけ |
 
 - `run.json` の `format` が 2 でない実行（別の形で作られた実行）は、一覧に出しますが、見るだけです。
 - `approvals.json` は `approvals.json.lock` を取ってから書き、ほかの作業の承認とほかの項目はそのまま残します。一覧と詳細レポートは書き直しません。
 - `result.json` は `assets/result.schema.json`（結果の形の取り決めの写し）で確かめてから使います。
+- 人に見せる確信度は、`scripts/confidence.py`（一括実行のスクリプトの写し）で決めます。作業役の確信度を、確かめの上限とビルドでの検証の問題で下げたものです（一覧と同じ答え）。
 - 認証情報の環境変数（既定 `COV_USER` / `COV_AUTH_KEY`）は、Windows ではユーザーの環境変数（`HKCU\Environment`）も読みます。画面から保存できるのは Windows だけで、認証キーの値は画面に出しません。
 - サーバの場所の記録：`~/.<このフォルダの名前>/`（環境変数 `GUI_STATE_DIR` で変えられます）。止まるまでの時間は環境変数 `GUI_IDLE_SECONDS`（既定 7200 秒）です。
 
@@ -89,5 +90,5 @@ py -3 -m unittest discover -s tests
 python3 -m unittest discover -s tests
 ```
 
-- `assets/contract/yaml-edit/cases.json`（注釈を残す書き換えの共通の試験のデータ）、`assets/run.schema.json`、`assets/approvals.schema.json`（実行フォルダの取り決めの写し）があれば、それでも確かめます。ないときは、その試験を飛ばします。
+- `assets/contract/yaml-edit/cases.json`（注釈を残す書き換えの共通の試験のデータ）、`assets/contract/confidence/cases.json`（人に見せる確信度の共通の試験のデータ）、`assets/run.schema.json`、`assets/approvals.schema.json`（実行フォルダの取り決めの写し）があれば、それでも確かめます。ないときは、その試験を飛ばします。
 - 試験の課題（モデルで解かせて採点するもの）は `evals/` にあります。

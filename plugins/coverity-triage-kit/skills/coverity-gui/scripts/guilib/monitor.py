@@ -1,7 +1,8 @@
 """What the AI of a run is doing, for the 監視 tab. Read only, from the files of the run folder:
 
-- ``run.json``: the items (``status``; ``started``, ``attempts``, ``rework_rounds``, ``slot``, ``error``
-  when present) and whether the review / integration are used;
+- ``run.json`` (the fields of ``assets/run.schema.json``): the items (``status``, ``started``, ``attempts``,
+  ``review_rounds``, ``slot``, ``stage``, ``error``), whether the review / integration are used, and
+  ``halted`` / ``halt_reason`` (the run cannot go on until the cause is fixed and it is resumed);
 - ``items/<ID>/progress.json`` (``phase``, ``note``; the time is the file's), ``brief.md`` (when the
   current attempt started), ``result.previous.json`` (the item is being redone after the review);
 - ``agents/reviewer/<ID>.md`` / ``agents/integrator/brief.md`` and their progress, ``review.json``,
@@ -209,7 +210,7 @@ def _item_state(run: Run, item: dict[str, Any], records: list[dict[str, Any]], j
     scripted = working and (copying or item.get("stage") in SCRIPT_STAGES)
     idle = _since(now, last)
     rework = (folder / "result.previous.json").is_file()
-    rounds = item.get("rework_rounds", item.get("review_rounds"))
+    rounds = item.get("review_rounds")
     attempts = item.get("attempts")
     return {
         "id": item["id"], "cids": item["cids"], "is_group": item["id"].startswith("G"),
@@ -362,6 +363,11 @@ def _role(run: Run, role: str, now: float, states: list[dict[str, Any]]) -> dict
 def _alerts(run: Run, records: list[dict[str, Any]], states: list[dict[str, Any]], initial: dict[str, Any] | None,
             roles: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    if run.data.get("halted") and not run.data.get("stopped"):
+        reason = str(run.data.get("halt_reason") or "").strip() or "理由の記録がありません"
+        out.append({"time": "", "level": "critical", "source": "halt", "item": None,
+                    "title": "実行が止まっています（このままでは先に進みません）",
+                    "detail": _detail(f"理由: {reason}", "原因を直してから、一括のトリアージを続きから再開してください。")})
     for r in records:
         level = _level(r)
         if level == "info":
@@ -435,10 +441,12 @@ def _alerts(run: Run, records: list[dict[str, Any]], states: list[dict[str, Any]
 
 
 def _main(stage_key: str, counts: dict[str, int], free: int, roles: list[dict[str, Any]],
-          initial: dict[str, Any] | None, records: list[dict[str, Any]], now: float) -> dict[str, Any]:
+          initial: dict[str, Any] | None, records: list[dict[str, Any]], now: float, halted: bool = False) -> dict[str, Any]:
     reviewing = any(r["role"] == "reviewer" and r["state"] == "running" for r in roles)
     integrating = any(r["role"] == "integrator" and r["state"] == "running" for r in roles)
-    if stage_key == "initial":
+    if halted and stage_key not in ("stopped", "done"):
+        label = "止まっている（原因を直してから再開してください）"
+    elif stage_key == "initial":
         label = "止まっている（初回解析に失敗）" if initial and initial["status"] == "failed" else "初回解析の終わりを待っている"
     elif stage_key == "items":
         if counts["pending"] and free:
@@ -490,7 +498,9 @@ def board(run: Run, repo: Path | None = None, now: float | None = None) -> dict[
                "item": _item_of(r), "text": _text(r)} for r in reversed(records[-RECENT:])]
     items = [{k: v for k, v in s.items() if k not in ("started", "slot", "finishing")} for s in states]
     done = counts["done"] + counts["error"]
-    return {**info, "main": _main(stage_key, counts, free, roles, initial, records, now),
+    halted = bool(run.data.get("halted")) and not run.data.get("stopped")
+    return {**info, "main": _main(stage_key, counts, free, roles, initial, records, now, halted),
+            "halted": halted, "halt_reason": (str(run.data.get("halt_reason") or "") or None) if halted else None,
             "counts": counts, "total": total, "parallel": parallel, "workers": workers, "initial": initial,
             "roles": roles, "items": items, "recent": recent,
             "alerts": _alerts(run, records, states, initial, roles, jobs),

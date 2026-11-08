@@ -87,14 +87,25 @@ class SelftestBase(unittest.TestCase):
     def check(self, check_id):
         return json.loads((self.dir / "selftest.json").read_text(encoding="utf-8"))["checks"].get(check_id)
 
-    # a run folder in the shape the batch run leaves (design 4.11)
-    def make_run(self, out, items=None, summary=True):
+    # a run folder in the shape the batch run leaves (design 4.11, assets/run.schema.json)
+    def make_run(self, out, items=None, summary=True, **state):
         run_dir = Path(out) / "20261108-101500"
         items = items or [
             ("20001", [20001], "done", "fix"), ("20002", [20002], "done", "deviation"),
             ("20003", [20003], "done", "fix"), ("G1", [20004, 20005, 20006], "done", "deviation")]
-        write_json(run_dir / "run.json", {"format": 2, "run_id": run_dir.name, "filter_name": "all.yaml",
-                                          "items": [{"id": i, "cids": c, "status": s} for i, c, s, _ in items]})
+        finished = summary and all(s in ("done", "error", "merged") for _, _, s, _ in items)
+        data = {"format": 2, "tool_version": "1", "run_id": run_dir.name, "repo_root": str(getattr(self, "sample", self.tmp)),
+                "created_at": "2026-11-08T10:15:00", "filter_name": "all", "stream": "app-main", "limit": 20,
+                "initial": False, "review": True, "integration": False, "max_rework": 1, "parallel": 2,
+                "stage": "done" if finished else "items", "stopped": False, "stopped_at": None,
+                "finished": finished, "finished_at": "2026-11-08T11:00:00" if finished else None,
+                "halted": False, "halt_reason": None,
+                "items": [{"id": i, "cids": c, "status": s, "merged_into": None, "merged_from": [],
+                           "review": "pass" if s == "done" else None, "slot": None, "stage": None, "attempts": 1,
+                           "review_rounds": 0, "error": "取れませんでした" if s == "error" else "",
+                           "started": 1762564500.0, "seconds": 120.0} for i, c, s, _ in items]}
+        data.update(state)
+        write_json(run_dir / "run.json", data)
         for item_id, cids, status, rec in items:
             if status != "done":
                 continue
@@ -192,6 +203,24 @@ class SectionOneAndTwoTest(SelftestBase):
         self.assertIn("20002", got["2-4"]["detail"])
         self.assertEqual(got["2-5"]["status"], "review")  # the group lost one CID
         self.assertEqual(got["2-6"]["status"], "review")  # a missing patch only
+
+    def test_a_halted_or_stopped_run_did_not_reach_its_end(self):
+        run_dir = self.make_run(self.out, finished=False, stage="fetch", halted=True,
+                                halt_reason="Coverity の認証に失敗しました（401）")
+        got = {c["id"]: c for c in self.call("check-run", "--dir", str(self.dir), "--run", str(run_dir))["checks"]}
+        self.assertEqual(got["2-2"]["status"], "fail")
+        self.assertIn("認証に失敗", got["2-2"]["detail"])
+        shutil.rmtree(run_dir)
+        run_dir = self.make_run(self.out, finished=False, stage="stopped", stopped=True, stopped_at="2026-11-08T10:30:00")
+        got = {c["id"]: c for c in self.call("check-run", "--dir", str(self.dir), "--run", str(run_dir))["checks"]}
+        self.assertEqual(got["2-2"]["status"], "fail")
+        self.assertIn("止められ", got["2-2"]["detail"])
+
+    def test_a_run_json_of_the_wrong_shape_fails(self):
+        run_dir = self.make_run(self.out, stage="somewhere")
+        got = {c["id"]: c for c in self.call("check-run", "--dir", str(self.dir), "--run", str(run_dir))["checks"]}
+        self.assertEqual(got["2-2"]["status"], "fail")
+        self.assertIn("run.json の形", got["2-2"]["detail"])
 
     def test_changed_working_file_fails(self):
         run_dir = self.make_run(self.out)
@@ -361,6 +390,9 @@ class SchemaCopyTest(SelftestBase):
         self.call("start", "--dir", str(self.dir), "--sections", "2", script=script)
         self.call("sample", "--dir", str(self.dir), script=script)
         run_dir = self.make_run(self.dir / "coverity-triage-out")
+        state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        del state["tool_version"]
+        write_json(run_dir / "run.json", state)
         result = self.call("check-run", "--dir", str(self.dir), "--run", str(run_dir), script=script)
         two = {c["id"]: c for c in result["checks"]}["2-2"]
         self.assertEqual(two["status"], "fail")

@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from apply_testlib import (CONFIG, FIXED, READER, RUN_ID, SKILL, Fixture, TempDirCase, git, needs_git, needs_uv,
-                           run_script, write_json)
+                           run_item, run_state, run_script, write_json)
 
 FOUR = [
     {"id": "20001", "cids": [20001], "recommendation": "fix", "fix": "commit"},
@@ -94,6 +94,27 @@ class Preview(TempDirCase):
         plan = json.loads(Path(preview(run)["plan_file"]).read_bytes())
         self.assertEqual(plan["triage"][0]["classification"], "Intentional")
         self.assertEqual(plan["triage"][0]["comment"], edit["comment"])
+
+    def test_a_long_comment_of_the_person_is_told_before_consent(self) -> None:
+        edit = {"classification": "False Positive", "action": "Ignore", "severity": "Unspecified",
+                "comment": "誤検知。" + "呼び出し元で必ず確かめている。" * 15}
+        run = self.fx.make_run([{**FOUR[1], "edit": edit}])
+        out = preview(run)
+        long = [e for e in out["effects"] if "200 文字を超えて" in e]
+        self.assertEqual(len(long), 1, out["effects"])
+        self.assertIn(f"20002（{len(edit['comment'])} 文字）", long[0])
+        plan = json.loads(Path(out["plan_file"]).read_bytes())
+        self.assertEqual(plan["triage"][0]["comment"], edit["comment"])  # the person's text, not cut
+        self.assertFalse(any("200 文字" in e for e in preview(self.fx.make_run(FOUR[1:2], run_id="20261108-101501"))["effects"]))
+
+    def test_the_stream_is_the_one_of_run_json(self) -> None:
+        run = self.fx.make_run(FOUR[1:2])
+        state = json.loads((run / "run.json").read_text(encoding="utf-8"))
+        state["stream"] = "app-release"
+        write_json(run / "run.json", state)
+        write_json(run / "filter.json", {"name": "untriaged", "streams": ["app-main"]})  # not read
+        plan = json.loads(Path(preview(run)["plan_file"]).read_bytes())
+        self.assertEqual(plan["triage"][0]["stream"], "app-release")
 
     def test_fix_without_a_patch_is_a_problem_and_nothing_is_written(self) -> None:
         run = self.fx.make_run([{"id": "20009", "cids": [20009], "recommendation": "fix", "fix": None}])
@@ -278,6 +299,13 @@ class ApplyCode(TempDirCase):
         _, result = apply_code(run, preview(run)["confirmation_token"])
         self.assertIn("確信度: 中", result["pull_requests"][0]["body"])
 
+    def test_confidence_in_the_pull_request_is_low_when_the_build_check_failed(self) -> None:
+        run = self.fx.make_run(FOUR[:1])
+        write_json(run / "verify.json", {"20001": {"mode": "build", "batch": True, "applied": True, "build_ok": False,
+                                                    "problems": ["ビルドエラーが、この修正案の変えたファイルで出ています"]}})
+        _, result = apply_code(run, preview(run)["confirmation_token"])
+        self.assertIn("確信度: 低", result["pull_requests"][0]["body"])
+
     def test_one_branch_per_run(self) -> None:
         settings = self.fx.repo / ".coverity-triage" / "config.yaml"
         settings.write_text(settings.read_text(encoding="utf-8") + "options:\n  per_run_branch: true\n", encoding="utf-8")
@@ -307,6 +335,15 @@ class ApplyCode(TempDirCase):
         self.assertEqual(stats["recommendation_taken_rate"], round(2 / 3, 3))
         self.assertEqual(stats["deviation_edited_rate"], 1.0)
         self.assertEqual(stats["average_seconds_per_item"], 120.0)
+        record = json.loads((run / "apply-code.result.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["metrics"]["20001"]["shown_confidence"], "high")
+        # seconds may be null (not known): those items are left out of the average
+        state = json.loads((run / "run.json").read_text(encoding="utf-8"))
+        state["items"][0]["seconds"] = None
+        state["items"][1]["seconds"] = 60
+        write_json(run / "run.json", state)
+        _, stats, _ = run_script("stats", "--repo", str(self.fx.repo))
+        self.assertEqual(stats["average_seconds_per_item"], 90.0)
 
     def test_svn_patch_goes_to_the_working_copy(self) -> None:
         if not (shutil.which("svn") and shutil.which("svnadmin")):
@@ -332,8 +369,7 @@ class ApplyCode(TempDirCase):
             __import__("apply_testlib").result_of("20001", "fix"))))
         write_json(run_dir / "items" / "20001" / "saved.json",
                    {"fix": {"files": ["src/reader.c"], "patch": str(patch), "branch": None, "commit": None}})
-        write_json(run_dir / "run.json", {"format": 2, "run_id": RUN_ID, "repo_root": str(wc), "stream": "s",
-                                          "items": [{"id": "20001", "cids": [20001], "status": "done", "applied": {}}]})
+        write_json(run_dir / "run.json", run_state(RUN_ID, wc, [run_item("20001", [20001])], stream="s"))
         (run_dir / "summary.html").write_text("x", encoding="utf-8")
         write_json(run_dir / "approvals.json", {"version": 1, "items": {"20001": {"decision": "fix", "edited": False}}})
         out = preview(run_dir)

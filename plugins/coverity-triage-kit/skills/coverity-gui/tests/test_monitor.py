@@ -46,7 +46,8 @@ class MonitorTest(unittest.TestCase):
 
     def test_items_show_state_step_note_and_progress(self) -> None:
         items = [{"id": "20001", "cids": [20001], "status": "done", "review": "pass"},
-                 {"id": "20002", "cids": [20002], "status": "in_progress", "attempts": 2, "rework_rounds": 1},
+                 {"id": "20002", "cids": [20002], "status": "in_progress", "attempts": 2, "review_rounds": 1,
+                  "slot": 1, "stage": "work"},
                  {"id": "20003", "cids": [20003], "status": "pending"}]
         run = helpers.make_run(self.out, RUN, items, review=True, summary=False, extra={"parallel": 2})
         helpers.write_json(run / "items" / "20002" / "progress.json", {"item": "20002", "phase": "fix", "note": "修正を作っている"})
@@ -170,20 +171,47 @@ class MonitorTest(unittest.TestCase):
 
     def test_a_stopped_run_is_shown_as_stopped(self) -> None:
         helpers.make_run(self.out, RUN, [{"id": "20001", "cids": [20001], "status": "pending"}], summary=False,
-                         extra={"stopped": {"at": "2026-11-08T13:30:00"}})
+                         extra={"stopped": True, "stopped_at": "2026-11-08T13:30:00+09:00", "stage": "stopped"})
         data = self.board()
         self.assertEqual(data["stage"], "stopped")
+        self.assertFalse(data["halted"])
         runs = self.srv.get("/api/runs")[1]["runs"]
         self.assertFalse(next(r for r in runs if r["run_id"] == RUN)["unfinished"])
+
+    def test_a_halted_run_tells_why_it_cannot_go_on(self) -> None:
+        helpers.make_run(self.out, RUN, [{"id": "20001", "cids": [20001], "status": "pending"}], summary=False,
+                         extra={"halted": True, "halt_reason": "Coverity の認証に失敗しました（401）", "stage": "fetch"})
+        data = self.board()
+        self.assertTrue(data["halted"])
+        self.assertEqual(data["halt_reason"], "Coverity の認証に失敗しました（401）")
+        self.assertIn("止まっている", data["main"]["label"])
+        alert = data["alerts"][0]
+        self.assertEqual((alert["level"], alert["source"]), ("critical", "halt"))
+        self.assertIn("認証に失敗", alert["detail"])
+        # resumed: the batch run sets halted back to false
+        run_json = self.out / RUN / "run.json"
+        state = json.loads(run_json.read_text(encoding="utf-8"))
+        state.update(halted=False, halt_reason=None)
+        helpers.write_json(run_json, state)
+        data = self.board()
+        self.assertFalse(data["halted"])
+        self.assertFalse(any(a["source"] == "halt" for a in data["alerts"]))
 
     def test_run_json_fixtures_match_the_contract_schema(self) -> None:
         schema = helpers.contract_schema("run.schema.json")
         if schema is None:
             self.skipTest("assets/run.schema.json is not here yet (the copy of the contract arrives later)")
         run = helpers.make_run(self.out, RUN, [{"id": "20001", "cids": [20001], "status": "done", "review": "pass"},
-                                               {"id": "G1", "cids": [20004, 20005], "status": "in_progress"}])
+                                               {"id": "G1", "cids": [20004, 20005], "status": "in_progress",
+                                                "merged_from": ["20004", "20005"], "slot": 1, "stage": "work"},
+                                               {"id": "20004", "cids": [20004], "status": "merged", "merged_into": "G1"},
+                                               {"id": "20007", "cids": [20007], "status": "error", "error": "取れなかった"}],
+                               review=True, summary=False)
         data = json.loads((run / "run.json").read_text(encoding="utf-8"))
         self.assertEqual(helpers.schema.errors(data, schema), [])
+        job = {"name": "copy-w1", "kind": "copy", "status": "running", "pid": 1, "started": "2026-11-08T13:00:00+09:00",
+               "args": {"item": "G1", "slot": 1}}
+        self.assertEqual(helpers.schema.errors(job, {**schema["$defs"]["job"], "$defs": schema["$defs"]}), [])
 
 
 if __name__ == "__main__":

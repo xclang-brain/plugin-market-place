@@ -40,6 +40,7 @@ from typing import Any  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import confidence  # noqa: E402  (byte copy of the batch run's rule: the confidence shown to people)
 import plantoken  # noqa: E402
 
 RUN_ID = re.compile(r"^[0-9]{8}-[0-9]{6}(-[0-9]+)?$")
@@ -54,7 +55,8 @@ KNOWLEDGE_FILE = "knowledge.md"
 DEFAULT_OUTPUT_DIR = os.pardir + "/coverity-triage-out"  # next to the repository
 LABELS = {"fix": "修正", "deviation": "逸脱", "reject": "却下"}
 CONFIDENCE_JA = {"high": "高", "medium": "中", "low": "低"}
-CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+TAKEN_REVIEWS = ("pass", "flag", "rework")  # run.json items[].review once the run took review.json in
+COMMENT_MAX = 200  # characters of a deviation comment (the rule for the comments written by the AI)
 SERVER_ERROR = re.compile(r"(?:HTTP\s*|[（(]\s*)5\d\d(?!\d)|(?<![0-9A-Za-z])5xx(?![0-9A-Za-z])", re.IGNORECASE)
 KNOWLEDGE_TEMPLATE = """# プロジェクトの知識（Coverity トリアージ）
 
@@ -377,23 +379,20 @@ class RunFolder:
     def has_summary(self) -> bool:
         return (self.dir / "summary.html").is_file()
 
-    def stream(self, item: dict[str, Any]) -> str | None:
-        """The stream of the item's warnings: run.json, the filter of the run, the issue files."""
-        if isinstance(self.state.get("stream"), str) and self.state["stream"]:
-            return self.state["stream"]
-        filt = read_json(self.dir / "filter.json", {})
-        streams = filt.get("streams") if isinstance(filt, dict) else None
-        if isinstance(streams, list) and len(streams) == 1 and isinstance(streams[0], str):
-            return streams[0]
-        issues = read_json(self.dir / "issues.json", {})
-        if isinstance(issues, dict) and isinstance(issues.get("stream"), str):
-            return issues["stream"]
-        for cid in item.get("cids") or []:
-            detail = read_json(self.item_dir(item["id"]) / f"issue-{cid}.json", {})
-            issue = detail.get("issue") if isinstance(detail, dict) else None
-            if isinstance(issue, dict) and isinstance(issue.get("stream"), str):
-                return issue["stream"]
-        return None
+    @property
+    def stream(self) -> str | None:
+        """The stream of the run's warnings (run.json ``stream``; one stream per run)."""
+        value = self.state.get("stream")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    def seconds(self) -> dict[str, float]:
+        """How long each finished item took (run.json ``items[].seconds``: a number, or null when not known)."""
+        out = {}
+        for item in self.items:
+            value = item.get("seconds")
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                out[item["id"]] = float(value)
+        return out
 
 
 def is_group(item_id: str) -> bool:
@@ -418,11 +417,10 @@ def written_ids(run_dir: Path) -> tuple[set[str], dict[str, Any]]:
     return {str(v["id"]) for v in written.values() if isinstance(v, dict) and "id" in v}, data
 
 
-def applied_parts(run: RunFolder, record: dict[str, Any], written: set[str], item: dict[str, Any]) -> set[str]:
-    parts = set((record["applied"].get(item["id"]) or {}).keys()) - {"at"}
-    applied = item.get("applied")
-    if isinstance(applied, dict):
-        parts |= {k for k, v in applied.items() if v and k != "at"}
+def applied_parts(record: dict[str, Any], written: set[str], item: dict[str, Any]) -> set[str]:
+    """What is applied already: this skill's record (apply-code.result.json), and what Coverity has."""
+    entry = record["applied"].get(item["id"])
+    parts = {k for k, v in entry.items() if v and k != "at"} if isinstance(entry, dict) else set()
     if item["id"] in written:
         parts.add("coverity")
     return parts
@@ -505,7 +503,7 @@ def cmd_preview(args: argparse.Namespace) -> dict[str, Any]:
     record = load_record(run.dir)
     written, _ = written_ids(run.dir)
     triage, code, reject, problems = [], [], [], []
-    already, already_fixed, undecided = [], [], []
+    already, already_fixed, undecided, long_comments = [], [], [], []
     for item in run.items:
         if item.get("status") != "done" or item.get("merged_into"):
             continue
@@ -519,7 +517,7 @@ def cmd_preview(args: argparse.Namespace) -> dict[str, Any]:
             problems.append(f"{item['id']}: 結果のファイル（items/{item['id']}/result.json）を読めません")
             continue
         saved = run.saved(item["id"])
-        done = applied_parts(run, record, written, item)
+        done = applied_parts(record, written, item)
         cids = [int(c) for c in item.get("cids") or []]
         if decision == "fix":
             if "fix" in done:
@@ -548,8 +546,10 @@ def cmd_preview(args: argparse.Namespace) -> dict[str, Any]:
                 if missing:
                     problems.append(f"{item['id']}: 逸脱の {'・'.join(missing)} が空です（承認の画面で直してください）")
                     continue
-                stream = run.stream(item)
+                stream = run.stream
                 triage.append({"id": item["id"], "cids": cids, **({"stream": stream} if stream else {}), **values})
+                if len(values["comment"]) > COMMENT_MAX:
+                    long_comments.append(f"{item['id']}（{len(values['comment'])} 文字）")
                 todo = True
             annotation = saved.get("annotation") if isinstance(saved.get("annotation"), dict) else None
             if annotation and "annotation" not in done:
@@ -608,6 +608,9 @@ def cmd_preview(args: argparse.Namespace) -> dict[str, Any]:
         effects.append(f"却下 {len(reject)} 件：何も書き込みません" + (
             f"。グループ {', '.join(groups)} の CID は、次の実行からグループにしません（no-grouping.yaml に足します）"
             if groups else ""))
+    if long_comments:
+        effects.append(f"逸脱コメントが {COMMENT_MAX} 文字を超えています（{', '.join(long_comments)}）。このまま書き戻すと、"
+                       f"その文のまま Coverity に入ります。縮めるときは、承認の画面で直してから、もう一度反映を頼んでください")
     if already_fixed:
         effects.append(f"{', '.join(already_fixed)}：最新のリビジョンでもう直っているため、「修正」でも取り込むものはありません")
     return {**base, "nothing_to_apply": False, "plan_file": str(path),
@@ -620,18 +623,19 @@ def cmd_preview(args: argparse.Namespace) -> dict[str, Any]:
 # ---- apply-code ----------------------------------------------------------------------------------------
 
 
-def effective_confidence(run: RunFolder, item_id: str, result: dict[str, Any], kind: str) -> str:
-    """The confidence shown to people: never above the review's cap or a failed build check."""
-    level = result.get("confidence") if result.get("confidence") in CONFIDENCE_ORDER else "low"
-    review = read_json(run.item_dir(item_id) / "review.json", {})
-    if isinstance(review, dict) and review.get("outcome") in ("flag", "rework"):
-        cap = review.get("confidence_cap") if review.get("confidence_cap") in CONFIDENCE_ORDER else "low"
-        level = min(level, cap, key=CONFIDENCE_ORDER.get)
+def shown_confidence(run: RunFolder, item_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """The confidence shown to people (the shared rule of scripts/confidence.py, as in the summary):
+    {"confidence", "reason", "lowered_by"}.
+
+    The review counts once the run took it in (run.json ``items[].review`` is pass / flag / rework; an
+    unverified item has none); the build check is the item's entry of verify.json."""
+    review = None
+    if run.item(item_id).get("review") in TAKEN_REVIEWS:
+        found = read_json(run.item_dir(item_id) / "review.json", None)
+        review = found if isinstance(found, dict) else None
     verify = read_json(run.dir / "verify.json", {})
     check = verify.get(item_id) if isinstance(verify, dict) else None
-    if kind == "fix" and isinstance(check, dict) and (check.get("build_ok") is False or check.get("problems")):
-        level = "low"
-    return level
+    return confidence.effective_confidence(result, review, check if isinstance(check, dict) else None)
 
 
 def pr_text(run: RunFolder, entry: dict[str, Any]) -> tuple[str, str]:
@@ -642,7 +646,7 @@ def pr_text(run: RunFolder, entry: dict[str, Any]) -> tuple[str, str]:
     cids = entry["cids"]
     head = f"Coverity CID {', '.join(map(str, cids[:5]))}{' ほか' if len(cids) > 5 else ''}"
     title = f"{head}: {fix.get('summary') or '修正'}" if entry["kind"] == "fix" else f"{head}: 逸脱の注釈"
-    level = effective_confidence(run, entry["id"], result, entry["kind"])
+    level = shown_confidence(run, entry["id"], result)["confidence"]
     body = "\n".join([
         "## 見立て", "", str(verdict.get("summary") or ""), "", str(verdict.get("rationale") or ""), "",
         "## 変更の内容", "", str(fix.get("summary") if entry["kind"] == "fix" else deviation.get("comment") or ""), "",
@@ -971,7 +975,9 @@ def metrics_records(run: RunFolder, plan: dict[str, Any]) -> dict[str, dict[str,
     for approval, entry in entries:
         result = run.result(entry["id"]) or {}
         record = {"item": entry["id"], "cids": entry["cids"], "recommendation": result.get("recommendation"),
-                  "confidence": result.get("confidence"), "approval": approval, "at": now()}
+                  "confidence": result.get("confidence"),
+                  "shown_confidence": shown_confidence(run, entry["id"], result)["confidence"],
+                  "approval": approval, "at": now()}
         if approval == "deviation":
             proposal = result.get("deviation") if isinstance(result.get("deviation"), dict) else {}
             record["comment_edited"] = str(entry.get("comment", "")).strip() != str(proposal.get("comment", "")).strip()
@@ -1139,20 +1145,22 @@ def cmd_stats(args: argparse.Namespace) -> dict[str, Any]:
         if not metrics:
             continue
         runs += 1
-        state = read_json(folder / "run.json", {})
-        times = {i.get("id"): i.get("seconds") for i in (state.get("items") or []) if isinstance(i, dict)} \
-            if isinstance(state, dict) else {}
+        try:
+            times = RunFolder(folder).seconds()
+        except ApplyError:  # run.json cannot be read: the records count, the times are not known
+            times = {}
         for item_id, value in metrics.items():
             if isinstance(value, dict) and value.get("approval") in LABELS:
                 records.append(value)
-                if isinstance(times.get(item_id), (int, float)):
-                    seconds.append(float(times[item_id]))
+                if item_id in times:
+                    seconds.append(times[item_id])
     approvals = {k: 0 for k in LABELS}
     by_confidence: dict[str, list[int]] = {}
     taken = edited = deviations = 0
     for r in records:
         approvals[r["approval"]] += 1
-        stats = by_confidence.setdefault(str(r.get("confidence")), [0, 0])
+        # the confidence the person saw (records made before it was kept: the worker's)
+        stats = by_confidence.setdefault(str(r.get("shown_confidence") or r.get("confidence")), [0, 0])
         stats[0] += 1
         if r["approval"] == r.get("recommendation"):
             taken += 1

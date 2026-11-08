@@ -128,14 +128,17 @@ def update(repo: Path, run_id: str, body: Any) -> dict[str, Any]:
 
     out: dict[str, Any] = {"ok": True, "item": item_id, **entry}
     warnings = []
-    applied = item.get("applied")
+    applied = run.applied_parts(item_id)
     if applied and (before.get("decision"), before.get("deviation")) != (entry["decision"], entry.get("deviation")):
-        parts = "、".join(label for part, label in APPLIED_JA.items() if isinstance(applied, dict) and part in applied)
-        warnings.append(f"{item_id} はもう反映しています{f'（{parts}）' if parts else ''}。承認を変えても、反映したものは"
+        parts = "、".join(APPLIED_JA[part] for part in applied)
+        warnings.append(f"{item_id} はもう反映しています（{parts}）。承認を変えても、反映したものは"
                         "元に戻りません。まだ反映していない部分は、次に反映するときに反映します")
     comment = (kept or {}).get("comment", "")
     if len(comment) > COMMENT_MAX:
-        warnings.append(f"逸脱コメントが {len(comment)} 文字あります。Coverity に書き込む前に、{COMMENT_MAX} 文字以内に縮めるのがおすすめです")
+        # Not refused here: the screen holds no copy of the comment rules. The edit is the person's own text.
+        warnings.append(f"逸脱コメントが {len(comment)} 文字あります。逸脱コメントは {COMMENT_MAX} 文字以内の決まりです。"
+                        "このまま保存しましたが、反映するとこの文のまま Coverity に書き込みます。"
+                        f"{COMMENT_MAX} 文字以内に縮めて、もう一度保存してください")
     if warnings:
         out["warning"] = "\n".join(warnings)
     return out

@@ -9,8 +9,8 @@ For each variant:
 
 1. the self-test skill (a temp copy, run by path) makes its sample repository: git, a push target
    and a fake Coverity (``selftest.py start --sections 2`` and ``sample``). The variant sets
-   ``agents.review`` / ``agents.integration`` in its config and commits it; ``--limit N`` adds a
-   filter file with ``limit: N`` (a 1-warning run for a smoke test);
+   ``agents.review`` / ``agents.integration`` in its config and commits it; ``--limit N`` asks for
+   「N 件だけ」 in the request (the batch-run skill turns it into --limit; 1 for a smoke test);
 2. claude_adapter extracts the orchestrator's table, followed through the agents of the table (all
    agents, the skills and the MCP server), into ``<repo>/.claude/`` (hidden through .git/info/exclude);
    the run folder's output_dir (outside the repository) is passed with ``--add-dir``;
@@ -52,6 +52,8 @@ ROLES = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合�
 VARIANTS = {"default": {"review": False, "integration": False}, "full": {"review": True, "integration": True}}
 DEFAULT_FILTER = "all.yaml"
 PROMPT = "Coverity の警告を、条件ファイル {filter} で、すべてトリアージしてください。途中で質問せず、最後まで進めてください。"
+# With --limit, the batch-run skill's own phrase for a limit (「N 件だけ」) instead of 「すべて」.
+PROMPT_LIMIT = "Coverity の警告を、条件ファイル {filter} で、{limit} 件だけトリアージしてください。途中で質問せず、最後まで進めてください。"
 RUN_DIR_RE = re.compile(r"^[0-9]{8}-[0-9]{6}(-[0-9]+)?$")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SELFTEST_LEVELS = {"2-2": "must", "2-3": "must", "2-4": "should", "2-5": "should", "2-6": "must"}
@@ -83,12 +85,11 @@ def set_agent_options(text: str, options: dict[str, bool]) -> str:
     return "\n".join(lines)
 
 
-def limited_filter(text: str, limit: int) -> str:
-    lines = [ln for ln in text.replace("\r\n", "\n").rstrip("\n").split("\n") if not re.match(r"^limit\s*:", ln)]
-    return "\n".join(lines + [f"limit: {limit}"]) + "\n"
+def prompt_for(filter_name: str, limit: int | None) -> str:
+    return (PROMPT_LIMIT if limit else PROMPT).replace("{filter}", filter_name).replace("{limit}", str(limit or ""))
 
 
-def prepare_sample(selftest_script: Path, vdir: Path, variant: str, limit: int | None) -> dict:
+def prepare_sample(selftest_script: Path, vdir: Path, variant: str) -> dict:
     sdir = vdir / "selftest"
     started, res = ek.run_json(ek.uv_script(selftest_script, "start", "--sections", "2", "--dir", str(sdir),
                                             "--client", "Claude Code（EVAL）"), timeout=600)
@@ -103,10 +104,6 @@ def prepare_sample(selftest_script: Path, vdir: Path, variant: str, limit: int |
     config = repo / ".coverity-triage" / "config.yaml"
     config.write_text(set_agent_options(config.read_text(encoding="utf-8"), VARIANTS[variant]), encoding="utf-8")
     filter_name = sample.get("filter") or DEFAULT_FILTER
-    if limit:
-        src = repo / ".coverity-triage" / "filters" / filter_name
-        filter_name = f"eval-{limit}.yaml"
-        (src.parent / filter_name).write_text(limited_filter(src.read_text(encoding="utf-8"), limit), encoding="utf-8")
     ek.git(repo, "add", "-A")
     ek.git(repo, "commit", "-q", "-m", f"EVAL の設定（{variant}）", check=False)
     return {"selftest_dir": sdir, "repo": repo, "output_dir": Path(sample["output_dir"]), "filter": filter_name}
@@ -115,9 +112,14 @@ def prepare_sample(selftest_script: Path, vdir: Path, variant: str, limit: int |
 # --------------------------------------------------------------------------- after the run
 
 
+def run_dirs(output_dir: Path) -> list[Path]:
+    if not Path(output_dir).is_dir():
+        return []
+    return sorted(p for p in Path(output_dir).iterdir() if p.is_dir() and RUN_DIR_RE.match(p.name))
+
+
 def find_run_dir(output_dir: Path) -> Path | None:
-    runs = sorted(p for p in Path(output_dir).iterdir() if p.is_dir() and RUN_DIR_RE.match(p.name)) \
-        if Path(output_dir).is_dir() else []
+    runs = run_dirs(output_dir)
     return runs[-1] if runs else None
 
 
@@ -170,7 +172,8 @@ def agent_checks(summary: dict, role_names: dict[str, str]) -> list[dict]:
     ]
 
 
-def selftest_checks(selftest_script: Path, sdir: Path, run_dir: Path) -> tuple[list[dict], dict | None]:
+def selftest_checks(selftest_script: Path, sdir: Path, run_dir: Path, limited: bool = False) -> tuple[list[dict], dict | None]:
+    """The self-test's check-run (2-2〜2-6). A limited run cannot meet 2-4 and 2-5 (they need every warning)."""
     data, res = ek.run_json(ek.uv_script(selftest_script, "check-run", "--dir", str(sdir), "--run", str(run_dir)),
                             timeout=600)
     if not data or not data.get("ok"):
@@ -179,6 +182,8 @@ def selftest_checks(selftest_script: Path, sdir: Path, run_dir: Path) -> tuple[l
     for c in data.get("checks") or []:
         level = SELFTEST_LEVELS.get(str(c.get("id")), "should")
         ok = c.get("status") != "fail" if level == "must" else c.get("status") == "pass"
+        if limited and str(c.get("id")) in ("2-4", "2-5"):
+            ok = None  # skipped: the run was limited to fewer warnings than the sample has
         detail = f"{c.get('status')}: {c.get('actual', '')}" + (f"（{c['detail']}）" if c.get("detail") else "")
         out.append(ek.check(f"selftest-{c.get('id')}", ok, detail[:600], level))
     return out, data
@@ -205,7 +210,7 @@ def adapter_args(**kw) -> argparse.Namespace:
 def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     vdir = ctx["out"] / variant
     ek.progress(TAG, f"{variant}: 見本のリポジトリを作る")
-    sample = prepare_sample(ctx["selftest_script"], vdir, variant, args.limit)
+    sample = prepare_sample(ctx["selftest_script"], vdir, variant)
     repo, output_dir = sample["repo"], sample["output_dir"]
     venv = vdir / "mcp-venv"
     build = ek.ADAPTER.build(adapter_args(
@@ -215,7 +220,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
         claude_bin=args.claude_bin))
     ek.exclude_in_git(repo, ".claude/")
     head = ek.head(repo)
-    prompt = PROMPT.replace("{filter}", sample["filter"])
+    prompt = prompt_for(sample["filter"], args.limit)
     saved = ek.read_json(Path(build["files"]["command"]))
     argv = list(saved["argv"])
     argv[saved["prompt_index"]] = prompt
@@ -239,7 +244,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
 
     ek.progress(TAG, f"{variant}: claude -p --agent {ctx['orchestrator']['name']}（時間の上限 {args.timeout:g} 秒）")
     run = ek.run_claude(argv, Path(saved["cwd"]), args.timeout, vdir / "transcript.jsonl")
-    summary = ek.summarize(run["events"])
+    summary = ek.summarize(run["events"], prompt)
     checks = [ek.check("finished", not run["timed_out"] and summary["has_result"] and not summary.get("is_error"),
                        ("時間切れ" if run["timed_out"] else "")
                        + ("" if summary["has_result"] else " result の知らせなし")
@@ -247,6 +252,9 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
                        or f"{summary.get('num_turns')} ターンで終わった")]
     run_dir = find_run_dir(output_dir)
     checks.append(ek.check("run_folder", run_dir is not None, str(run_dir) if run_dir else f"実行フォルダがありません: {output_dir}"))
+    made = run_dirs(output_dir)
+    checks.append(ek.check("one_run_folder", len(made) <= 1,
+                           f"実行フォルダを {len(made)} つ作った（{', '.join(p.name for p in made)}）", "should"))
     status, selftest, acc = None, None, None
     if run_dir is not None:
         run_json = ek.read_json(run_dir / "run.json") or {}
@@ -258,7 +266,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
         missing = [n for n in ("summary.html", "approvals.json") if not (run_dir / n).is_file()]
         checks.append(ek.check("summary_files", not missing, f"ない: {missing}" if missing else "summary.html と approvals.json がある"))
         checks += item_checks(run_dir, run_json, VARIANTS[variant]["review"], VARIANTS[variant]["integration"])
-        st_checks, selftest = selftest_checks(ctx["selftest_script"], sample["selftest_dir"], run_dir)
+        st_checks, selftest = selftest_checks(ctx["selftest_script"], sample["selftest_dir"], run_dir, bool(args.limit))
         checks += st_checks
         acc = accuracy(run_dir, ctx["expected"]) if not args.limit else None
     changed = ek.working_changes(repo)
@@ -282,6 +290,14 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     return record
 
 
+def counts_text(counts: dict | None) -> str:
+    if not counts:
+        return "－"
+    text = f"終わった {counts.get('done', 0)} / {counts.get('total', 0)}"
+    extra = [f"{k} {counts[k]}" for k in ("error", "pending", "in_progress", "merged") if counts.get(k)]
+    return text + (f"（{'、'.join(extra)}）" if extra else "")
+
+
 def render_report(meta: dict, records: list[dict]) -> str:
     lines = ["# 3段階目（一括のトリアージ）の EVAL の結果", "",
              f"- 日時: {meta['started_at']}", f"- 統括エージェント: `{meta['orchestrator']}`（モデル `{meta['model']}`）",
@@ -291,7 +307,7 @@ def render_report(meta: dict, records: list[dict]) -> str:
     lines += ek.md_table(["変種", "合否", "落ちた確かめ", "件数", "推奨の一致", "時間（秒）", "ターン", "費用"],
                          [[r["variant"], ek.mark(r.get("passed")),
                            "、".join(c["id"] for c in r.get("checks", []) if c["ok"] is False) or "－",
-                           r.get("counts") or "－",
+                           counts_text(r.get("counts")),
                            (f"{r['accuracy']['matched']}/{r['accuracy']['total']}" if r.get("accuracy") else "－"),
                            r.get("seconds", "－"), r.get("num_turns", "－"), ek.money(r.get("cost_usd"))] for r in records])
     for r in records:
@@ -318,7 +334,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--plugin-root")
     p.add_argument("--variant", action="append", choices=sorted(VARIANTS),
                    help="default（確かめと統合なし）か full（両方あり）。何度でも。既定は両方")
-    p.add_argument("--limit", type=int, help="調べる件数の上限（条件ファイルに limit を足す。試しは 1）")
+    p.add_argument("--limit", type=int, help="調べる件数の上限（頼みの文を「N 件だけ」にする。試しは 1）")
     p.add_argument("--model", help="統括エージェント（メイン）のモデル（既定はその定義の claude-* のモデル）")
     p.add_argument("--agent-model", help="作業・検証・統合のエージェントのモデル（既定は各定義の claude-* のモデル）")
     p.add_argument("--timeout", type=float, default=2700.0, help="1つの変種の時間の上限（秒。既定 45 分）")

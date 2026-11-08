@@ -74,12 +74,26 @@ class ResultsTest(unittest.TestCase):
         self.assertEqual((row["checker"], row["file"], row["line"]), ("NULL_RETURNS", "src/reader.c", 40))
         self.assertEqual(row["report"], "cid/20001.html")
 
+    def reviewed(self, item_id: str, outcome: str | None) -> None:
+        """run.json as the batch run writes it once it took the review of an item in (items[].review)."""
+        run_json = self.run_dir / "run.json"
+        before = run_json.read_bytes()
+        self.addCleanup(run_json.write_bytes, before)
+        data = json.loads(before)
+        data["review"] = True
+        next(i for i in data["items"] if i["id"] == item_id)["review"] = outcome
+        run_json.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def row(self, item_id: str) -> dict:
+        return next(r for r in self.srv.get(f"/api/runs/{RUN}/summary")[1]["items"] if r["id"] == item_id)
+
     def test_review_cap_and_build_problems_lower_the_confidence_shown(self) -> None:
         item = self.run_dir / "items" / "20001"
         helpers.write_json(item / "review.json", {"item": "20001", "outcome": "flag", "findings": [],
                                                   "confidence_cap": "medium", "rework": [], "note": "根拠が弱い"})
         self.addCleanup((item / "review.json").unlink)
-        row = next(r for r in self.srv.get(f"/api/runs/{RUN}/summary")[1]["items"] if r["id"] == "20001")
+        self.reviewed("20001", "flag")
+        row = self.row("20001")
         self.assertEqual((row["confidence"], row["review"]), ("medium", "flag"))
         self.assertIn("根拠が弱い", row["confidence_reason"])
         helpers.write_json(self.run_dir / "verify.json", {"20001": {"mode": "build", "build_ok": False, "problems": ["ビルドが失敗"]}})
@@ -88,6 +102,23 @@ class ResultsTest(unittest.TestCase):
         self.assertEqual(row["confidence"], "low")
         result = json.loads((item / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(result["confidence"], "high")  # result.json is never changed
+
+    def test_a_review_counts_only_once_the_batch_run_took_it_in(self) -> None:
+        item = self.run_dir / "items" / "20001"
+        helpers.write_json(item / "review.json", {"item": "20001", "outcome": "flag", "findings": [],
+                                                  "confidence_cap": "low", "rework": [], "note": "根拠が弱い"})
+        self.addCleanup((item / "review.json").unlink)
+        self.assertEqual(self.row("20001")["confidence"], "high")  # items[].review is still null, as in the summary
+        self.reviewed("20001", "unverified")
+        self.assertEqual(self.row("20001")["confidence"], "high")  # could not be reviewed: no cap
+        self.reviewed("20001", "flag")
+        self.assertEqual(self.row("20001")["confidence"], "low")
+
+    def test_a_failed_build_does_not_lower_a_deviation_recommendation(self) -> None:
+        helpers.write_json(self.run_dir / "verify.json", {"20002": {"mode": "build", "build_ok": False, "problems": ["失敗"]}})
+        self.addCleanup((self.run_dir / "verify.json").unlink)
+        row = self.row("20002")  # recommended deviation (helpers.make_run): the fix is only the other proposal
+        self.assertEqual((row["recommendation"], row["confidence"]), ("deviation", "medium"))
 
     def test_an_approval_is_saved_at_once_and_the_others_stay(self) -> None:
         before = self.approvals()["items"]
@@ -202,16 +233,30 @@ class ResultsTest(unittest.TestCase):
         self.assertIn("処理できませんでした", missing["error"])
 
     def test_already_applied_items_warn_when_the_approval_changes(self) -> None:
-        run_json = self.run_dir / "run.json"
-        before = run_json.read_bytes()
-        self.addCleanup(run_json.write_bytes, before)
-        data = json.loads(before)
-        data["items"][0]["applied"] = {"fix": {"branch": "coverity-fix/cid-20001"}, "at": "2026-11-08T12:00:00"}
-        run_json.write_text(json.dumps(data), encoding="utf-8")
+        record = self.run_dir / "apply-code.result.json"  # the apply skill's record of what it applied
+        helpers.write_json(record, {"version": 1, "applied": {"20001": {"fix": {"branch": "coverity-fix/cid-20001",
+                                                                                "commit": "abc123", "at": "2026-11-08T12:00:00"}}},
+                                    "results": {}, "made": {}, "metrics": {}})
+        self.addCleanup(record.unlink)
+        row = self.row("20001")
+        self.assertEqual((row["applied"], row["applied_parts"]), (True, ["修正"]))
+        self.assertEqual(next(r for r in self.srv.get("/api/runs")[1]["runs"] if r["run_id"] == RUN)["applied"], 1)
         answer = self.save("20001", "reject")
         self.assertTrue(answer["ok"])
-        self.assertIn("もう反映しています", answer["warning"])
+        self.assertIn("もう反映しています（修正）", answer["warning"])
         self.save("20001", "fix")
+
+    def test_a_long_comment_is_saved_with_a_clear_warning(self) -> None:
+        path = self.out / RUN / "approvals.json"
+        self.addCleanup(path.write_bytes, path.read_bytes())
+        long = "誤検知。" + "呼び出し元で必ず確かめている。" * 15
+        answer = self.save("20002", "deviation", {"classification": "False Positive", "action": "Ignore",
+                                                  "severity": "Unspecified", "comment": long})
+        self.assertTrue(answer["ok"], answer)
+        self.assertIn(f"{len(long)} 文字", answer["warning"])
+        self.assertIn("200 文字以内", answer["warning"])
+        self.assertIn("この文のまま Coverity に書き込みます", answer["warning"])
+        self.assertEqual(self.approvals()["items"]["20002"]["deviation"]["comment"], long)
 
     def test_a_result_file_of_the_wrong_shape_is_told_not_used(self) -> None:
         path = self.run_dir / "items" / "G1" / "result.json"
