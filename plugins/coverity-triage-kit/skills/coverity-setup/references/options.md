@@ -34,8 +34,8 @@
 
 1. 「修正前のコードで試しにビルドします（時間がかかることがあります。Coverity には登録しません）」と伝えて、`trial-build --build-command "<3>" --setup-command "<1>" --build-dir "<2>"` を動かす。リポジトリの外（結果を置くフォルダの `_trial-build`）にコピーしてビルドするので、作業中のファイルは変わらない。
 2. `build_ok` が false なら、`log_tail` を見て、コマンドの誤りか環境の問題かを伝え、直してもう一度試す。
-3. 成功したら、`set-verify --build-command "<3>" --setup-command "<1>" --build-dir "<2>" --default <4>` に、初回解析を使うなら `--initial --cov-commit-args="<6>" --timeout-minutes <7>`、使わないなら `--no-initial` を足し、さらに `--check` を付けて動かす。返った `changes` を表で見せ、`notice` があればその文も伝えて、同意を得る。
-4. 同意を得たら `--check` を付けずに同じ引数で動かし、`check` で確かめる。初回解析を使うときは、`check` の「初回解析の cov-build」などの行を伝える（ng なら、Coverity の解析のツールの bin フォルダを PATH に足すのは社内の手順で。warning は「環境設定のコマンドで PATH に足されるなら問題ありません」）。
+3. 成功したら、`set-verify --build-command "<3>" --setup-command "<1>" --build-dir "<2>" --default <4>` に、初回解析を使うなら `--initial --cov-commit-args="<6>" --timeout-minutes <7>`、使わないなら `--no-initial` を足し、さらに `--check` を付けて動かす。返った `changes` を表で見せ、`notice` があればその文も伝えて、「この内容で保存しますか？」と聞いて返事を終える。
+4. 見せた表に同意の返事をもらったら、`--check` を付けずに同じ引数で動かし、`check` で確かめる。初回解析を使うときは、`check` の「初回解析の cov-build」などの行を伝える（ng なら、Coverity の解析のツールの bin フォルダを PATH に足すのは社内の手順で。warning は「環境設定のコマンドで PATH に足されるなら問題ありません」）。
 
 - `--cov-commit-args` などの値が `--` で始まるときは、`=` でつなぐ（`--cov-commit-args="--auth-key-file C:/key.txt"`）。
 - 省いた項目は、今の設定のまま残る。
@@ -43,7 +43,7 @@
 ## 2. set の書き方
 
 ```
-uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/setup.py" set --repo "<リポジトリ>" --value agents.review=true --value agents.max_rework=2 --check
+uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/setup.py" set --repo "<リポジトリ>" --value max_items=50 --value agents.integration=true --check
 ```
 
 - 値は項目の型で読む：true / false、整数、文字列。リストは `[a, b]` か、`a, b`。
