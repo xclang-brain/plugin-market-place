@@ -2144,6 +2144,7 @@ class CopiedAloneTest(unittest.TestCase):
 
 
 class SkillDocTest(unittest.TestCase):
+    """SKILL.md の形を確かめる。文言は確かめない（決まった文を固定すると、テストに合わせた指示が増えるため）。"""
 
     @property
     def text(self):
@@ -2158,78 +2159,19 @@ class SkillDocTest(unittest.TestCase):
         self.assertRegex(front, r"(?m)^name: " + re.escape(SKILL_NAME) + r"$")
         desc = re.search(r"(?m)^description: (.+)$", front)
         self.assertIsNotNone(desc)
-        self.assertIn("スラッシュコマンド", desc.group(1))
+        self.assertLessEqual(len(desc.group(1)), 1024)
 
     def test_commands_use_own_folder_and_python_placeholder(self):
-        self.assertIn("`<python>` は、Windows では `py -3`（ない場合は `python`）、"
-                      "それ以外では `python3` です。", self.text)
+        self.assertIn("`<python>`", self.text)
+        self.assertIn("py -3", self.text)
         for sub in ("run", "config-path", "check"):
             self.assertIn("<python> <このスキルのフォルダ>/scripts/build.py " + sub, self.text)
         self.assertNotIn("python3 <このスキルのフォルダ>", self.text)
 
     def test_commands_do_not_depend_on_bash(self):
         """Copilot CLI は、Windows では PowerShell でコマンドを動かす。bash だけの書き方を使わない。"""
-        for block in re.findall(r"```[a-z]*\n(.*?)```", self.text, re.S):
-            for word in ("<<", "source ", "$(", "&&"):
-                self.assertNotIn(word, block)
-
-    def test_sections(self):
-        for heading in ("## 何をするスキルか", "## 頼まれ方と、すること", "## 結果の伝え方",
-                        "## 守ること"):
-            self.assertIn(heading, self.text)
-
-    def test_exit_codes_are_not_shown_to_the_user(self):
-        """見出しや場合分けに終了コードを書くと、モデルが利用者に見せてしまう。"""
-        for line in self.text.splitlines():
-            if "終了コード" in line:
-                self.assertIn("伝えません", line, line)
-        self.assertNotRegex(self.text, r"[0-2] ?[がは]成功")
-
-    def test_json_names_are_not_shown(self):
-        section = self.text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
-        self.assertIn("JSON の項目名", section)
-        self.assertIn("利用者に見せません", section)
-        self.assertIn("設定ファイルの項目名", section)
-
-    def test_check_summary_is_a_table_of_config_names(self):
-        """表の見出しに、項目名と日本語の言い換えが混ざったことがある。項目名と値の表で見せる。"""
-        section = self.text.split("### 設定を確かめて、問題が無かったとき", 1)[1].split("### ビルドに成功したとき", 1)[0]
-        for word in ("設定ファイルの項目名と値の表で見せます。",
-                     "列は「項目」と「値」です。",
-                     "日本語に言い換えません。",
-                     "「説明」の列を別に足します。",
-                     "表の外に文で伝えます。",
-                     "`shell_program`"):
-            self.assertIn(word, section, word)
-        self.assertNotIn("ビルドするフォルダ、コマンド、できるファイルを短く伝えます", self.text)
-
-    def test_mentions_notes_compiler_and_gitignore(self):
-        for word in ("`notes`", "`empty_recommended`", "`compiler`", "`.gitignore`",
-                     "`stale_outputs`", "`added`"):
-            self.assertIn(word, self.text)
-
-    def test_gitignore_and_added_keys_are_explained(self):
-        self.assertNotIn("フォルダを新しく作るときは", self.text)
-        self.assertIn("`.gitignore` が無ければ", self.text)
-        self.assertIn("足りない項目", self.text)
-        self.assertIn("ほかの所は変えません", self.text)
-        # 足りない項目を足すのは config-path だけ（check は設定ファイルを書き換えない）
-        self.assertIn("run と check は足さずに、`notes` で知らせます。", self.text)
-        self.assertNotIn("自分で足します", self.text)
-
-    def test_check_creates_no_files(self):
-        section = self.text.split("### 設定を確かめるよう頼まれたとき", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("作業フォルダにファイル（設定ファイル・`.gitignore`・ログ）を作りません。", section)
-        self.assertIn("設定ファイルが無いときは「設定ファイル … がありません」と返します。", section)
-        self.assertIn("check は作りません。", self.text)
-        # message の config-path の文は利用者に言わず、頼み方を伝える
-        problems = self.text.split("### 設定や PC の準備に問題があるとき", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("message の「config-path で…」の文は言わずに", problems)
-        self.assertIn("「設定ファイルを作って」と頼めば作れると伝えます。", problems)
-
-    def test_request_to_make_the_config_file(self):
-        self.assertIn("### 「設定ファイルを作って」と頼まれたとき", self.text)
-        self.assertNotIn("どこ？", self.text)
+        for word in ("<<", "source ", "$(", "&&"):
+            self.assertNotIn(word, self.text)
 
 
 class ReadmeTest(unittest.TestCase):

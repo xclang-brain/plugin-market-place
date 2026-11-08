@@ -1925,66 +1925,12 @@ class SelfContained(unittest.TestCase):
                     self.assertIn("作業", out)        # cp932 で書ける文字は、そのまま
                     self.assertIn("\\u00e9", out)    # é は cp932 で書けない
 
-    def test_skill_md_does_not_show_exit_codes(self):
-        """スクリプト自身の終了コードで場合分けを書くと、モデルが利用者に見せてしまう。
-
-        機器のコマンドの終了コード（exit_code）は、「終了コード N」の形で伝える。
-        """
-        with open(SKILL_MD, encoding="utf-8") as f:
-            text = f.read()
-        for line in text.splitlines():
-            if "スクリプト" in line and ("終了コード" in line or "終わりのコード" in line):
-                self.assertIn("伝えません", line, line)
-        self.assertIn("自身の終了コードは、利用者に伝えません", text)
-        self.assertNotRegex(text, r"[0-2] ?[がは](成功|問題)")
-        self.assertIn("`.gitignore`", text)
-
-    def test_skill_md_explains_gitignore_and_added_keys(self):
-        with open(SKILL_MD, encoding="utf-8") as f:
-            text = f.read()
-        self.assertNotIn("フォルダを新しく作るときは", text)
-        self.assertIn("`.gitignore` がなければ", text)
-        self.assertIn("足りない項目", text)
-        self.assertIn("ほかの所は変えません", text)
-        self.assertIn("`added`", text.split("## 結果の伝え方", 1)[1])
-        # 足りない項目を足すのは config-path だけ（check は設定ファイルを書き換えない）
-        self.assertIn("run と check は足さずに、`notes` で知らせます。", text)
-        self.assertNotIn("自分で足します", text)
-
-    def test_skill_md_hides_json_names(self):
-        with open(SKILL_MD, encoding="utf-8") as f:
-            text = f.read()
-        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
-        self.assertIn("JSON の項目名", section)
-        self.assertIn("利用者に見せません", section)
-        self.assertIn("設定ファイルの項目名（commands、listen_seconds など）は、見せてかまいません", section)
-        self.assertNotIn("sensor", text)
-
-    def test_skill_md_tells_device_exit_codes(self):
-        with open(SKILL_MD, encoding="utf-8") as f:
-            text = f.read()
-        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
-        self.assertIn("`exit_code` が 0 以外の数なら", section)
-        self.assertIn("「終了コード N」", section)
-        self.assertIn("`exit_code` という項目名は見せません", section)
-
-    def test_skill_md_marks_guesses_as_guesses(self):
-        """結果にない原因を、前のやり取りから推測して、事実のように書かないこと。"""
-        with open(SKILL_MD, encoding="utf-8") as f:
-            text = f.read()
-        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
-        self.assertIn("結果にない原因を、事実として書きません。", section)
-        self.assertIn("推測だと分かるように書きます。", section)
-
     def test_skill_md_does_not_show_the_marker(self):
         """終了コードを調べるための印は、SKILL.md にも書かない（利用者への答えに写されないように）。"""
         with open(SKILL_MD, encoding="utf-8") as f:
             text = f.read()
         self.assertNotIn(MARKER_TAG, text)
         self.assertNotIn("$?", text)
-        self.assertIn("ログにも残しません", text)
-        self.assertIn("「（終了コード：0）」", text)
-        self.assertIn("「（終了コード：読めませんでした）」", text)
 
     def test_messages_that_ask_to_check_name_concrete_things(self):
         """「確かめてください」の文は、何を確かめるかを具体的に言う。"""
@@ -2011,12 +1957,11 @@ class SelfContained(unittest.TestCase):
         front = dict(line.split(":", 1) for line in m.group(1).splitlines() if ":" in line)
         # name は、フォルダの名前と同じにする（名前を変えて写したときは、両方を変える）
         self.assertEqual(front["name"].strip(), SKILL_NAME)
-        self.assertIn("スラッシュコマンド", front["description"])
+        self.assertLessEqual(len(front["description"]), 1024)
         self.assertNotRegex(text, r"/[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]")  # 「/なにか:名前」の形のコマンドは書かない
         for sub in ("capture.py run", "capture.py config-path", "capture.py check"):
             self.assertIn(sub, text)
-        self.assertIn("`config.yaml`", text)
-        self.assertIn("`logs`", text)
+        self.assertIn("config.yaml", text)
 
     def test_readme_covers_the_settings_and_the_test_command(self):
         with open(README, encoding="utf-8") as f:
@@ -2070,15 +2015,6 @@ class SelfContained(unittest.TestCase):
         part = text.split("### パスワードを環境変数で渡す", 1)[1].split("\n## ", 1)[0]
         self.assertRegex(part, r"\n   - Windows（PowerShell）：`\$env:[A-Z_]+ = '[^']+'`\n"
                                r"   - Linux（bash）：`export [A-Z_]+='[^']+'`\n")
-
-    def test_skill_md_check_creates_nothing(self):
-        with open(SKILL_MD, encoding="utf-8") as f:
-            text = f.read()
-        self.assertIn("check は、ファイル（設定ファイル、`.gitignore`、ログ）を作りません。", text)
-        self.assertIn("「設定ファイルを作って」と頼まれたとき", text)
-        section = text.split("## 結果の伝え方", 1)[1].split("## 守ること", 1)[0]
-        self.assertIn("`notes`", section)
-        self.assertIn("頼まれるまで、設定ファイルは作りません。", section)
 
     def test_template_comments(self):
         with open(TEMPLATE, encoding="utf-8") as f:

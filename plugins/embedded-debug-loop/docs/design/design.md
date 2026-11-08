@@ -70,6 +70,7 @@ flowchart TB
 
 - `agents/` と `extensions/` は、`com.github.copilot/` の下にある。
 - スキルのフォルダには、`SKILL.md`、`scripts/` の Python のスクリプト、使い方の `README.md`、`tests/` がある。設定を持つスキルは、設定のひな形も持つ。
+- `SKILL.md` は、エージェントが読む概要にとどめる（何をするか、コマンド、結果の読み方）。まれにしか要らない詳細は `reference/` のファイルに分け、`SKILL.md` から1段でたどれるようにする。
 - 設計書には、スキルと作業エージェントの名前と中身を書かない。各スキルの中身は、そのスキルの README と SKILL.md にある。
 - 作業エージェントの使い方は `agents/README.markdown` に書く。拡張子が `.md` だと、Copilot CLI がエージェントの定義として読み込み、エラーを出す（1.0.105 で確認）。`.markdown` は読み込まれない（1.0.105 で、プロジェクトの `.github/agents/` とプラグインの `com.github.copilot/agents/` の両方で確認）。
 - 使っていない部品：MCP サーバー、プラグインのフックの設定（`hooks.json`。フックはエクステンションで登録する）、LSP、指示ファイル。
