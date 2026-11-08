@@ -757,6 +757,8 @@
                 return;
               }
               await poll();
+              // the setup form is gone: show the phases and the slots from the top (REQ-411)
+              if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
             },
           },
         },
@@ -843,7 +845,13 @@
             ),
           ),
           h('div', { class: 'display', id: 'recent' }, h('h3', null, '最近の動き'), recent.length ? h('ol', { class: 'recent-list' }, recent.map((line) => h('li', null, line))) : h('p', { class: 'muted' }, 'まだありません')),
-          h('div', { class: 'display', id: 'initial-progress' }, h('h3', null, '初回解析の進み具合'), initial ? progress(initial, initial.used ? '初回解析' : '初回解析はしない') : h('p', { class: 'muted' }, 'まだありません')),
+          h(
+            'div',
+            { class: 'display', id: 'initial-progress' },
+            h('h3', null, '初回解析の進み具合'),
+            initial ? progress(initial, initial.used ? '初回解析' : '初回解析はしない') : h('p', { class: 'muted' }, 'まだありません'),
+            initial?.stalled ? h('p', null, badge('⚠ 停止?', 'warn'), ' 30 分以上、動きがありません。') : null,
+          ),
           h('div', { class: 'display', id: 'overall-progress' }, h('h3', null, '全体の進み具合'), progress(live.progress, '処理した件数 / 全体')),
         ),
         !finished && run.permissionSteps?.length

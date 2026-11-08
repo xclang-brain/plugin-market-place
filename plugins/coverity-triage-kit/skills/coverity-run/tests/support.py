@@ -255,30 +255,27 @@ class RunCase(unittest.TestCase):
               max_ticks: int = 60, out: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run the tick loop as the agent does, with fake tools and agents, until done or stop."""
         out = out or self.tick(run_dir)
+        queue = list(out["actions"])
         for _ in range(max_ticks):
             if out.get("done") or out.get("stop"):
                 return out
-            if not out["actions"]:
+            if not queue:
                 out = self.tick(run_dir)
+                queue += out["actions"]
                 continue
-            reports = []
-            for action in out["actions"]:
-                if action["type"] in ("fetch_issues", "fetch_details"):
-                    self.do_fetch(action, issues)
-                    reports.append(("--finished", action["task"]))
-                elif action["type"] == "launch":
-                    handler = {"worker": worker or (lambda a: self.work_as_worker(a)),
-                               "reviewer": reviewer or (lambda a: self.review_as_reviewer(a)),
-                               "integrator": integrator}[action["role"]]
-                    verdict = handler(action)
-                    reports.append(("--failed", action["task"]) if verdict == "fail" else ("--finished", action["task"]))
-            for flag, task in reports:
-                extra = ["--reason", "テストで失敗させた"] if flag == "--failed" else []
-                out = self.tick(run_dir, flag, task, *extra)
-                if out.get("stop"):
-                    return out
-                if out["actions"]:
-                    break  # hand out what the last report gave before the others (as an agent would)
+            action = queue.pop(0)
+            flag = "--finished"
+            if action["type"] in ("fetch_issues", "fetch_details"):
+                self.do_fetch(action, issues)
+            elif action["type"] == "launch":
+                handler = {"worker": worker or (lambda a: self.work_as_worker(a)),
+                           "reviewer": reviewer or (lambda a: self.review_as_reviewer(a)),
+                           "integrator": integrator}[action["role"]]
+                if handler(action) == "fail":
+                    flag = "--failed"
+            extra = ["--reason", "テストで失敗させた"] if flag == "--failed" else []
+            out = self.tick(run_dir, flag, action["task"], *extra)
+            queue += out["actions"]
         self.fail(f"the run did not end: {out}")
 
 

@@ -74,6 +74,9 @@ test('design 8.2 phase: worker or integrator → do; reviewer → study; nothing
   h.runner.on('run:status', () => statusOf({ running_tasks: [], stage: 'initial' }));
   await h.clock.advance(5_000);
   assert.equal(h.state().run.phase, 'do');
+  h.runner.on('run:status', () => statusOf({ running_tasks: [], stage: 'fetch' }));
+  await h.clock.advance(5_000);
+  assert.equal(h.state().run.phase, 'do', 'fetching the warnings is work, too');
   h.runner.on('run:status', () => statusOf({ running_tasks: [{ task: 'reviewer:20001@1', role: 'reviewer' }], stage: 'review' }));
   await h.clock.advance(5_000);
   assert.equal(h.state().run.phase, 'study');

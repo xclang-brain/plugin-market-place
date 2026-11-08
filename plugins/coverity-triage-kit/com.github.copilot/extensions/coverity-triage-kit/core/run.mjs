@@ -131,9 +131,10 @@ export function syncSlot(run, rec) {
   slot.hasReply = rec.reply != null;
 }
 
-// Plan / Do / Study (design 8.2): a running reviewer → study; workers, integrators, launched tasks,
-// or a long stage (initial analysis, build verification) → do; nothing running between ticks → plan.
-const LONG_STAGES = new Set(['initial', 'verify']);
+// Plan / Do / Study (design 8.2): a running reviewer → study; workers, integrators, launched tasks → do;
+// stages the orchestrator or a detached job works on without agents (initial analysis, fetching the warnings
+// and their paths, build verification) → do; nothing running between ticks → plan.
+const LONG_STAGES = new Set(['initial', 'fetch', 'details', 'verify']);
 export function computePhase(run, force = false) {
   if (!force && run.status !== 'running') return null;
   let doing = false;

@@ -38,6 +38,7 @@ async function runningState(t) {
       ],
       errors: [{ item: '20009', kind: '取得', detail: '経路を取れませんでした', level: 'critical' }],
       recent: ['10:06 a', '10:05 b', '10:04 c', '10:03 d', '10:02 e', '10:01 f'],
+      initial: { used: true, step: 'analyze', value: 40, max: 100, label: '解析', stalled: true },
     }),
   );
   const root = await openAndStart(h);
@@ -175,7 +176,7 @@ test('REQ-411 REQ-412 REQ-414 running: phase, stage, slots, waits, progress tabl
   assert.match(textOf($('errors')), /20009 重大 取得 経路を取れませんでした/);
   assert.equal($('recent').querySelectorAll('li').length, 5);
   assert.match(textOf($('overall-progress')), /1 \/ 3（33%）/);
-  assert.match(textOf($('initial-progress')), /初回解析はしない/);
+  assert.match(textOf($('initial-progress')), /解析（40%）.*⚠ 停止\? 30 分以上、動きがありません。/);
   assert.match(textOf($('s-criteria')), /C-01.*合格 1.*不合格 0/);
   await $('stop').dispatch('click');
   await settle();
