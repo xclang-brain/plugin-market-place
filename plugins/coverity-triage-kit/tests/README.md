@@ -28,7 +28,7 @@ python3 tests/run.py
 | --- | --- |
 | `--list` | 試験の組の名前を出す |
 | `--only <名前>` | その組だけを動かす。何回でも付けられる。`parts` は部品ごとの試験すべて。部品は `skills/<名前>` か、フォルダの名前でも選べる |
-| `--skip-slow` | 時間のかかる試験を飛ばす（部品をコピーして動かす独立性の試験、部品を動かす取り決めの試験、結合の試験） |
+| `--skip-slow` | 時間のかかる試験を飛ばす（部品をコピーして動かす独立性の試験、部品を動かす取り決めの試験、結合の試験、画面の試験） |
 | `--jobs <数>` | 部品ごとの試験を同時にいくつ動かすか（既定は CPU の数。4 まで） |
 | `--timeout <秒>` | 1つの組の時間の上限（既定は 900 秒。独立性の試験は 3600 秒） |
 | `--results <ファイル>` | 結果の JSON の置き場所 |
@@ -50,9 +50,9 @@ python3 tests/run.py --only docs --only structure
 | Python | 3.10 以上 | 動かせない（終了コード 2） |
 | uv | （あること） | 部品の試験を動かせない（終了コード 2） |
 | git | （あること） | 部品の試験を動かせない（終了コード 2） |
-| Node.js | 22 以上 | 画面の試験を動かせない（`--only extension` のときなど。終了コード 2） |
+| Node.js | 22 以上 | エクステンションの試験を動かせない（`--only extension` のときなど。終了コード 2）。`ui` は飛ばす |
 | svn、cppcheck | （あれば使う） | それを使う試験だけを飛ばす |
-| Playwright | （あれば使う） | 画面をブラウザーで確かめる試験だけを飛ばす。入れるとき：`npm install --prefix tests --no-save --no-package-lock playwright@1.56.1` |
+| Playwright（Chromium） | （あれば使う） | 画面をブラウザーで確かめる試験（`extension` の一部と `ui`）だけを飛ばす。入れるとき：`npm install --prefix tests --no-save --no-package-lock playwright@1.56.1` と `npx --prefix tests playwright install chromium` |
 
 要る道具は、選んだ組の分だけを確かめます（`--only docs` なら Python だけ）。
 
@@ -62,15 +62,29 @@ python3 tests/run.py --only docs --only structure
 | --- | --- | --- |
 | 部品ごと | `skills/<名前>/tests/`、`mcp-servers/<名前>/tests/` | スクリプトとツールの振る舞い。部品のフォルダだけでも動く |
 | `structure` | `tests/structure/` | `plugin.json`・`mcp.json` を公式の schema で。SKILL.md の frontmatter・長さ・指すファイル・目次、`evals/` の形。エージェントの定義の形 |
-| `contracts` | `tests/contracts/` | 取り決めの写しが同じ。`defaults.json` と統括エージェントの表と役割の言葉が合う。MCP サーバーが偽の Coverity で書いたファイルを一括実行が受け付ける。確認の文字列 |
-| `independence` | `tests/independence/` | 1段階目の部品に、ほかの部品の名前・プラグインの名前・外を指すパスがない。部品のフォルダだけをコピーして（スキルは名前を変えたコピーも）試験が通る。エージェントは名前を表にだけ書く。2段階目と3段階目の組が名前で閉じている。上の段の文書に下の段の中身がない |
-| `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合 |
+| `contracts` | `tests/contracts/` | 設計書 4.17 の写し（データ・持ち主のスクリプト・共通の試験のデータ）が、持ち主と同じバイト列。写しは部品の中をファイルの名前で探す（まだない写しは理由を書いて飛ばす）。写したスクリプトを写す側が使い、要るライブラリを持つ。`defaults.json` と統括エージェントの表と役割の言葉が合う。MCP サーバーが偽の Coverity で書いたファイルを、一括実行と真偽の調査のスクリプトが受け付ける。確認の文字列（計画のファイルは MCP サーバーのツールで、entries は確認の文字列の関数で） |
+| `independence` | `tests/independence/` | 1段階目の部品に、ほかの部品の名前・プラグインの名前・外を指すパスがない（`output_dir` の既定の値 `../coverity-triage-out` だけは許す。英語の言葉は単語として数え、`uv.lock` は見ない）。部品のフォルダだけをコピーして（スキルは名前を変えたコピーも）試験が通る。エージェントは名前を表にだけ書く。2段階目と3段階目の組が名前で閉じている。上の段の文書に下の段の中身がない。一括実行が実際に書いた指示ファイル（作業・確かめ・作り直し・統合）と頼みの文に、部品の名前がない |
+| `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合。一括のトリアージを、モデルを使わずに最後まで流す（`test_flow.py`：模擬の Coverity の5件の警告、MCP サーバーでの取得、決まった振る舞いの偽のエージェント、一覧、反映の確認の文字列、書き戻し、修正のブランチの push） |
+| `ui` | `tests/ui/` | 結果と設定の画面を、Playwright の Chromium で（幅 390 px と 1280 px、ライトとダーク）。タブが出る、横にはみ出さない、ダークで読める、一覧で選んだ承認と詳細で直した逸脱コメントが `approvals.json` に保存され、反映がそれを読む、サーバを止められる |
 | `docs` | `tests/docs/` | 版の一致、要求の番号の追跡、仕様書と設計書に部品の名前がない、`docs/replace.md` の表が今の部品と合う、README の並び、リンク |
 | `eval` | `tests/eval/` | EVAL の道具の、モデルを使わない試験 |
 | `extension` | `tests/extension/` | エクステンション（偽の SDK と偽のコマンド、画面） |
 
-`structure`・`contracts`・`independence`・`docs` は、部品の名前を書いていません。部品は、フォルダ・`mcp.json`・`defaults.json`・「使う部品」の表・[部品の変え方](../docs/replace.md) の「今の部品」の表から読みます。
+`structure`・`contracts`・`independence`・`integration`・`ui`・`docs` は、部品の名前を書いていません。部品は、フォルダ・`mcp.json`・`defaults.json`・「使う部品」の表・[部品の変え方](../docs/replace.md) の「今の部品」の表から読みます。
 まだない部品は、理由を書いて飛ばします。
+
+### モデルを使わずに流す一括のトリアージ（`tests/integration/flowlib.py`）
+
+`integration` の `test_flow.py`、`independence` の指示ファイルの試験、`ui` は、同じ道具を使います。
+
+- 小さな C のリポジトリ（git、`main`）と、5件の警告：同じ関数の2件（グループになる）、意図的な1件（逸脱）、
+  チェッカーは違うが同じ修正で直る2件（統合役がまとめる）。何が正しいかも道具が持っています。
+- 偽のエージェント：指示ファイルの表から、直すフォルダ・結果・確かめの結果・計画のファイルを読み、書かれたとおりに書きます。
+  作業役は、作業用のコピーで本当にコードを直します。検証役は、評価基準をすべて1回ずつ書きます（1件は一度差し戻します）。
+- 統括エージェントの代わり：`tick` の `actions` のとおりに、警告の取得を MCP サーバー（`mcp.json` の起動のコマンド）か、
+  用意したファイル（`new-run --issues-file`）で行い、`launch` を偽のエージェントに渡し、`--finished` で知らせます。
+- 部品は、`defaults.json`（`runCommand`、`guiCommand`、`applySkill`）と `mcp.json` と、スキルの SKILL.md が動かすよう書いた
+  スクリプトから見つけます。uv・git・模擬の Coverity・部品がないときは、理由を書いて飛ばします。
 
 ### 部品の試験の動かし方の決まり
 

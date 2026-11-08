@@ -83,7 +83,7 @@ class GuiScreenTest(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp(prefix="ui-")).resolve()
         cls.env = fl.base_env(cls.tmp)
         cls.env.update(TMPDIR=str(cls.tmp), TEMP=str(cls.tmp), TMP=str(cls.tmp), GUI_STATE_DIR=str(cls.tmp / "gui-state"),
-                       GUI_IDLE_SECONDS="300")
+                       GUI_IDLE_SECONDS="120")
         cls.gui_py = fl.command_script("guiCommand")
         cls.started = False
         try:

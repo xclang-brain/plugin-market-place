@@ -130,32 +130,49 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 
 ## 取り決めの写し
 
-同じ取り決めを2つ以上の部品が持つときは、持ち主のファイルが正です（設計書の 4.17）。持ち主を変えたら、写しを持ち主のものに合わせてコピーします。
+同じ取り決めを2つ以上の部品が持つときは、持ち主のファイルが正です（設計書の 4.17）。写しは、持ち主のファイルと**同じバイト列**にします（書き直さず、そのままコピーします）。持ち主を変えたら、すべての写しを持ち主のものに合わせてコピーします。
+
+写しの置き場所は、持ち主と同じ名前で、データは写す側の `assets/`、スクリプトは写す側の `scripts/`、共通の試験のデータは写す側の `assets/contract/<名前>/` です。MCP サーバーは、スクリプトをパッケージ（`src/coverity_mcp/`）に、共通の試験のデータを `tests/contract/<名前>/` に置きます。自分の部品の `assets/` を探すスクリプト（`check_result.py`、`check_review.py`、`check_plan.py`）は、`scripts/` の直下に置き、探すファイルも `assets/` に置きます。写す側は、写したスクリプトを読み込んで使います（同じ決まりを自分で書き直しません）。写したスクリプトが使うライブラリ（`jsonschema`、`pyyaml` など）は、写す側のスクリプトの PEP 723 の欄（MCP サーバーは `pyproject.toml`）にも書きます。
 
 | 取り決め | 持ち主のファイル | 写し |
 | --- | --- | --- |
-| 結果の形 | `skills/triage-report/assets/result.schema.json` | `skills/coverity-run/assets/`、`skills/coverity-gui/assets/`、`skills/triage-integration/assets/`（`plan.schema.json` と比べるため） |
+| 結果の形 | `skills/triage-report/assets/result.schema.json` | `skills/coverity-run/assets/`、`skills/triage-integration/assets/`（`plan.schema.json` と比べるため）、`skills/coverity-gui/assets/` |
 | 確かめの形と評価基準 | `skills/triage-review/assets/review.schema.json`、`criteria.json` | `skills/coverity-run/assets/` |
 | 統合の計画の形 | `skills/triage-integration/assets/plan.schema.json` | `skills/coverity-run/assets/` |
-| 実行フォルダの形 | `skills/coverity-run/assets/run.schema.json` | `skills/coverity-apply/assets/`、`skills/coverity-gui/assets/`、`skills/coverity-help/assets/`、`skills/coverity-selftest/assets/` |
-| 承認の形 | `skills/coverity-run/assets/approvals.schema.json` | `skills/coverity-apply/assets/`、`skills/coverity-gui/assets/` |
-| 逸脱コメントの決まり | `skills/deviation-comment/assets/contract/comment/cases.json` | `skills/triage-report/assets/contract/comment/`、`skills/coverity-run/assets/contract/comment/` |
-| 結果の決まり | `skills/triage-report/assets/contract/result/cases.json` | `skills/coverity-run/assets/contract/result/` |
-| 機械的な確かめ | `skills/triage-review/assets/contract/lint/cases.json` | `skills/coverity-run/assets/contract/lint/` |
-| 統合の計画の決まり | `skills/triage-integration/assets/contract/plan/cases.json` | `skills/coverity-run/assets/contract/plan/` |
-| 注釈を残す書き換え | `skills/coverity-setup/assets/contract/yaml-edit/cases.json` | `skills/coverity-gui/assets/contract/yaml-edit/` |
-| 確認の文字列 | `skills/coverity-apply/assets/contract/token/cases.json` | `mcp-servers/coverity-connect/tests/contract/token/` |
+| 逸脱コメントの決まり | `skills/deviation-comment/scripts/check_comment.py`、`assets/contract/comment/cases.json` | `skills/triage-report/`、`skills/triage-integration/`、`skills/coverity-run/` の `scripts/` と `assets/contract/comment/` |
+| 結果の決まり | `skills/triage-report/scripts/check_result.py`、`assets/contract/result/cases.json` | `skills/coverity-run/` の `scripts/` と `assets/contract/result/` |
+| 確かめの決まり | `skills/triage-review/scripts/check_review.py` | `skills/coverity-run/scripts/` |
+| 機械的な確かめ | `skills/triage-review/scripts/lint_result.py`、`assets/contract/lint/cases.json` | `skills/coverity-run/` の `scripts/` と `assets/contract/lint/` |
+| 統合の計画の決まり | `skills/triage-integration/scripts/check_plan.py`、`assets/contract/plan/cases.json` | `skills/coverity-run/` の `scripts/` と `assets/contract/plan/` |
+| 人に見せる確信度 | `skills/coverity-run/scripts/confidence.py`、`assets/contract/confidence/cases.json` | `skills/coverity-apply/`、`skills/coverity-gui/` の `scripts/` と `assets/contract/confidence/` |
+| 注釈を残す書き換え | `skills/coverity-setup/scripts/yamledit.py`、`assets/contract/yaml-edit/cases.json` | `skills/coverity-gui/` の `scripts/`（その下のフォルダでもよい）と `assets/contract/yaml-edit/` |
+| 確認の文字列 | `skills/coverity-apply/scripts/plantoken.py`、`assets/contract/token/cases.json` | `mcp-servers/coverity-connect/src/coverity_mcp/plantoken.py`、`mcp-servers/coverity-connect/tests/contract/token/cases.json` |
+| 実行フォルダの形 | `skills/coverity-run/assets/run.schema.json` | `skills/coverity-apply/assets/`、`skills/coverity-gui/assets/`、`skills/coverity-selftest/assets/`、`skills/coverity-help/assets/` |
+| 承認の形 | `skills/coverity-run/assets/approvals.schema.json` | `skills/coverity-apply/assets/`、`skills/coverity-gui/assets/`、`skills/coverity-selftest/assets/` |
 
-コピーのしかた（例：結果の形）：
+コピーのしかた（例：逸脱コメントの決まりを、一括実行に写す）：
 
 ```text
 # Windows（PowerShell）
-Copy-Item "skills/triage-report/assets/result.schema.json" "skills/coverity-run/assets/result.schema.json"
+Copy-Item "skills/deviation-comment/scripts/check_comment.py" "skills/coverity-run/scripts/check_comment.py"
+Copy-Item "skills/deviation-comment/assets/contract/comment/cases.json" "skills/coverity-run/assets/contract/comment/cases.json"
 # Linux（bash）
-cp "skills/triage-report/assets/result.schema.json" "skills/coverity-run/assets/result.schema.json"
+cp "skills/deviation-comment/scripts/check_comment.py" "skills/coverity-run/scripts/check_comment.py"
+cp "skills/deviation-comment/assets/contract/comment/cases.json" "skills/coverity-run/assets/contract/comment/cases.json"
 ```
 
-新しい取り決めを足すときは、設計書の 4.17 の表に行を足し、`tests/contracts/test_contracts.py` の `OWNERS` に、ファイルの名前と、持ち主と写しを持つ部品の役割（この文書の表の役割の名前）を足します。部品の名前は書きません。
+コピーした後は、取り決めの試験で、写しが同じであることを確かめます。
+
+```text
+# Windows（PowerShell）
+py -3 tests/run.py --only contracts
+# Linux（bash）
+python3 tests/run.py --only contracts
+```
+
+取り決めの試験は、部品のフォルダの中を**ファイルの名前**で探し、同じ名前のファイルをすべて写しとして確かめます。表にない部品が同じ名前のファイルを持つと、不合格になります（設計書の 4.17 の表に足すか、名前を変えます）。まだ写しを持たない部品は、理由を書いて飛ばします。
+
+新しい取り決めを足すときは、設計書の 4.17 の表に行を足し、`tests/contracts/test_contracts.py` の `CONTRACTS` に、持ち主のフォルダの中のパスと、持ち主と写しを持つ部品の役割（この文書の「今の部品」の表の役割の名前）を足します。部品の名前は書きません。
 
 ## 変えた後に確かめる
 

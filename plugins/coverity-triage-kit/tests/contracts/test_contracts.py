@@ -180,6 +180,20 @@ def cases_path(name):
     return None
 
 
+def expected_place(folder, contract):
+    """写しを置く場所（設計書 4.17）：スキルは持ち主と同じ。MCP サーバーは、スクリプトをパッケージ（src/<パッケージ>/）に、
+    共通の試験のデータを tests/contract/ に置く"""
+    if Path(folder).parent.resolve() != pp.MCP_DIR.resolve():
+        return contract
+    if kind_of(contract) == "script":
+        packages = sorted(p.name for p in (Path(folder) / "src").glob("*/__init__.py") for p in [p.parent]) \
+            if (Path(folder) / "src").is_dir() else []
+        return f"src/{packages[0] if packages else '<パッケージ>'}/{Path(contract).name}"
+    if kind_of(contract) == "cases":
+        return "tests/" + "/".join(Path(contract).parts[-3:])
+    return contract
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -299,7 +313,7 @@ class CopiesTest(unittest.TestCase):
                     if folder is None:
                         self.skipTest(f"{holder} の部品がまだありません")
                     if not copies_in(folder, contract):
-                        self.skipTest(f"{holder}（{pp.rel(folder)}）に {contract} の写しがまだありません"
+                        self.skipTest(f"{holder}（{pp.rel(folder)}）に {expected_place(folder, contract)} の写しがまだありません"
                                       f"（持ち主：{owner}。docs/replace.md の手順でコピーしてください）")
 
     def test_copies_are_listed(self):

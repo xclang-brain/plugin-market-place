@@ -25,17 +25,17 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 
+sys.dont_write_bytecode = True  # nothing is left in the plugin's folder
 try:
     from . import emulator as emu_support
     from . import flowlib as fl
 except ImportError:  # discovered with this folder as the top level
-    import sys
-
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import emulator as emu_support  # type: ignore[no-redef]
     import flowlib as fl  # type: ignore[no-redef]
