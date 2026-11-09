@@ -35,14 +35,16 @@ USAGE = "使い方：ftp_deploy.py run|check|init [--workdir 作業フォルダ]
 MASK = "***"
 BLOCK_SIZE = 64 * 1024
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-FTP_ERRORS = ftplib.all_errors  # ftplib.Error、OSError（ssl.SSLError を含む）、EOFError
+BOOLEANS = configparser.ConfigParser.BOOLEAN_STATES  # true・false のほか、yes・no なども読める
+# ftplib.Error、OSError（ssl.SSLError を含む）、EOFError と、機器の答えを読めないときの ValueError
+FTP_ERRORS = ftplib.all_errors + (ValueError,)
 DROPPED = (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
 # 機器までの経路がないときの errno。Windows では WSA の番号になる。
 UNREACHABLE = {getattr(errno, n) for n in (
     "EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN", "ENETDOWN",
     "WSAEHOSTUNREACH", "WSAENETUNREACH", "WSAEHOSTDOWN", "WSAENETDOWN") if hasattr(errno, n)}
 
-SECRETS = []  # 結果とログで伏せる文字列（パスワード）
+SECRETS = []  # 機器の答えや例外の文から伏せる文字列（パスワード）
 
 
 class Stop(Exception):
@@ -54,17 +56,21 @@ class Stop(Exception):
         self.code = code
 
 
-def mask(value):
-    """文字列と、辞書・リストの中の文字列から、パスワードを伏せる。"""
-    if isinstance(value, str):
-        for secret in SECRETS:
-            value = value.replace(secret, MASK)
-        return value
-    if isinstance(value, dict):
-        return {k: mask(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [mask(v) for v in value]
-    return value
+class OldRemoved(Exception):
+    """古いファイルを消したあとに、名前を変えられなかった。error は元の例外。"""
+
+    def __init__(self, error):
+        Exception.__init__(self, error)
+        self.error = error
+
+
+def mask(text):
+    """機器の答えや例外の文から、パスワードを伏せる。
+    設定から作るパスや名前は伏せない（root などの短いパスワードで、パスが壊れないように）。"""
+    text = str(text)
+    for secret in SECRETS:
+        text = text.replace(secret, MASK)
+    return text
 
 
 class Log(object):
@@ -82,7 +88,7 @@ class Log(object):
         if self.fh is None:
             return
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for line in mask(str(text)).splitlines() or [""]:
+        for line in str(text).splitlines() or [""]:
             self.fh.write("%s %s\n" % (stamp, line))
         self.fh.flush()
 
@@ -93,6 +99,10 @@ class Log(object):
 
 
 LOG = Log()
+
+
+def log_failure(e):
+    LOG("失敗：" + mask(repr(e)))
 
 
 # --- 設定 -------------------------------------------------------------------
@@ -133,7 +143,7 @@ def read_config(path):
         errors = getattr(e, "errors", None)
         where = "の %s 行目" % errors[0][0] if errors else ""
         raise Stop("設定ファイル %s%sを読めません。「項目 = 値」の形で書いてください。"
-                   "2つ目からのリストの値は、行頭に空白を入れてください。" % (path, where), 2)
+                   "リストの値は、項目の次の行から、行頭に空白を入れて書いてください。" % (path, where), 2)
     if not parser.has_section(SECTION):
         raise Stop("設定ファイル %s に [settings] の行がありません。" % path, 2)
     raw = dict(parser.items(SECTION))
@@ -143,7 +153,8 @@ def read_config(path):
 
 
 def settings_from(raw, workdir, environ):
-    """値を確かめる。(settings, problems) を返す。problems は日本語の文のリスト。"""
+    """値を確かめる。(settings, problems) を返す。problems は日本語の文のリスト。
+    PC にまだない送るファイルは、problems ではなく settings["missing"] に入れる。"""
     problems = []
     for key in raw:
         if key not in KEYS:
@@ -175,11 +186,11 @@ def settings_from(raw, workdir, environ):
         problems.append("password_env の環境変数 %s がありません。"
                         "環境変数を設定するか、password に書いてください。" % s["password_env"])
 
-    for key, default, choices in (("passive", "true", ("true", "false")), ("tls", "no", ("no", "yes"))):
+    for key, default in (("passive", "true"), ("tls", "false")):
         value = get(key, default).lower()
-        if value not in choices:
-            problems.append("%s は %s か %s にしてください（今の値：%s）。" % ((key,) + choices + (value,)))
-        s[key] = value in ("true", "yes")
+        if value not in BOOLEANS:
+            problems.append("%s は true か false にしてください（今の値：%s）。" % (key, value))
+        s[key] = BOOLEANS.get(value, False)
 
     timeout = get("timeout_seconds", "30")
     try:
@@ -203,7 +214,7 @@ def settings_from(raw, workdir, environ):
     elif ".." in s["remote_parts"]:
         problems.append("remote_dir に .. は使えません（今の値：%s）。" % remote_dir)
 
-    s["files"] = []
+    s["files"], s["missing"] = [], []
     entries = [line.strip() for line in raw.get("files", "").splitlines() if line.strip()]
     if not entries:
         problems.append("files（送るファイル）が空です。")
@@ -211,16 +222,19 @@ def settings_from(raw, workdir, environ):
     for entry in entries:
         path = os.path.normpath(os.path.join(workdir, entry))
         name = os.path.basename(path)
-        if not os.path.isfile(path):
-            problems.append("送るファイル %s がありません（%s）。" % (entry, path))
-        elif not safe_name(name):
+        if not safe_name(name):
             problems.append("%s は、名前に \\ や改行などが入っているので送れません。"
                             "名前を変えてください。" % entry)
         elif name in seen:
             problems.append("files に、名前が同じファイルが2つあります（%s と %s）。" % (seen[name], entry))
+        elif os.path.isdir(path):
+            problems.append("files の %s はフォルダです。送るファイルを1つずつ書いてください。" % entry)
         else:
             seen[name] = entry
-            s["files"].append((path, name))
+            if os.path.isfile(path):
+                s["files"].append((path, name))
+            else:
+                s["missing"].append((entry, path))
     return s, problems
 
 
@@ -241,12 +255,12 @@ def logged_settings(raw):
 
 def explain(what, e, s, login=False, transfer=False, hint=None):
     """例外を「何ができないか。なぜか。何を確かめるか。」の文にする。hint を渡せば、それを確かめることにする。"""
-    reply = str(e).strip()
+    reply = mask(str(e).strip())
     code = reply[:3] if isinstance(e, ftplib.Error) else ""
     if isinstance(e, socket.gaierror):
         why, check = "ホスト名 %s が見つかりません" % s["host"], "host を確かめてください"
     elif isinstance(e, ConnectionRefusedError) and transfer:
-        why, check = "ファイルを送るための接続を断られました", "passive を変えると直ることがあります"
+        why, check = "ファイルを送るときに使う接続を断られました", "passive を変えると直ることがあります"
     elif isinstance(e, ConnectionRefusedError):
         why = "接続を断られました。機器の FTP サーバーが動いていないようです"
         check = "機器で FTP サーバーが動いているかと、port を確かめてください"
@@ -261,8 +275,12 @@ def explain(what, e, s, login=False, transfer=False, hint=None):
         why, check = "途中で接続が切れました", "機器の電源とケーブルを確かめてください"
     elif code == "421":
         why, check = "機器の FTP サーバーが接続を切りました（%s）" % reply, "機器の FTP サーバーのようすを確かめてください"
-    elif isinstance(e, ssl.SSLError):
+    elif isinstance(e, ssl.SSLError) or code == "522":
         why, check = "暗号化の手続きに失敗しました（%s）" % reply, "機器の FTP サーバーが FTPS に対応しているかと、tls を確かめてください"
+    elif isinstance(e, UnicodeDecodeError):
+        why, check = "機器の FTP サーバーの答えを UTF-8 で読めません", "機器の FTP サーバーの文字コードの設定を確かめてください"
+    elif isinstance(e, ValueError):
+        why, check = "機器の FTP サーバーの答えの形が違います（%s）" % reply, "機器の FTP サーバーの設定を確かめてください"
     elif login and code == "530" and s["user"]:
         why = "ユーザー名かパスワードが違います（%s）" % reply
         check = "user と password（password_env を使うときは、その環境変数）を確かめてください"
@@ -283,28 +301,39 @@ def explain(what, e, s, login=False, transfer=False, hint=None):
     return "%s。%s。%s。" % (what, why, hint or check)
 
 
+class FTPS(ftplib.FTP_TLS):
+    """ファイルを送る接続でも、ログインした接続の TLS セッションを使い回す。
+    ftplib はそうしないので、vsftpd（既定の require_ssl_reuse=YES）などに断られる。"""
+
+    def ntransfercmd(self, cmd, rest=None):
+        conn, size = ftplib.FTP.ntransfercmd(self, cmd, rest)
+        if self._prot_p:
+            conn = self.context.wrap_socket(conn, server_hostname=self.host, session=self.sock.session)
+        return conn, size
+
+
 def connect(s):
     """機器につないでログインする。つながらなくても、やり直さない。"""
-    ftp = ftplib.FTP_TLS() if s["tls"] else ftplib.FTP()
+    ftp = FTPS() if s["tls"] else ftplib.FTP()
     ftp.encoding = "utf-8"  # Python 3.8 の既定は latin-1。ファイルの名前を UTF-8 で送る
     host, port = s["host"], s["port"]
     user = s["user"] or "anonymous"
     LOG("機器 %s の %d 番ポートに FTP でつなぎます（tls = %s、ユーザー %s）。"
-        % (host, port, "yes" if s["tls"] else "no", user))
+        % (host, port, "true" if s["tls"] else "false", user))
     step, login, check = "機器 %s の %d 番ポートに FTP でつながりません" % (host, port), False, None
     try:
-        LOG(ftp.connect(host, port, timeout=s["timeout"]))
+        LOG(mask(ftp.connect(host, port, timeout=s["timeout"])))
         if s["tls"]:
-            step = "FTPS（tls = yes）を始められません"
-            check = "機器の FTP サーバーが FTPS に対応しているかを確かめてください。対応していなければ、tls を no にしてください"
-            LOG(ftp.auth())
+            step = "FTPS（tls = true）を始められません"
+            check = "機器の FTP サーバーが FTPS に対応しているかを確かめてください。対応していなければ、tls を false にしてください"
+            LOG(mask(ftp.auth()))
         step, login, check = "機器 %s に FTP でログインできません" % host, True, None
-        LOG(ftp.login(user, s["password"]))
+        LOG(mask(ftp.login(user, s["password"])))
         if s["tls"]:
             step, login = "FTPS でファイルを送る準備ができません", False
-            LOG(ftp.prot_p())
+            LOG(mask(ftp.prot_p()))
     except FTP_ERRORS as e:
-        LOG("失敗：%r" % (e,))
+        log_failure(e)
         close(ftp)
         raise Stop(explain(step, e, s, login=login, hint=check))
     ftp.set_pasv(s["passive"])
@@ -321,42 +350,59 @@ def close(ftp):
 
 
 def enter_remote_dir(ftp, s, create):
-    """remote_dir に入り、その絶対パスを返す。create なら、ないフォルダを親から順に作る。"""
+    """remote_dir に入る。入れなければ、親から順に入り、入れないフォルダを create なら作る。
+    create でなければ作らずに、入れなかったフォルダの名前を返す（入れたら None）。"""
     remote_dir = s["remote_dir"]
-    step = "機器のフォルダ %s に入れません" % remote_dir
     try:
+        ftp.cwd(remote_dir)
+        return None
+    except ftplib.error_perm:
+        pass
+    if remote_dir.startswith("/"):
+        ftp.cwd("/")
+    for part in s["remote_parts"]:
         try:
-            ftp.cwd(remote_dir)
-        except ftplib.error_perm as e:
+            ftp.cwd(part)
+        except ftplib.error_perm:
             if not create:
-                raise Stop("機器 %s にはログインできましたが、フォルダ %s に入れません（%s）。"
-                           "フォルダがないなら、run のときに作ります。"
-                           "あるなら、user に入る権限があるかを確かめてください。" % (s["host"], remote_dir, e))
-            step = "機器に送り先のフォルダ %s を作れません" % remote_dir
-            if remote_dir.startswith("/"):
-                ftp.cwd("/")
-            for part in s["remote_parts"]:
-                try:
-                    ftp.cwd(part)
-                except ftplib.error_perm:
-                    ftp.mkd(part)
-                    LOG("機器にフォルダ %s を作りました。" % part)
-                    ftp.cwd(part)
-        try:
-            return ftp.pwd()
-        except ftplib.Error:
-            return remote_dir
-    except FTP_ERRORS as e:
-        LOG("失敗：%r" % (e,))
-        raise Stop(explain(step, e, s))
+                return part
+            ftp.mkd(part)
+            LOG("機器にフォルダ %s を作りました。" % part)
+            ftp.cwd(part)
+    return None
+
+
+def current_dir(ftp, default):
+    try:
+        return ftp.pwd()
+    except ftplib.Error:
+        return default
+
+
+def names_here(ftp):
+    """今のフォルダの中の名前。ファイルを送るときと同じ接続を開くので、passive や FTPS の問題もわかる。"""
+    try:
+        return [n.rstrip("/").rsplit("/", 1)[-1] for n in ftp.nlst()]
+    except (ftplib.error_perm, ftplib.error_temp) as e:
+        if str(e)[:3] not in ("450", "550"):  # 空のフォルダで 450 か 550 を返す FTP サーバーがある
+            raise
+        return []
+
+
+def remote_size(ftp, name):
+    """機器のファイルのサイズ。なければ None。"""
+    try:
+        return ftp.size(name)
+    except ftplib.error_perm:
+        return None
 
 
 def send_file(ftp, s, path, name):
     """1つのファイルを name.part に送り、サイズを確かめ、権限を変えてから name に置き換える。
-    失敗したら name.part を消して Stop。"""
+    失敗したら name.part を消して Stop。古い name を消したあとの失敗なら、name.part は残す。"""
     part = name + ".part"
-    size = os.path.getsize(path)
     try:
+        size = os.path.getsize(path)
         fh = open(path, "rb")
     except OSError as e:
         raise Stop("PC のファイル %s を読めません（%s）。" % (path, e.strerror or e))
@@ -364,65 +410,81 @@ def send_file(ftp, s, path, name):
     step, sending = "%s を送れません" % name, True
     try:
         with fh:
-            LOG(ftp.storbinary("STOR " + part, fh, BLOCK_SIZE))
+            LOG(mask(ftp.storbinary("STOR " + part, fh, BLOCK_SIZE)))
         step, sending = "送った %s のサイズを確かめられません" % name, False
-        remote_size = ftp.size(part)
-        if remote_size != size:
+        sent = ftp.size(part)
+        if sent != size:
             raise Stop("送った %s のサイズが合いません（機器：%s バイト、PC：%d バイト）。"
                        "送る途中で壊れたおそれがあります。機器の空き容量とケーブルを確かめてください。"
-                       % (name, "?" if remote_size is None else remote_size, size))
+                       % (name, "?" if sent is None else sent, size))
         LOG("機器の %s のサイズは PC と同じです（%d バイト）。" % (part, size))
         if s["file_mode"]:
             # 置き換える前に変える。失敗しても、元のファイルはそのまま残る
             step = "%s の権限を %s にできません" % (name, s["file_mode"])
-            LOG(ftp.sendcmd("SITE CHMOD %s %s" % (s["file_mode"], part)))
+            LOG(mask(ftp.sendcmd("SITE CHMOD %s %s" % (s["file_mode"], part))))
         step = "%s を %s に置き換えられません" % (part, name)
         replace(ftp, part, name)
-    except Stop:
-        remove_part(ftp, part)
-        raise
+        return size
+    except OldRemoved as e:
+        log_failure(e.error)
+        raise Stop(explain(step, e.error, s) + "古い %s は消しました。送ったファイルは %s として機器にあります。"
+                   "もう一度送るか、機器で名前を %s に変えてください。" % (name, part, name))
+    except Stop as e:
+        message = e.message
     except FTP_ERRORS as e:
-        LOG("失敗：%r" % (e,))
+        log_failure(e)
         message = explain(step, e, s, transfer=sending)
-        if not remove_part(ftp, part):
-            message += "機器に %s が残っているかもしれません。" % part
-        raise Stop(message)
-    return size
+    if not remove_part(ftp, part):
+        message += "機器に %s が残っているかもしれません。" % part
+    raise Stop(message)
 
 
 def replace(ftp, part, name):
+    """part の名前を name に変える。上書きの名前の変更を断る機器では、古い name を消してから変える。
+    古い name を消したあとに変えられなければ OldRemoved。"""
+    reply = ftp.sendcmd("RNFR " + part)  # 断られたら、何も消さずに失敗にする
+    if reply[:1] != "3":
+        raise ftplib.error_reply(reply)
     try:
-        LOG(ftp.rename(part, name))
-    except ftplib.error_perm as first:
-        # 今あるファイルへの名前の変更を断るサーバーがある。古いファイルを消して、もう一度試す
-        LOG("名前を変えられません（%s）。古い %s を消して、もう一度試します。" % (first, name))
-        try:
-            LOG(ftp.delete(name))
-        except ftplib.error_perm:
-            raise first
-        LOG(ftp.rename(part, name))
+        LOG(mask(ftp.voidcmd("RNTO " + name)))
+        return
+    except ftplib.error_perm as e:
+        if remote_size(ftp, name) is None:  # 古い name がなければ、ほかの理由で断られた
+            raise
+        LOG("上書きの名前の変更を断られました（%s）。古い %s を消して、もう一度試します。" % (mask(e), name))
+    LOG(mask(ftp.delete(name)))
+    try:
+        LOG(mask(ftp.rename(part, name)))
+    except FTP_ERRORS as e:
+        raise OldRemoved(e)
 
 
 def remove_part(ftp, part):
-    """途中までのファイルを消す。消せたか、もともとなければ True。接続が切れていれば False。"""
+    """途中までのファイルを消す。消せたか、もともとなければ True。残っているかもしれなければ False。"""
     try:
-        LOG(ftp.delete(part))
+        LOG(mask(ftp.delete(part)))
         LOG("機器の %s を消しました。" % part)
+        return True
     except ftplib.error_perm:
-        pass
+        try:
+            return remote_size(ftp, part) is None  # 消すのを断られたのか、もともとないのか
+        except FTP_ERRORS:
+            return False
     except FTP_ERRORS:
         return False
-    return True
 
 
 # --- サブコマンド -------------------------------------------------------------
 
-def checked_settings(raw, workdir, result):
+def checked_settings(raw, workdir, result, need_files):
     LOG("設定：%s" % logged_settings(raw))
     s, problems = settings_from(raw, workdir, os.environ)
+    if need_files:
+        problems += ["送るファイル %s がありません（%s）。ビルドしたかと、files の書き方を確かめてください。" % m
+                     for m in s["missing"]]
     if problems:
         result["problems"] = problems
-        raise Stop("".join(problems) + "設定ファイル %s を直してください。" % result["config"], 2)
+        raise Stop("".join(problems) + "設定ファイル %s を確かめてください。" % result["config"], 2)
     return s
 
 
@@ -462,14 +524,34 @@ def cmd_init(workdir, result):
 
 
 def cmd_check(workdir, result):
-    s = checked_settings(read_config(result["config"]), workdir, result)
+    result.update(notes=[], remote_dir=None)
+    s = checked_settings(read_config(result["config"]), workdir, result, need_files=False)
+    notes = result["notes"]
+    notes += ["送るファイル %s は、まだありません。ビルドの前なら、それでかまいません。" % entry
+              for entry, _ in s["missing"]]
     ftp = connect(s)
+    remote_dir = s["remote_dir"]
+    step = "機器の送り先のフォルダ %s に入れません" % remote_dir
     try:
-        result["remote_dir"] = enter_remote_dir(ftp, s, create=False)
+        missing = enter_remote_dir(ftp, s, create=False)
+        here = current_dir(ftp, remote_dir)
+        step = "機器のフォルダ %s の一覧を取れません" % here
+        names = names_here(ftp)
+    except FTP_ERRORS as e:
+        log_failure(e)
+        raise Stop(explain(step, e, s, transfer=True))
     finally:
         close(ftp)
-    result.update(ok=True, message="機器 %s に FTP でログインでき、送り先のフォルダ %s があることを確かめました。"
-                  % (s["host"], result["remote_dir"]))
+    if missing in names:
+        raise Stop("機器 %s にはログインできましたが、送り先のフォルダ %s に入れません。"
+                   "%s がフォルダかと、user に入る権限があるかを確かめてください。" % (s["host"], remote_dir, missing))
+    if missing:
+        notes.append("送り先のフォルダ %s は、まだありません。run のときに作ります。" % remote_dir)
+        message = "機器 %s に FTP でログインできました。" % s["host"]
+    else:
+        result["remote_dir"] = here
+        message = "機器 %s に FTP でログインし、送り先のフォルダ %s の一覧を取れました。" % (s["host"], here)
+    result.update(ok=True, message=message + "".join(notes))
     return 0
 
 
@@ -479,10 +561,15 @@ def cmd_run(workdir, result):
     open_log(workdir)
     result["log"] = LOG.path
     LOG("run を始めます。設定ファイル：%s" % result["config"])
-    s = checked_settings(raw, workdir, result)
+    s = checked_settings(raw, workdir, result, need_files=True)
     ftp = connect(s)
     try:
-        remote_dir = enter_remote_dir(ftp, s, create=True)
+        try:
+            enter_remote_dir(ftp, s, create=True)
+        except FTP_ERRORS as e:
+            log_failure(e)
+            raise Stop(explain("機器の送り先のフォルダ %s に入れないか、作れません" % s["remote_dir"], e, s))
+        remote_dir = current_dir(ftp, s["remote_dir"])
         result["remote_dir"] = remote_dir
         LOG("送り先：%s" % remote_dir)
         for path, name in s["files"]:
@@ -522,15 +609,15 @@ def main(argv=None):
             result["problems"] = [e.message]
         code = e.code
     except Exception as e:
-        LOG(traceback.format_exc())
+        LOG(mask(traceback.format_exc()))
         result["ok"] = False
-        result["message"] = "思わぬエラーで止まりました（%s: %s）。" % (type(e).__name__, e)
+        result["message"] = "思わぬエラーで止まりました（%s: %s）。" % (type(e).__name__, mask(e))
         if LOG.path:
             result["message"] += "ログ %s を見てください。" % LOG.path
         code = 1
     LOG(result["message"])
     LOG.close()
-    sys.stdout.write(json.dumps(mask(result), ensure_ascii=True) + "\n")
+    sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     return code
 
