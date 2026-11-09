@@ -4,7 +4,7 @@
 
 使い方：hook.py [イベント] < フックの入力（JSON）
   イベント：UserPromptSubmit、PreToolUse、SubagentStop、Stop。省くと入力の hook_event_name を使う。
-作業フォルダの .<このスキルのフォルダの名前>/recording が新しくなければ、何もしない（REQ-407、REQ-408）。
+作業フォルダの .debug-dashboard/recording が新しくなければ、何もしない（REQ-407、REQ-408）。
 どんなときも終了コード 0 で終える。標準出力には、ツールを断るときの JSON だけを出す。
 """
 
@@ -17,22 +17,26 @@ import sys
 import time
 import traceback
 
-SKILL = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA = ".debug-dashboard"         # フックの設定（hooks.json）も、この名前を使う
 FRESH_SECONDS = 120               # サーバーは 30 秒ごとに recording を書き直す。2 分そのままなら止まったとみなす
 EVENT_BYTES = 8 * 1024            # 1件の上限
 SESSION_BYTES = 20 * 1024 * 1024  # 1つのセッションの記録の上限
 KEEP_SESSIONS = 30                # 残すセッションの数
 COMMAND_CHARS = 1000              # コマンドは先頭のこれだけを残す
 MASK_CHARS = 16 * 1024            # 伏せる前に、文をこの長さまでにする。1件は 8 KB までなので、これより後ろは残らない
-NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
 
 SECRET_WORDS = re.compile(r"(?i)pass|token|secret|key")
-# 名前=値、名前: 値（"名前": "値" も）。名前に pass・token・secret・key を含むもの。
-# 名前の長さに上限を付けて、長い文で正規表現が遅くならないようにする
-SECRET_PAIR = re.compile(r"""(?i)([\w.-]{0,64}(?:pass|token|secret|key)[\w.-]{0,64}["']?\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s"',;&|]+)""")
+# 名前=値、名前: 値（"名前": "値"、全角の ＝ と ： も）。名前に pass・token・secret・key を含むもの。
+# 閉じていない引用符は、行の終わりまで伏せる。名前の長さに上限を付けて、長い文で正規表現が遅くならないようにする
+SECRET_PAIR = re.compile(r"""(?i)([\w.-]{0,64}(?:pass|token|secret|key)[\w.-]{0,64}["']?\s*[=:＝：]\s*)"""
+                         r"""("[^"\n]*"?|'[^'\n]*'?|[^\s"',;&|]+)""")
 # --password 値 のように、フラグの後に空白で続く値
 SECRET_FLAG = re.compile(r"(?i)((?<![\w-])--?[\w-]{0,64}(?:pass|token|secret|key)[\w-]{0,64}\s+)(?!-)(\S+)")
-URL_PASSWORD = re.compile(r"(//[^/\s:@]+:)[^@\s/]+(@)")
+# -u 利用者:パスワード（curl）、-u 利用者,パスワード（lftp）、sshpass -p パスワード
+OPTION_PASSWORD = re.compile(r"((?<![\w-])(?:(?:-u|--user)\s+[^\s:,]+[:,]|sshpass\s+-p\s*))(\S+)")
+# //利用者:パスワード@ホスト。パスワードに @ があっても、ホストの前の最後の @ までを伏せる
+URL_PASSWORD = re.compile(r"(//[^/\s:@]+:)[^\s/]+?(@)(?=[^@\s/]*(?:[/\s]|$))")
 
 AGENT_TOOLS = {"agent", "task"}
 COMMAND_TOOLS = {"bash", "powershell", "shell"}
@@ -66,7 +70,8 @@ def text_of(value):
 def mask(text):
     text = URL_PASSWORD.sub(r"\1***\2", text[:MASK_CHARS])
     text = SECRET_PAIR.sub(r"\1***", text)
-    return SECRET_FLAG.sub(r"\1***", text)
+    text = SECRET_FLAG.sub(r"\1***", text)
+    return OPTION_PASSWORD.sub(r"\1***", text)
 
 
 def mask_data(value):
@@ -131,7 +136,7 @@ def fit(event):
 
 
 def write_file(path, data, append):
-    flags = os.O_WRONLY | os.O_CREAT | NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
+    flags = os.O_WRONLY | os.O_CREAT | FLAGS | (os.O_APPEND if append else os.O_TRUNC)
     fd = os.open(path, flags, 0o600)
     try:
         os.write(fd, data)
@@ -207,9 +212,11 @@ def handle(args, raw, base):
     if not isinstance(data, dict):
         return
     event = EVENTS.get(text_of(args[0] if args else pick(data, "hook_event_name", "hookEventName")).lower())
+    if event is None:
+        return
     session = re.sub(r"[^A-Za-z0-9_-]", "_", text_of(pick(data, "session_id", "sessionId")))[:64] or "default"
     folder = session_folder(base, session)
-    if folder is None or event is None:
+    if folder is None:
         return
     stop = os.path.join(folder, "stop")
     agent = short(pick(data, "agent_type", "agentType", "agentName"))
@@ -238,7 +245,7 @@ def main():
     try:
         raw = sys.stdin.buffer.read()
         project = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("COPILOT_PROJECT_DIR") or os.getcwd()
-        candidate = os.path.join(project, "." + SKILL)
+        candidate = os.path.join(project, DATA)
         if is_recording(candidate):
             base = candidate
             handle(sys.argv[1:], raw, base)

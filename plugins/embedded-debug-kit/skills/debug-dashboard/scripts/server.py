@@ -4,8 +4,8 @@
 
 使い方：server.py --workdir 作業フォルダ
 127.0.0.1 の、OS が選ぶポートで待ち受ける（REQ-402）。起動ごとにトークンを作る。
-.<このスキルのフォルダの名前>/server.json に URL とトークンを、recording に記録中の目印を書く。
-recording は 30 秒ごとに書き直し、終わるときに消す。
+.debug-dashboard/server.json に URL とトークンを、recording に記録中の目印を書く。
+recording は 30 秒ごとに書き直し、終わるときに消す。server.json が自分のものでなくなったら終わる。
 """
 
 import argparse
@@ -22,7 +22,8 @@ import time
 from urllib.parse import unquote, urlsplit
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-SKILL = os.path.basename(os.path.dirname(SCRIPTS))
+DATA = ".debug-dashboard"  # フックの設定（hooks.json）も、この名前を使う
+FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
 STATIC_DIR = os.path.join(SCRIPTS, "static")
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -55,17 +56,22 @@ def write_private(path, obj):
     """本人だけが読み書きできるファイルに、置き換えで書く（読む側が書きかけを見ないように）"""
     data = json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8")
     tmp = "%s.%d.tmp" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | FLAGS, 0o600)
     try:
         os.write(fd, data)
     finally:
         os.close(fd)
-    try:
-        os.replace(tmp, path)
-    except OSError:  # Windows で、ほかのプロセスが開いているとき
-        os.remove(tmp)
-        with open(path, "wb") as f:
-            f.write(data)
+    for wait in (0.05, 0.2, 0.5, None):  # Windows では、フックが読んでいる間は置き換えられない
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            if wait is None:
+                os.remove(tmp)
+                raise
+            time.sleep(wait)
 
 
 def read_json(path):
@@ -79,11 +85,12 @@ def read_json(path):
 def summarize(events):
     """記録から、今の段・動いているエージェント・最後の報告と判定を求める（設計書 8.6）"""
     running = {}
-    result = {"title": "", "started": None, "updated": None, "count": len(events),
+    result = {"title": "", "started": None, "updated": None, "count": len(events), "requests": 0,
               "last_report": None, "last_verdict": None}
     for e in events:
         kind, agent = e.get("kind"), e.get("agent") or ""
         result["started"] = result["started"] or e.get("time")
+        result["requests"] += int(kind == "request")
         result["updated"] = e.get("time") or result["updated"]
         if kind == "prompt":
             running.clear()
@@ -123,7 +130,7 @@ class Store:
 
     def session_path(self, session):
         sessions = self.sessions_dir()
-        if not sessions or not SESSION_RE.match(session or ""):
+        if not sessions or not isinstance(session, str) or not SESSION_RE.match(session):
             return None
         path = os.path.join(sessions, session)
         return path if os.path.isdir(path) and not os.path.islink(path) else None
@@ -187,7 +194,7 @@ class Store:
             return False
         path = os.path.join(folder, "stop")
         if not os.path.lexists(path):
-            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600))
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | FLAGS, 0o600))
         return True
 
     def settings(self):
@@ -201,8 +208,11 @@ class Store:
             return "直したいことと合格の条件は、%d 字までの文で送ってください。" % MAX_TEXT
         if not (isinstance(trials, int) and not isinstance(trials, bool) and 1 <= trials <= MAX_TRIALS):
             return "試行の上限は、1 から %d までの数にしてください。" % MAX_TRIALS
-        write_private(os.path.join(self.base, "settings.json"),
-                      {"goal": goal, "criteria": criteria, "max_trials": trials})
+        try:
+            write_private(os.path.join(self.base, "settings.json"),
+                          {"goal": goal, "criteria": criteria, "max_trials": trials})
+        except OSError as e:
+            return "設定を保存できませんでした（%s）。作業フォルダの権限と空き容量を確かめてください。" % e
         return None
 
 
@@ -310,13 +320,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.fail(404, "ありません。")
 
 
-def keep_recording(path, info, done):
-    """recording の時刻を書き直し続ける"""
-    while not done.wait(REFRESH_SECONDS):
-        if os.path.islink(os.path.dirname(path)) or os.path.islink(path):
+def owner(path):
+    data = read_json(path)
+    return data.get("pid") if isinstance(data, dict) else None
+
+
+def keep_recording(httpd, base, info, done, every=REFRESH_SECONDS):
+    """recording の時刻を書き直し続ける。server.json が消えたり、ほかのサーバーのものになったりしたら終了する"""
+    recording, server_json = os.path.join(base, "recording"), os.path.join(base, "server.json")
+    while not done.wait(every):
+        mine = owner(server_json) == info["pid"] and owner(recording) in (None, info["pid"])
+        if not mine or os.path.islink(base) or os.path.islink(recording):
+            sys.stderr.write("%s server.json か recording が、このサーバーのものでなくなったので終了します。\n" % now_iso())
+            httpd.shutdown()
             return
         try:
-            write_private(path, dict(info, time=time.time()))
+            write_private(recording, dict(info, time=time.time()))
         except OSError as e:
             sys.stderr.write("%s recording を書き直せません：%s\n" % (now_iso(), e))
 
@@ -334,7 +353,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Web管理画面のサーバー")
     parser.add_argument("--workdir", required=True)
     workdir = os.path.abspath(parser.parse_args(argv).workdir)
-    base = os.path.join(workdir, "." + SKILL)
+    base = os.path.join(workdir, DATA)
     if os.path.islink(base) or not os.path.isdir(base):
         sys.stderr.write("%s がないか、シンボリックリンクです。\n" % base)
         return 2
@@ -349,7 +368,7 @@ def main(argv=None):
     write_private(recording, dict(info, time=time.time()))
     write_private(server_json, dict(info, url=url, token=httpd.token, started=now_iso()))
     done = threading.Event()
-    threading.Thread(target=keep_recording, args=(recording, info, done), daemon=True).start()
+    threading.Thread(target=keep_recording, args=(httpd, base, info, done), daemon=True).start()
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
     sys.stderr.write("%s 起動しました。ポート %d\n" % (now_iso(), port))

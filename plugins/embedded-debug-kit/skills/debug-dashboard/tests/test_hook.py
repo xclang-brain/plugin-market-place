@@ -125,15 +125,18 @@ class RecordingTest(unittest.TestCase):
 
     def test_masks_passwords(self):
         command = ("curl ftp://root:hunter2@192.168.1.5/ --password=pw1 --token tok2 && "
-                   "export API_KEY=key3 DB_PASS='pw 4'")
+                   "export API_KEY=key3 DB_PASS='pw 4' && curl -u root:pw9 x && lftp -u root,pw10 h && "
+                   "sshpass -p pw11 ssh h && curl ftp://user:pw12@x@host/")
         run_hook(self.project, pre("Bash", {"command": command}))
-        run_hook(self.project, {"session_id": "s1", "prompt": 'password: pw5 と "secret": "pw6"'},
-                 "UserPromptSubmit")
+        run_hook(self.project, {"session_id": "s1", "prompt": 'password: pw5 と "secret": "pw6"\n'
+                                "password：pw13 と password＝pw14\nPASSWORD=\"pw15"}, "UserPromptSubmit")
         run_hook(self.project, pre("mcp__x__login", {"user": "root", "password": "pw7", "url": "https://u:pw8@h/"}))
         text = (self.base / "sessions" / "s1" / "events.jsonl").read_text(encoding="utf-8")
-        for secret in ("hunter2", "pw1", "tok2", "key3", "pw 4", "pw5", "pw6", "pw7", "pw8"):
+        for secret in ("hunter2", "pw1", "tok2", "key3", "pw 4", "pw5", "pw6", "pw7", "pw8", "pw9", "pw10",
+                       "pw11", "pw12", "@x@", "pw13", "pw14", "pw15"):
             self.assertNotIn(secret, text)
         self.assertIn("ftp://root:***@192.168.1.5/", text)
+        self.assertIn("ftp://user:***@host/", text)
         self.assertIn("root", text)
 
     def test_file_tools_record_paths_only(self):
@@ -157,6 +160,10 @@ class RecordingTest(unittest.TestCase):
                  "preToolUse")
         events = read_events(self.project, "c1")
         self.assertEqual([(e["kind"], e.get("input")) for e in events], [("prompt", None), ("tool", "make")])
+
+    def test_unknown_event_creates_nothing(self):
+        run_hook(self.project, {"session_id": "s9", "hook_event_name": "Notification"})
+        self.assertFalse((self.base / "sessions").exists())
 
     def test_session_id_is_sanitized(self):
         run_hook(self.project, {"session_id": "../../evil", "prompt": "x"}, "UserPromptSubmit")
@@ -226,6 +233,7 @@ class StageTest(unittest.TestCase):
         self.assertEqual(self.stage(prompt, dict(work, denied=True)), "plan")
         self.assertEqual(self.stage({"kind": "tool", "agent": "worker-agent", "sub": True}), "work")
         self.assertEqual(self.stage(prompt, work, {"kind": "report", "agent": "", "sub": False}), "plan")
+        self.assertEqual(server.summarize([prompt, work, work_done, review])["requests"], 2)
 
     def test_last_report_and_verdict(self):
         summary = server.summarize([
@@ -237,33 +245,70 @@ class StageTest(unittest.TestCase):
 
 
 HOOKS_JSON = support.SKILL_DIR.parents[1] / "com.anthropic.claude-code" / "hooks" / "hooks.json"
+BASH = shutil.which("bash")
 
 
-@unittest.skipUnless(HOOKS_JSON.is_file() and shutil.which("bash") and os.name != "nt",
+@unittest.skipUnless(HOOKS_JSON.is_file() and BASH,
                      "プラグインの hooks.json がないか、bash がありません（スキルのフォルダだけをコピーしたとき）")
 class HooksJsonTest(unittest.TestCase):
-    """プラグインのフックの設定のコマンドを、そのまま動かす"""
+    """プラグインのフックの設定のコマンドを、CLI と同じく bash で動かす（Windows では Git Bash）"""
 
-    def run_command(self, project, payload):
-        command = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    PAYLOADS = {
+        "UserPromptSubmit": {"session_id": "s1", "prompt": "直して"},
+        "PreToolUse": pre("Bash", {"command": "ls"}),
+        "SubagentStop": {"session_id": "s1", "agent_id": "a1", "agent_type": WORKER, "last_assistant_message": "報告"},
+        "Stop": {"session_id": "s1", "last_assistant_message": "結論"},
+    }
+
+    def run_command(self, project, event, path=None):
+        command = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))["hooks"][event][0]["hooks"][0]["command"]
         env = support.clean_env(CLAUDE_PLUGIN_ROOT=str(HOOKS_JSON.parents[2]), CLAUDE_PROJECT_DIR=str(project))
-        return subprocess.run(command, shell=True, input=json.dumps(payload).encode("utf-8"), env=env,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if path:
+            env["PATH"] = path
+        return subprocess.run([BASH, "-c", command], input=json.dumps(self.PAYLOADS[event]).encode("utf-8"),
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+
+    def test_bash_is_not_wsl(self):
+        self.assertNotIn("system32", BASH.lower(),
+                         "WSL の bash が見つかりました。Git for Windows の bash を PATH の前に置いてください")
 
     def test_without_marker_exits_0_and_records_nothing(self):
         project = temp_project(self)
-        proc = self.run_command(project, pre("Bash", {"command": "ls"}))
-        self.assertEqual((proc.returncode, proc.stdout), (0, b""))
+        for event in self.PAYLOADS:
+            proc = self.run_command(project, event)
+            self.assertEqual((proc.returncode, proc.stdout), (0, b""), event)
         self.assertFalse((project / DATA).exists())
+
+    def test_records_every_event(self):
+        project = temp_project(self)
+        mark_recording(project)
+        for event in self.PAYLOADS:
+            self.assertEqual(self.run_command(project, event).returncode, 0, event)
+        self.assertEqual([e["kind"] for e in read_events(project)], ["prompt", "tool", "report", "report"])
 
     def test_with_stop_marker_denies(self):
         project = temp_project(self)
         base = mark_recording(project)
         (base / "sessions" / "s1").mkdir(parents=True)
         (base / "sessions" / "s1" / "stop").write_text("")
-        proc = self.run_command(project, pre("Bash", {"command": "ls"}))
+        proc = self.run_command(project, "PreToolUse")
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_without_python_exits_0(self):
+        folder = os.path.dirname(BASH)
+        if any(shutil.which(name, path=folder) for name in ("py", "python3")):
+            own = temp_project(self)
+            if not support.can_symlink(own):
+                self.skipTest("Python のない PATH を作れません")
+            os.symlink(BASH, str(own / "bash"))
+            folder = str(own)
+        project = temp_project(self)
+        mark_recording(project)
+        for event in self.PAYLOADS:
+            proc = self.run_command(project, event, path=folder)
+            self.assertEqual((proc.returncode, proc.stdout), (0, b""), event)
+        self.assertEqual(read_events(project), [])
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_DIR / "scripts"
-DATA = "." + SKILL_DIR.name  # 作業フォルダの記録のフォルダ（.debug-dashboard）
+DATA = ".debug-dashboard"  # 作業フォルダの記録のフォルダ
 
 
 def clean_env(**extra):

@@ -3,13 +3,20 @@
   python3 -m unittest discover -s tests
 """
 
+import io
 import json
 import re
+import sys
+import threading
 import time
 import unittest
+from unittest import mock
 
 import support
 from support import DATA, request, start_server, temp_project
+
+sys.path.insert(0, str(support.SCRIPTS))
+import server  # noqa: E402  recording の書き直しを確かめる
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -74,7 +81,7 @@ class ServerTest(unittest.TestCase):
         status, _, body = request(self.info, "POST", "/api/stop", {"session": "s1"})
         self.assertEqual(status, 200, body)
         self.assertTrue((self.project / DATA / "sessions" / "s1" / "stop").is_file())
-        for session in ("../s1", "nothing", "", None):
+        for session in ("../s1", "nothing", "", None, 5, ["s1"], {"a": 1}):
             self.assertEqual(request(self.info, "POST", "/api/stop", {"session": session})[0], 404, session)
 
     def test_state_and_session(self):
@@ -106,6 +113,34 @@ class ServerTest(unittest.TestCase):
         self.proc.wait(10)
         self.assertFalse((self.project / DATA / "recording").exists())
         self.assertFalse((self.project / DATA / "server.json").exists())
+
+
+class KeepRecordingTest(unittest.TestCase):
+    """server.json が消えたり、ほかのサーバーのものになったりしたら、recording を書き直さずに終わる"""
+
+    def run_keeper(self, change):
+        base = temp_project(self)
+        info = {"pid": 4242, "port": 1}
+        (base / "server.json").write_text(json.dumps(info), encoding="utf-8")
+        stopped, done = threading.Event(), threading.Event()
+        self.addCleanup(done.set)
+        httpd = type("FakeServer", (), {"shutdown": lambda _self: stopped.set()})()
+        with mock.patch("sys.stderr", io.StringIO()):
+            threading.Thread(target=server.keep_recording, args=(httpd, str(base), info, done, 0.05),
+                             daemon=True).start()
+            deadline = time.time() + 5
+            while not (base / "recording").is_file() and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertTrue((base / "recording").is_file(), "自分のものなのに、recording を書き直しません")
+            self.assertFalse(stopped.is_set())
+            change(base)
+            self.assertTrue(stopped.wait(5), "終わりません")
+
+    def test_stops_when_server_json_is_gone(self):
+        self.run_keeper(lambda base: (base / "server.json").unlink())
+
+    def test_stops_when_another_server_records(self):
+        self.run_keeper(lambda base: (base / "server.json").write_text('{"pid": 7, "port": 2}', encoding="utf-8"))
 
 
 class PageTest(unittest.TestCase):

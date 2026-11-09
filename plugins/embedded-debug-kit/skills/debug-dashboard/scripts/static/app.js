@@ -10,8 +10,9 @@
   const $ = (id) => document.getElementById(id);
 
   const token = takeToken();
-  let selected = null;    // 表示している実行（セッション）
-  let follow = true;      // いちばん新しい実行を表示し続けるか
+  let selected = null;    // 表示している実行（チャット）
+  let shown = null;       // 表示している実行の要約
+  let follow = true;      // 統括エージェントの新しい実行を表示し続けるか
   let shownKey = "";      // 表示中の内容。変わったときだけ描き直す
   let listKey = "";
   let settingsFilled = false;
@@ -172,8 +173,16 @@
     return (session.title || "（依頼の記録がありません）") + "（" + when(session.started, true) + " から）";
   }
 
+  // 追う実行：エージェントに依頼したチャットのうち、いちばん新しいもの。なければ、いちばん新しいチャット。
+  // 画面を起動したチャットなど、エージェントを使わないチャットに移らないようにする
+  function latest(sessions) {
+    const run = sessions.find((s) => s.requests > 0) || sessions[0];
+    return run ? run.id : null;
+  }
+
   function render(detail) {
     const s = detail ? detail.session : null;
+    shown = s;
     const key = s ? [s.id, s.count, s.stage, s.stopped].join("|") : "";
     if (key === shownKey) return;
     shownKey = key;
@@ -205,7 +214,7 @@
     const key = selected + "|" + sessions.map((s) => s.id + s.updated + s.stage).join(",");
     if (key === listKey) return;
     listKey = key;
-    const items = sessions.map((s, index) => {
+    const items = sessions.map((s) => {
       const button = el("button", s.id === selected ? "session current" : "session");
       button.type = "button";
       button.append(el("span", "title", s.title || "（依頼の記録がありません）"),
@@ -213,7 +222,7 @@
       if (s.id === selected) button.setAttribute("aria-current", "true");
       button.addEventListener("click", () => {
         selected = s.id;
-        follow = index === 0;
+        follow = s.id === latest(sessions);
         shownKey = listKey = "";
         tick();
       });
@@ -226,9 +235,12 @@
   }
 
   async function stopRun() {
-    if (!selected || !confirm("この実行を止めますか？\n次のツールの呼び出しから断り、作業を終えるよう伝えます。")) return;
+    if (!shown) return;
+    const id = shown.id;
+    const name = "「" + (shown.title || "（依頼の記録がありません）") + "」（" + when(shown.started, true) + " から）";
+    if (!confirm(name + "を止めますか？\n次のツールの呼び出しから断り、作業を終えるよう伝えます。")) return;
     try {
-      const result = await api("/api/stop", { session: selected });
+      const result = await api("/api/stop", { session: id });
       $("stop-result").textContent = result.message;
       shownKey = "";
       tick();
@@ -247,7 +259,7 @@
     if (!settingsFilled) fillSettings(state.settings || {});
     const sessions = state.sessions || [];
     if (follow || !sessions.some((s) => s.id === selected)) {
-      selected = sessions.length ? sessions[0].id : null;
+      selected = latest(sessions);
       follow = true;
     }
     renderSessions(sessions);

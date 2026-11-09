@@ -2,6 +2,7 @@
 """シリアルで機器のシェルにつなぎ、コマンドを順に動かして、出力と終了コードを返す。
 
   serial_console.py run [--command コマンド]... [--workdir 作業フォルダ]
+  serial_console.py run --stdin [--workdir 作業フォルダ]   （標準入力の1行を1つのコマンドにする）
   serial_console.py check|init [--workdir 作業フォルダ]
 
 設定は <作業フォルダ>/.<スキルの名前>/config.ini、ログは同じフォルダの logs/ に置く。
@@ -38,7 +39,7 @@ TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
 SECTION = "settings"
 KEYS = ("port", "baud", "login_user", "login_password", "login_password_env", "prompt",
         "commands", "command_timeout_seconds")
-USAGE = "使い方：serial_console.py run [--command コマンド]... | check | init [--workdir 作業フォルダ]"
+USAGE = "使い方：serial_console.py run [--command コマンド]... | run --stdin | check | init [--workdir 作業フォルダ]"
 DEFAULT_PROMPT = r"[#$] $"
 MASK = "***"
 IS_WINDOWS = os.name == "nt"
@@ -55,6 +56,7 @@ POLL = 0.05           # 1回の読み取りで文字を待つ秒数
 READ_MAX = 4096       # 1回に読むバイト数の上限
 WRITE_WAIT = 5.0      # 書き込みを待つ秒数
 OUTPUT_LINES = 60     # JSON に入れる、コマンドごとの出力の行数（全部はログにある）
+OUTPUT_CHARS = 8000   # 同じく、文字数
 
 RC_COMMAND = ' echo "__rc=$?"'          # 前の空白は、bash の履歴に残さないため
 RC_RE = re.compile(r"__rc=([0-9]+)")    # エコーされた行は「__rc=$?」なので合わない
@@ -65,6 +67,8 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]"           # 色、カーソル�
                      r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # 端末の題名など
                      r"|\x1b[ -/]*[0-~]")                  # そのほかの短いもの
 CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# Windows の Git Bash は、/ で始まる引数（と「名前=/…」の後ろ）を「C:/Program Files/Git/…」に書き換える
+MSYS_PATH_RE = re.compile(r"(?:^|=)[A-Za-z]:[/\\]")
 
 SECRETS = []  # 結果とログで伏せる文字列（パスワード）
 
@@ -81,7 +85,7 @@ class Stop(Exception):
 def mask(value):
     """文字列と、辞書・リストの中の文字列から、パスワードを伏せる。"""
     if isinstance(value, str):
-        for secret in SECRETS:
+        for secret in sorted(set(SECRETS), key=len, reverse=True):  # 長いものから。短いものが一部なら、残りが出てしまう
             value = value.replace(secret, MASK)
         return value
     if isinstance(value, dict):
@@ -120,7 +124,7 @@ LOG = Log()
 
 
 def clean(text):
-    """色などの制御文字と \\r を除き、後退（\\b）を当てはめる。"""
+    """色などの制御文字と \\r を除き、バックスペース（\\b）で消された文字を消す。"""
     text = ANSI_RE.sub("", text).replace("\r", "")
     if "\b" in text:
         out = []
@@ -251,10 +255,8 @@ def settings_from(raw, environ, commands_arg):
     if not (s["timeout"] > 0 and math.isfinite(s["timeout"])):
         problems.append("command_timeout_seconds は 0 より大きい数にしてください（今の値：%s）。" % timeout)
 
-    if commands_arg:
+    if commands_arg is not None:
         s["commands"] = [c.strip() for c in commands_arg if c.strip()]
-        if any("\n" in c or "\r" in c for c in s["commands"]):
-            problems.append("--command の値に改行は入れられません。コマンドごとに --command を付けてください。")
     else:
         s["commands"] = [line.strip() for line in raw.get("commands", "").splitlines() if line.strip()]
     return s, problems
@@ -294,7 +296,7 @@ def open_error(path, e, result):
         # Windows では、ほかのプログラムが開いているポートは「アクセスが拒否されました」になる
         apps = "Tera Term や PuTTY など" if IS_WINDOWS else "minicom や screen など"
         return "シリアルポート %s は、ほかのプログラムが使っています。端末ソフト（%s）を閉じてから、" \
-               "やり直してください。" % (path, apps)
+               "やり直してください。前に動かしたこのスクリプトが、まだ動いていないかも確かめてください。" % (path, apps)
     if num in (errno.EACCES, errno.EPERM):
         return "シリアルポート %s を開く権限がありません。今のユーザーを dialout グループに入れて" \
                "（sudo usermod -aG dialout $USER）、ログインし直してください。" % path
@@ -337,10 +339,17 @@ class Console(object):
             self.unlogged += text
             while "\n" in self.unlogged or len(self.unlogged) > READ_MAX:
                 line, sep, rest = self.unlogged.partition("\n")
+                if not sep:
+                    # 改行のない長い行は分けて書く。先に伏せ、パスワードの書きかけかもしれない終わりは次に回す
+                    line = mask(line)
+                    keep = min(max([len(x) for x in SECRETS] + [1]) - 1, READ_MAX // 2)
+                    cut = max(len(line) - keep, 0)
+                    line, rest = line[:cut], line[cut:]
                 LOG(clean(line), "| ")
-                self.unlogged = rest if sep else ""
+                self.unlogged = rest
         parts = (self.tail + text).split("\n")
-        if self.prompt_line:
+        # 「# 」のような短いプロンプトは、出力の行（「# Subtest」など）と見分けられないので見ない
+        if self.prompt_line and len(self.prompt_line.strip()) >= 3:
             for i, line in enumerate(parts[:-1]):
                 if self.lines + i > 0 and clean(line).startswith(self.prompt_line):
                     self.back = True
@@ -467,8 +476,8 @@ def reach_shell(con, s):
     patterns = (("login", LOGIN_RE), ("password", PASSWORD_RE), ("prompt", s["prompt"]))
     user_sent = password_sent = False
     wakes = cancels = 0
-    LOG("Enter を送り、プロンプトを待ちます。")
-    con.send("\r")
+    LOG("Ctrl-U と Enter を送り、プロンプトを待ちます。")
+    con.send("\x15\r")  # Ctrl-U で打ちかけの文字を消してから Enter を送る（打ちかけのコマンドを動かさない）
     while True:
         hit = con.wait_for(patterns, LOGIN_WAIT if user_sent else WAKE_WAIT)
         if hit == "prompt":
@@ -488,7 +497,7 @@ def reach_shell(con, s):
             con.send(s["password"] + "\r")
             password_sent = True
         elif hit == "password" and not user_sent and cancels < 2:
-            # 前の人がパスワードを打つ途中で離れていた。Enter で取り消すと、ログインの求めに戻る
+            # 前に誰かがパスワードを入力しかけていた。Enter で取り消すと、ログインの求めに戻る
             con.mark()
             LOG("パスワードの入力の途中だったので、Enter で取り消します。")
             cancels += 1
@@ -524,6 +533,7 @@ def run_command(con, s, item):
     """コマンドを1つ動かし、item に出力と終了コードを入れる。プロンプトが戻ったら True。"""
     command = item["command"]
     prompt = (("prompt", s["prompt"]),)
+    before = con.prompt_line  # 送る前のプロンプト
     back = None
     con.mark()
     LOG("コマンドを送ります：%s" % command)
@@ -539,14 +549,18 @@ def run_command(con, s, item):
         # 途中で切れても、そこまでの出力を返す
         lines = clean(con.text()).split("\n")
         if back:
-            lines.pop()  # 最後の行はプロンプト
+            last = lines.pop()  # 最後の行はプロンプト
+            # 出力が改行で終わらないと、プロンプトと同じ行に出る（printf など）。プロンプトだけを除く
+            if before and last.endswith(before) and last[:-len(before)].strip():
+                lines.append(last[:-len(before)])
         lines = drop_echo(lines, command)
         while lines and not lines[-1].strip():
             lines.pop()
         while lines and not lines[0].strip():
             lines.pop(0)
-        item["output"] = "\n".join(lines[-OUTPUT_LINES:])
-        item["truncated"] = len(lines) > OUTPUT_LINES
+        text = "\n".join(lines[-OUTPUT_LINES:])
+        item["output"] = text[-OUTPUT_CHARS:]
+        item["truncated"] = len(lines) > OUTPUT_LINES or len(text) > OUTPUT_CHARS
     if back and not item["timed_out"]:
         item["exit_code"] = read_exit_code(con, s)
     return bool(back)
@@ -558,7 +572,7 @@ def checked_settings(raw, result, commands_arg=None, need_commands=False):
     LOG("設定：%s" % logged_settings(raw))
     s, problems = settings_from(raw, os.environ, commands_arg)
     if need_commands and not s["commands"]:
-        problems.append("動かすコマンドがありません。設定の commands に書くか、--command で渡してください。")
+        problems.append("動かすコマンドがありません。設定の commands に書くか、--command か --stdin で渡してください。")
     if problems:
         result["problems"] = problems
         raise Stop("".join(problems) + "設定ファイル %s を直してください。" % result["config"], 2)
@@ -613,7 +627,7 @@ def cmd_check(workdir, result, commands_arg):
         con.close()
     message = "シリアルポート %s で、機器のシェルのプロンプトまで進めました。%s" % (s["port"], logged_in_text(s, logged_in))
     if not s["commands"]:
-        message += "設定の commands が空なので、run では --command でコマンドを渡してください。"
+        message += "設定の commands が空なので、run では --command か --stdin でコマンドを渡してください。"
     result.update(ok=True, message=message)
     return 0
 
@@ -655,6 +669,28 @@ def cmd_run(workdir, result, commands_arg):
     return 0
 
 
+def stdin_commands():
+    """標準入力（UTF-8）の空でない行を、コマンドのリストにする。"""
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is None or stream.isatty():  # 端末なら、入力を待ったまま止まってしまう
+        return []
+    try:
+        text = stream.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise Stop("標準入力を UTF-8 で読めません。PowerShell では、先に "
+                   "$OutputEncoding = [Text.UTF8Encoding]::new($false) を動かしてください。", 2)
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def check_command_args(commands):
+    for c in commands or []:
+        if "\n" in c or "\r" in c:
+            raise Stop("--command の値に改行は入れられません。コマンドごとに --command を付けるか、--stdin で渡してください。", 2)
+        if IS_WINDOWS and MSYS_PATH_RE.search(c):
+            raise Stop("--command の値「%s」が、Windows のパスに書き換わっています（Git Bash は、/ で始まる値などを"
+                       "書き換えます）。このコマンドは --stdin で渡してください。" % c, 2)
+
+
 class Parser(argparse.ArgumentParser):
     def error(self, message):
         raise Stop("コマンドの書き方が違います。" + USAGE, 2)
@@ -665,17 +701,21 @@ def main(argv=None):
     parser.add_argument("subcommand", choices=("run", "check", "init"))
     parser.add_argument("--workdir")
     parser.add_argument("--command", action="append", dest="commands")
+    parser.add_argument("--stdin", action="store_true")
     result = {"ok": False, "message": "", "problems": [], "config": None, "log": None}
     try:
         args = parser.parse_args(argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
         result["config"] = os.path.join(data_dir(workdir), "config.ini")
-        if args.commands is not None and args.subcommand != "run":
-            raise Stop("--command は run でだけ使えます。" + USAGE, 2)
+        if (args.commands is not None or args.stdin) and args.subcommand != "run":
+            raise Stop("--command と --stdin は run でだけ使えます。" + USAGE, 2)
+        if args.commands is not None and args.stdin:
+            raise Stop("--command と --stdin は、どちらか一方だけを使ってください。" + USAGE, 2)
+        check_command_args(args.commands)
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir, 2)
         run = {"run": cmd_run, "check": cmd_check, "init": cmd_init}[args.subcommand]
-        code = run(workdir, result, args.commands)
+        code = run(workdir, result, stdin_commands() if args.stdin else args.commands)
     except Stop as e:
         result["ok"] = False
         result["message"] = e.message
@@ -691,7 +731,9 @@ def main(argv=None):
         code = 1
     LOG(result["message"])
     LOG.close()
-    sys.stdout.write(json.dumps(mask(result), ensure_ascii=True) + "\n")
+    shown = mask(result)
+    shown.update(config=result["config"], log=result["log"])  # 手元のパスは伏せない（パスワードと同じ文字を含むことがある）
+    sys.stdout.write(json.dumps(shown, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     return code
 

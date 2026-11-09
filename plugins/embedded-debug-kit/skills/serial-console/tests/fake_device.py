@@ -5,13 +5,17 @@ pty=True なら、疑似端末（Linux の /dev/pts/N）で待ち受ける。
 
 シェルが分かるコマンド：
   echo 文字   文字を出す。$? は直前の終了コードに替え、" と ' は除く
+  printf 文字 文字を、改行を付けずに出す
   true・false 終了コード 0・1
   seq N       1 から N までを1行ずつ出す
   color       色の付いた文字を出す
   kmsg        ok を出したあと、プロンプトの後ろに機器のメッセージを出す（プロンプトが隠れる）
+  tap         「# Subtest: sensor」を出し、1.5 秒たってから ok を出す
   hang        Ctrl-C が来るまで終わらない
+  stuck       Ctrl-C が来ても終わらない
   bye         接続を切る（ケーブルが抜けたまね）
   そのほか    not found を出し、終了コード 127
+Ctrl-U は、打ちかけの文字を消す（kill=False なら、ふつうの文字として扱う）。
 """
 
 import os
@@ -27,13 +31,15 @@ KMSG = "[  12.345678] usb 1-1: new high-speed USB device number 3"
 
 class FakeDevice(object):
     def __init__(self, user="root", password="secret", prompt=PROMPT, state="login", typed="",
-                 mute=False, pty=False):
+                 mute=False, pty=False, kill=True, no_rc=False):
         self.user, self.password, self.prompt = user, password, prompt
         self.state = state  # login・password・shell
         self.line = typed   # 打ちかけの文字
         self.mute = mute    # 何も返さない（電源が入っていない機器のまね）
+        self.kill = kill    # Ctrl-U で打ちかけの文字を消せる
+        self.no_rc = no_rc  # $? を使えないシェルのまね
         self.rc = 0
-        self.busy = False
+        self.busy = None    # 動いている hang か stuck
         self.dropped = False
         self.typed_user = None
         self.received = bytearray()
@@ -111,14 +117,18 @@ class FakeDevice(object):
             return
         for ch in data.decode("utf-8", "replace"):
             if self.busy:
-                if ch == "\x03":
-                    self.busy = False
+                if ch == "\x03" and self.busy == "hang":
+                    self.busy = None
                     self.rc = 130
                     self._out("^C\r\n" + self.prompt)
             elif ch == "\r":
                 self._out("\r\n")
                 line, self.line = self.line, ""
                 self._enter(line)
+            elif ch == "\x15" and self.kill:
+                if self.state != "password":
+                    self._out("\b \b" * len(self.line))
+                self.line = ""
             elif ch == "\x03":
                 self.line = ""
                 self._out("^C\r\n")
@@ -153,8 +163,13 @@ class FakeDevice(object):
         word, _, arg = command.partition(" ")
         out = None
         if word == "echo":
-            out = arg.replace("$?", str(self.rc)).replace('"', "").replace("'", "")
+            out = arg if self.no_rc else arg.replace("$?", str(self.rc))
+            out = out.replace('"', "").replace("'", "")
             self.rc = 0
+        elif word == "printf":
+            self.rc = 0
+            self._out(arg + self.prompt)
+            return
         elif word in ("true", "false"):
             self.rc = 0 if word == "true" else 1
         elif word == "seq":
@@ -167,8 +182,13 @@ class FakeDevice(object):
             self.rc = 0
             self._out("ok\r\n" + self.prompt + KMSG + "\r\n")
             return
-        elif word == "hang":
-            self.busy = True
+        elif word == "tap":
+            self._out("# Subtest: sensor\r\n")
+            time.sleep(1.5)
+            out = "ok"
+            self.rc = 0
+        elif word in ("hang", "stuck"):
+            self.busy = word
             return
         elif word == "bye":
             self.dropped = True

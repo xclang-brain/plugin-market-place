@@ -75,7 +75,7 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 | --- | --- | --- |
 | cross-build | ビルドのコマンドを動かし、結果と、できたファイルの有無・更新の有無・サイズ・ELF の種類を返す。時間切れのときは、子プロセスも止める | `source_dir`、`sdk_env`、`build_command`、`outputs`、`timeout_seconds` |
 | ftp-deploy | ファイルを FTP で機器に送る。一時的な名前で送り、サイズを確かめてから名前を変える。必要なら権限を変える（SITE CHMOD）。送り先は `remote_dir` の中だけ。`tls` で FTPS も選べる | `host`、`port`、`user`、`password`、`files`、`remote_dir`、`file_mode`、`tls` |
-| serial-console | シリアルで機器のシェルにつなぎ、必要ならログインし、コマンドを順に動かして、出力と終了コードを返す。動かすコマンドは、設定の `commands` か、`--command` で渡したもの | `port`、`baud`、`login_user`、`login_password`、`prompt`、`commands` |
+| serial-console | シリアルで機器のシェルにつなぎ、必要ならログインし、コマンドを順に動かして、出力と終了コードを返す。動かすコマンドは、設定の `commands` か、`--command` か `--stdin`（1行に1つ）で渡したもの | `port`、`baud`、`login_user`、`login_password`、`prompt`、`commands` |
 | skill-config | スキルの名前を受け取り、`<作業フォルダ>/.<名前>/config.ini` のコメントを読んで、利用者に質問しながら値を書き込む。ファイルがなければ、そのスキルの `init` を使うよう伝える | なし |
 | debug-dashboard | Web管理画面の起動と終了。フックから呼ばれて記録と停止をする（4段階目、8章） | なし |
 
