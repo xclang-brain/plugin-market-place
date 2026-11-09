@@ -46,7 +46,7 @@
 
 - Agent Plugins 1.0.0 の部品は、スキル（`skills/`）と MCP サーバー（`mcp.json`）だけである。CLI に固有のファイルは、その CLI の名前空間のフォルダに置く（第8節）。Claude Code の名前空間は決まっていないので、`com.anthropic.claude-code` とした。
 - Copilot CLI は、Agent Plugins 1.0.0 の `$schema` を持つルートの `plugin.json` を、`.claude-plugin/plugin.json` より優先して読む。
-- Claude Code は `.claude-plugin/plugin.json` を読む。`agents` を書くと既定の `agents/` の代わりにそこを読み、`hooks` を書くとそこのフックを足す。
+- Claude Code は `.claude-plugin/plugin.json` を読む。`agents` にエージェントのファイルを並べると、既定の `agents/` の代わりにそれを読む（`claude plugin validate` は、フォルダの指定を受け付けない）。`hooks` を書くと、そこのフックを足す。
 - Claude Code のプラグインのスキルの説明は、スキルのフォルダの場所を示す。Copilot CLI も同じである。
 
 ## 3. スキルの共通の決まり

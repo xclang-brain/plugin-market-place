@@ -6,7 +6,18 @@
     "name": "xclang-brain"
   },
   "repository": "https://github.com/xclang-brain/plugin-market-place",
-  "keywords": ["embedded", "debug", "cross-compile", "ftp", "serial"],
-  "agents": "./com.anthropic.claude-code/agents/",
-  "hooks": "./com.anthropic.claude-code/hooks/hooks.json"
+  "keywords": [
+    "embedded",
+    "debug",
+    "cross-compile",
+    "ftp",
+    "serial"
+  ],
+  "agents": [
+    "./com.anthropic.claude-code/agents/debug-orchestrator.md",
+    "./com.anthropic.claude-code/agents/device-debugger.md",
+    "./com.anthropic.claude-code/agents/debug-verifier.md"
+  ],
+  "hooks": "./com.anthropic.claude-code/hooks/hooks.json",
+  "license": "MIT"
 }
