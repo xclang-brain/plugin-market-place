@@ -41,4 +41,5 @@ handoff-compare-report も、make-idea で作ったアイデア（AI の申し�
 
 1. プラグインのフォルダを `plugins/<プラグインの名前>/` に置きます。
 2. `.github/plugin/marketplace.json` の `plugins` に、名前・説明・版と、`"source": "./plugins/<プラグインの名前>"` を足します。
-3. 上の一覧に1行足します。
+3. Claude Code でも使えるプラグイン（`.claude-plugin/plugin.json` があるもの）なら、`.claude-plugin/marketplace.json` の `plugins` にも、同じ名前・版・`source` で足します。2つの一覧のマーケットプレイスの名前（`plugin-market-place`）は同じにします。版は、2つの一覧と、プラグインの `plugin.json`・`.claude-plugin/plugin.json` で同じにします。
+4. 上の一覧に1行足します。

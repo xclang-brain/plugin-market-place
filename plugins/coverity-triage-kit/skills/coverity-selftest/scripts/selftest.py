@@ -72,7 +72,8 @@ CHECKS = [
     ("1-5", "統合役", "表の統合役のエージェントが一覧にあり、説明に「統合役」がある", "エージェント"),
     ("1-6", "統括エージェント", "表の統括エージェントが一覧にある", "エージェント"),
     ("1-7", "道具", "uv と git がある", "スクリプト"),
-    ("1-8", "Web管理画面のツール", "画面を開くツールがある（画面を使わないなら要らない）", "エージェント"),
+    ("1-8", "Web管理画面のツール", "画面を開くツールがある（画面を使わないなら要らない。Claude Code では、画面は Copilot CLI だけなので skip）",
+     "エージェント"),
     ("2-1", "見本のリポジトリ", "偽の Coverity の見本のリポジトリを作れる", "スクリプト"),
     ("2-2", "一括実行", "最後まで進み、一覧（summary.html）と承認（approvals.json）ができる", "スクリプト"),
     ("2-3", "作業", "すべての作業が終わる（エラーと未処理がない）", "スクリプト"),
@@ -450,6 +451,14 @@ def cmd_start(folder: str | None, sections: str, repo: str | None, client: str) 
             "checks": [{"id": c[0], "title": c[1], "expected": c[2], "who": c[3]} for c in CHECKS if c[0][0] in picked]}
 
 
+def client_name(state: dict[str, Any]) -> str:
+    """The client to start again, from start --client (both names when it is not known)."""
+    text = str(state.get("client") or "").lower()
+    if "claude" in text:
+        return "Claude Code"
+    return "Copilot CLI" if "copilot" in text else "Copilot CLI（か Claude Code）"
+
+
 def cmd_check_tools(folder: str) -> dict[str, Any]:
     results = Results(folder)
     env = results.state["environment"]
@@ -458,7 +467,8 @@ def cmd_check_tools(folder: str) -> dict[str, Any]:
     missing = [name for name, found in (("uv", uv), ("git", gitv)) if not found]
     out = results.record("1-7", "fail" if missing else "pass",
                          f"uv: {uv or '見つかりません'}、git: {gitv or '見つかりません'}、svn: {env.get('svn')}",
-                         f"見つからない: {'、'.join(missing)}。入れて PATH を通し、Copilot CLI を起動し直します" if missing else "")
+                         f"見つからない: {'、'.join(missing)}。入れて PATH を通し、{client_name(results.state)} を起動し直します"
+                         if missing else "")
     results.save()
     return {"ok": True, "checks": [out]}
 

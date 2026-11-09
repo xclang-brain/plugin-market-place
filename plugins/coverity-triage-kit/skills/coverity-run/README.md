@@ -38,15 +38,16 @@ mkdir -p ~/.copilot/skills
 cp -r "<このフォルダ>" ~/.copilot/skills/<名前>
 ```
 
-作業フォルダの `.github/skills/<名前>/` に置いても使えます。プラグインに入れて配られているときは、置く必要はありません。
+作業フォルダの `.github/skills/<名前>/` に置いても使えます（Claude Code なら `.claude/skills/<名前>/` か `~/.claude/skills/<名前>/`）。プラグインに入れて配られているときは、置く必要はありません。
 
 ## 呼び方
 
 新しく始めるときは、スラッシュで呼び、条件を続けて書きます。例：`/<スキルの名前> High だけ 10 件`、`/<スキルの名前> misra.yaml で、最初に解析して`、`/<スキルの名前> 前回の続きから`（プラグインから入れたときは `/<プラグインの名前>:<スキルの名前>` でも呼べます）。
-スラッシュなしの「Coverity の警告をトリアージして」だけでは、新しい実行を始めません（コマンドとして呼んだときだけ始めます）。すでにある実行の「進み具合は？」「一覧を作り直して」は、チャットで頼めます。
+スラッシュなしの「Coverity の警告をトリアージして」だけでは、新しい実行を始めません（コマンドとして呼んだときと、このスキルに従うエージェントを選んで頼んだときだけ始めます）。すでにある実行の「進み具合は？」「一覧を作り直して」は、チャットで頼めます。
 
 AI は、始める前に 1 回だけ、実行フォルダの読み書きと `uv` のコマンドを、このセッションのあいだ許可するしかたを示します。
-Copilot CLI では `/add-dir` と `copilot --add-dir … --allow-tool …` を、Claude Code では `/add-dir` と `/permissions`（`Bash(uv run *)`・スキルを使うことの `Skill(…)`・スキルのフォルダを読むことの `Read(…)`・`Write`・`Edit`・Coverity から読むツール。`Skill` と `Read` には、このスキルが入っている場所から決めた名前が入ります。`/add-dir` だけでは足りません）と `claude --add-dir … --allowedTools …` を示します（Claude Code の夜通しの実行には、起動し直すほうが確実です。`Write` と `Edit` の許可はセッションのどのファイルにも効き、実行フォルダにだけ書くのはエージェントの決まりです）。どちらでも、Coverity に書き戻すツールは前もって許可しません。Claude Code での反映は、`--agent` を付けずに起動したセッションでします。
+Copilot CLI では `/add-dir` と `copilot --add-dir … --allow-tool …` を、Claude Code では `/add-dir` と `/permissions`（`Bash(uv run *)`・スキルを使うことの `Skill(…)`・スキルのフォルダを読むことの `Read(…)`・実行フォルダに書くことの `Edit(…)`・Coverity から読むツール。`Skill`・`Read`・`Edit` には、このスキルと実行フォルダの場所から決めた名前が入ります。`/add-dir` だけでは足りません）と `claude --add-dir … --allowedTools …` を示します（Claude Code の夜通しの実行には、起動し直すほうが確実です。`Edit(…)` は `Write` も含み、実行フォルダの中にだけ効きます。`/permissions` で足した許可は設定ファイルに残るので、自分だけのプロジェクトの設定に保存し、実行が終わったら消します）。どちらでも、Coverity に書き戻すツールは前もって許可しません。Claude Code での反映は、`--agent` を付けずに起動したセッションでします。
+Claude Code では、案内を示したところで止まり、許可を済ませて「始めて」と返すまで待ちます（起動し直したときは、新しいセッションで「前回の続きから。許可は起動のときに済ませました」と頼みます）。頼みの文に「途中で質問せず」などとあるときと、許可を起動のときに済ませたと書いたときは、待ちません。
 始めたら、終わるまで質問しません。
 
 ## スクリプトを直接動かす
@@ -59,8 +60,8 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/run.py" <コマンド>
 |---|---|
 | `settings --repo R` | 設定の今の値と条件ファイルの一覧、設定の問題（読むだけ） |
 | `runs --repo R` | 実行の一覧（新しい順。別の形の実行は `foreign: true`） |
-| `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N] [--issues-file F]` | 実行フォルダを作る |
-| `resume --run D` | 途中の実行を続きからにする |
+| `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N] [--issues-file F] [--client copilot\|claude-code] [--mcp-tool T]…` | 実行フォルダを作る（`--client` と `--mcp-tool` は許可の案内の形と、そこに入れる読むツール） |
+| `resume --run D [--client copilot\|claude-code] [--mcp-tool T]…` | 途中の実行を続きからにする |
 | `tick --run D [--finished T] [--failed T --reason R] [--wait S]` | 次にすること（`actions`）を返す |
 | `status --run D` | 実行の様子（読むだけ。鍵を取らない） |
 | `summary --run D` | 一覧と承認の案を作る。作業用のコピーを消す |
@@ -84,7 +85,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/run.py" <コマンド>
 ```
 
 `actions` の `type` は `fetch_issues`（警告の取得）、`fetch_details`（警告経路の取得）、`launch`（役のエージェントに頼む）、
-`command`（短いコマンド）です。終わったら `--finished <task>`、失敗したら `--failed <task> --reason "…"` で知らせます。
+`command`（短いコマンド）です。終わったら `--finished <task>`、失敗したら `--failed <task> --reason '…'` で知らせます。
 結果のファイルができていれば、知らせがなくても進みます。30 分動きのない仕事は失敗としてやり直します。
 
 ### status の出力（あらまし）

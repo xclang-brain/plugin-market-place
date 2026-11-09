@@ -25,10 +25,14 @@ For each variant:
    result.json for every item, review.json when review is on, the user's repository unchanged,
    only role agents called, the orchestrator edited no file; plus counts, accuracy, time and cost.
 
-Variants: ``default`` (review and integration off, the design defaults) and ``full`` (both on).
+Variants: ``default`` (review and integration off, the design defaults) and ``full`` (both on), run when no
+``--variant`` is given; ``bare`` (only with ``--variant bare``) has the default settings and the bare request
+「Coverity の警告をトリアージしてください。…」 with no filter and no limit. Those are also the words of the screen's
+entry skill, which Claude Code loads too, so ``bare`` adds that skill to the copied parts and checks that the batch
+run still starts (the batch-run skill is loaded and its new-run is called; every variant checks this).
 
   uv run --native-tls --quiet tests/eval/stage3/run_stage3.py [--format copilot-converted|claude-plugin]
-        [--variant default|full]... [--limit N]
+        [--variant default|full|bare]... [--limit N]
         [--model M] [--agent-model M] [--tools-from-definitions] [--timeout S] [--max-turns N] [--max-budget-usd X]
         [--out DIR] [--build-only] [--no-sync]
 
@@ -53,12 +57,18 @@ TAG = "stage3"
 ROLE_ORCHESTRATOR = "統括"
 ROLE_SELFTEST = "自己診断"
 ROLE_RUN = "一括実行"
+ROLE_SCREEN = "画面の入口"
 ROLES = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合役"}
-VARIANTS = {"default": {"review": False, "integration": False}, "full": {"review": True, "integration": True}}
+BARE = "bare"
+VARIANTS = {"default": {"review": False, "integration": False}, "full": {"review": True, "integration": True},
+            BARE: {"review": False, "integration": False}}
+DEFAULT_VARIANTS = ("default", "full")  # bare only when asked for
 DEFAULT_FILTER = "all.yaml"
 PROMPT = "Coverity の警告を、条件ファイル {filter} で、すべてトリアージしてください。途中で質問せず、最後まで進めてください。"
 # With --limit, the batch-run skill's own phrase for a limit (「N 件だけ」) instead of 「すべて」.
 PROMPT_LIMIT = "Coverity の警告を、条件ファイル {filter} で、{limit} 件だけトリアージしてください。途中で質問せず、最後まで進めてください。"
+# The bare variant: no filter, no limit (the same words call the screen's entry skill).
+PROMPT_BARE = "Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。"
 RUN_DIR_RE = re.compile(r"^[0-9]{8}-[0-9]{6}(-[0-9]+)?$")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SELFTEST_LEVELS = {"2-2": "must", "2-3": "must", "2-4": "should", "2-5": "should", "2-6": "must"}
@@ -90,7 +100,9 @@ def set_agent_options(text: str, options: dict[str, bool]) -> str:
     return "\n".join(lines)
 
 
-def prompt_for(filter_name: str, limit: int | None) -> str:
+def prompt_for(filter_name: str, limit: int | None, variant: str = "default") -> str:
+    if variant == BARE:
+        return PROMPT_BARE
     return (PROMPT_LIMIT if limit else PROMPT).replace("{filter}", filter_name).replace("{limit}", str(limit or ""))
 
 
@@ -177,6 +189,17 @@ def agent_checks(summary: dict, role_names: dict[str, str]) -> list[dict]:
     ]
 
 
+def start_checks(summary: dict, run_skill: str) -> list[dict]:
+    """The orchestrator loaded the batch-run skill and started the run with its new-run (not another skill)."""
+    loaded = run_skill in summary["skills_loaded"]
+    new_run = [u for u in summary["tool_uses"] if u["parent"] is None
+               and any("new-run" in str(v) for v in (u["input"] or {}).values())]
+    return [
+        ek.check("run_skill_loaded", loaded, f"読んだスキル: {sorted(set(summary['skills_loaded']))}"),
+        ek.check("new_run_called", bool(new_run), f"new-run を {len(new_run)} 回動かした"),
+    ]
+
+
 def selftest_checks(selftest_script: Path, sdir: Path, run_dir: Path, limited: bool = False) -> tuple[list[dict], dict | None]:
     """The self-test's check-run (2-2〜2-6). A limited run cannot meet 2-4 and 2-5 (they need every warning)."""
     data, res = ek.run_json(ek.uv_script(selftest_script, "check-run", "--dir", str(sdir), "--run", str(run_dir)),
@@ -227,18 +250,20 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     sample = prepare_sample(ctx["selftest_script"], vdir, variant)
     repo, output_dir = sample["repo"], sample["output_dir"]
     venv = vdir / "mcp-venv"
+    # bare: the screen's entry skill is there too, as in an installed plugin (its trigger is the bare request)
+    extra = [str(ctx["screen_skill"])] if variant == BARE and ctx.get("screen_skill") else None
     build = ek.ADAPTER.build(adapter_args(
         workspace=str(repo), parts_from_table=str(ctx["definition"]), plugin_root=str(ctx["root"]),
         output_dir=str(output_dir), fake_data=str(repo / ".coverity-triage" / "fake-issues.yaml"),
         mcp_env=[f"UV_PROJECT_ENVIRONMENT={venv}"], model=ctx["model"], agent_model=args.agent_model,
-        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin"),
+        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin"), skill=extra,
         # claude-plugin: --model also goes into the copied orchestrator's model line, so the run does not
         # depend on whether claude's --model or the main agent's own model wins.
         main_model=ctx["model"] if args.format == ek.ADAPTER.FORMAT_PLUGIN else None,
         tools_from_definitions=getattr(args, "tools_from_definitions", False)))
     ek.exclude_in_git(repo, ".claude/")
     head = ek.head(repo)
-    prompt = prompt_for(sample["filter"], args.limit)
+    prompt = prompt_for(sample["filter"], args.limit, variant)
     saved = ek.read_json(Path(build["files"]["command"]))
     argv = list(saved["argv"])
     argv[saved["prompt_index"]] = prompt
@@ -246,7 +271,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     if args.max_budget_usd:
         argv += ["--max-budget-usd", str(args.max_budget_usd)]
     record = {"variant": variant, "format": args.format, "plugin_dir": build.get("plugin_dir"),
-              "options": VARIANTS[variant], "filter": sample["filter"], "limit": args.limit, "prompt": prompt, "repo": str(repo), "output_dir": str(output_dir), "cwd": saved["cwd"], "command": argv,
+              "options": VARIANTS[variant], "filter": None if variant == BARE else sample["filter"], "limit": args.limit, "prompt": prompt, "repo": str(repo), "output_dir": str(output_dir), "cwd": saved["cwd"], "command": argv,
               "agents": [{"name": a["name"], "model": a["model"], "skills": a["skills"]} for a in build["agents"]],
               "skills": sorted(build["skills"]), "mcp_servers": sorted(build["mcp_servers"]),
               "build_problems": build.get("problems")}
@@ -293,6 +318,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     checks.append(ek.check("repo_unchanged", not changed and not moved,
                            ("変わったファイル: " + "、".join(changed[:10]) if changed else "") + (" HEAD が変わった" if moved else "")
                            or "利用者のリポジトリは変わっていない"))
+    checks += start_checks(summary, ctx["run_skill"])
     checks += agent_checks(summary, ctx["role_names"])
     record.update({
         "checks": checks, "passed": ek.verdict_of(checks), "run_dir": str(run_dir) if run_dir else None,
@@ -332,7 +358,7 @@ def render_report(meta: dict, records: list[dict]) -> str:
                            r.get("seconds", "－"), r.get("num_turns", "－"), ek.money(r.get("cost_usd"))] for r in records])
     for r in records:
         lines += ["", f"## {r['variant']}（review {r['options']['review']}、integration {r['options']['integration']}、"
-                  f"条件ファイル {r['filter']}）", "", f"頼みの文: {r['prompt']}", "", f"実行フォルダ: `{r.get('run_dir')}`", ""]
+                  f"条件ファイル {r['filter'] or '指定なし'}）", "", f"頼みの文: {r['prompt']}", "", f"実行フォルダ: `{r.get('run_dir')}`", ""]
         lines += ek.md_table(["確かめ", "重さ", "結果", "詳しく"],
                              [[c["id"], c["level"], ek.mark(c["ok"]), c["detail"]] for c in r.get("checks", [])])
         if r.get("accuracy"):
@@ -356,7 +382,8 @@ def make_parser() -> argparse.ArgumentParser:
                    help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin"
                         "（Claude Code の定義を一時のプラグインに写し、--plugin-dir で動かす）")
     p.add_argument("--variant", action="append", choices=sorted(VARIANTS),
-                   help="default（確かめと統合なし）か full（両方あり）。何度でも。既定は両方")
+                   help="default（確かめと統合なし）、full（両方あり）か bare（default の設定で、条件のない頼みの文。"
+                        "画面の入口のスキルも置く）。何度でも。既定は default と full")
     p.add_argument("--limit", type=int, help="調べる件数の上限（頼みの文を「N 件だけ」にする。試しは 1）")
     p.add_argument("--model", help="統括エージェント（メイン）のモデル（既定はその定義の claude-* のモデル。"
                                    "claude-plugin では定義の model のまま。付けたときは、写した統括の model の行もこれに替える）")
@@ -378,10 +405,19 @@ def run(args: argparse.Namespace) -> dict:
     root = Path(args.plugin_root).resolve() if args.plugin_root else ek.PLUGIN_ROOT
     if args.limit is not None and args.limit < 1:
         raise ek.EvalError("--limit は 1 以上です")
+    if args.limit is not None and BARE in (args.variant or []):
+        raise ek.EvalError("--limit は bare と一緒に使えません（bare の頼みの文には条件を付けません）")
     orchestrator = ek.part(ROLE_ORCHESTRATOR, root)
     selftest = ek.part(ROLE_SELFTEST, root)
     run_skill = ek.part(ROLE_RUN, root)["name"]
     role_names = {role: ek.part(word, root)["name"] for role, word in ROLES.items()}
+    variants = list(args.variant or DEFAULT_VARIANTS)
+    screen_skill = None
+    if BARE in variants:
+        try:
+            screen_skill = ek.part(ROLE_SCREEN, root)["path"]
+        except ek.EvalError:
+            screen_skill = None  # a plugin without the screen: the bare request alone
     out = ek.prepare_out(args.out, "stage3", root)
     tools = ek.copy_tree(selftest["path"], out / "tools" / selftest["path"].name)
     selftest_script = tools / "scripts" / "selftest.py"
@@ -401,7 +437,7 @@ def run(args: argparse.Namespace) -> dict:
         shown_model = model or "（claude の既定）"
     collected = ek.ADAPTER.collect_parts(definition, ek.ADAPTER.Layout(root, flavor="claude" if plugin else "copilot"))
     ctx = {"root": root, "out": out, "orchestrator": orchestrator, "definition": definition,
-           "selftest_script": selftest_script,
+           "selftest_script": selftest_script, "run_skill": run_skill, "screen_skill": screen_skill,
            "expected": expected, "model": model, "role_names": role_names,
            "run_script": lambda build: (Path(build["skills"][run_skill]) / "scripts" / "run.py") if run_skill in build["skills"] else None}
     meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "format": args.format,
@@ -410,7 +446,7 @@ def run(args: argparse.Namespace) -> dict:
             "agent_model_default": "各定義の model" if plugin else None,
             "parts": [a["name"] for a in collected["agents"]] + sorted(collected["skills"]) + sorted(collected["mcp"]),
             "out": str(out)}
-    records = [run_variant(v, args, ctx) for v in (args.variant or list(VARIANTS))]
+    records = [run_variant(v, args, ctx) for v in variants]
     report = ek.write_text(out / "report.md", render_report(meta, records))
     done = [r for r in records if r.get("passed") is not None]
     result = {"ok": True, "kind": "stage3", "out": str(out), "report": str(report), "meta": meta,

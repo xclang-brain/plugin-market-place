@@ -197,7 +197,7 @@ class ScreenRulesTest(unittest.TestCase):
         self.assertEqual(branches, ["Claude Code で動いているとき", "それ以外（GitHub Copilot CLI）のとき"])
         claude, copilot = re.split(r"^- それ以外（GitHub Copilot CLI）のとき", section, flags=re.M)
         for word in ["GitHub Copilot CLI の機能", "claude --agent", "表の統括エージェント", "表の一括実行のスキル",
-                     "3つの原因は示しません"]:
+                     "3つの原因は示しません", "調べたいリポジトリのフォルダで", "「前もって許可する」"]:
             self.assertIn(word, claude)
         self.assertNotIn("when-tool-missing.md", claude)
         self.assertIn("references/when-tool-missing.md", copilot)
@@ -205,6 +205,17 @@ class ScreenRulesTest(unittest.TestCase):
         rows = {r[0]: r[2] for r in table_block(text)[3][2:]}
         self.assertIn("claude --agent", rows["統括エージェント"])
         self.assertIn("画面のツールがないとき", rows["一括実行"])
+
+    def test_rules_give_way(self):
+        # The rules do not block the orchestrator when it drives a batch, nor a part the user calls
+        # after the screen tool was missing.
+        text = read(SKILL_MD)
+        intro = text.split("\n## 守ること", 1)[0]
+        self.assertIn("統括エージェントとして一括のトリアージを進めているとき", intro)
+        self.assertIn("このスキルは何もしません", intro)
+        rules = re.search(r"^## 守ること\s*$(.*?)^## ", text, re.M | re.S).group(1)
+        self.assertIn("画面のツールがなかった後に", rules)
+        self.assertIn("その部品の手順に従います", rules)
 
     def test_no_scripts(self):
         self.assertFalse((SKILL_DIR / "scripts").exists())

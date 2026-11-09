@@ -718,6 +718,32 @@ class Stage3Test(unittest.TestCase):
         self.assertIn("1 件だけ", limited)
         self.assertNotIn("すべて", limited, "「すべて」 would contradict the limit")
         self.assertIn("all.yaml", limited)
+        self.assertEqual(stage3.prompt_for("all.yaml", None, "bare"),
+                         "Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。",
+                         "bare: the bare request, no filter and no limit")
+
+    def test_bare_variant(self):
+        self.assertEqual(stage3.VARIANTS["bare"], stage3.VARIANTS["default"], "bare has the default settings")
+        self.assertNotIn("bare", stage3.DEFAULT_VARIANTS, "bare runs only when asked for")
+        self.assertEqual(set(stage3.DEFAULT_VARIANTS), {"default", "full"})
+        self.assertEqual(stage3.make_parser().parse_args(["--variant", "bare"]).variant, ["bare"])
+        out = self.base / "out"
+        with self.assertRaises(ek.EvalError):
+            stage3.run(stage3.make_parser().parse_args(["--variant", "bare", "--limit", "1", "--out", str(out)]))
+        self.assertFalse(out.exists(), "refused before anything is made")
+
+    def test_start_checks(self):
+        good = ek.summarize([event_tool("a", "Skill", {"skill": "kit:run-skill"}),
+                             event_tool("b", "Bash", {"command": 'uv run --quiet "x/run.py" new-run --repo "r"'}),
+                             event_tool("c", "Bash", {"command": "new-run"}, parent="z")])
+        checks = {c["id"]: c for c in stage3.start_checks(good, "run-skill")}
+        self.assertTrue(checks["run_skill_loaded"]["ok"])
+        self.assertTrue(checks["new_run_called"]["ok"])
+        self.assertIn("1 回", checks["new_run_called"]["detail"], "only the main agent's calls count")
+        other = ek.summarize([event_tool("a", "Skill", {"skill": "kit:screen-skill"}),
+                              event_tool("c", "Bash", {"command": "new-run"}, parent="a")])
+        failed = {c["id"] for c in stage3.start_checks(other, "run-skill") if c["ok"] is False}
+        self.assertEqual(failed, {"run_skill_loaded", "new_run_called"})
 
     def make_run(self) -> Path:
         out = self.base / "out"
@@ -858,6 +884,32 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual(record["format"], PLUGIN)
         self.assertEqual({a["name"]: a["model"] for a in record["agents"]},
                          {n: ("claude-haiku-5-5" if n == orchestrator else "inherit") for n in roles})
+
+    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    def test_build_only_bare_with_the_claude_plugin(self):
+        out = self.base / "out"
+        proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage3" / "run_stage3.py"),
+                               "--format", PLUGIN, "--build-only", "--no-sync", "--variant", "bare", "--out", str(out)],
+                              capture_output=True, env=ENV, timeout=600)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")[-2000:])
+        data = json.loads(proc.stdout.decode("utf-8"))
+        variant = data["variants"][0]
+        self.assertEqual(variant["variant"], "bare")
+        argv = variant["command"]
+        self.assertEqual(argv[2], stage3.PROMPT_BARE)
+        plugin_name = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+        self.assertEqual(argv[argv.index("--agent") + 1], f"{plugin_name}:{ek.part('統括', ROOT)['name']}")
+        skills = {p.name for p in (Path(variant["plugin_dir"]) / "skills").iterdir()}
+        self.assertIn(ek.part("一括実行", ROOT)["name"], skills)
+        self.assertIn(ek.part("画面の入口", ROOT)["name"], skills,
+                      "bare: the skill whose trigger is the same request is there, as in an installed plugin")
+        record = json.loads((out / "bare" / "variant.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["options"], {"review": False, "integration": False})
+        self.assertIsNone(record["filter"])
+        self.assertIsNone(record["limit"])
+        config = (Path(variant["cwd"]) / ".coverity-triage" / "config.yaml").read_text(encoding="utf-8")
+        self.assertIn("review: false", config)
+        self.assertIn("integration: false", config)
 
 
 class Stage4Test(unittest.TestCase):

@@ -196,6 +196,28 @@ class SelftestRulesTest(unittest.TestCase):
         self.assertIn("Copilot CLI だけ", line)
         self.assertIn('--client "<Copilot CLI か Claude Code>"', text)
 
+    def test_section_two_claude_code_permissions_and_refusal(self):
+        text = read(SKILL_MD)
+        m = re.search(r"^## ② .*?$(.*?)^## ", text, re.M | re.S)
+        self.assertIsNotNone(m)
+        section = m.group(1)
+        # Claude Code: background agents cannot ask, so the in-chat way is shown and the user's answer is awaited
+        line = next(x for x in section.splitlines() if x.lstrip().startswith("- Claude Code では"))
+        for word in ["`permission_steps`", "`/add-dir`", "`/permissions`", "済んだと答えるまで待って"]:
+            self.assertIn(word, line)
+        # a write-back call that the permission prompt stopped is not a refusal of the wrong token
+        self.assertRegex(section, r"許可の確認が断られて.*`check-refused` を動かさず.*review")
+        two_seven = next(x for x in section.splitlines() if "2-7：" in x)
+        self.assertIn("`repo_root` に見本のリポジトリ", two_seven)
+
+    def test_section_three_passes_the_repository(self):
+        text = read(SKILL_MD)
+        m = re.search(r"^## ③ .*?$(.*?)^## ", text, re.M | re.S)
+        self.assertIsNotNone(m)
+        for check_id in ("3-2", "3-3", "3-4"):
+            line = next(x for x in m.group(1).splitlines() if f"{check_id}：" in x)
+            self.assertIn("`repo_root`", line, check_id)
+
     def test_script_commands(self):
         for path in [SKILL_MD, README]:
             for line in read(path).splitlines():

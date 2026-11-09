@@ -23,7 +23,7 @@ Coverity Connect の警告のトリアージの道具一式について、使い
 
 ## 置き方
 
-プラグインを入れると、一緒に入ります。フォルダだけを `.github/skills/coverity-help/` か `~/.copilot/skills/coverity-help/`（Claude Code なら `.claude/skills/coverity-help/`）にコピーしても使えます（資料と点検は、このフォルダだけで動きます）。
+プラグインを入れると、一緒に入ります。フォルダだけを `.github/skills/coverity-help/` か `~/.copilot/skills/coverity-help/`（Claude Code なら `.claude/skills/coverity-help/` か `~/.claude/skills/coverity-help/`）にコピーしても使えます（資料と点検は、このフォルダだけで動きます）。
 
 ## 呼び方
 
@@ -54,7 +54,8 @@ PowerShell でも bash でも、同じ書き方で動きます。
 | `ready` | ng の項目がないか |
 | `checks[]` | `check`（確かめたこと）、`status`（`ok` / `ng` / `warning` / `info`）、`detail`、`fix`（直し方） |
 | `settings` | 既定の値を足した設定の今の値 |
-| `runs[]` | 実行フォルダ（新しい順に10件）：`run_id`、`counts`（状態ごとの件数）、`has_summary`、`stopped`、`halted`・`halt_reason`（続けられずに止まっているか、その理由）、`foreign`（別の形の実行フォルダ） |
+| `output_dir` | 結果の置き場所（絶対パス）。設定がないか読めないときは null |
+| `runs[]` | 実行フォルダ（新しい順に10件）：`run_id`、`run_dir`（実行フォルダの絶対パス。`run` の `--run` に渡す）、`counts`（状態ごとの件数）、`has_summary`、`stopped`、`halted`・`halt_reason`（続けられずに止まっているか、その理由）、`foreign`（別の形の実行フォルダ） |
 
 認証情報は、あるかどうかだけを示し、値は `****` です。Windows では、ユーザーの環境変数（`HKCU\Environment`）も読みます。
 

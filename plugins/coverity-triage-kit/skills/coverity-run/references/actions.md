@@ -67,7 +67,7 @@
 | `reviewer:<ID>@<回>[#<直しの回>]` | 検証役の確かめ |
 | `integrator@<回>[#<直しの回>]` | 統合役のまとめ |
 
-- 終わったら `tick --run D --finished <task>`、失敗したら `tick --run D --failed <task> --reason "<理由>"`。
+- 終わったら `tick --run D --finished <task>`、失敗したら `tick --run D --failed <task> --reason '<理由>'`。
 - 結果のファイルができていれば、知らせがなくても tick は終わったとみなします（後で届いた知らせは使いません）。
 - 30 分のあいだ出力も進み具合もない仕事は、失敗としてやり直します。
 

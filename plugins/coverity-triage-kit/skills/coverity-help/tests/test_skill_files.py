@@ -220,22 +220,34 @@ class ClaudeCodeTest(unittest.TestCase):
 
     def test_permissions_apply_and_worker_as_subagent(self):
         body = self.section()
-        # /add-dir alone allows no writes and no tools: the in-session way also allows Write, Edit and the read tools
+        # /add-dir alone allows no writes and no tools: the in-session way also allows the writes in the run folder
+        # and the read tools
         self.assertIn("`/add-dir` だけでは足りません", body)
         step1 = body[body.index("\n1. チャットで `/add-dir"):body.index("\n2. Claude Code を")]
-        for word in ["`/permissions`", "`Bash(uv run *)`", "`Write`", "`Edit`", "読む4つのツール", "書き戻すツールは許可しない"]:
+        for word in ["`/permissions`", "`Bash(uv run *)`", "読む4つのツール", "書き戻すツールは許可しない"]:
             self.assertIn(word, step1)
-        # the skills ask before each use, and an installed plugin's skill folder is outside the repository:
-        # both ways allow the skills and the reading of that folder (only reading)
-        rules = ["Skill(<プラグインの名前>:*)", "Read(~/.claude/plugins/**)"]
+        # the skills ask before each use, an installed plugin's skill folder is outside the repository, and the
+        # run folder is the only place to write: both ways allow the skills, the reading of that folder (only
+        # reading) and the writes in the run folder (never Write or Edit for every file)
+        rules = ["Skill(<プラグインの名前>:*)", "Read(~/.claude/plugins/cache/<マーケットプレイスの名前>/<プラグインの名前>/**)",
+                 "Edit(//<output_dir の絶対パス>/**)"]
         command = [b for b in re.findall(r"```[a-z]*\n(.*?)```", body, re.S) if "--allowedTools" in b][0]
         for rule in rules:
             self.assertIn(f"`{rule}`", step1)
             self.assertIn(f'"{rule}"', command)
+        for bare in ('"Write"', '"Edit"', "`Write` と `Edit`"):
+            self.assertNotIn(bare, command + step1)
+        self.assertNotRegex(body, r"(Edit|Write)\(~/\.claude/plugins", "the plugin folder is only read")
         self.assertIn("読むだけの許可", body)
         self.assertIn("2 の起動のしかたが確実", body)
-        self.assertIn("このセッションのどのファイルにも効きます", body)
-        self.assertIn("エージェントの決まり", body)
+        self.assertIn("実行フォルダの中に書くこと", body)
+        self.assertIn("`//c/Users/me/out`", body)
+        self.assertIn("`//c/work/kit`", body)
+        self.assertIn("`Read(~/.claude/skills/**)`", body)
+        # rules added with /permissions are saved and stay: the local settings, removed when the run is done
+        self.assertIn("後のセッションにも残る", step1)
+        self.assertIn("`.claude/settings.local.json`", step1)
+        self.assertIn("そのセッションだけに効きます", body)
         # apply runs in a session started without --agent
         self.assertIn("反映（反映のスキル）は、`--agent` を付けずに起動した", body)
         # the worker as a subagent cannot ask: the diff is a proposal; diff -> consent -> edit needs claude --agent
@@ -247,6 +259,19 @@ class ClaudeCodeTest(unittest.TestCase):
         text = read(SKILL_MD)
         self.assertIn("Claude Code で使う", text)
         self.assertIn("「Claude Code で使うには？」", text)
+
+    def test_answers_in_claude_code_terms(self):
+        # in Claude Code the answers use its words (the references are written for Copilot CLI); names it cannot read
+        # are not guessed
+        text = read(SKILL_MD)
+        rules = re.search(r"^## 守ること\s*$(.*?)(?=^## )", text, re.M | re.S).group(1)
+        self.assertIn("Claude Code で動いているとき", rules)
+        self.assertIn("`/agents`", rules)
+        self.assertIn("推測で埋めず", text)
+        # stage 2 in Claude Code: claude --agent first; a named worker only returns the diff as a proposal
+        row = re.search(r"^\| 2 \|(.*)$", self.section(), re.M).group(1)
+        self.assertLess(row.index("claude --agent"), row.index("名前を挙げて"))
+        self.assertIn("差分を案として返すだけ", row)
 
 
 class CommandsTest(unittest.TestCase):

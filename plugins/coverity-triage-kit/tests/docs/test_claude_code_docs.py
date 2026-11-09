@@ -9,6 +9,10 @@
   そこに書いた mcp__plugin_<プラグイン>_<登録名>__<ツール>（と手で登録したときの mcp__<登録名>__<ツール>）は、
   プラグインの名前・.mcp.json の登録名・MCP サーバーのツール（ソースと、サーバーの README の「## ツール」の見出し）と合う。
   --allowedTools の行は、書き戻すツールのほかのツール（読むツール）をすべて並べる。
+- 3段階目の許可（設計書 3.5）：README と統括エージェントの README の起動のコマンドと /permissions の一覧が、同じ8つ
+  （uv、スキル、このプラグインのフォルダを読むだけ、実行フォルダにだけ書く Edit(//…/**)、読む4つのツール）を並べる。
+  素の Write・Edit と、プラグインのフォルダに書く許可はない。取り出したときの Skill(<スキル>) は、コピーするスキルのうち
+  allowed-tools を持つものと同じ。変更履歴の /permissions の文も Skill・Read・Edit を挙げる。
 - エージェントの README に「Claude Code で使う」があり、Claude Code の定義（agents/<名前>.md）と、
   .claude/agents/ への取り出し方を書いている。書いた `--agent <プラグイン>:<名前>` と定義のファイルが、あるものを指す。
 - 仕様書に Claude Code の要求があり、設計書に「2つの形の同居」の節がある。リポジトリの README の行が Claude Code に触れる。
@@ -53,6 +57,20 @@ def section(text, heading, level=2):
     marks = "#" * level
     m = re.search(rf"(?ms)^{marks} {re.escape(heading)}\s*\n(.*?)(?=^#{{1,{level}}} |\Z)", text)
     return m.group(1) if m else None
+
+
+def section_with_code(text, heading):
+    """「## 見出し」の節の本文。``` の中の「# 」の行（コマンドの注釈）では切らない。なければ空"""
+    out, inside, fenced = [], False, False
+    for line in text.splitlines():
+        if FENCE_LINE.match(line):
+            fenced = not fenced
+        elif not fenced and line.startswith("## "):
+            inside = line[3:].strip() == heading
+            continue
+        if inside:
+            out.append(line)
+    return "\n".join(out)
 
 
 def claude_agent_names():
@@ -118,7 +136,9 @@ class ReadmeClaudeSectionTest(unittest.TestCase):
     def test_skills_and_their_folder_are_allowed(self):
         """スキルは allowed-tools を持つので使う前に確認が出て、入れたプラグインの参照資料はリポジトリの外にある
         （2.1.319 で確認）。裏で動くエージェントは確認を出せないので、2つの許可のしかたの両方に入れる"""
-        rules = [f"Skill({pp.PLUGIN_NAME}:*)", "Read(~/.claude/plugins/**)"]
+        if not MARKET_NAME:
+            self.skipTest("マーケットプレイスの一覧（.claude-plugin/marketplace.json）がありません")
+        rules = [f"Skill({pp.PLUGIN_NAME}:*)", plugin_read_rule()]
         starts = [line for line in self.body.splitlines() if line.startswith("claude --add-dir")]
         self.assertTrue(starts, f"README の「{HEADING}」に起動のコマンドがありません")
         for line in starts:
@@ -128,6 +148,115 @@ class ReadmeClaudeSectionTest(unittest.TestCase):
         self.assertTrue(any(all(rule in lines for rule in rules) for lines in blocks),
                         f"/permissions で許可する一覧に {rules} がありません")
         self.assertNotRegex(self.body, r"(Edit|Write)\(~/\.claude/plugins", "プラグインのフォルダは読むだけ")
+
+
+MARKET_NAME = json.loads(pp.read(CLAUDE_MARKET)).get("name") if CLAUDE_MARKET.is_file() else None
+# 実行フォルダにだけ書く許可（2.1.319 で確認：Write にも効き、ほかの場所に書くときは確認が出る）
+EDIT_RULE = "Edit(//<output_dir の絶対パス>/**)"
+
+
+def plugin_read_rule():
+    """GitHub のマーケットプレイスから入れたプラグインのフォルダを読むだけの許可（ほかのプラグインは読まない）"""
+    return f"Read(~/.claude/plugins/cache/{MARKET_NAME}/{pp.PLUGIN_NAME}/**)"
+
+
+def read_tool_names():
+    """Coverity から読むツール（書き戻すツールのほか）の、プラグインとして入れたときの名前"""
+    write_back = {t for names in pp.write_back_tools().values() for t in names}
+    entries = pp.mcp_names()
+    names = []
+    for server in sorted(claude_servers()):
+        entry = entries.get(server) or {}
+        tools = set(entry.get("tools") or set())
+        listed = readme_tools(entry.get("folder"))
+        tools = tools & listed if listed is not None else tools
+        names += [pp.claude_mcp_tool_names(server, t)[0] for t in sorted(tools - write_back)]
+    return names
+
+
+def quoted(line):
+    """コマンドの行の "…" で囲んだ値"""
+    return re.findall(r'"([^"]*)"', line)
+
+
+class ClaudePermissionSetTest(unittest.TestCase):
+    """3段階目を夜通し動かすときの許可（README と統括エージェントの README）：起動のコマンドと /permissions の一覧が、
+    同じ8つ（uv、スキル、プラグインのフォルダを読むだけ、実行フォルダにだけ書く、読む4つのツール）を並べる。
+    素の Write・Edit と、プラグインのフォルダに書く許可は書かない"""
+
+    def setUp(self):
+        if not pp.CLAUDE_MCP.is_file():
+            self.skipTest("Claude Code の .mcp.json がまだありません")
+        orchestrators = [p for p in pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX)
+                         if re.search(rf"--agent {re.escape(pp.PLUGIN_NAME)}:", section(pp.read(p), HEADING) or "")
+                         and "### 前もって許可する" in (section(pp.read(p), HEADING) or "")]
+        self.docs = {"README.md": section(pp.read(README), HEADING) or ""}
+        self.docs.update({p.name: section(pp.read(p), HEADING) or "" for p in orchestrators})
+        self.assertGreaterEqual(len(self.docs), 2, "統括エージェントの README に「前もって許可する」がありません")
+
+    @staticmethod
+    def same(rules):
+        """並びは、MCP のツールの前の4つだけ比べる（読むツールの並びは問わない）"""
+        return [r for r in rules if not r.startswith("mcp__")], sorted(r for r in rules if r.startswith("mcp__"))
+
+    def test_launch_commands_and_permissions_lists_name_the_same_rules(self):
+        if not MARKET_NAME:  # the narrow Read rule names the marketplace
+            self.skipTest("マーケットプレイスの一覧（.claude-plugin/marketplace.json）がありません")
+        self.rules = ["Bash(uv run *)", f"Skill({pp.PLUGIN_NAME}:*)", plugin_read_rule(), EDIT_RULE, *read_tool_names()]
+        self.assertEqual(len(self.rules), 8, self.rules)
+        for name, body in self.docs.items():
+            with self.subTest(doc=name):
+                starts = [line for line in body.splitlines()
+                          if line.startswith("claude --add-dir") and "--allowedTools" in line]
+                self.assertTrue(starts, f"{name}：起動のコマンドがありません")
+                for line in starts:
+                    allowed = line.split("--allowedTools", 1)[1].split(" --agent ", 1)[0]
+                    self.assertEqual(self.same(quoted(allowed)), self.same(self.rules), f"{name}：起動のコマンドの許可が8つと違います")
+                blocks = [self.same([x for x in b.splitlines() if x.strip()]) for b in re.findall(r"```text\n(.*?)```", body, re.S)]
+                self.assertIn(self.same(self.rules), blocks,
+                              f"{name}：/permissions で許可する一覧が、起動のコマンドと同じ8つではありません")
+                self.assertIn("後のセッションにも残ります", body, f"{name}：/permissions の許可が残ることを書いていません")
+                self.assertIn("`.claude/settings.local.json`", body, f"{name}：保存先（自分だけの設定）がありません")
+                self.assertIn("//c/", body, f"{name}：Windows のパスの書き方（//c/…）がありません")
+
+    def test_no_bare_write_or_edit_and_no_write_to_the_plugin_folder(self):
+        for path in permission_docs():
+            text = pp.read(path)
+            with self.subTest(doc=pp.rel(path)):
+                for number, line, allowed in approve_lines(text):
+                    if allowed and "claude" in line:
+                        for bare in ("Write", "Edit"):
+                            self.assertNotIn(bare, quoted(line), f"{pp.rel(path)}:{number}：素の {bare} を前もって許可しています")
+                self.assertNotRegex(text, r"(Edit|Write)\((~|//)[^)]*plugins", "プラグインのフォルダは読むだけ")
+                self.assertNotRegex(text, r"(Edit|Write)\(//<プラグインのフォルダ>", "プラグインのフォルダは読むだけ")
+                self.assertNotIn("Read(~/.claude/plugins/**)", text, "ほかのプラグインまで読める広さです")
+        for name in ("CHANGELOG.md",):
+            text = pp.read(pp.ROOT / name)
+            with self.subTest(doc=name):
+                lines = [line for line in text.splitlines() if "`/permissions`" in line]
+                self.assertTrue(lines, f"{name}：/permissions の文がありません")
+                for line in lines:
+                    self.assertNotIn("`Write`", line, f"{name}：素の Write を許可するとあります")
+                    for rule in ("Skill(", "Read(", "Edit("):
+                        self.assertIn(rule, line, f"{name}：/permissions の文に {rule} がありません")
+
+    def test_extracted_skills_rules_follow_the_copy_lists(self):
+        """取り出したときの Skill(<スキル>) は、コピーするスキルのうち allowed-tools を持つものと同じ"""
+        found = 0
+        for readme in sorted(pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX)):
+            body = section_with_code(pp.read(readme), HEADING)
+            copied = re.findall(r"^for s in ([^;\n]+); do", body, re.M)
+            named = set(re.findall(r"`Skill\(([a-z0-9-]+)\)`", body))
+            if not copied:
+                continue
+            found += 1
+            want = {n for n in copied[0].split()
+                    if re.search(r"(?m)^allowed-tools:", pp.read(pp.SKILLS_DIR / n / "SKILL.md").split("\n---", 1)[0])}
+            with self.subTest(readme=readme.name):
+                self.assertEqual(named, want, f"{readme.name}：取り出したときの Skill(<スキル>) が、コピーするスキルと合いません")
+                self.assertIn("`Read(~/.claude/skills/**)`", body, f"{readme.name}：~/.claude/skills/ に置いたときの Read がありません")
+        if not found:
+            self.skipTest("コピーの一覧を書いたエージェントの README がありません")
 
 
 def permission_docs():

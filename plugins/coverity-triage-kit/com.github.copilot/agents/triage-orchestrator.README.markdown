@@ -81,7 +81,7 @@ Claude Code 用の定義は、プラグインの `agents/triage-orchestrator.md`
 ### 始め方
 
 1. 調べたいリポジトリのフォルダで、下の「前もって許可する」の指定を付けて、`claude --agent coverity-triage-kit:triage-orchestrator` で起動します。
-2. 「High だけトリアージして」のように、上の「頼み方の例」のとおりに頼みます。
+2. 「High だけトリアージして」のように、上の「頼み方の例」のとおりに頼みます。許可の案内が出たところで止まり、「始めて」と返すまで待ちます。起動のときに許可を済ませたときは、頼みの文に「許可は起動のときに済ませました」か「途中で質問せず」を添えると、待たずに始まります。
    起動のときに `--agent` を付けずに、`/coverity-triage-kit:coverity-run High だけ` と入力しても、同じ流れで始まります（会話の主役が一括実行のスキルに従い、プラグインの作業・検証・統合のエージェントを呼びます）。
 
 - 統括エージェントが呼んだエージェントは、裏で動くことがあります。終わると、結果が知らせとして届きます。
@@ -93,14 +93,25 @@ Claude Code 用の定義は、プラグインの `agents/triage-orchestrator.md`
 統括エージェントが呼んだエージェントは裏で動くことがあり、そのときは許可の確認を出せないので、前もって許可していないツールは使えずに止まります。夜通し動かすときは、確実な、起動のときの指定を使います。
 
 ```text
-claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Skill(coverity-triage-kit:*)" "Read(~/.claude/plugins/**)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage" --agent coverity-triage-kit:triage-orchestrator
+claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Skill(coverity-triage-kit:*)" "Read(~/.claude/plugins/cache/plugin-market-place/coverity-triage-kit/**)" "Edit(//<output_dir の絶対パス>/**)" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage" --agent coverity-triage-kit:triage-orchestrator
 ```
 
-起動した後のチャットでするときは、`/add-dir "<output_dir>"` を打ってこのセッションのあいだの許可を選び、続けて `/permissions` で、上の指定と同じ9つ（`Bash(uv run *)`、`Skill(coverity-triage-kit:*)`、`Read(~/.claude/plugins/**)`、`Write`、`Edit`、Coverity から読む4つのツール）を許可します。`/add-dir` だけでは、ツールは許可されません。
+起動した後のチャットでするときは、`/add-dir "<output_dir>"` を打ってこのセッションのあいだの許可を選び、続けて `/permissions` で、上の指定と同じ次の8つを許可します。`/add-dir` だけでは、ツールは許可されません。`/permissions` で足した許可は、設定ファイルに保存され、後のセッションにも残ります。保存先は、自分だけの、このプロジェクトの設定（`.claude/settings.local.json`）にし、実行が終わったら `/permissions` で消します。起動のときの指定は、そのセッションだけに効きます。
 
-- `Write` と `Edit` の許可は、このセッションのすべてのファイル（調べているリポジトリも）に効きます。書く場所を実行フォルダに限っているのは、エージェントの決まりです。
-- `Skill(coverity-triage-kit:*)` と `Read(~/.claude/plugins/**)` がないと、裏で動く作業エージェントは、スキルを使えず、スキルの参照資料も読めずに止まります（スキルが許可を持っているので使う前に確認が出て、入れたプラグインのフォルダはリポジトリの外なので読むたびに確認が出るため）。Read は読むだけの許可です。`--plugin-dir` で入れたときは `Read(//<プラグインのフォルダ>/**)` にします。
-- 書き戻すツール（`coverity_update_triage`）は前もって許可しません。
+```text
+Bash(uv run *)
+Skill(coverity-triage-kit:*)
+Read(~/.claude/plugins/cache/plugin-market-place/coverity-triage-kit/**)
+Edit(//<output_dir の絶対パス>/**)
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage
+```
+
+- `Edit(//<output_dir の絶対パス>/**)` は、実行フォルダの中に書くこと（新しいファイルを作る `Write` も含みます）だけの許可です。リポジトリなど、ほかの場所に書くときは確認が出ます。絶対パスの前に `/` を1つ足した形で書きます（例：`/home/me/out` は `//home/me/out`。Windows の `C:\Users\me\out` は、ドライブ名を小文字にして `\` を `/` にした `//c/Users/me/out`）。一括実行が示す許可の案内には、実際の名前が入っています。
+- `Skill(coverity-triage-kit:*)` と `Read(~/.claude/plugins/cache/plugin-market-place/coverity-triage-kit/**)` がないと、裏で動く作業エージェントは、スキルを使えず、スキルの参照資料も読めずに止まります（スキルが許可を持っているので使う前に確認が出て、入れたプラグインのフォルダはリポジトリの外なので読むたびに確認が出るため）。Read は読むだけの許可です。`--plugin-dir` で入れたときと、マーケットプレイスを手元のフォルダから足したときは、`Read(//<プラグインのフォルダ>/**)` にします（Windows の `C:\work\kit` は `Read(//c/work/kit/**)`）。`CLAUDE_CONFIG_DIR` で設定の場所を変えているときは、`Read(//<その場所>/plugins/cache/plugin-market-place/coverity-triage-kit/**)` にします。
+- 書き戻すツール（`coverity_update_triage`）は前もって許可しません。反映のときに確認が出ます。
 - 部品を取り出して MCP サーバーを自分で登録したときは、ツールの名前が `mcp__coverity-connect__<ツール>` になります。
 
 ### 取り出して使う
@@ -124,6 +135,8 @@ for s in coverity-run coverity-gui coverity-apply coverity-setup checker-knowled
 ```
 
 並べたスキルの名前は、定義の表からたどったスキルと同じです。表が変わったら、表に合わせます。
+
+取り出したときの「前もって許可する」は、`Skill(coverity-triage-kit:*)` とプラグインのフォルダの `Read(…)` の代わりに、取り出したスキルのうち許可（`allowed-tools`）を持つものを1つずつ許可します：`Skill(coverity-run)`、`Skill(coverity-gui)`、`Skill(coverity-apply)`、`Skill(coverity-setup)`、`Skill(triage-investigation)`、`Skill(deviation-comment)`、`Skill(triage-report)`、`Skill(triage-review)`、`Skill(triage-integration)`。リポジトリの `.claude/skills/` に置いたときは、参照資料を読む許可はいりません。`~/.claude/skills/` に置いたときは、`Read(~/.claude/skills/**)`（読むだけ）も許可します。`Bash(uv run *)`、`Edit(//<output_dir の絶対パス>/**)`、Coverity から読む4つのツール（名前は `mcp__coverity-connect__<ツール>`）は、プラグインのときと同じです。起動は、`claude --add-dir "<output_dir>" --allowedTools …` の後ろに `--agent triage-orchestrator` を足します。
 
 ## うまくいかないとき
 

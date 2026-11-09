@@ -91,6 +91,8 @@ uv run --native-tls --quiet tests/eval/stage3/run_stage3.py --format claude-plug
 - `claude-plugin` では、統括エージェントと、表でたどれるエージェント（`agents/<名前>.md`）・スキル・MCP サーバーを、そのまま `<out>/<変種>/claude-plugin/` に写し、`--plugin-dir <out>/<変種>/claude-plugin --agent <プラグイン>:<統括>` で動かします。どの表にもないスキルは写しません（Claude Code は、プラグインの `skills/` のスキルをすべて読むため）。
 - `claude-plugin` で `--model` を付けたときは、`claude` の `--model` に渡すだけでなく、写した統括エージェントの定義の `model` の行もそれに替えます（`--agent` で動かすメインのエージェントに、`--model` と定義の `model` のどちらが効くかによらず、そのモデルで動くようにするため）。ほかのエージェントの `model` の行は、`--agent-model` のときだけ替えます。
 - 変種：`default`（確かめと統合なし。設定の既定）と `full`（両方あり）。`--variant` で選びます（既定は両方）。
+- `bare` は `--variant bare` のときだけ動きます。条件のない頼み「Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。」で、設定は `default` と同じです。画面の入口のスキルも写すので、入れたプラグインと同じスキルがそろいます（入口のスキルの決まりが、統括エージェントの一括の実行を止めないかを確かめるため）。`--limit` とは一緒に使えません。
+- どの変種でも、一括実行のスキルを読んだこと（`run_skill_loaded`）と、`new-run` を動かしたこと（`new_run_called`）を確かめます。
 - 確かめ：自己診断の `check-run`（2-2〜2-6：最後まで進む、すべての作業が終わる、推奨が想定と合う、グループ、成果物と作業中のファイル）、`summary.html` と `approvals.json`、すべての作業の `result.json`、確かめありなら `review.json`、利用者のリポジトリが変わらない、役のエージェントだけを呼んだ、統括エージェントがファイルを書いていない、実行フォルダが1つ。件数・推奨の一致・時間・ターン・費用も記録します。
 - 主なオプション：`--format F`、`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル。`claude-plugin` では定義の `model`。付けたときは、写した統括の `model` の行も替える）、`--agent-model M`（ほかのエージェント。既定は各定義のモデル。`claude-plugin` では、写した定義の `model` の行を替える。統括は `--model` が先）、`--tools-from-definitions`（`claude-plugin` で `--tools` を付ける。既定は付けない）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
 
@@ -138,7 +140,7 @@ python3 tests/eval/stage4/run_stage4.py
 - Copilot CLI での、`com.github.copilot/agents/` の `.md` の読み込み、プラグインの名前の付いたエージェントとスキルの呼び方、`mcp.json` の `${…}` の展開。Claude Code での同じこと（`agents/`、`<プラグイン>:<名前>`、`.mcp.json` の `${CLAUDE_PLUGIN_ROOT}`）は、`--format claude-plugin` で確かめられます。
 - エクステンション（Web管理画面）。4段階目は、画面を開くツールの代わりのサーバーで、入口の選ばれ方だけを確かめます。画面の流れは `tests/extension/`（偽の SDK）と手での確認です。
 - モデルの名前（`gpt-6-luna` などは使えないので、定義の候補のうち claude のものを使う）と、Auto のときのモデルの選ばれ方。
-- Copilot CLI の許可の確認（`/add-dir`、「このセッションでは許可」）。ここでは `--permission-mode acceptEdits`、`--allowedTools`、`--add-dir` で代えます。
+- Copilot CLI の許可の確認（`/add-dir`、「このセッションでは許可」）。ここでは `--allowedTools` と `--add-dir` で代えます（`copilot-converted` は `--permission-mode acceptEdits` も付けます。`claude-plugin` は付けず、利用者に勧める許可と同じにします）。
 - 作業フォルダ：`copilot-converted` では、`.claude/` を作業フォルダ（＝調べるリポジトリ）に置くので、エージェントの検索に部品のファイルも出ます。`claude-plugin` では、部品はリポジトリの外の一時のプラグインにあります（Copilot CLI と同じ）。
 
 ## claude_adapter.py
@@ -208,9 +210,9 @@ python3 tests/eval/claude_adapter.py collect --format claude-plugin agents/triag
 python3 tests/eval/claude_adapter.py build --format claude-plugin --workspace "<作業フォルダ>" --plugin-dir "<一時のプラグイン>" --parts-from-table agents/triage-worker.md --fake-data "<偽の警告のファイル>" --prompt "List the tools and skills you have, one per line" --run --inspect
 ```
 
-作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run *)" "Skill(<プラグイン>:*)" "Read(//<一時のプラグイン>/**)" "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
+作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --allowedTools "Bash(uv run *)" "Skill(<プラグイン>:*)" "Read(//<一時のプラグイン>/**)" "Edit(//<output_dir>/**)" "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
 
-- `Skill(<プラグイン>:*)` と `Read(//<一時のプラグイン>/**)` は、README で利用者に勧める許可と同じ形です。スキルは `allowed-tools` を持つので使う前に確認が出、一時のプラグインは作業フォルダの外なので参照資料を読むたびに確認が出ます。`claude -p` と裏で動くエージェントは、それを断ります（2.1.319 で確認。これがないと、作業エージェントが参照資料を読めずに止まります）。
+- `Skill(<プラグイン>:*)`、`Read(//<一時のプラグイン>/**)`、`Edit(//<output_dir>/**)` は、README で利用者に勧める許可と同じ形です。`--permission-mode acceptEdits` は付けません（利用者にも勧めていないため）。書けるのは `<output_dir>` の中だけで、作業フォルダ（調べるリポジトリ）に書くときは確認が出て、`claude -p` では断られます。MCP のツールの `*` は、偽の Coverity を使う EVAL だけの書き方です。スキルは `allowed-tools` を持つので使う前に確認が出、一時のプラグインは作業フォルダの外なので参照資料を読むたびに確認が出ます。`claude -p` と裏で動くエージェントは、それを断ります（2.1.319 で確認。これがないと、作業エージェントが参照資料を読めずに止まります）。
 
 - 既定では `--tools` を付けません。利用者がプラグインを動かすときと同じ、Claude Code の既定のツールのままです（既定のツールに足りないものがあれば、利用者にも足りないので、EVAL でもそれが出るようにするため）。`--tools-from-definitions` を付けたときだけ、copilot-converted と同じ決まりで、写した定義の `tools` の組み込みのツールを合わせたものを `--tools` に渡します（`tools` のない定義は基本のツールすべて）。
 - `--mcp-config` と `--strict-mcp-config` は付けません（プラグインの MCP サーバーは、`.mcp.json` から読まれます）。

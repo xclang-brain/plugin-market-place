@@ -647,8 +647,8 @@ class DocumentIndependence(unittest.TestCase):
             self.skipTest("上の段の文書がまだありません")
         problems = []
         for doc in docs:
-            # <output_dir> のような、値を入れる所の印（設計書 3.5 の書き方）は数えない
-            text = re.sub(r"<[A-Za-z0-9_.]+>", "<…>", pp.read(doc))
+            # <output_dir> や <output_dir の絶対パス> のような、値を入れる所の印（設計書 3.5 の書き方）は数えない
+            text = re.sub(r"<[A-Za-z0-9_.]+(?: [^<>`\n]+)?>", "<…>", pp.read(doc))
             problems += pp.hits_in_text(pp.rel(doc), text, self.internals())
         self.assertEqual(problems, [], "上の段の文書に、下の段の中身（スクリプトの名前・設定の項目）があります：\n" + "\n".join(problems))
 

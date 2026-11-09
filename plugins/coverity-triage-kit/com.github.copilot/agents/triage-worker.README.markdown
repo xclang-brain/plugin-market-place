@@ -110,7 +110,7 @@ cp "<プラグイン>/agents/triage-worker.md" "<リポジトリ>/.claude/agents
 for s in checker-knowledge triage-investigation code-fix deviation-comment triage-report; do cp -r "<プラグイン>/skills/$s" "<リポジトリ>/.claude/skills/"; done
 ```
 
-スクリプトを動かすスキルは、`uv` のコマンドで許可の確認が出ます。許可（`allowed-tools`）を持つスキルは、使う前にも確認が出ます。毎回の確認を省くときは、`/permissions` で `Bash(uv run *)` と、`Skill(triage-investigation)`・`Skill(deviation-comment)`・`Skill(triage-report)` を許可します（取り出したスキルはリポジトリの中にあるので、参照資料を読む許可はいりません。プラグインとして入れたときは `Skill(coverity-triage-kit:*)` と `Read(~/.claude/plugins/**)` です）。
+スクリプトを動かすスキルは、`uv` のコマンドで許可の確認が出ます。許可（`allowed-tools`）を持つスキルは、使う前にも確認が出ます。毎回の確認を省くときは、`/permissions` で `Bash(uv run *)` と、`Skill(triage-investigation)`・`Skill(deviation-comment)`・`Skill(triage-report)` を許可します（リポジトリの `.claude/skills/` に取り出したときは、参照資料を読む許可はいりません。`~/.claude/skills/` に置いたときは、`Read(~/.claude/skills/**)`（読むだけ）も許可します。プラグインとして入れたときは `Skill(coverity-triage-kit:*)` と `Read(~/.claude/plugins/cache/plugin-market-place/coverity-triage-kit/**)` です）。`/permissions` で足した許可は、設定ファイルに保存され、後のセッションにも残ります。自分だけの、このプロジェクトの設定（`.claude/settings.local.json`）に保存し、要らなくなったら `/permissions` で消します。
 
 ## うまくいかないとき
 

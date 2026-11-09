@@ -109,7 +109,7 @@ def _answer(run: Run, result: Step, say: list[str]) -> dict[str, Any]:
         nxt = "say と error を利用者に伝えて止める（ほかには何もしない）"
     elif result.actions:
         nxt = ("actions を順に行う。launch は裏で動かし、終わったら tick --finished <task>（失敗したら --failed <task> "
-               "--reason \"<理由>\"）。fetch は呼び終わったら tick --finished <task>")
+               "--reason '<理由>'）。fetch は呼び終わったら tick --finished <task>")
     elif agents:
         nxt = "裏で動いているエージェントが終わったら tick --finished <task>。それまでは tick をそのまま呼び直してよい"
     else:

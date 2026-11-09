@@ -21,7 +21,7 @@ Coverity の警告のトリアージの道具一式が、この PC で動くか�
 
 ## 置き方
 
-プラグインを入れると、一緒に入ります。フォルダだけを `.github/skills/coverity-selftest/` か `~/.copilot/skills/coverity-selftest/` にコピーしても、スクリプトと見本はこのフォルダだけで動きます（確かめる相手の部品は、別に要ります）。
+プラグインを入れると、一緒に入ります。フォルダだけを `.github/skills/coverity-selftest/` か `~/.copilot/skills/coverity-selftest/`（Claude Code なら `.claude/skills/coverity-selftest/` か `~/.claude/skills/coverity-selftest/`）にコピーしても、スクリプトと見本はこのフォルダだけで動きます（確かめる相手の部品は、別に要ります）。
 
 ## 呼び方
 
@@ -60,8 +60,11 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/selftest.py" report --
 | --- | --- |
 | 1-1・1-3〜1-6 が失敗 | プラグインが入っているか、Copilot CLI（か Claude Code）を起動し直したか確かめる。`/mcp` と `/agent`（Claude Code では `/agents`）の一覧を見る |
 | 1-8 が未実施（Claude Code） | Web管理画面は Copilot CLI だけの機能なので、Claude Code では確かめません |
-| 1-7 が失敗 | uv か git を入れて PATH を通し、Copilot CLI を起動し直す |
+| 1-7 が失敗 | uv か git を入れて PATH を通し、Copilot CLI（か Claude Code）を起動し直す |
 | 2-2〜2-8 が失敗 | 一括実行か反映が途中で止まった。`report.md` の詳しいことと、見本の実行フォルダ（`coverity-triage-out/`）を見る |
+| 2-2〜2-6 が失敗（Claude Code） | 裏で動くエージェントに許可がなかった。一括実行が示す許可を `/add-dir` と `/permissions` で与えてから、② をやり直す |
+| 2-7 が要確認 | 書き戻すツールの確認を断ったので、確かめられなかった。② をやり直し、その確認を、その1回だけ許可する（間違った確認の文字列なので、書き込まれない） |
+| ② が範囲から外れた（Claude Code） | `--agent` で統括のエージェントを主役にして起動したセッションには、書き戻しのツールがない。`--agent` を付けずに Claude Code を起動して、② を確かめる |
 | 2-4・2-5 が要確認 | AI の結論が想定と違った。結論は実行ごとに揺れるので、失敗ではない。詳細レポートで理由を見る |
 | 3-1 が失敗 | 設定・条件ファイル・認証情報の環境変数のどれかがない。準備のスキルで直す |
 | 3-2 が失敗 | URL、認証キー、証明書、プロキシを確かめる |

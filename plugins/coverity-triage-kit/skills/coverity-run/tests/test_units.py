@@ -182,6 +182,19 @@ class ClientDocsTest(unittest.TestCase):
         self.assertIn("`--client` と `--mcp-tool`", text)
         actions = (SKILL / "references" / "actions.md").read_text(encoding="utf-8")
         self.assertIn("--client copilot\\|claude-code", actions)
+        resume = text[text.index("再開するなら"):text.index("\n3. ")]
+        self.assertIn("`--client claude-code` を必ず付け", resume)
+
+    def test_claude_code_waits_before_the_start_only(self) -> None:
+        """In Claude Code the permissions are given before the agents start: the turn ends after the steps, unless
+        the request says not to ask on the way or that the permissions were given at launch. Copilot CLI goes on."""
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        step = text[text.index("\n6. "):text.index("## 2. ")]
+        self.assertIn("Claude Code で動いているときは、案内を示したら、そのターンを終えて待ちます", step)
+        self.assertIn("「途中で質問せず」", step)
+        self.assertIn("許可を起動のときに済ませた", step)
+        self.assertIn("始めた後は質問しません", step)
+        self.assertEqual(step.count("ターンを終えて"), 1, "only under the Claude Code condition")
 
     def test_cli_accepts_the_client(self) -> None:
         text = (SKILL / "scripts" / "run.py").read_text(encoding="utf-8")
@@ -398,13 +411,18 @@ class ClaudeSkillRulesTest(unittest.TestCase):
     """The Skill and Read rules that Claude Code needs for the kit's skills (they ask before each use, and the
     skill folder of an installed plugin is outside the repository)."""
 
+    KIT_LINE = 'allowed-tools: ["shell(uv run:*)"]\n'
+
     def make_skills(self, plugin: str | None) -> Path:
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(__import__("shutil").rmtree, tmp, True)
         root = tmp / ("kit" if plugin else ".claude")
         skills = root / "skills"
-        for name, front in (("run-x", 'allowed-tools: ["shell(uv run:*)"]\n'), ("plain", ""),
-                            ("Bad_Name", 'allowed-tools: ["shell(uv run:*)"]\n')):
+        # "release" is a skill of the repository that allows other tools: it is never pre-approved
+        for name, front in (("run-x", self.KIT_LINE), ("plain", ""), ("Bad_Name", self.KIT_LINE),
+                            ("other-x", self.KIT_LINE),
+                            ("release", "allowed-tools: Bash(uv run x.py:*), Bash(git push:*)\n"),
+                            ("wider", 'allowed-tools: ["shell(uv run:*)", "shell(git:*)"]\n')):
             (skills / name).mkdir(parents=True)
             (skills / name / "SKILL.md").write_text(f"---\nname: {name}\n{front}---\nallowed-tools uv run\n",
                                                     encoding="utf-8")
@@ -417,22 +435,40 @@ class ClaudeSkillRulesTest(unittest.TestCase):
         from runlib import views
 
         skills = self.make_skills("kit-x")
-        self.assertEqual(views.claude_skill_rules(skills),
+        self.assertEqual(views.claude_skill_rules(skills, own="run-x"),
                          ["Skill(kit-x:*)", f"Read({views._rule_path(skills)}/**)"])
 
     def test_taken_out_skills_are_named_one_by_one(self) -> None:
         from runlib import views
 
         skills = self.make_skills(None)
-        rules = views.claude_skill_rules(skills)
-        self.assertEqual(rules[0], "Skill(run-x)", "only the skills that ask before use, with a valid name")
-        self.assertEqual(len(rules), 2)
+        rules = views.claude_skill_rules(skills, own="run-x")
+        self.assertEqual(rules, ["Skill(other-x)", "Skill(run-x)", f"Read({views._rule_path(skills)}/**)"],
+                         "only the skills whose allowed-tools line is this skill's own, with a valid name")
+
+    def test_a_skill_that_allows_other_tools_is_never_listed(self) -> None:
+        from runlib import views
+
+        skills = self.make_skills(None)
+        (skills / "release" / "SKILL.md").write_text(
+            "---\nname: release\nallowed-tools: Bash(uv run *), Bash(git push *), mcp__x__update_y\n---\n",
+            encoding="utf-8")
+        rules = views.claude_skill_rules(skills, own="run-x")
+        for name in ("release", "wider", "plain", "Bad_Name"):
+            self.assertNotIn(f"Skill({name})", rules)
+
+    def test_own_line_unknown_names_only_this_skill(self) -> None:
+        from runlib import views
+
+        skills = self.make_skills(None)
+        self.assertEqual(views.claude_skill_rules(skills, own="plain")[:-1], ["Skill(plain)"])
+        self.assertEqual(views.claude_skill_rules(skills, own="gone-x")[:-1], [], "no folder: no rule")
 
     def test_odd_manifest_name_falls_back(self) -> None:
         from runlib import views
 
         skills = self.make_skills("Kit X")
-        self.assertEqual(views.claude_skill_rules(skills)[0], "Skill(run-x)")
+        self.assertEqual(views.claude_skill_rules(skills, own="run-x")[:2], ["Skill(other-x)", "Skill(run-x)"])
 
     def test_rule_path(self) -> None:
         from runlib import views
@@ -443,12 +479,62 @@ class ClaudeSkillRulesTest(unittest.TestCase):
                     "relative/skills"):
             self.assertIsNone(views._rule_path(Path(odd)), odd)
 
+    def test_read_rule_falls_back_to_the_home_folder(self) -> None:
+        from unittest import mock
+
+        from runlib import views
+
+        self.assertEqual(views._read_rule(Path("/home/u/kit/skills")), "Read(//home/u/kit/skills/**)")
+        home = Path(tempfile.gettempdir()).resolve() / "a (x)"
+        with mock.patch.object(Path, "home", return_value=home):
+            self.assertEqual(views._read_rule(home / ".claude" / "plugins" / "cache" / "m" / "k" / "1" / "skills"),
+                             "Read(~/.claude/plugins/cache/m/k/1/skills/**)")
+            self.assertIsNone(views._read_rule(home), "never the whole home folder")
+            self.assertIsNone(views._read_rule(home.parent / "(y)" / "skills"))
+
     def test_steps_without_rules_say_nothing_of_them(self) -> None:
         from runlib import views
 
         first, restart = views._claude_steps(Path("/o/out"), ["mcp__s__read_a"], skill_rules=[])
         self.assertNotIn("Skill(", first + restart)
-        self.assertIn('--allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__s__read_a"', restart)
+        self.assertNotIn("Read", first + restart)
+        self.assertIn('--allowedTools "Bash(uv run *)" "Edit(//o/out/**)" "mcp__s__read_a"', restart)
+
+    def test_writes_only_in_the_run_folder(self) -> None:
+        from runlib import views
+
+        first, restart = views._claude_steps(Path("/o/out"), [], skill_rules=["Skill(kit-x:*)", "Read(//x/**)"])
+        self.assertIn('"Read(//x/**)" "Edit(//o/out/**)" で起動し直します', restart)
+        self.assertNotIn('"Write"', restart)
+        self.assertIn("実行フォルダに書くこと（Edit(//o/out/**)。Write も含みます）", first)
+        self.assertIn("ほかの場所（調べているリポジトリなど）に書くときは、確認が出ます", first)
+        windows = views._claude_steps(Path("C:/Users/me/out"), [], skill_rules=[])[1]
+        self.assertIn('"Edit(//c/Users/me/out/**)"', windows)
+        # a run folder whose name cannot go into a rule: Write and Edit as they are, and the steps say so
+        odd_first, odd = views._claude_steps(Path("/o/(x)"), [], skill_rules=[])
+        self.assertIn('"Bash(uv run *)" "Write" "Edit" で起動し直します', odd)
+        self.assertNotIn("Edit(", odd_first + odd)
+        self.assertIn("書く場所を絞れません", odd_first)
+        self.assertIn("このセッションのどのファイルにも効きます", odd_first)
+
+    def test_wording_follows_the_rules_listed(self) -> None:
+        from runlib import views
+
+        only_skill = views._claude_steps(Path("/o/out"), [], skill_rules=["Skill(kit-x:*)"])[0]
+        self.assertIn("スキルを使うこと（Skill(kit-x:*)）、", only_skill)
+        self.assertIn("Skill を許可しないと、スキルを使うたびに確認が出ます。", only_skill)
+        self.assertNotIn("参照資料を読むこと", only_skill)
+        self.assertNotIn("Read は読むだけ", only_skill)
+        self.assertIn("そのフォルダを読む許可（Read）を示していません", only_skill)
+        self.assertIn("裏で動くエージェントは止まります", only_skill)
+        only_read = views._claude_steps(Path("/o/out"), [], skill_rules=["Read(//x/**)"])[0]
+        self.assertIn("スキルの参照資料を読むこと（Read(//x/**)）、", only_read)
+        self.assertIn("Read を許可しないと、参照資料を読むたびに確認が出ます（Read は読むだけ", only_read)
+        self.assertNotIn("Skill", only_read)
+        both = views._claude_steps(Path("/o/out"), [], skill_rules=["Skill(kit-x:*)", "Read(//x/**)"])[0]
+        self.assertIn("スキルを使うこととスキルの参照資料を読むこと（Skill(kit-x:*)、Read(//x/**)）", both)
+        self.assertIn("Skill と Read を許可しないと", both)
+        self.assertNotIn("示していません", both)
 
 
 class LockTest(unittest.TestCase):

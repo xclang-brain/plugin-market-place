@@ -558,13 +558,18 @@ class ClaudePluginFormatTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(self.dest.resolve()))
         self.assertEqual(argv[argv.index("--agent") + 1], "fake-kit:lead")
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "project")
-        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
-        for flag in ("--agents", "--mcp-config", "--strict-mcp-config", "--model"):
-            self.assertNotIn(flag, argv)
+        for flag in ("--agents", "--mcp-config", "--strict-mcp-config", "--model", "--permission-mode"):
+            self.assertNotIn(flag, argv, "no acceptEdits: the writes are allowed in the output folder only, as for a user")
         allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
         self.assertEqual(allowed, ["Bash(uv run *)", "Skill(fake-kit:*)", ca.plugin_read_rule(self.dest),
-                                   "mcp__plugin_fake-kit_fake-server__*"],
-                         "the rules a user is asked for: the skills ask before use, their references are outside the folder")
+                                   ca.output_edit_rule(out), "mcp__plugin_fake-kit_fake-server__*"],
+                         "the rules a user is asked for: the skills ask before use, their references are outside the "
+                         "folder, and only the output folder is written")
+        for bare in ("Write", "Edit"):
+            self.assertNotIn(bare, allowed)
+        if os.name == "nt":
+            for rule in allowed[2:4]:
+                self.assertRegex(rule, r"^(Read|Edit)\(//[a-z]/", "the drive form //c/... in the full argv")
         self.assertEqual(argv[argv.index("--add-dir") + 1], str(out.resolve()))
         self.assertNotIn("--tools", argv, "by default the plugin runs with Claude Code's own tools, like a user's session")
         self.assertIsNone(res["tools"])
@@ -599,10 +604,18 @@ class ClaudePluginFormatTest(unittest.TestCase):
     def test_plugin_read_rule(self):
         if os.name == "nt":
             self.assertEqual(ca.plugin_read_rule(Path("C:/a/b")), "Read(//c/a/b/**)")
+            self.assertEqual(ca.output_edit_rule(Path("C:/a/out")), "Edit(//c/a/out/**)")
         else:
             here = Path(__file__).resolve().parent
             self.assertEqual(ca.plugin_read_rule(here), f"Read(/{here.as_posix()}/**)")
             self.assertTrue(ca.plugin_read_rule(here).startswith("Read(//"))
+            self.assertEqual(ca.output_edit_rule(here), f"Edit(/{here.as_posix()}/**)")
+
+    def test_plugin_argv_without_output_dir_writes_nowhere(self):
+        argv = ca.plugin_argv(["claude"], "p", self.dest, "fake-kit:lead", "fake-kit", ["fake-server"], None, None, [])
+        self.assertNotIn("--add-dir", argv)
+        self.assertNotIn("--permission-mode", argv)
+        self.assertFalse([a for a in argv if a.startswith(("Edit", "Write"))], argv)
 
     def test_build_stage2_shape_and_options(self):
         res = self.build(parts_from_table=str(self.agents / "helper-a.md"), model="claude-haiku-5-5")

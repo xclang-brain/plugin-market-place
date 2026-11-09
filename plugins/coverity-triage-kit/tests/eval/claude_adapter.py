@@ -950,11 +950,22 @@ def _fresh_plugin_dir(dest: Path) -> None:
     (dest / PLUGIN_MARKER).write_text(json.dumps(PLUGIN_MARKER_DATA) + "\n", encoding="utf-8")
 
 
+def _folder_rule(tool: str, folder: Path) -> str:
+    """Claude Code's rule for a folder: <tool>(//<absolute path>/**); on Windows C:\\a is //c/a."""
+    text = Path(folder).resolve().as_posix()
+    drive = re.match(r"^([A-Za-z]):/(.*)$", text)
+    return f"{tool}(//{drive.group(1).lower()}/{drive.group(2)}/**)" if drive else f"{tool}(/{text}/**)"
+
+
 def plugin_read_rule(plugin_dir: Path) -> str:
     """Claude Code's rule that reads (only) a folder: Read(//<absolute path>/**); on Windows C:\\a is //c/a."""
-    text = Path(plugin_dir).resolve().as_posix()
-    drive = re.match(r"^([A-Za-z]):/(.*)$", text)
-    return f"Read(//{drive.group(1).lower()}/{drive.group(2)}/**)" if drive else f"Read(/{text}/**)"
+    return _folder_rule("Read", plugin_dir)
+
+
+def output_edit_rule(output_dir: Path) -> str:
+    """Claude Code's rule that writes in one folder only: Edit(//<absolute path>/**) (it covers Write too, new
+    files included; writes anywhere else still ask)."""
+    return _folder_rule("Edit", output_dir)
 
 
 def plugin_argv(claude_bin: list[str], prompt: str, plugin_dir: Path, agent_ref: str, plugin: str,
@@ -962,13 +973,16 @@ def plugin_argv(claude_bin: list[str], prompt: str, plugin_dir: Path, agent_ref:
                 tools: list[str] | None = None) -> list[str]:
     """claude -p with the copied plugin (design 9.3). The prompt goes right after -p."""
     argv = list(claude_bin) + ["-p", prompt, "--plugin-dir", str(plugin_dir), "--agent", agent_ref,
-                               "--setting-sources", "project", "--permission-mode", "acceptEdits"]
+                               "--setting-sources", "project"]
     if tools:
         argv += ["--tools", ",".join(tools)]
     # The same rules the README asks of a user (2.1.319): the plugin's skills have allowed-tools, so each use asks,
     # and the copied plugin is outside the working folder, so each read of a skill's reference file asks; claude -p
-    # and the agents it starts in the background deny what would ask. The Read rule only reads.
+    # and the agents it starts in the background deny what would ask. The Read rule only reads. The writes are
+    # allowed in the output folder only (no --permission-mode acceptEdits: a user is not asked for it either).
     argv += ["--allowedTools", PLUGIN_BASH_ALLOW, f"Skill({plugin}:*)", plugin_read_rule(plugin_dir)]
+    if output_dir is not None:
+        argv.append(output_edit_rule(output_dir))
     argv += [f"mcp__plugin_{plugin}_{n}__*" for n in mcp_names]
     if output_dir is not None:
         argv += ["--add-dir", str(output_dir)]

@@ -86,6 +86,7 @@ def permission_steps(output: Path, mcp_tools: list[str] | None = None, client: s
 
 
 SKILLS_DIR = Path(__file__).resolve().parents[3]  # <skills>/coverity-run/scripts/runlib/views.py
+OWN_SKILL = Path(__file__).resolve().parents[2].name  # this skill's folder (a renamed copy keeps working)
 _SKILL_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 # A path that can go into a permission rule and into the double-quoted command to copy as it is.
 _RULE_PATH = re.compile(r'^[^"`$\\()*?\[\]!\n\r]+$')
@@ -102,21 +103,36 @@ def _rule_path(path: Path) -> str | None:
     return rule if _RULE_PATH.match(rule) else None
 
 
-def _asks_before_use(skill_md: Path) -> bool:
-    """True when the frontmatter of a SKILL.md has allowed-tools with `uv run` (Claude Code asks before such a skill)."""
+def _read_rule(folder: Path) -> str | None:
+    """The rule that only reads ``folder``: Read(//<path>/**), or Read(~/<path>/**) when only the home folder's
+    name has a character that cannot go into a rule. None when neither can be written."""
+    path = _rule_path(folder)
+    if path:
+        return f"Read({path}/**)"
+    try:
+        rel = folder.relative_to(Path.home().resolve()).as_posix()
+    except (ValueError, RuntimeError, OSError):
+        return None
+    return f"Read(~/{rel}/**)" if rel != "." and _RULE_PATH.match(rel) else None
+
+
+def _allowed_line(skill_md: Path) -> str | None:
+    """The allowed-tools line of a SKILL.md's frontmatter (Claude Code asks before a skill that has one), or None."""
     try:
         text = skill_md.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
-        return False
+        return None
     head = text.split("\n---", 1)[0] if text.startswith("---") else ""
-    return any(line.startswith("allowed-tools") and "uv run" in line for line in head.splitlines())
+    return next((line.rstrip() for line in head.splitlines() if line.startswith("allowed-tools")), None)
 
 
-def claude_skill_rules(skills_dir: Path = SKILLS_DIR) -> list[str]:
+def claude_skill_rules(skills_dir: Path = SKILLS_DIR, own: str = OWN_SKILL) -> list[str]:
     """The Claude Code rules that let the kit's skills run unasked (their frontmatter has allowed-tools, so Claude
     Code asks before each one) and let their reference files be read (the skill folder of an installed plugin is
     outside the repository, so each read asks). In a plugin, Skill(<plugin>:*); with the skills taken out on their
-    own (.claude/skills/), Skill(<skill>) for each. The Read rule only reads: nothing in that folder is written."""
+    own (.claude/skills/), Skill(<skill>) for this skill and for the skills next to it whose allowed-tools line is
+    exactly this skill's own (never a skill that allows other tools). The Read rule only reads: nothing in that
+    folder is written."""
     rules: list[str] = []
     try:
         manifest = read_json(skills_dir.parent / ".claude-plugin" / "plugin.json", {})
@@ -125,42 +141,66 @@ def claude_skill_rules(skills_dir: Path = SKILLS_DIR) -> list[str]:
     name = manifest.get("name") if isinstance(manifest, dict) else None
     if isinstance(name, str) and _SKILL_NAME.match(name):
         rules.append(f"Skill({name}:*)")
-    else:  # only the skills next to this one that Claude Code asks about: they allow `uv run` the way this kit does
+    else:
+        line = _allowed_line(skills_dir / own / "SKILL.md")
         found: list[str] = []
-        try:
-            for d in sorted(skills_dir.iterdir(), key=lambda p: p.name):
-                skill_md = d / "SKILL.md"
-                if _SKILL_NAME.match(d.name) and skill_md.is_file() and _asks_before_use(skill_md):
-                    found.append(d.name)
-        except OSError:
-            pass
-        rules += [f"Skill({n})" for n in found]
-    folder = _rule_path(skills_dir)
-    if folder:
-        rules.append(f"Read({folder}/**)")
+        if line is None:  # this skill's own line is unknown: only this skill
+            found = [own] if (skills_dir / own).is_dir() else []
+        else:
+            try:
+                found = [d.name for d in sorted(skills_dir.iterdir(), key=lambda p: p.name)
+                         if (d / "SKILL.md").is_file() and _allowed_line(d / "SKILL.md") == line]
+            except OSError:
+                found = [own]
+        rules += [f"Skill({n})" for n in found if _SKILL_NAME.match(n)]
+    read = _read_rule(skills_dir)
+    if read:
+        rules.append(read)
     return rules
 
 
 def _claude_steps(output: Path, tools: list[str], skill_rules: list[str] | None = None) -> list[str]:
-    """Claude Code's two ways. /add-dir only adds the folder: it allows neither Write/Edit nor the Coverity tools,
+    """Claude Code's two ways. /add-dir only adds the folder: it allows neither the writes nor the Coverity tools,
     and an agent that runs in the background cannot show a confirmation, so the in-session way also allows them
-    through /permissions. Starting Claude Code again with --allowedTools is the reliable way for a night run."""
+    through /permissions. Starting Claude Code again with --allowedTools is the reliable way for a night run.
+    The writes are allowed in the run folder only (Edit(//<folder>/**) covers Write too); when the folder's name
+    cannot go into a rule, Write and Edit are allowed as they are, and the steps say so."""
     rules = claude_skill_rules() if skill_rules is None else skill_rules
+    has_skill = any(r.startswith("Skill(") for r in rules)
+    has_read = any(r.startswith("Read(") for r in rules)
     read = (f"Coverity から読むツール（{'、'.join(tools)}）" if tools else
             "Coverity から読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ。/mcp で見える名前）")
-    skills = (f"スキルを使うこととスキルの参照資料を読むこと（{'、'.join(rules)}）、" if rules else "")
-    why = ("Skill と Read を許可しないと、スキルを使うたびと参照資料を読むたびに確認が出ます（Read は読むだけで、そのフォルダには書きません）。"
-           if rules else "")
+    what = "と".join(w for w, on in (("スキルを使うこと", has_skill), ("スキルの参照資料を読むこと", has_read)) if on)
+    skills = f"{what}（{'、'.join(rules)}）、" if rules else ""
+    kinds = " と ".join(k for k, on in (("Skill", has_skill), ("Read", has_read)) if on)
+    times = "と".join(t for t, on in (("スキルを使うたび", has_skill), ("参照資料を読むたび", has_read)) if on)
+    why = f"{kinds} を許可しないと、{times}に確認が出ます" if kinds else ""
+    why += "（Read は読むだけで、そのフォルダには書きません）。" if has_read else ("。" if why else "")
+    if has_skill and not has_read:
+        why += ("スキルのフォルダの名前に、許可の指定で使えない文字があるので、そのフォルダを読む許可（Read）を示していません。"
+                "スキルのフォルダが調べているリポジトリの外にあるときは、/permissions で、そのフォルダを読む許可を手で足します。"
+                "足さないと、参照資料を読むたびに確認が出て、裏で動くエージェントは止まります。")
+    folder = _rule_path(output)
+    edit = f"Edit({folder}/**)" if folder else None
+    if edit:
+        writes = f"実行フォルダに書くこと（{edit}。Write も含みます）"
+        scope = (f"{edit} は、実行フォルダの中に書くこと（新しいファイルも）だけの許可です。ほかの場所（調べているリポジトリなど）に書くときは、"
+                 "確認が出ます。")
+    else:
+        writes = "ファイルの書き込み（Write・Edit）"
+        scope = ("実行フォルダの名前に、許可の指定で使えない文字があるので、書く場所を絞れません。"
+                 "Write と Edit の許可は、このセッションのどのファイルにも効きます（実行フォルダにだけ書くのは、エージェントの決まりです）。")
     first = (f"チャットで /add-dir \"{output}\" と入力し、確認で、このセッションのあいだの許可を選びます。"
              "/add-dir だけでは足りません（フォルダが加わるだけで、ファイルの書き込みもツールも許可されません）。"
-             f"続けて /permissions で Bash(uv run *)、{skills}ファイルの書き込み（Write・Edit）、{read}を許可します。"
-             f"{why}"
-             "Write と Edit の許可は、このセッションのどのファイルにも効きます（実行フォルダにだけ書くのは、エージェントの決まりです）。"
+             f"続けて /permissions で Bash(uv run *)、{skills}{writes}、{read}を許可します。"
+             f"{why}{scope}"
+             "/permissions で足した許可は、設定ファイルに保存され、後のセッションにも残ります。保存先は、自分だけの、このプロジェクトの設定"
+             "（.claude/settings.local.json）にし、実行が終わったら /permissions で消します。"
              "Coverity に書き戻すツールは許可しません。")
-    allowed = " ".join(f'"{r}"' for r in ["Bash(uv run *)", *rules, "Write", "Edit"])
+    allowed = " ".join(f'"{r}"' for r in ["Bash(uv run *)", *rules, *([edit] if edit else ["Write", "Edit"])])
     restart = f"または、Claude Code を claude --add-dir \"{output}\" --allowedTools {allowed}"
     agent = "エージェントを --agent で起動して始めたときは、同じ --agent も後ろに足します。"
-    sure = "夜通しの実行には、こちらが確実です。"
+    sure = "夜通しの実行には、こちらが確実です。起動のときの許可は、そのセッションだけに効きます。"
     apply = "反映するときに確認が出ます。反映は、--agent を付けずに起動したセッションでします"
     if tools:
         names = " ".join(f'"{t}"' for t in tools)

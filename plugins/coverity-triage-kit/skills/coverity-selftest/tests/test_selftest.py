@@ -446,6 +446,14 @@ class UserEnvTest(unittest.TestCase):
         self.assertEqual(selftest.parse_sections("①②"), ["1", "2"])
         self.assertEqual(selftest.parse_sections("3, 4"), ["3", "4"])
 
+    def test_restart_hint_names_the_client(self):
+        # the 1-7 detail tells the user to start again the client given to start --client
+        selftest = load_module()
+        self.assertEqual(selftest.client_name({"client": "Copilot CLI"}), "Copilot CLI")
+        self.assertEqual(selftest.client_name({"client": "Claude Code"}), "Claude Code")
+        self.assertIn("Claude Code", selftest.client_name({"client": ""}))
+        self.assertIn("Copilot CLI", selftest.client_name({}))
+
     def test_log_tail_drops_source_excerpts(self):
         selftest = load_module()
         text = "a.c:3: error: x\n    3 |   y = secret();\n      |       ^\nmake: *** [all] Error 1\n"

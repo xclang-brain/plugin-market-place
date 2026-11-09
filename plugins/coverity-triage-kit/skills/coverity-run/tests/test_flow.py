@@ -31,6 +31,16 @@ class BasicFlowTest(RunCase):
         self.assertNotIn("rm -rf", odd["permission_steps"][1])
         self.assertNotIn("'srv-x'", odd["permission_steps"][1])
 
+    @staticmethod
+    def bare(step: str, out: Path) -> str:
+        """The step without the rules and folders made from where the skill and the run folder are: the words
+        checked below must not depend on the place (a checkout or an install folder can hold any word)."""
+        rules = views.claude_skill_rules()
+        folder = views._rule_path(out)
+        for part in ("、".join(rules), " ".join(f'"{r}"' for r in rules), *rules, f"Edit({folder}/**)", str(out)):
+            step = step.replace(part, "")
+        return step
+
     def test_permission_steps_for_claude_code(self) -> None:
         tools = ["mcp__srv-x__read_a", "mcp__plugin_kit-x_srv-x__get_b_details"]
         args = [a for t in tools for a in ("--mcp-tool", t)]
@@ -40,29 +50,53 @@ class BasicFlowTest(RunCase):
         self.assertIn(f'/add-dir "{out}"', first)
         self.assertIn("/permissions で Bash(uv run *)", first)
         # the kit's skills ask before each use and live outside the repository when installed: both are allowed
+        # (the Read rule only when the skill folder's name can go into a rule)
         rules = views.claude_skill_rules()
-        self.assertEqual([r.split("(")[0] for r in rules], ["Skill", "Read"], rules)
-        self.assertEqual(rules[-1], f"Read({views._rule_path(views.SKILLS_DIR)}/**)")
+        read = views._read_rule(views.SKILLS_DIR)
+        self.assertEqual(rules[-1:] if read else [], [read] if read else [], rules)
+        skill_rules = rules[:-1] if read else rules
+        self.assertTrue(all(r.startswith("Skill(") for r in skill_rules), rules)
+        if views._SKILL_NAME.match(views.OWN_SKILL):
+            self.assertTrue(skill_rules, "a Skill rule: the plugin's, or this skill's own")
         self.assertIn("、".join(rules), first)
-        self.assertIn("Read は読むだけ", first)
-        # /add-dir allows neither the file writes nor the Coverity tools: the first way allows them too
+        if read:
+            self.assertIn("Read は読むだけ", first)
+        else:
+            self.assertIn("そのフォルダを読む許可（Read）を示していません", first)
+        # /add-dir allows neither the file writes nor the Coverity tools: the first way allows them too,
+        # the writes only in the run folder
         self.assertIn("/add-dir だけでは足りません", first)
-        self.assertIn("ファイルの書き込み（Write・Edit）", first)
+        folder = views._rule_path(out)
+        edit = f"Edit({folder}/**)" if folder else None
+        if edit:
+            self.assertIn(f"実行フォルダに書くこと（{edit}。Write も含みます）", first)
+            self.assertIn("実行フォルダの中に書くこと（新しいファイルも）だけの許可です", first)
+        else:
+            self.assertIn("ファイルの書き込み（Write・Edit）", first)
+            self.assertIn("このセッションのどのファイルにも効きます", first)
         self.assertIn("Coverity から読むツール（mcp__srv-x__read_a、mcp__plugin_kit-x_srv-x__get_b_details）", first)
-        self.assertIn("このセッションのどのファイルにも効きます", first)
+        # rules added with /permissions are saved and stay: the local settings, removed when the run is done
+        self.assertIn("後のセッションにも残ります", first)
+        self.assertIn(".claude/settings.local.json", first)
+        self.assertIn("実行が終わったら /permissions で消します", first)
         self.assertIn("書き戻すツールは許可しません", first)
         self.assertIn("夜通しの実行には、こちらが確実です", restart)
         self.assertIn("反映は、--agent を付けずに起動したセッションでします", restart)
-        named = " ".join(f'"{r}"' for r in rules)
-        self.assertIn(f'claude --add-dir "{out}" --allowedTools "Bash(uv run *)" {named} "Write" "Edit" '
+        named = " ".join(f'"{r}"' for r in [*rules, *([edit] if edit else ["Write", "Edit"])])
+        self.assertIn(f'claude --add-dir "{out}" --allowedTools "Bash(uv run *)" {named} '
                       '"mcp__srv-x__read_a" "mcp__plugin_kit-x_srv-x__get_b_details" で起動し直します', restart)
         self.assertIn("--agent", restart)
         for step in (first, restart):
-            self.assertNotIn("copilot", step)
-            self.assertNotIn("--allow-tool", step)
+            checked = self.bare(step, out)
+            self.assertNotIn("copilot", checked)
+            self.assertNotIn("--allow-tool", checked)
             self.assertNotIn("<", step, "no placeholder in the command to copy (REQ-306)")
+            if edit:
+                self.assertNotIn('"Write"', step)
+                self.assertNotIn('"Edit"', step)
         again = self.run_json("resume", "--run", created["run_dir"], "--client", "claude-code", "--mcp-tool", tools[0])
-        self.assertIn('"Edit" "mcp__srv-x__read_a" で起動し直します', again["permission_steps"][1])
+        last = f'"{edit}"' if edit else '"Edit"'
+        self.assertIn(f'{last} "mcp__srv-x__read_a" で起動し直します', again["permission_steps"][1])
 
     def test_claude_code_tool_names_are_strict_and_never_write(self) -> None:
         bad = ["mcp__srv-x", "mcp__srv-x__*", "mcp__srv-x__", "mcp__plugin_kit-x_srv-x", "srv-x(read_a)",
@@ -70,18 +104,24 @@ class BasicFlowTest(RunCase):
                "mcp__srv-x__read__a", "mcp__srv x__read_a", "Bash(rm *)", "mcp__srv-x__update_c",
                "mcp__plugin_kit-x_srv-x__srv_write_d", "mcp__srv-x__delete-e", "mcp__srv-x__" + "a" * 65]
         args = [a for t in bad + ["mcp__srv-x__read_a"] for a in ("--mcp-tool", t)]
-        first, restart = self.new_run("--client", "claude-code", *args)["permission_steps"]
-        self.assertIn('"Edit" "mcp__srv-x__read_a" で起動し直します', restart)
+        created = self.new_run("--client", "claude-code", *args)
+        first, restart = created["permission_steps"]
+        out = Path(created["run_dir"]).parent
+        folder = views._rule_path(out)
+        last = f'"Edit({folder}/**)"' if folder else '"Edit"'
+        self.assertIn(f'{last} "mcp__srv-x__read_a" で起動し直します', restart)
         for step in (first, restart):
-            self.assertEqual(step.count('mcp__'), 1, step)
+            checked = self.bare(step, out)
+            self.assertEqual(checked.count('mcp__'), 1, step)
             for word in ("skip-permissions", "update", "write", "delete", "rm ", "*\"", "srv-x(read_a)"):
-                self.assertNotIn(word, step)
+                self.assertNotIn(word, checked)
         # without a tool that reads, both ways still say to allow the read tools (never at a later confirmation:
         # an agent in the background cannot show one)
         plain_first, plain = self.new_run("--client", "claude-code", "--mcp-tool", "mcp__srv-x__update_c")["permission_steps"]
-        self.assertIn('"Write" "Edit" で起動し直します', plain)
+        self.assertIn(f"{last} で起動し直します", plain)
         self.assertIn("/mcp で見える名前を後ろに 1 つずつ足します", plain)
-        self.assertIn("ファイルの書き込み（Write・Edit）、Coverity から読むツール（接続の確かめ", plain_first)
+        self.assertIn("Write も含みます）、Coverity から読むツール（接続の確かめ" if folder else
+                      "ファイルの書き込み（Write・Edit）、Coverity から読むツール（接続の確かめ", plain_first)
         for step in (plain_first, plain):
             self.assertNotIn("最初の確認", step)
             self.assertNotIn("mcp__srv-x__update_c", step)
