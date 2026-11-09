@@ -138,7 +138,8 @@ def tree(folder):
 
 class ShowTest(unittest.TestCase):
     def test_reads_marks_from_comments(self):
-        code, data = Project(self).show()
+        p = Project(self)
+        code, data = p.show()
         self.assertEqual(code, 0)
         self.assertTrue(data["ok"])
         items = {i["key"]: i for i in data["items"]}
@@ -153,7 +154,7 @@ class ShowTest(unittest.TestCase):
         self.assertEqual(items["password"]["env_key"], "password_env")
         self.assertIsNone(items["host"]["env_key"])
         self.assertEqual(data["missing"], ["host"])
-        self.assertEqual(data["config"], p_config(data))
+        self.assertEqual(data["config"], p.config)
         self.assertNotIn("file", data)
 
     def test_secret_is_masked(self):
@@ -173,6 +174,23 @@ class ShowTest(unittest.TestCase):
         items = {i["key"]: i for i in data["items"]}
         self.assertEqual(items["api_token"]["value"], "***")
         self.assertFalse(items["token_env"]["secret"])
+
+    def test_secret_name_is_matched_by_words(self):
+        names = ["max_tokens", "login_pass", "private_key", "pwd", "api_token", "bypass", "client.secret"]
+        p = Project(self, "[settings]\n" + "".join("%s = x\n" % n for n in names))
+        secret = {i["key"]: i["secret"] for i in p.show()[1]["items"]}
+        self.assertEqual(secret, {"max_tokens": False, "login_pass": True, "private_key": True, "pwd": True,
+                                  "api_token": True, "bypass": False, "client.secret": True})
+
+    def test_half_width_marks_semicolons_and_indented_comments(self):
+        p = Project(self, "[settings]\n; 機器の名前 (必須)\n\u3000# 補足\n; 例: dev1\nhost =\n"
+                          "# 合言葉 (秘密)\nword = abc\n# 動かし方。\n  # 選べる値: on ／ off\nmode = on\n")
+        items = {i["key"]: i for i in p.show()[1]["items"]}
+        self.assertEqual((items["host"]["required"], items["host"]["examples"]), (True, ["dev1"]))
+        self.assertEqual(items["host"]["comment"], "機器の名前 (必須)\n補足")
+        self.assertEqual((items["word"]["secret"], items["word"]["value"]), (True, "***"))
+        self.assertEqual(items["mode"]["choices"], ["on", "off"])
+        self.assertEqual(p.set("mode", "OFF")[1]["value"], "off")
 
     def test_required_secret_with_env_name_is_not_missing(self):
         text = CONFIG.replace("（秘密）", "（必須）（秘密）").replace("password = " + PASSWORD, "password =")
@@ -481,6 +499,32 @@ class InputTest(unittest.TestCase):
         p = Project(self)
         p.set("host", "﻿二階\r\n".encode("utf-8"))
         self.assertEqual(p.values()["host"], "二階")
+
+
+class PowerShellTest(unittest.TestCase):
+    """SKILL.md の PowerShell の例を、そのまま動かす（Windows PowerShell 5.1 は日本語を ? に変えやすい）。"""
+
+    @unittest.skipUnless(POWERSHELL, "PowerShell（powershell か pwsh）がないので飛ばす")
+    def test_skill_md_example_passes_japanese(self):
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as fh:
+            block = re.search(r"```powershell\n(.*?)```", fh.read(), re.S).group(1)
+        p = Project(self)
+
+        def quote(text):
+            return "'" + text.replace("'", "''") + "'"
+        block = (block.replace("py -3 ", "& %s " % quote(sys.executable))
+                 .replace('"<このスキルのフォルダ>/scripts/config_tool.py"', quote(SCRIPT))
+                 .replace("<スキルの名前>", TARGET).replace("<項目>", "host").replace("<値>", "二階の台所")
+                 .replace("--stdin", "--stdin --workdir " + quote(p.dir)))
+        self.assertNotIn("<", block, "SKILL.md の PowerShell の例の書き方が変わった")
+        ps1 = os.path.join(p.dir, "set.ps1")
+        with open(ps1, "w", encoding="utf-8-sig") as fh:  # 5.1 は BOM がないと cp932 で読む
+            fh.write(block)
+        r = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                            "-File", ps1], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        data = json.loads(r.stdout.decode("ascii"))
+        self.assertTrue(data["ok"], data["message"])
+        self.assertEqual(p.values()["host"], "二階の台所")
 
 
 if __name__ == "__main__":

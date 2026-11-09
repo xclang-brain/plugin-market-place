@@ -81,6 +81,8 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 
 - serial-console は、pyserial 3.5（BSD ライセンス）を `scripts/vendor/` に同梱する。
 - skill-config の書き込みは、同梱のスクリプトで、その項目の行だけを書き換える（コメントと並びを残す）。値は標準入力で渡す。
+- skill-config は自分の設定を持たないので、サブコマンドは `show`（読むだけ。何も作らない）と `set` にする。SKILL.md には、質問の進め方の節を足す。
+- debug-dashboard のサブコマンドは `start`・`stop`・`status`。利用者が呼んだときだけ動くよう、SKILL.md に `disable-model-invocation: true` を書く（REQ-401。Claude Code と Copilot CLI の両方が対応している）。skill-creator の検証スクリプト（quick_validate）は、Agent Skills の基本の項目しか認めないので、この1行だけを理由に失敗する。
 
 ## 5. エージェント
 
