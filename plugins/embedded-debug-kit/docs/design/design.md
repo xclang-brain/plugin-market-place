@@ -222,9 +222,10 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 | Web管理画面 | `skills/debug-dashboard/tests/` | 記録と停止、パスワードを伏せること、目印がないときと古いときに何もしないこと、サーバーのアクセス制限（トークン・Host・Origin）、記録の中の HTML が動かないこと |
 | 独立性 | `tests/independence/` | 1段階目のスキルが外を参照しないこと。上の段階が下の段階の中身を書かないこと。作業エージェントがスキルの名前だけを持つこと。両方の CLI のエージェントの本文が同じこと。各ファイルの最後に「してはいけないこと」の節があること |
 | 文書 | `tests/docs/` | 版の一致（両方のマーケットプレイスを含む）と、要求の追跡 |
+| スキルの選ばれ方 | `skills/<名前>/evals/`、`evals/` | skill-creator の形のケースを `claude plugin eval` で動かす。ふつうの頼みから、そのスキルが選ばれるか（スキルのフォルダだけでも動く）。関係のない頼みや Web管理画面を開く頼みで、スキルが選ばれないか |
 | 通しのテスト（E2E） | `tests/e2e/` | 模擬の機器と `claude -p` で、2段階目と3段階目が不具合を直せるか。止める目印でツールが断られるか。AI の利用料がかかるので、CI では動かさない |
 
-プラグインの検証には、`claude plugin validate`、plugin-dev の plugin-validator・skill-reviewer・検証スクリプト、skill-creator の評価を使う。
+プラグインの検証には、`claude plugin validate`、plugin-dev の plugin-validator・skill-reviewer・検証スクリプト、skill-creator の検証スクリプトを使う。
 
 ## 10. 要求の追跡
 
@@ -236,10 +237,10 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 | REQ-006 | 2 | `docs/guide/` | `tests/independence/` |
 | REQ-007 | 3、5 | 定義と使い方の文書 | `tests/independence/`（最後の節）、人が読む |
 | REQ-008 | 1、5 | 名前 | `tests/independence/` |
-| REQ-101〜REQ-110 | 3、4 | `skills/<1段階目>/` | スキルの単体テスト |
-| REQ-111 | 3、4 | `skills/skill-config/` | skill-config の単体テスト、skill-creator の評価 |
-| REQ-201〜REQ-209 | 5 | 作業エージェントの定義 | `tests/e2e/`、`claude plugin eval` |
+| REQ-101〜REQ-110 | 3、4 | `skills/<1段階目>/` | スキルの単体テスト、`claude plugin eval`（ふつうの頼みでスキルが選ばれるか） |
+| REQ-111 | 3、4 | `skills/skill-config/` | skill-config の単体テスト、`claude plugin eval` |
+| REQ-201〜REQ-209 | 5 | 作業エージェントの定義 | `tests/e2e/` |
 | REQ-301〜REQ-308、REQ-310 | 5、5.1 | 統括・検証エージェントの定義 | `tests/e2e/` |
 | REQ-309 | 5.2 | 統括エージェントの定義 | `tests/e2e/` |
 | REQ-311 | 7 | 統括エージェントの定義 | `tests/e2e/` |
-| REQ-401〜REQ-409 | 8 | `skills/debug-dashboard/`、フックの設定 | debug-dashboard の単体テスト、`tests/e2e/` |
+| REQ-401〜REQ-409 | 8 | `skills/debug-dashboard/`、フックの設定 | debug-dashboard の単体テスト、`tests/e2e/`、`claude plugin eval`（AI が画面を勝手に起動しないか） |
