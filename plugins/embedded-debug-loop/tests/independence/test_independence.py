@@ -4,8 +4,7 @@
 そのため、スキルを足す・消す・置き換えても、作業エージェントを置き換えても、このテストは直さずに済む。
 - スキル：skills/ の下の、SKILL.md があるフォルダ（フォルダの名前がスキルの名前）
 - 作業エージェント：defaults.json の worker（「<プラグイン>:<名前>」）。定義は agents/<名前>.agent.md
-- 設定のスキルと作業のスキル：作業エージェントの定義の「使うスキル」の表（役割・スキル・使うとき）。
-  「使うとき」が「設定」の行が設定のスキル、ほかの行が作業のスキル
+- 使うスキル：作業エージェントの定義の「使うスキル」の一覧（`名前` を並べたもの）
 - スキルの中身：スキルのフォルダの scripts/ の下の .py（同梱した他者のコード scripts/vendor/ を除く）と、
   フォルダの直下の、名前に template を含むファイル（設定のひな形。YAML の「項目:」か INI の「項目 =」の行を項目とする）
 
@@ -20,23 +19,23 @@
   - フォルダだけを別の場所にコピーしても、そのスキルのテストが通る。
     コピーしたフォルダ（名前を変えたコピーも）で設定ファイルの用意と設定の確認が動き、データが作業フォルダの
     .<フォルダの名前>/ にだけできることは、コマンドがスキルごとに違うので、各スキルのテスト（tests/）で確かめる。
-- 2段階目：作業エージェントの定義は、スキルの名前と役割を「使うスキル」の表にだけ書く。表のスキルは、
-  skills/ の下のスキルと同じ。表の外には、スキルの名前も、役割の並びも、自分の名前も書かない。
-  スキルの中身（スクリプトの名前、設定の項目、設定ファイルの置き場所、転送やログ取得の方法）を書いていない。
-  セットアップでは、設定のスキルに渡す名前を、読む前にチャットに書く。
-  作業エージェントの README は、スキルの名前を書かず、定義の表を案内する。
+- 2段階目：作業エージェントの定義は、使うスキルの名前を「使うスキル」の一覧にだけ書く。一覧のスキルは、
+  skills/ の下のスキルと同じ。一覧の外には、スキルの名前も自分の名前も書かない。
+  スキルの中身（スクリプトの名前、設定の項目、設定ファイルの置き場所）を書いていない。
+  作業エージェントの使い方の文書（docs/guide/2-<名前>.md）は、スキルの名前を書かず、定義の一覧を案内する。
+  agents/ には、エージェントの定義のほかのファイルを置かない（.md はエージェントとして読み込まれる）。
 - 3段階目：統括エージェント・検証エージェント・エクステンションは、機器・ビルド・転送・ログ取得の
   方法やスキルの名前を書いていない。作業エージェントの名前は、設定のデータ（defaults.json）にだけある。
   定義の例に、具体の値（答えになりうる数字）を書いていない。利用者への質問の例や選択肢にも、
   頼みに書かれていない値を作って入れない。
-- 文書：上の段の文書（プラグインの README、作業エージェントの README の統括・検証の部分、3段階目のガイド）に、
+- 文書：上の段の文書（プラグインの README、3段階目のガイド）に、
   スキルの名前と、転送・ログ取得の具体の言葉がない。部品を変える手順書（docs/replace.md）は、
   直す所が分かるように今の部品の名前を例として書く開発者向けの文書なので、上の段の文書に入れない。
   3段階目のガイドは、作業エージェントが機器のものだと前提にしない。作業エージェントは、
   最初の依頼に名前を書いて選ぶ。部品を変える手順書は開発者向けで、利用者向けのガイドの中にない。
-- 置き換え：スキルは、作業エージェントの定義の「使うスキル」の表の行の名前を替えるだけで置き換えられる
+- 置き換え：スキルは、作業エージェントの定義の「使うスキル」の一覧の名前を替えるだけで置き換えられる
   （作業エージェントごと置き換えても）。統括エージェント・検証エージェント・エクステンションと、作業エージェントの
-  README は、スキルの中身を書いていないので、直さずに済む。
+  使い方の文書は、スキルの中身を書いていないので、直さずに済む。
   作業エージェントを別の名前に替えても 3段階目が動くことは、tests/extension/ で確かめる。
 
   python3 -m unittest discover -s tests/independence -v
@@ -61,7 +60,6 @@ EXT_DIR = ROOT / "com.github.copilot" / "extensions" / "embedded-debug-loop"
 DEFAULTS = EXT_DIR / "defaults.json"
 GUIDE_DIR = ROOT / "docs" / "guide"
 REPLACE_DOC = ROOT / "docs" / "replace.md"  # 部品を変える手順書（開発者向け。今の部品の名前を例に書く）
-WORKER_README = AGENTS_DIR / "README.markdown"
 TEXT_SUFFIXES = {".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".mjs", ".js", ".html", ".css", ".txt", ".sh"}
 PLUGIN_NAME = ROOT.name  # embedded-debug-loop
 # スキルのフォルダに書いてはいけない、プラグインを指す言葉
@@ -106,6 +104,11 @@ def agent_path(key):
 def worker_path():
     """作業エージェントの定義。defaults.json の worker から決める"""
     return agent_path("worker")
+
+
+def worker_guide():
+    """作業エージェントの使い方の文書。defaults.json の worker から決める"""
+    return GUIDE_DIR / f"2-{agent_name('worker')}.md"
 
 
 def stage3_files():
@@ -168,10 +171,11 @@ def internal_patterns(compound_keys_only=False):
 
 
 # ---------------------------------------------------------------------------
-# 作業エージェントの定義の「使うスキル」の表
+# 作業エージェントの定義の「使うスキル」の一覧
 # ---------------------------------------------------------------------------
 
 SKILL_SECTION = re.compile(r"^## 使うスキル\n(.*?)(?=^## |\Z)", re.S | re.M)
+SKILL_NAME = re.compile(r"`([^`]+)`")
 
 
 def section(text, heading):
@@ -180,58 +184,40 @@ def section(text, heading):
     return m.group(1) if m else None
 
 
-def table_rows(text):
-    """Markdown の表の行（見出しと区切りの行は除く）を、セルの並びで返す"""
-    rows = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("|") or re.match(r"^\|[\s:\-|]+\|$", line):
-            continue
-        rows.append([c.strip() for c in line.strip("|").split("|")])
-    return rows[1:] if rows else rows
-
-
 def is_table_line(line):
     return line.lstrip().startswith("|")
 
 
-def skill_table_parts(text):
-    """作業エージェントの定義を、「使うスキル」の節の表の行と、表の外の文に分ける。節がなければ (None, text)"""
+def skill_list_parts(text):
+    """作業エージェントの定義を、「使うスキル」の一覧の行と、それ以外の文に分ける。節がなければ (None, text)"""
     m = SKILL_SECTION.search(text)
     if m is None:
         return None, text
     lines = m.group(1).splitlines(keepends=True)
-    table = "".join(line for line in lines if is_table_line(line))
-    rest = "".join(line for line in lines if not is_table_line(line))
-    return table, text[:m.start(1)] + rest + text[m.end(1):]
+    listed = "".join(line for line in lines if SKILL_NAME.search(line))
+    rest = "".join(line for line in lines if not SKILL_NAME.search(line))
+    return listed, text[:m.start(1)] + rest + text[m.end(1):]
 
 
-def worker_table(text):
-    """「使うスキル」の表の行を、(役割, スキルの名前, 使うとき) の並びで返す。表の形が違えば AssertionError"""
-    table, _ = skill_table_parts(text)
-    if table is None:
+def worker_skills(text):
+    """「使うスキル」の一覧のスキルの名前を、書かれた順で返す。一覧がなければ AssertionError"""
+    listed, _ = skill_list_parts(text)
+    if listed is None:
         raise AssertionError("作業エージェントの定義に「## 使うスキル」の節がありません")
-    rows = []
-    for cells in table_rows(table):
-        if len(cells) != 3:
-            raise AssertionError(f"「使うスキル」の表の行が、3列（役割・スキル・使うとき）ではありません：{cells}")
-        m = re.fullmatch(r"`([^`]+)`", cells[1])
-        if m is None:
-            raise AssertionError(f"「使うスキル」の表のスキルが、skill ツールに渡す名前（`名前`）の形ではありません：{cells[1]}")
-        rows.append((cells[0], m.group(1), cells[2]))
-    if not rows:
-        raise AssertionError("「使うスキル」の表に、行がありません")
-    return rows
+    names = SKILL_NAME.findall(listed)
+    if not names:
+        raise AssertionError("「使うスキル」の節に、スキルの名前（`名前`）がありません")
+    return names
 
 
-def replace_in_table(text, renames):
-    """「使うスキル」の表の行の `名前` だけを替える（表の外は変えない）"""
+def replace_in_list(text, renames):
+    """「使うスキル」の一覧の `名前` だけを替える（一覧の外は変えない）"""
     m = SKILL_SECTION.search(text)
     if m is None:
         raise AssertionError("作業エージェントの定義に「## 使うスキル」の節がありません")
     out = []
     for line in m.group(1).splitlines(keepends=True):
-        if is_table_line(line):
+        if SKILL_NAME.search(line):
             for old, new in renames.items():
                 line = line.replace(f"`{old}`", f"`{new}`")
         out.append(line)
@@ -387,33 +373,27 @@ class SkillIndependence(unittest.TestCase):
 
 
 class WorkerIndependence(unittest.TestCase):
-    """2段階目：作業エージェントは、スキルの名前と役割を「使うスキル」の表でだけ知る"""
+    """2段階目：作業エージェントは、スキルを「使うスキル」の一覧の名前でだけ知る"""
 
     def setUp(self):
         self.path = worker_path()
         self.assertTrue(self.path.is_file(),
                         f"defaults.json の worker の定義（{self.path.relative_to(ROOT)}）がありません")
         self.text = self.path.read_text(encoding="utf-8")
-        self.table, self.outside = skill_table_parts(self.text)
-        self.assertIsNotNone(self.table, "作業エージェントの定義に「## 使うスキル」の節がありません")
-        self.rows = worker_table(self.text)
-        self.label = f"{self.path.relative_to(ROOT)}（「使うスキル」の表の外）"
+        self.listed, self.outside = skill_list_parts(self.text)
+        self.assertIsNotNone(self.listed, "作業エージェントの定義に「## 使うスキル」の節がありません")
+        self.names = worker_skills(self.text)
+        self.label = f"{self.path.relative_to(ROOT)}（「使うスキル」の一覧の外）"
 
-    def test_table_lists_the_skills(self):
-        """表の列は、役割・スキル・使うとき。表のスキルは、skills/ の下のスキルと同じ。どの行にも役割と使うときがある"""
-        header = [c.strip() for c in self.table.splitlines()[0].strip().strip("|").split("|")]
-        self.assertEqual(header, ["役割", "スキル", "使うとき"], "「使うスキル」の表の見出しが違います")
-        names = [skill for _, skill, _ in self.rows]
-        self.assertEqual(len(names), len(set(names)), f"表に、同じスキルが2回あります：{names}")
-        self.assertEqual(sorted(names), skill_names(), "表のスキルが、skills/ の下のスキルと違います")
-        for role, skill, when in self.rows:
-            self.assertTrue(role, f"表の {skill} の役割が空です")
-            self.assertTrue(when, f"表の {skill} の「使うとき」が空です")
+    def test_list_names_the_skills(self):
+        """一覧のスキルは、skills/ の下のスキルと同じ"""
+        self.assertEqual(len(self.names), len(set(self.names)), f"一覧に、同じスキルが2回あります：{self.names}")
+        self.assertEqual(sorted(self.names), skill_names(), "一覧のスキルが、skills/ の下のスキルと違います")
 
-    def test_skill_names_only_in_table(self):
-        names = sorted(set(skill_names()) | {skill for _, skill, _ in self.rows})
+    def test_skill_names_only_in_list(self):
+        names = sorted(set(skill_names()) | set(self.names))
         problems = hits_in_text(self.label, self.outside, [(name, token(name)) for name in names])
-        self.assertEqual(problems, [], "表の外に、スキルの名前があります：\n" + "\n".join(problems))
+        self.assertEqual(problems, [], "一覧の外に、スキルの名前があります：\n" + "\n".join(problems))
 
     def test_does_not_name_itself(self):
         """自分の名前を書かない。作業エージェントを置き換えても、中を直さずに済む"""
@@ -422,9 +402,8 @@ class WorkerIndependence(unittest.TestCase):
         self.assertEqual(problems, [], "作業エージェントの定義に、自分の名前があります：\n" + "\n".join(problems))
 
     def test_no_skill_internals(self):
-        # 表のスキルの名前の欄は除く（スキルの名前は、そこにだけ書く）
-        text = self.outside + "\n" + "\n".join(f"{role} {when}" for role, _, when in self.rows)
-        found = [label for label, pattern in internal_patterns() if pattern.search(text)]
+        # 一覧のスキルの名前は除く（スキルの名前は、そこにだけ書く）
+        found = [label for label, pattern in internal_patterns() if pattern.search(self.outside)]
         self.assertEqual(found, [], f"作業エージェントが、スキルの中身を書いています：{found}")
 
     def test_no_upper_layer(self):
@@ -476,13 +455,12 @@ class OrchestrationIndependence(unittest.TestCase):
         self.assertIn("返事の1行目に「準備：できている」か「準備：できていない」と書いてください", orchestrator)
         self.assertIn("手順ごとの結果", orchestrator)
         worker = worker_path().read_text(encoding="utf-8")
-        self.assertIn("頼みの文が求める形で返します", worker)
         for phrase in ["これは準備の確認です", "あなたは作業役です", "準備：できている", "準備：できていない"]:
             self.assertNotIn(phrase, worker, f"作業エージェントの定義に、統括エージェントとの決まり「{phrase}」があります")
 
 
 class DocumentIndependence(unittest.TestCase):
-    """文書：各部品の使い方は、その部品の README にだけ書く。上の段の文書に、下の段の中身を書かない"""
+    """文書：各部品の使い方は、その部品の使い方の文書にだけ書く。上の段の文書に、下の段の中身を書かない"""
 
     def upper_documents(self):
         """（表示の名前, 本文）。上の段の文書（部品を変える手順書は、今の部品の名前を例に書くので入れない）"""
@@ -511,7 +489,7 @@ class DocumentIndependence(unittest.TestCase):
         default = agent_name("worker")
         self.assertLessEqual(len(token(default).findall(text)), 1, f"3段階目のガイドに、{default} が2回以上あります")
         self.assertNotIn("機器", text, "3段階目のガイドが、機器を前提にしています")
-        self.assertNotIn(WORKER_README.name, text, "3段階目のガイドが、特定の作業エージェントの README を案内しています")
+        self.assertNotIn(worker_guide().name, text, "3段階目のガイドが、特定の作業エージェントの使い方の文書を案内しています")
 
     def test_guide_chooses_worker_in_first_request(self):
         """作業エージェントは、最初の依頼に名前を書いて選ぶ（画面で選ぶ前に、既定の作業エージェントが動かないように）"""
@@ -523,44 +501,45 @@ class DocumentIndependence(unittest.TestCase):
         self.assertIsNotNone(screen, "3段階目のガイドに、Web管理画面で替えられることが書かれていません")
         self.assertLess(request.start(), screen.start(), "3段階目のガイドで、Web管理画面で選ぶ方法が、依頼の書き方より先にあります")
 
-    def test_worker_readme_names_no_skill(self):
-        """作業エージェントの README は、スキルの名前も中身も書かない（スキルを足す・消す・替えても、README は直さずに済む）"""
-        self.assertTrue(WORKER_README.is_file(), "作業エージェントの README（agents/README.markdown）がありません")
-        text = WORKER_README.read_text(encoding="utf-8")
-        label = WORKER_README.relative_to(ROOT)
+    def test_worker_guide_names_no_skill(self):
+        """作業エージェントの使い方の文書は、スキルの名前も中身も書かない（スキルを足す・消す・替えても、直さずに済む）"""
+        guide = worker_guide()
+        self.assertTrue(guide.is_file(), f"作業エージェントの使い方の文書（{guide.relative_to(ROOT)}）がありません")
+        text = guide.read_text(encoding="utf-8")
+        label = guide.relative_to(ROOT)
         problems = hits_in_text(label, text, [(name, name_token(name)) for name in skill_names()])
         problems += hits_in_text(label, text, [(k, token(k)) for k in all_template_keys()])
-        self.assertEqual(problems, [], "作業エージェントの README に、スキルの名前や中身があります：\n" + "\n".join(problems))
+        self.assertEqual(problems, [], "作業エージェントの使い方の文書に、スキルの名前や中身があります：\n" + "\n".join(problems))
 
-    def test_worker_readme_points_to_the_definition_table(self):
-        """作業エージェントの README の「使うスキル」は、表を持たず、作業エージェントの定義の表を案内する"""
-        text = WORKER_README.read_text(encoding="utf-8")
+    def test_worker_guide_points_to_the_definition_list(self):
+        """作業エージェントの使い方の文書の「使うスキル」は、一覧を持たず、作業エージェントの定義の一覧を案内する"""
+        text = worker_guide().read_text(encoding="utf-8")
         part = section(text, "使うスキル")
-        self.assertIsNotNone(part, "作業エージェントの README に「## 使うスキル」の節がありません")
+        self.assertIsNotNone(part, "作業エージェントの使い方の文書に「## 使うスキル」の節がありません")
         self.assertFalse([line for line in part.splitlines() if is_table_line(line)],
-                         "作業エージェントの README の「使うスキル」に、表があります（表は、作業エージェントの定義にだけ置く）")
+                         "作業エージェントの使い方の文書の「使うスキル」に、表があります（一覧は、作業エージェントの定義にだけ置く）")
         definition = worker_path().name
         links = [t.partition("#") for t in re.findall(r"\]\(([^)\s]+)\)", part)]
         self.assertTrue(any(Path(file_part).name == definition and anchor == "使うスキル" for file_part, _, anchor in links),
-                        f"作業エージェントの README の「使うスキル」が、{definition}#使うスキル を案内していません：{links}")
+                        f"作業エージェントの使い方の文書の「使うスキル」が、{definition}#使うスキル を案内していません：{links}")
 
-    def test_agents_folder_has_only_agent_definitions_as_md(self):
-        """agents/ の .md は、Copilot CLI がエージェントの定義として読み込む。README は .markdown にする"""
+    def test_agents_folder_holds_only_agent_definitions(self):
+        """agents/ の .md は、Copilot CLI がエージェントの定義として読み込む。定義のほかのファイルを置かない"""
         for path in AGENTS_DIR.iterdir():
-            if path.suffix == ".md":
-                self.assertTrue(path.name.endswith(".agent.md"), f"{path.name} はエージェントとして読み込まれます")
+            self.assertTrue(path.name.endswith(".agent.md"), f"agents/ に、エージェントの定義でない {path.name} があります")
 
     def test_old_guides_are_gone(self):
         # 1・2段階目の使い方は、各部品の README にある。ガイドに置かない
-        old = sorted(p.name for p in GUIDE_DIR.iterdir() if re.match(r"[12]-", p.name))
-        self.assertEqual(old, [], "docs/guide/ に、1・2段階目のガイドがあります（中身は各部品の README に書く）")
+        # 1段階目の使い方は、各スキルの README にある。2段階目のガイドは、既定の作業エージェントのものだけ
+        guides = sorted(p.name for p in GUIDE_DIR.iterdir() if re.match(r"[12]-", p.name))
+        self.assertEqual(guides, [worker_guide().name], "docs/guide/ の 1・2段階目のガイドが、既定の作業エージェントのものだけではありません")
         # 部品の置き換えはプラグインの設計変更。利用者向けのガイドに置かない
         self.assertFalse((GUIDE_DIR / REPLACE_DOC.name).exists(), "部品を変える手順書が、利用者向けのガイドの中にあります")
         self.assertTrue(REPLACE_DOC.is_file(), "部品を変える手順書（docs/replace.md）がありません")
 
     def test_links_resolve(self):
         """プラグインの文書の相対リンクが、あるファイルと見出しを指す"""
-        docs = [ROOT / "README.md", WORKER_README] + sorted((ROOT / "docs").rglob("*.md"))
+        docs = [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md"))
         docs += sorted(SKILLS_DIR.glob("*/README.md"))
         problems = []
         for doc in docs:
@@ -589,45 +568,39 @@ def heading_slugs(path):
 
 
 class SkillReplacement(unittest.TestCase):
-    """置き換え：スキルは「使うスキル」の表の行の名前を替えるだけで置き換えられる（作業エージェントごと置き換えても）。
+    """置き換え：スキルは「使うスキル」の一覧の名前を替えるだけで置き換えられる（作業エージェントごと置き換えても）。
     ほかの部品は、スキルの中身を書いていないので、直さずに済む"""
 
     def setUp(self):
         self.definition = worker_path().read_text(encoding="utf-8")
-        self.rows = worker_table(self.definition)
+        self.names = worker_skills(self.definition)
 
-    def test_skill_is_replaced_by_its_table_row(self):
-        """スキルを1つ、別の名前のスキルに替える。作業エージェントの定義で直すのは、表のその行の名前だけ"""
-        old = self.rows[0][1]
+    def test_skill_is_replaced_by_its_name_in_the_list(self):
+        """スキルを1つ、別の名前のスキルに替える。作業エージェントの定義で直すのは、一覧のその名前だけ"""
+        old = self.names[0]
         new = f"{old}-alt"
-        replaced = replace_in_table(self.definition, {old: new})
-        rows = worker_table(replaced)
-        self.assertEqual([(role, when) for role, _, when in rows], [(role, when) for role, _, when in self.rows],
-                         "役割と使うときは変わりません")
-        self.assertEqual([skill for _, skill, _ in rows], [new if skill == old else skill for _, skill, _ in self.rows])
-        self.assertIsNone(token(old).search(replaced), f"表の行を替えても、定義に {old} が残ります（表の外にも書いてあります）")
+        replaced = replace_in_list(self.definition, {old: new})
+        self.assertEqual(worker_skills(replaced), [new if name == old else name for name in self.names])
+        self.assertIsNone(token(old).search(replaced), f"一覧の名前を替えても、定義に {old} が残ります（一覧の外にも書いてあります）")
 
     def test_replaced_worker_and_skills_need_no_upper_change(self):
-        """作業エージェントごと、名前の違うスキルの組に置き換える。作業エージェントの定義で直すのは、表の行の名前だけ。
+        """作業エージェントごと、名前の違うスキルの組に置き換える。作業エージェントの定義で直すのは、一覧の名前だけ。
         統括エージェント・検証エージェント・エクステンションは、どの名前も書いていないので、直さずに済む"""
         old_worker = agent_name("worker")
         new_worker = f"{old_worker}-alt"
-        renames = {skill: f"{skill}-alt" for _, skill, _ in self.rows}
-        new_definition = replace_in_table(self.definition, renames)
-        new_rows = worker_table(new_definition)
-        self.assertEqual([(role, when) for role, _, when in new_rows], [(role, when) for role, _, when in self.rows],
-                         "役割と使うときは変わりません")
+        renames = {name: f"{name}-alt" for name in self.names}
+        new_definition = replace_in_list(self.definition, renames)
         for word in list(renames) + [old_worker]:
-            self.assertIsNone(token(word).search(new_definition), f"表の行の名前を替えても、定義に {word} が残ります")
+            self.assertIsNone(token(word).search(new_definition), f"一覧の名前を替えても、定義に {word} が残ります")
         for path in stage3_files():
             text = path.read_text(encoding="utf-8")
             for word in [old_worker, new_worker] + list(renames) + list(renames.values()):
                 self.assertIsNone(token(word).search(text), f"{path.relative_to(ROOT)} に {word} があります")
 
     def test_other_parts_know_no_skill_internals(self):
-        """作業エージェントの README と 3段階目の部品は、スキルの中身（スクリプト・設定のひな形のファイルと項目の名前、
+        """作業エージェントの使い方の文書と 3段階目の部品は、スキルの中身（スクリプト・設定のひな形のファイルと項目の名前、
         データの置き場所）を書いていない。スキルを、別の中身・別の設定の形のスキルに置き換えても、直さずに済む"""
-        problems = hits(WORKER_README, internal_patterns())
+        problems = hits(worker_guide(), internal_patterns())
         # 3段階目は、ツールの引数（prompt など）と重なる短い項目の名前を除き、_ を含む項目の名前だけを見る
         compound = internal_patterns(compound_keys_only=True)
         for path in stage3_files():
