@@ -93,16 +93,28 @@ export function createStore({ dataRoot, clock }) {
       writeAtomic(alivePath(runId), String(clock.now()));
     },
 
+    // Only a missing file gives null at once. A refused read (Windows: a scanner or a rename holds the
+    // file for a moment) is tried once more, then the file's mtime stands in (each rename refreshes it).
     readAlive(runId) {
+      let failed = false;
       for (let i = 0; ; i += 1) {
         let n = null;
         try {
           n = parseAlive(readFileSync(alivePath(runId), 'utf8'));
-        } catch {
-          return null;
+        } catch (e) {
+          if (e.code === 'ENOENT') return null;
+          failed = true;
         }
-        if (n !== null || i >= 1) return n;
+        if (n !== null) return n;
+        if (i >= 1) break;
         sleepSync(20); // a writer may be in the middle of rewriting it: read once more
+      }
+      if (!failed) return null;
+      try {
+        const { mtimeMs } = statSync(alivePath(runId));
+        return Number.isFinite(mtimeMs) && mtimeMs > 0 ? mtimeMs : null;
+      } catch {
+        return null;
       }
     },
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -260,6 +262,116 @@ if not MISSING:
             again = self.update(token, entries=ENTRIES)
             self.assertEqual((again["done"], again["written"]), (True, ["10001", "G1"]))
             self.assertNotIn("busy_note", again)
+
+        def hold_lock(self, path: Path) -> Path:
+            """The lock of the record, held by another call of this process (never taken as left behind)."""
+            lock = path.with_name(path.name + ".lock")
+            lock.write_text(f"{os.getpid()} now", encoding="ascii")
+            self.tools._held_files.add(str(lock))
+            return lock
+
+        def free_lock(self, lock: Path) -> None:
+            self.tools._held_files.discard(str(lock))
+            lock.unlink()
+
+        @contextlib.contextmanager
+        def short_budget(self, seconds: float):
+            """A call budget of ``seconds``; the fake Coverity answers at once (no first request of 5 s)."""
+            from coverity_mcp import connect
+
+            real = self.tools.Deadline
+            with mock.patch.object(self.tools, "Deadline", lambda: real(seconds)), \
+                    mock.patch.object(connect.ConnectClient, "FIRST_REQUEST_SECONDS", 0.0):
+                yield
+
+        def test_busy_record_after_a_write_is_no_error_and_never_sends_it_twice(self) -> None:
+            token = entries_token(ENTRIES)
+            path, _ = self.tools.entries_result_path(self.tools.config_of(str(self.repo)))
+            self.addCleanup(self.tools._unsaved.clear)
+            held: list[Path] = []
+
+            def another_session_takes_the_record():
+                held.append(self.hold_lock(path))  # while 10001 is being sent
+                return cov.httpx.Response(200)
+
+            self.cov.triage_responses[10001] = another_session_takes_the_record
+            started = time.monotonic()
+            with self.short_budget(1.0), mock.patch.object(self.tools, "SAVE_GRACE", 0.5):
+                out = self.update(token, entries=ENTRIES)  # not an error: 10001 is in Coverity now
+            self.assertLess(time.monotonic() - started, 4.0)  # not LOCK_WAIT (10 s) twice
+            self.assertEqual((out["done"], out["written"], out["remaining"]), (False, ["10001"], ["G1"]))
+            self.assertIn("10001 は Coverity に書きましたが", out["busy_note"])
+            self.assertEqual(out["next"], self.tools.CALL_AGAIN)
+            self.assertEqual(self.puts(), 1)
+            del self.cov.triage_responses[10001]
+
+            with mock.patch.object(self.tools, "LOCK_WAIT", 0.2):  # still busy: nothing sent, still named
+                still = self.update(token, entries=ENTRIES)
+            self.assertEqual((still["done"], still["written"]), (False, []))
+            self.assertIn("10001 は Coverity に書きましたが", still["busy_note"])
+            self.assertEqual(self.puts(), 1)
+
+            self.free_lock(held[0])
+            again = self.update(token, entries=ENTRIES)
+            self.assertEqual((again["done"], again["written"], again["written_total"]), (True, ["G1"], 2))
+            self.assertNotIn("busy_note", again)
+            self.assertEqual(self.puts(), 2)  # only G1: 10001 is not sent again
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(sorted(v["id"] for v in saved["written"].values()), ["10001", "G1"])
+            self.assertEqual(self.tools._unsaved, {})
+
+        def test_save_made_good_at_the_end_leaves_no_busy_note(self) -> None:
+            import threading
+
+            one = ENTRIES[:1]
+            token = entries_token(one)
+            self.tools._unsaved.clear()
+            path, _ = self.tools.entries_result_path(self.tools.config_of(str(self.repo)))
+            self.addCleanup(self.tools._unsaved.clear)
+
+            def another_session_holds_the_record_briefly():
+                lock = self.hold_lock(path)  # while 10001 is being sent
+                timer = threading.Timer(1.2, self.free_lock, args=(lock,))  # freed before the last save gives up
+                timer.start()
+                self.addCleanup(timer.cancel)
+                return cov.httpx.Response(200)
+
+            self.cov.triage_responses[10001] = another_session_holds_the_record_briefly
+            with self.short_budget(1.0), mock.patch.object(self.tools, "SAVE_GRACE", 3.0):
+                out = self.update(token, entries=one)
+            self.assertEqual((out["done"], out["written"], out["remaining"], out["next"]), (True, ["10001"], [], None))
+            self.assertNotIn("busy_note", out)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual([v["id"] for v in saved["written"].values()], ["10001"])
+            self.assertEqual(self.tools._unsaved, {})
+
+        def test_lock_waits_end_within_the_budget(self) -> None:
+            token = entries_token(ENTRIES)
+            path, _ = self.tools.entries_result_path(self.tools.config_of(str(self.repo)))
+            lock = self.hold_lock(path)
+            started = time.monotonic()
+            with self.short_budget(1.0):  # LOCK_WAIT stays 10 s
+                out = self.update(token, entries=ENTRIES)
+            self.assertLess(time.monotonic() - started, 4.0)
+            self.assertEqual((out["done"], out["remaining"]), (False, ["10001", "G1"]))
+            self.assertIn("busy_note", out)
+            self.assertEqual(self.puts(), 0)
+            self.free_lock(lock)
+
+        def test_no_send_when_the_time_ran_out_while_waiting_for_the_record(self) -> None:
+            real = self.tools.Deadline
+
+            class TimeRunsOut(real):  # time is left before the wait for the lock, none after it
+                calls = 0
+
+                def allows(self, client, requests=1):
+                    TimeRunsOut.calls += 1
+                    return TimeRunsOut.calls == 1
+
+            with mock.patch.object(self.tools, "Deadline", TimeRunsOut):
+                out = self.update(entries_token(ENTRIES), entries=ENTRIES)
+            self.assertEqual((out["done"], out["written"], out["remaining"]), (False, [], ["10001", "G1"]))
+            self.assertEqual(self.puts(), 0)
 
         @unittest.skipUnless(hasattr(os, "getuid"), "the owner of a folder is checked on Linux and macOS")
         def test_refuses_a_record_folder_of_another_user(self) -> None:

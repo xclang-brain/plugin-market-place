@@ -300,11 +300,16 @@ async def coverity_update_triage(
         同じ確認の文字列では送り直さない（値を直して preview からやり直す）。
       - 認証の失敗（401・403）、5xx、接続の失敗では、呼び出し全体を止める。止まった項目は記録しないので、
         直ってから同じ引数で呼ぶと書き込む。
+      - 記録は、ほかのセッションと分けて使う。保存の間だけ、記録の横に <記録のファイル名>.lock を置く
+        （1 秒もかからない）。ほかのセッションが記録を使っていて空かなければ、そこで送るのをやめて done: false を返す。
+        Coverity に書いたあとに記録できなかった項目は、このセッションが覚えていて、もう一度呼ぶと送り直さずに記録する。
 
     返す値:
       {"done": true/false, "written": [この呼び出しで書いた id], "written_total": 書き込み済みの数, "entries": 項目の数,
-       "failed": [{"id", "cids", "error"}], "remaining": [時間が足りず残した id], "result_file": "記録のパス", "next": …}
-      done が false なら、同じ引数でもう一度呼ぶ。
+       "failed": [{"id", "cids", "error"}], "remaining": [送らずに残した id], "result_file": "記録のパス", "next": …,
+       "busy_note": 記録を保存できなかったときだけ。理由と、書いたがまだ記録していない id}
+      remaining は、時間が足りなかった項目と、記録が空かなかった項目。done が false なら、同じ引数でもう一度呼ぶ。
+      .lock のファイルは、書き戻し中のセッションがなければ消してよい（60 秒より古いものは次の呼び出しが片づける）。
     """
     return await _run("coverity_update_triage", tools.update_triage, confirmation_token=confirmation_token,
                       repo_root=repo_root, plan_file=plan_file, entries=entries)

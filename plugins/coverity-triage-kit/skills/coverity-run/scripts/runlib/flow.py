@@ -583,10 +583,22 @@ def _back_or_fail(run: Run, item_id: str, stage: str, why: str, say: list[str]) 
     say.append(f"{item_id}: {why}。もう一度始めます。")
 
 
+def _started_for(run: Run, name: str, item_id: str) -> bool:
+    """The job ``name`` runs for this item (an error came after it was started: the item stays with it)."""
+    try:
+        job = jobs.read(run.dir, name)
+    except Exception:  # noqa: BLE001 - not known: treat it as not started
+        return False
+    return bool(job) and job.get("status") == "running" and item_id in _job_items(job)
+
+
 def _copy_reaped(run: Run, job: dict[str, Any], say: list[str]) -> None:
-    item_id = (job.get("args") or {}).get("item")
+    args = job.get("args") or {}
+    item_id = args.get("item")
     item = run.find(item_id)
     if item is None or item["status"] != "in_progress" or item.get("stage") != "copy":
+        return
+    if args.get("slot") != item.get("slot"):  # a copy for an earlier slot of this item: its copy is not this one
         return
     if job.get("status") == "done":
         with run.update() as st:
@@ -755,6 +767,8 @@ def _fill_slots(run: Run, say: list[str]) -> list[dict[str, Any]]:
         try:
             jobs.start(run.dir, f"copy-w{slot}", "copy", {"item": item_id, "slot": slot, "reset_analyzed": reset_analyzed})
         except BaseException:
+            if _started_for(run, f"copy-w{slot}", item_id):
+                raise
             with run.update() as s:  # the job did not start: the item is pending again
                 item = run.item(item_id, s)
                 if item["status"] == "in_progress" and item.get("stage") == "copy":
@@ -834,7 +848,8 @@ def _worker_ended(run: Run, item_id: str, failed: bool, reason: str, say: list[s
     try:
         jobs.start(run.dir, f"save-{item_id}", "save", {"item": item_id, "slot": item["slot"]})
     except BaseException as exc:
-        _back_or_fail(run, item_id, "save", f"修正を保存する処理を始められませんでした（{exc}）", say)
+        if not _started_for(run, f"save-{item_id}", item_id):
+            _back_or_fail(run, item_id, "save", f"修正を保存する処理を始められませんでした（{exc}）", say)
         raise
 
 
@@ -1020,9 +1035,12 @@ def _integrator_ended(run: Run, failed: bool, reason: str, say: list[str], actio
         try:
             jobs.start(run.dir, "merge", "merge", {"merges": to_build})
         except BaseException:
+            started = {e["item"] for e in to_build if _started_for(run, "merge", e["item"])}
             with run.update() as st:  # the job did not start: a worker makes these fixes
                 for entry in to_build:
                     current = run.item(entry["item"], st)
+                    if entry["item"] in started:
+                        continue
                     if current["status"] == "in_progress" and current.get("stage") == "merge":
                         current.update(status="pending", stage=None, slot=None)
             raise

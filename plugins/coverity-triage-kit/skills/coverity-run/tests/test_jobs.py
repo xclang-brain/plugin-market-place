@@ -219,11 +219,81 @@ class JobRecordTest(unittest.TestCase):
 
     def test_stopped_job_whose_process_lives_counts_as_running(self) -> None:
         proc = self.live()
-        self.record("copy-w1", pid=proc.pid, status="stopped")
+        self.record("copy-w1", pid=proc.pid, status="stopped", stopping=True)
         self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "running")
         self.assertEqual([j["name"] for j in self.jobs.running(self.dir)], ["copy-w1"])
-        self.record("copy-w1", pid=proc.pid, status="stopped", gone=True)
+        self.record("copy-w1", pid=proc.pid, status="stopped", stopping=True, gone=True)
         self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "stopped")
+
+    def test_stopped_record_without_stopping_is_final(self) -> None:
+        from unittest import mock
+
+        # written by an earlier version (no "stopping"): its pid may belong to another process now
+        proc = self.live()
+        self.record("copy-w1", pid=proc.pid, status="stopped")
+        self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "stopped")
+        self.assertEqual(self.jobs.running(self.dir), [])
+        with mock.patch.object(self.jobs, "kill_tree", return_value=True) as kill:
+            self.assertEqual(self.jobs.stop_all(self.dir), ([], []))
+        kill.assert_not_called()
+        self.assertIsNone(proc.poll())
+
+    def test_a_job_being_stopped_is_written_gone_once_its_process_ended(self) -> None:
+        from unittest import mock
+
+        # stop was ended between "stopping" and "gone": the process ends later
+        proc = self.live()
+        self.record("copy-w1", pid=proc.pid, status="stopped", stopping=True)
+        self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "running")
+        proc.kill()
+        proc.wait()
+        job = self.jobs.read(self.dir, "copy-w1")
+        self.assertEqual(job["status"], "stopped")
+        self.jobs.settle(self.dir, job)
+        self.assertTrue(self.on_disk("copy-w1")["gone"])
+        with mock.patch.object(self.jobs, "pid_alive", return_value=True):  # the number is given to another process
+            self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "stopped")
+        # stop also writes it down for such a job
+        self.record("copy-w2", pid=self.dead_pid(), status="stopped", stopping=True)
+        self.jobs.stop_all(self.dir)
+        self.assertTrue(self.on_disk("copy-w2")["gone"])
+        # settle leaves a job whose process still lives as it is
+        live = self.live()
+        self.record("copy-w3", pid=live.pid, status="stopped", stopping=True)
+        self.jobs.settle(self.dir, {**self.on_disk("copy-w3")})
+        self.assertNotIn("gone", self.on_disk("copy-w3"))
+
+    def test_stop_writes_stopping_before_the_kill(self) -> None:
+        from unittest import mock
+
+        proc = self.live()
+        self.record("copy-w1", pid=proc.pid)
+        seen = []
+
+        def kill(pid):
+            seen.append(self.on_disk("copy-w1"))
+            return True
+        with mock.patch.object(self.jobs, "kill_tree", kill):
+            self.assertEqual(self.jobs.stop_all(self.dir), (["copy-w1"], []))
+        self.assertEqual((seen[0]["status"], seen[0].get("stopping"), seen[0].get("gone")), ("stopped", True, None))
+        self.assertTrue(self.on_disk("copy-w1")["gone"])
+
+    def test_a_job_whose_stop_failed_sees_that_it_is_stopped(self) -> None:
+        proc = self.live()
+        self.record("copy-w1", pid=proc.pid, status="stopped", stopping=True)
+        self.assertTrue(self.jobs.Handle(self.dir, "copy-w1").stopped())
+        self.record("copy-w2", pid=proc.pid)
+        self.assertFalse(self.jobs.Handle(self.dir, "copy-w2").stopped())
+
+    def test_start_does_not_fail_once_the_job_was_started(self) -> None:
+        from unittest import mock
+
+        def busy(path, *args, **kwargs):
+            raise PermissionError(32, "The process cannot access the file", str(path))
+        with mock.patch.object(self.jobs, "spawn_detached", return_value=4242), \
+                mock.patch.object(self.jobs, "file_lock", busy):
+            job = self.jobs.start(self.dir, "copy-w1", "copy", {"item": "20001", "slot": 1})
+        self.assertEqual((job["status"], job["pid"], job["args"]["item"]), ("running", 4242, "20001"))
 
     def test_a_failed_kill_leaves_the_job_busy(self) -> None:
         from unittest import mock

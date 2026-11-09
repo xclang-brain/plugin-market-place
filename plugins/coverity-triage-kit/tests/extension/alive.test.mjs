@@ -2,6 +2,7 @@
 // before the log header, and an empty or broken mark never counts as "very old".
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -67,6 +68,52 @@ test('a run just created by another session (empty alive mark) is checked later,
   store.createRun('r1', { t: 'begin', at: clock.now() - 500, sessionId: 'other' });
   fs.writeFileSync(path.join(dataRoot, 'r1', 'alive'), ''); // as a reader could see a non-atomic rewrite
   const begin = store.readLog('r1').find((e) => e.t === 'begin');
+  const action = classifyUnfinishedRun({ begin, aliveAt: store.readAlive('r1'), now: clock.now(), sessionId: 'me' });
+  assert.equal(action, 'check_later');
+});
+
+// Makes the next `count` reads of an alive mark fail with `code`; the store imports readFileSync by
+// name, so the stub is pushed into the ESM bindings too.
+function failAliveReads(t, count, code) {
+  const real = fs.readFileSync;
+  let left = count;
+  fs.readFileSync = function stub(file, ...rest) {
+    if (left > 0 && String(file).endsWith(`${path.sep}alive`)) {
+      left -= 1;
+      throw Object.assign(new Error(`${code}: operation not permitted`), { code });
+    }
+    return real.call(this, file, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => {
+    fs.readFileSync = real;
+    syncBuiltinESMExports();
+  });
+  return () => count - left;
+}
+
+test('readAlive: a single refused read (EPERM) is tried again and gives the mark', (t) => {
+  const { store, clock } = storeIn(t);
+  store.createRun('r1', { t: 'begin', at: clock.now(), sessionId: 's' });
+  const used = failAliveReads(t, 1, 'EPERM');
+  assert.equal(store.readAlive('r1'), clock.now());
+  assert.equal(used(), 1);
+});
+
+test('readAlive: reads refused twice fall back to the file mtime, not null', (t) => {
+  const { dataRoot, store, clock } = storeIn(t);
+  store.createRun('r1', { t: 'begin', at: clock.now(), sessionId: 's' });
+  const { mtimeMs } = fs.statSync(path.join(dataRoot, 'r1', 'alive'));
+  failAliveReads(t, 2, 'EBUSY');
+  assert.equal(store.readAlive('r1'), mtimeMs);
+});
+
+test('a live run of another session whose mark read is refused once is checked later, not cut off', (t) => {
+  const { store, clock } = storeIn(t);
+  // begun long ago, mark fresh: the begin time alone would cut it off
+  store.createRun('r1', { t: 'begin', at: clock.now() - LIMITS.ALIVE_STALE_MS * 10, sessionId: 'other' });
+  const begin = store.readLog('r1').find((e) => e.t === 'begin');
+  failAliveReads(t, 1, 'EPERM');
   const action = classifyUnfinishedRun({ begin, aliveAt: store.readAlive('r1'), now: clock.now(), sessionId: 'me' });
   assert.equal(action, 'check_later');
 });

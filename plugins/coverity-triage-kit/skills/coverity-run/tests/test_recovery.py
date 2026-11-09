@@ -111,6 +111,76 @@ class RecoveryTest(RunCase):
         self.assertTrue(self.drive(run_dir, ISSUES)["done"])
         self.assertEqual(self.item(run_dir)["status"], "done")
 
+    def test_copy_job_whose_process_could_not_start_leaves_the_item_pending(self) -> None:
+        run_dir = self.offline_run()
+        refused = OSError(5, "Access is denied")
+        with mock.patch.object(self.jobs, "spawn_detached", side_effect=refused):
+            with self.assertRaises(OSError):
+                self.in_process(self.flow.tick, run_dir, wait=1)
+        item = self.item(run_dir)
+        self.assertEqual((item["status"], item["slot"], item["stage"], item["attempts"]), ("pending", None, None, 0))
+        self.assertNotIn("copy_failed", self.state(run_dir))
+        self.assertEqual(self.first_launch(run_dir)["task"], "worker:20001@1")
+
+    def test_save_job_whose_process_could_not_start_goes_back_to_pending(self) -> None:
+        run_dir = self.offline_run()
+        launch = self.first_launch(run_dir)
+        self.work_as_worker(launch)
+        refused = OSError(5, "Access is denied")
+        with mock.patch.object(self.jobs, "spawn_detached", side_effect=refused):
+            with self.assertRaises(OSError):
+                self.in_process(self.flow.tick, run_dir, finished=launch["task"], wait=1)
+        self.assertEqual((self.item(run_dir)["status"], self.item(run_dir)["stage"]), ("pending", None))
+        self.assertTrue(self.drive(run_dir, ISSUES)["done"])
+        self.assertEqual(self.item(run_dir)["status"], "done")
+
+    def started_then_failed(self):
+        """jobs.start that starts the job and then raises (a record another process held, on Windows)."""
+        real = self.jobs.start
+
+        def start(*args, **kwargs):
+            real(*args, **kwargs)
+            raise PermissionError(32, "The process cannot access the file", "copy-w1.json")
+        return start
+
+    def test_copy_job_that_started_before_an_error_keeps_its_item(self) -> None:
+        run_dir = self.offline_run()
+        with mock.patch.object(self.jobs, "start", self.started_then_failed()):
+            with self.assertRaises(PermissionError):
+                self.in_process(self.flow.tick, run_dir, wait=1)
+        item = self.item(run_dir)
+        self.assertEqual((item["status"], item["slot"], item["stage"], item["attempts"]), ("in_progress", 1, "copy", 1))
+        out = self.tick_until(run_dir)
+        self.assertEqual([a["task"] for a in out["actions"]], ["worker:20001@1"], out)
+        self.assertTrue(self.drive(run_dir, ISSUES, out=out)["done"])
+        self.assertEqual(self.item(run_dir)["status"], "done")
+
+    def test_save_job_that_started_before_an_error_keeps_its_item(self) -> None:
+        run_dir = self.offline_run()
+        launch = self.first_launch(run_dir)
+        self.work_as_worker(launch)
+        with mock.patch.object(self.jobs, "start", self.started_then_failed()):
+            with self.assertRaises(PermissionError):
+                self.in_process(self.flow.tick, run_dir, finished=launch["task"], wait=1)
+        self.assertEqual((self.item(run_dir)["status"], self.item(run_dir)["stage"]), ("in_progress", "save"))
+        self.assertTrue(self.drive(run_dir, ISSUES)["done"])
+        self.assertEqual(self.item(run_dir)["status"], "done")
+        self.assertNotIn("orphan_retries", self.item(run_dir))
+
+    def test_copy_end_for_another_slot_does_not_move_the_item(self) -> None:
+        from runlib.state import Run
+
+        run_dir = self.offline_run()
+        self.first_launch(run_dir)
+        self.edit_state(run_dir, lambda s: s["items"][0].update(stage="copy", slot=1))
+        old = {"name": "copy-w2", "kind": "copy", "status": "done", "args": {"item": "20001", "slot": 2},
+               "result": {}}
+        self.in_process(self.flow._copy_reaped, Run(run_dir, write=True), old, [])
+        self.assertEqual(self.item(run_dir)["stage"], "copy")
+        self.in_process(self.flow._copy_reaped, Run(run_dir, write=True), {**old, "name": "copy-w1",
+                                                                         "args": {"item": "20001", "slot": 1}}, [])
+        self.assertEqual(self.item(run_dir)["stage"], "ready")
+
     # ---- a job end that could not be taken in ------------------------------------------------
 
     def test_handler_that_failed_once_is_tried_again(self) -> None:

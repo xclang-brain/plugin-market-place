@@ -213,6 +213,8 @@ def lock_for(path: Path) -> threading.Lock:
 LOCK_WAIT = 10.0  # seconds a call waits for another process to finish with a file
 LOCK_STALE = 60.0  # a lock older than this was left by a process that died (a hold lasts well under a second)
 LOCK_GRACE = 5.0  # a younger lock may be just created (its pid not written yet): never taken as left behind
+MIN_LOCK_WAIT = 0.5  # a wait bounded by the time left of a call is never shorter than this
+SAVE_GRACE = 3.0  # the last save of a write-back may run this long past the budget (calls are cut at 30 s)
 DENIED_GRACE = 2.0  # Windows: access denied with no lock there is waited out this long, then reported as it is
 _held_files: set[str] = set()  # the lock files this process holds now
 
@@ -350,7 +352,8 @@ def file_lock(path: Path, wait: float | None = None) -> Iterator[None]:
                 raise
         if time.monotonic() > give_up:
             raise FileBusy(f"ほかのセッションがこのファイルを使っています。少し待ってから、同じ引数でもう一度呼んで"
-                              f"ください: {path}（{wait:.0f} 秒たっても空かないときは {lock.name} を消してください）")
+                           f"ください: {path}（{lock.name} は、このファイルを使うセッションがなければ消してかまいません。"
+                           f"{LOCK_STALE:.0f} 秒より古いものは、次の呼び出しが片づけます）")
         time.sleep(0.05)
     _held_files.add(str(lock))
     try:
@@ -961,6 +964,9 @@ def _merge_result(saved: dict[str, Any], written: dict[str, Any], failed: dict[s
     return out
 
 
+_unsaved: dict[str, dict[str, Any]] = {}  # per record: entries written whose save failed (and refusals, requests)
+
+
 def _done_before(result: dict[str, Any], key: str, token: str) -> bool:
     """Written already, or refused by Coverity with this confirmation token."""
     return key in result["written"] or (result["failed"].get(key) or {}).get("token") == token
@@ -988,35 +994,49 @@ def update_triage(confirmation_token: str, repo_root: str | None = None, plan_fi
         result_path, target = entries_result_path(config)
     # The record of entries is shared by the server processes of every session: each save is a short
     # merge under a lock between processes, and an entry is looked up again just before it is sent.
+    # Entries written to Coverity whose save failed are kept in this process (see _unsaved) and saved
+    # by the next call: they are never sent again.
+    unsaved_key = os.path.normcase(str(result_path.resolve()))
     written_mine: dict[str, Any] = {}
     failed_mine: dict[str, Any] = {}
+
+    def lock_wait(extra: float = 0.0) -> float:
+        """A lock wait that ends within the time left of this call (plus ``extra``)."""
+        return max(MIN_LOCK_WAIT, min(LOCK_WAIT, deadline.left() + extra))
 
     def fresh(requests: list[Any] | None = None) -> dict[str, Any]:
         return _merge_result(_load_result(result_path, target), written_mine, failed_mine, requests or [])
 
     def fresh_locked() -> dict[str, Any]:
-        with file_lock(result_path):
+        with file_lock(result_path, wait=lock_wait()):
             return fresh()
 
-    def save(requests: list[Any] | None = None) -> dict[str, Any]:
-        with file_lock(result_path):
+    def save(wait: float, requests: list[Any] | None = None) -> dict[str, Any]:
+        with file_lock(result_path, wait=wait):
             merged = fresh(requests)
             write_json(result_path, merged)
         return merged
 
     with lock_for(result_path):
+        earlier = _unsaved.get(unsaved_key) or {}
+        written_mine.update(earlier.get("written") or {})
+        failed_mine.update(earlier.get("failed") or {})
+        unsaved = list(written_mine)  # written to Coverity, not in the record yet
         result = fresh()
         written_now: list[str] = []
         remaining: list[str] = []
         client = make_client(config)
         finished = busy = False
+        save_error: BaseException | None = None
+        stopped_by_save = False  # sending stopped because the save after a write failed (not a busy record)
         try:
             for entry in items:
                 key = entry_key(entry)  # by content: an entry changed after writing is written again
                 if _done_before(result, key, token):
                     continue
                 # An entry with a stream also asks which triage store the stream uses: two requests.
-                if busy or not deadline.allows(client, 2 if entry.stream else 1):
+                requests_needed = 2 if entry.stream else 1
+                if busy or not deadline.allows(client, requests_needed):
                     remaining.append(entry.id)
                     continue
                 try:
@@ -1026,6 +1046,9 @@ def update_triage(confirmation_token: str, repo_root: str | None = None, plan_fi
                     remaining.append(entry.id)
                     continue
                 if _done_before(result, key, token):
+                    continue
+                if not deadline.allows(client, requests_needed):  # the wait for the lock took the time
+                    remaining.append(entry.id)
                     continue
                 attributes = TriageAttributes(classification=entry.classification, action=entry.action,
                                               severity=entry.severity)
@@ -1042,28 +1065,59 @@ def update_triage(confirmation_token: str, repo_root: str | None = None, plan_fi
                 written_mine[key] = compact({"id": entry.id, "cids": entry.cids, "stream": entry.stream,
                                              "triage_store": store, "at": now()})
                 written_now.append(entry.id)
-                result = save()
+                unsaved.append(key)
+                try:
+                    result = save(lock_wait())
+                    unsaved.clear()
+                except (ToolFailure, OSError) as exc:
+                    # Written to Coverity: never an error now (calling again would send it twice). Nothing
+                    # more is sent; the save is tried again below.
+                    busy, save_error, stopped_by_save = True, exc, True
+                    result = _merge_result(result, {key: written_mine[key]}, {}, [])
             finished = True
         finally:
-            requests = masker.data(client.requests)
+            requests = list(earlier.get("requests") or []) + masker.data(client.requests)
             client.close()
+            # Already busy with nothing unsaved: a short wait (the outcome is known). Entries written but
+            # not saved: a last chance a little past the budget.
+            wait = lock_wait(SAVE_GRACE) if unsaved or not busy else min(1.0, lock_wait())
             try:
-                result = save(requests)
+                result = save(wait, requests)
+                _unsaved.pop(unsaved_key, None)
+                unsaved.clear()
+                save_error = None  # the earlier failed save is made good: everything written is recorded
             except (ToolFailure, OSError) as exc:
-                # Written entries are saved already; only the request records (and refusals) are lost here.
-                if finished and not isinstance(exc, FileBusy):
-                    raise
+                # Kept in this process: the next call saves them and does not send them again.
+                if written_mine or failed_mine:
+                    _unsaved[unsaved_key] = {"written": dict(written_mine), "failed": dict(failed_mine),
+                                             "requests": requests[-MAX_RECORDS:]}
+                else:  # nothing written or refused in this process: nothing to keep
+                    _unsaved.pop(unsaved_key, None)
+                result = _merge_result(result, written_mine, failed_mine, [])
                 log.warning("書き戻しの記録を保存できませんでした: %s: %s", result_path, exc)
+                if finished and not unsaved and not isinstance(exc, FileBusy):
+                    raise
+                if unsaved:
+                    busy, save_error = True, exc
     keys = {entry_key(e) for e in items}
     failed = [{"id": v["id"], "cids": v["cids"], "error": v["error"]} for k, v in result["failed"].items() if k in keys]
-    done = not remaining
+    unrecorded = [written_mine[k]["id"] for k in unsaved if k in keys]
+    done = not remaining and not unrecorded
     out: dict[str, Any] = {
         "done": done, "written": written_now, "written_total": sum(1 for k in result["written"] if k in keys),
         "entries": len(items), "failed": failed, "remaining": remaining, "result_file": str(result_path),
         "seconds": round(deadline.elapsed(), 1), "next": None if done else CALL_AGAIN}
-    if busy:
-        out["busy_note"] = ("ほかのセッションが同じ Coverity に書き戻していて、記録のファイルが空きませんでした。"
-                            "少し待ってから、同じ引数でもう一度呼んでください")
+    if busy and not done:
+        if unrecorded and save_error is not None and not isinstance(save_error, FileBusy):
+            note = f"記録のファイルに保存できませんでした（{masker.text(str(save_error))}）。"
+        elif stopped_by_save and not unrecorded:
+            note = "書いた項目を記録のファイルにすぐ保存できなかったので、残りの項目はまだ送っていません。"
+        else:
+            note = "ほかのセッションが同じ Coverity に書き戻していて、記録のファイルが空きませんでした。"
+        if unrecorded:
+            note += (f"{', '.join(unrecorded)} は Coverity に書きましたが、まだ記録していません。このセッションで"
+                     "もう一度呼ぶと、送り直さずに記録します。")
+        out["busy_note"] = note + "少し待ってから、同じ引数でもう一度呼んでください"
     if failed:
         out["failed_note"] = ("failed の項目は Coverity に断られました。同じ確認の文字列では送り直しません。値を直して"
                               "coverity_preview_triage からやり直してください")

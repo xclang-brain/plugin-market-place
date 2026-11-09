@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 SKILL_DIR = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = SKILL_DIR / "scripts"
@@ -136,16 +136,37 @@ def remove_file(path: Path) -> None:
             time.sleep(0.05)
 
 
-def _writable_again(func: Any, path: str, _exc: Any) -> None:
-    """rmtree's error handler: clear the read-only mark (svn keeps its pristine files read-only; Windows
-    cannot delete a read-only file) and try the delete once more. The caller checks what is left."""
+def _add_write(path: str) -> None:
+    """Add the owner's write bit (and, for a folder, read and enter) to what is there. A link is left
+    alone: chmod would change the file it points to, which may be outside the tree."""
     with contextlib.suppress(OSError):
-        os.chmod(path, stat.S_IRWXU if os.path.isdir(path) else stat.S_IREAD | stat.S_IWRITE)
-    with contextlib.suppress(OSError):
-        os.chmod(os.path.dirname(path), stat.S_IRWXU)
-    if func in (os.unlink, os.remove, os.rmdir):
-        with contextlib.suppress(OSError):
-            func(path)
+        mode = os.lstat(path).st_mode
+        if stat.S_ISLNK(mode):
+            return
+        os.chmod(path, stat.S_IMODE(mode) | (stat.S_IRWXU if stat.S_ISDIR(mode) else stat.S_IREAD | stat.S_IWRITE))
+
+
+def _inside(path: str, top: str) -> bool:
+    real = os.path.realpath(path)
+    return real == top or real.startswith(top.rstrip(os.sep) + os.sep)
+
+
+def _writable_again(top: Path) -> Callable[[Any, str, Any], None]:
+    """rmtree's error handler for the tree ``top``: clear the read-only mark (svn keeps its pristine files
+    read-only; Windows cannot delete a read-only file) and try the delete once more. Only what is inside
+    the tree is changed: not the folder above it. The caller checks what is left."""
+    root = os.path.realpath(top)
+
+    def handler(func: Any, path: str, _exc: Any) -> None:
+        if _inside(path, root):
+            _add_write(path)
+        parent = os.path.dirname(path)
+        if _inside(parent, root):
+            _add_write(parent)
+        if func in (os.unlink, os.remove, os.rmdir):
+            with contextlib.suppress(OSError):
+                func(path)
+    return handler
 
 
 def remove_tree(path: Path, check: bool = True) -> bool:
@@ -156,15 +177,13 @@ def remove_tree(path: Path, check: bool = True) -> bool:
         if not os.path.lexists(path):
             return True
         if path.is_symlink() or not path.is_dir():
-            if not path.is_symlink():
-                with contextlib.suppress(OSError):
-                    os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+            _add_write(str(path))
             with contextlib.suppress(OSError):
                 remove_file(path)
         elif sys.version_info >= (3, 12):
-            shutil.rmtree(path, onexc=_writable_again)
+            shutil.rmtree(path, onexc=_writable_again(path))
         else:
-            shutil.rmtree(path, onerror=_writable_again)
+            shutil.rmtree(path, onerror=_writable_again(path))
         if not os.path.lexists(path):
             return True
         time.sleep(0.1)

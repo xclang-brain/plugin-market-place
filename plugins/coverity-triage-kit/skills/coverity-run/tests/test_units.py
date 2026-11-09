@@ -611,6 +611,53 @@ class RemoveTest(unittest.TestCase):
                 common.remove_tree(tree)
             self.assertFalse(common.remove_tree(tree, check=False))
 
+    @unittest.skipIf(sys.platform == "win32", "chmod changes only the read-only mark on Windows")
+    def test_a_link_in_the_tree_leaves_its_target_as_it_is(self) -> None:
+        import stat
+        from unittest import mock
+
+        outside = self.tmp / "repo" / "build.sh"
+        outside.parent.mkdir()
+        outside.write_text("#!/bin/sh\n")
+        outside.chmod(0o755)
+        tree = self.tmp / "w1"
+        (tree / "tools").mkdir(parents=True)
+        (tree / "tools" / "build.sh").symlink_to(outside)
+        real = os.unlink
+        calls = []
+
+        def once(path, *args, **kwargs):  # the first delete of the link is refused (its folder is read-only)
+            calls.append(path)
+            if os.path.basename(str(path)) == "build.sh" and len(calls) == 1:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path, *args, **kwargs)
+        with mock.patch.object(os, "unlink", once):
+            self.assertTrue(common.remove_tree(tree))
+        self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o755)
+
+    @unittest.skipIf(sys.platform == "win32", "chmod changes only the read-only mark on Windows")
+    def test_only_the_tree_is_made_writable_and_only_the_write_bit_is_added(self) -> None:
+        import stat
+        from unittest import mock
+
+        above = self.tmp / "work"
+        tree = above / "w1"
+        tree.mkdir(parents=True)
+        above.chmod(0o755)
+        busy = tree / "busy.obj"
+        busy.write_text("x")
+        busy.chmod(0o555)
+        real = os.unlink
+
+        def held(path, *args, **kwargs):
+            if os.path.basename(str(path)) == "busy.obj":
+                raise PermissionError(32, "The process cannot access the file", str(path))
+            return real(path, *args, **kwargs)
+        with mock.patch.object(os, "unlink", held):
+            self.assertFalse(common.remove_tree(tree, check=False))  # rmdir of the tree fails: the folder above stays as it was
+        self.assertEqual(stat.S_IMODE(above.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(busy.stat().st_mode), 0o755)
+
     def test_remove_file_is_tried_again_on_windows(self) -> None:
         from unittest import mock
 
@@ -659,6 +706,8 @@ class GitCopyTest(unittest.TestCase):
             dest = tmp / "work" / "w1"
             vcs.reset_copy(dest, rev)
             self.assertTrue(vcs.usable(dest))
+            # git on Windows marks .git hidden, and a hidden file cannot be overwritten: replace it
+            (dest / ".git").unlink()
             (dest / ".git").write_text("gitdir: " + str(tmp / "gone") + "\n", encoding="utf-8")
             self.assertFalse(vcs.usable(dest))
             vcs.reset_copy(dest, rev)

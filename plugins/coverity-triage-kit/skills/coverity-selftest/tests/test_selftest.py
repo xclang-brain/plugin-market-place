@@ -499,6 +499,10 @@ class CleanupTest(unittest.TestCase):
             self.selftest.remove_tree(folder)
 
     def test_check_build_keeps_the_results_when_the_copy_cannot_be_removed(self):
+        import importlib.util
+
+        if importlib.util.find_spec("yaml") is None:  # the check is called in this process, not through uv
+            self.skipTest("この Python に pyyaml がないため、ビルドの確かめをこのプロセスで呼べません")
         repo = self.tmp / "repo"
         write(repo / "main.c", "int main(void) { return 0; }\n")
         build = f'"{sys.executable}" -c "import sys; sys.exit(0)"'
