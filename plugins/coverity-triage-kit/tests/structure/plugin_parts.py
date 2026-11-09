@@ -4,7 +4,7 @@
 - スキル：skills/ の下の、SKILL.md があるフォルダ（フォルダの名前がスキルの名前）
 - MCP サーバー：mcp-servers/ の下のフォルダと、mcp.json の mcpServers の鍵（登録名）。
   ツールの名前は、MCP サーバーのソースの @….tool の付いた関数から読む
-- エージェント：com.github.copilot/agents/<名前>.agent.md
+- エージェント：com.github.copilot/agents/<名前>.agent.md（Copilot CLI）と、agents/<名前>.md（Claude Code。同じ名前の組）
 - プラグイン全体のスキルと役割：エクステンションの defaults.json（pluginSkills・roles・orchestrator）
 - 部品の組：エージェントとプラグイン全体のスキルの「## 使う部品」の表
 - 役割と今の名前の対応：docs/replace.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
@@ -40,6 +40,12 @@ DESIGN = DOCS_DIR / "design" / "design.md"
 REPLACE_DOC = DOCS_DIR / "replace.md"
 GUIDE_DIR = DOCS_DIR / "guide"
 SCHEMAS_DIR = TESTS / "structure" / "schemas" / "agent-plugins-1.0.0"
+# Claude Code の形（同じフォルダに置く。Copilot CLI は、plugin.json の $schema が Agent Plugins 1.0.0 なら読まない）
+CLAUDE_MANIFEST = ROOT / ".claude-plugin" / "plugin.json"
+CLAUDE_MCP = ROOT / ".mcp.json"
+CLAUDE_AGENTS_DIR = ROOT / "agents"
+CLAUDE_AGENT_SUFFIX = ".md"
+REPO_ROOT = ROOT.parents[1]
 
 AGENT_SUFFIX = ".agent.md"
 AGENT_README_SUFFIX = ".README.markdown"
@@ -263,6 +269,58 @@ def all_mcp_tool_names():
     return names
 
 
+def _destructive_tools(tree):
+    """destructiveHint=True を付けて登録したツールの名前（Coverity に書き込むツール）"""
+    names = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for deco in node.decorator_list:
+            if not isinstance(deco, ast.Call):
+                continue
+            flagged = any(isinstance(n, ast.keyword) and n.arg == "destructiveHint"
+                          and isinstance(n.value, ast.Constant) and n.value.value is True for n in ast.walk(deco))
+            if flagged:
+                names |= _decorated_tools(ast.Module(body=[node], type_ignores=[]))
+    return names
+
+
+@functools.lru_cache(maxsize=None)
+def write_back_tools():
+    """登録名 → 書き戻しのツール（destructiveHint=True のツール）の名前の集まり"""
+    out = {}
+    for name, folder in mcp_registrations().items():
+        tools = set()
+        if folder and folder.is_dir():
+            for path in sorted(folder.rglob("*.py")):
+                if skipped(path, folder) or "tests" in path.relative_to(folder).parts:
+                    continue
+                try:
+                    tools |= _destructive_tools(ast.parse(read(path)))
+                except SyntaxError:
+                    continue
+        out[name] = tools
+    return out
+
+
+def claude_mcp_tool_names(server: str, tool: str):
+    """Claude Code での MCP のツールの名前：プラグインのサーバー（plugin_<プラグイン>_<登録名>）と、手で登録したサーバー"""
+    return [f"mcp__plugin_{PLUGIN_NAME}_{server}__{tool}", f"mcp__{server}__{tool}"]
+
+
+def parse_claude_mcp_tool(name: str):
+    """Claude Code の MCP のツールの名前を (登録名, ツール, 形) に。形は "plugin" か "hand"。MCP のツールでなければ None"""
+    if not isinstance(name, str) or not name.startswith("mcp__"):
+        return None
+    m = re.fullmatch(r"mcp__plugin_" + re.escape(PLUGIN_NAME) + r"_(.+?)__(.+)", name)
+    if m:
+        return m.group(1), m.group(2), "plugin"
+    m = re.fullmatch(r"mcp__(?!plugin_)(.+?)__(.+)", name)
+    if m:
+        return m.group(1), m.group(2), "hand"
+    return None
+
+
 def agent_files():
     if not AGENTS_DIR.is_dir():
         return []
@@ -280,6 +338,53 @@ def agent_names():
 
 def agent_path(name: str) -> Path:
     return AGENTS_DIR / (name + AGENT_SUFFIX)
+
+
+def claude_agent_files():
+    """Claude Code のエージェント（agents/ の .md。Claude Code は、ここの .md をすべてエージェントとして読む）"""
+    if not CLAUDE_AGENTS_DIR.is_dir():
+        return []
+    return sorted(p for p in CLAUDE_AGENTS_DIR.iterdir() if p.is_file() and p.suffix == CLAUDE_AGENT_SUFFIX)
+
+
+def claude_agent_names():
+    return [p.stem for p in claude_agent_files()]
+
+
+def claude_agent_path(name: str) -> Path:
+    return CLAUDE_AGENTS_DIR / (name + CLAUDE_AGENT_SUFFIX)
+
+
+def tool_list(value):
+    """エージェントの tools・disallowedTools の並び。Claude Code は「A, B」の文字列、Copilot CLI は [a, b]"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [t.strip() for t in value.split(",") if t.strip()]
+    if isinstance(value, list):
+        return [t for t in value]
+    return [value]
+
+
+# Claude Code の frontmatter のうち、部品の名前を書いてよい行（名前と、ツールの名前）
+CLAUDE_NAME_KEYS = ("name", "tools", "disallowedTools")
+
+
+def without_frontmatter_keys(text: str, keys=CLAUDE_NAME_KEYS) -> str:
+    """frontmatter の中の、keys の行（とその続きの行）を空にした文（行の番号は変えない）"""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    out, blank = [lines[0]], False
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            out += lines[i:]
+            break
+        m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.\-]*)\s*:", line)
+        if m:
+            blank = m.group(1) in keys
+        out.append("" if blank else line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
 def defaults():

@@ -10,7 +10,7 @@
 
 ## 用意するもの
 
-- GitHub Copilot CLI と uv
+- GitHub Copilot CLI と uv（Claude Code でも使えます。下の「Claude Code で使う」）
 - 調べたいリポジトリに `.coverity-triage/` の設定（`/coverity-setup` で作る）
 - Coverity と通信する MCP サーバー `coverity-connect`（プラグインを入れると登録される）と、認証情報の環境変数（入れてから Copilot CLI を起動する）
 
@@ -74,12 +74,57 @@ copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write -
 3. MCP サーバーのフォルダ（`mcp-servers/coverity-connect/`）を置き、その README のとおりに `coverity-connect` という名前で登録します。
 4. Copilot CLI を起動し直し、`/agent` に4つのエージェントが、`/skills list` に11個のスキルが出れば完了です。
 
+## Claude Code で使う
+
+Claude Code 用の定義は、プラグインの `agents/triage-orchestrator.md` と、作業・検証・統合のエージェントの `agents/triage-worker.md`、`agents/triage-reviewer.md`、`agents/triage-integrator.md` の4つです。使う部品の表と決まりは、Copilot CLI 用の定義と同じです。
+
+### 始め方
+
+1. 調べたいリポジトリのフォルダで、下の「前もって許可する」の指定を付けて、`claude --agent coverity-triage-kit:triage-orchestrator` で起動します。
+2. 「High だけトリアージして」のように、上の「頼み方の例」のとおりに頼みます。
+   起動のときに `--agent` を付けずに、`/coverity-triage-kit:coverity-run High だけ` と入力しても、同じ流れで始まります（会話の主役が一括実行のスキルに従い、プラグインの作業・検証・統合のエージェントを呼びます）。
+
+- 統括エージェントが呼んだエージェントは、裏で動くことがあります。終わると、結果が知らせとして届きます。
+- 統括エージェントは、ファイルを直す道具と Coverity に書き戻すツールを持ちません。
+
+### 前もって許可する
+
+チャットで `/add-dir "<output_dir>"` を打ち、`/permissions` で `Bash(uv run *)` を許可します。または、次のように起動します。
+
+```text
+claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage" --agent coverity-triage-kit:triage-orchestrator
+```
+
+書き戻すツール（`coverity_update_triage`）は前もって許可しません。部品を取り出して MCP サーバーを自分で登録したときは、ツールの名前が `mcp__coverity-connect__<ツール>` になります。
+
+### 取り出して使う
+
+1. 4つの定義（`agents/` の `.md`）を、リポジトリの `.claude/agents/`（自分だけで使うときは `~/.claude/agents/`）にコピーします。
+2. 各定義の表のスキル（上の「取り出して使う」と同じもの）のフォルダを、`.claude/skills/<名前>/`（自分だけで使うときは `~/.claude/skills/<名前>/`）にコピーします。
+3. MCP サーバーのフォルダを置き、その README の「Claude Code」のとおりに `coverity-connect` という名前で登録します。
+4. Claude Code を起動し直し、`/agents` に4つのエージェントが出れば完了です。`claude --agent triage-orchestrator` で始めます。
+
+コピーのコマンドの例（`<プラグイン>` はこのプラグインのフォルダ、`<リポジトリ>` は調べたいリポジトリ）：
+
+```text
+# Windows（PowerShell）
+New-Item -ItemType Directory -Force "<リポジトリ>\.claude\agents", "<リポジトリ>\.claude\skills"
+Copy-Item "<プラグイン>\agents\triage-*.md" "<リポジトリ>\.claude\agents\"
+foreach ($s in "coverity-run", "coverity-gui", "coverity-apply", "coverity-setup", "checker-knowledge", "triage-investigation", "code-fix", "deviation-comment", "triage-report", "triage-review", "triage-integration") { Copy-Item -Recurse -Force "<プラグイン>\skills\$s" "<リポジトリ>\.claude\skills\" }
+# Linux（bash）
+mkdir -p "<リポジトリ>/.claude/agents" "<リポジトリ>/.claude/skills"
+cp "<プラグイン>"/agents/triage-*.md "<リポジトリ>/.claude/agents/"
+for s in coverity-run coverity-gui coverity-apply coverity-setup checker-knowledge triage-investigation code-fix deviation-comment triage-report triage-review triage-integration; do cp -r "<プラグイン>/skills/$s" "<リポジトリ>/.claude/skills/"; done
+```
+
+並べたスキルの名前は、定義の表からたどったスキルと同じです。表が変わったら、表に合わせます。
+
 ## うまくいかないとき
 
 | 起きること | すること |
 | --- | --- |
 | 「設定がありません」と言われて始まらない | `/coverity-setup` で準備する |
-| 「その役のエージェントがない」と言われる | `/agent` で、作業・検証・統合のエージェント（`triage-worker`・`triage-reviewer`・`triage-integrator`）が出るかを確かめる。取り出したときは、4つの定義を同じ場所に置く |
+| 「その役のエージェントがない」と言われる | `/agent` で、作業・検証・統合のエージェント（`triage-worker`・`triage-reviewer`・`triage-integrator`）が出るかを確かめる。取り出したときは、4つの定義を同じ場所に置く。Claude Code では `/agents` で確かめる |
 | 実行中に許可の確認が出て止まる | 確認に答える。次からは、始める前に「前もって許可する」をする |
 | 警告を取れない（認証の失敗など） | 認証情報の環境変数を入れてから Copilot CLI を起動し直す。MCP サーバーの README の「うまくいかないとき」を見る |
 | 途中で止まった | もう一度頼むか `/coverity-run` と入力すると、続きから再開できる |

@@ -53,6 +53,7 @@ python3 tests/run.py --only docs --only structure
 | git | （あること） | 部品の試験を動かせない（終了コード 2） |
 | Node.js | 22 以上 | エクステンションの試験を動かせない（`--only extension` のときなど。終了コード 2）。`ui` は飛ばす |
 | svn、cppcheck | （あれば使う） | それを使う試験だけを飛ばす |
+| Claude Code（`claude`） | （あれば使う） | `structure` の `claude plugin validate` だけを飛ばす |
 | Playwright（Chromium） | （あれば使う） | 画面をブラウザーで確かめる試験（`extension` の一部と `ui`）だけを飛ばす。入れるとき：`npm install --prefix tests --no-save --no-package-lock playwright@1.56.1` と `npx --prefix tests playwright install chromium` |
 
 要る道具は、選んだ組の分だけを確かめます（`--only docs` なら Python だけ）。
@@ -62,16 +63,16 @@ python3 tests/run.py --only docs --only structure
 | 名前 | 置き場所 | 確かめること |
 | --- | --- | --- |
 | 部品ごと | `skills/<名前>/tests/`、`mcp-servers/<名前>/tests/` | スクリプトとツールの振る舞い。部品のフォルダだけでも動く |
-| `structure` | `tests/structure/` | `plugin.json`・`mcp.json` を公式の schema で。SKILL.md の frontmatter・長さ・指すファイル・目次、`evals/` の形。エージェントの定義の形 |
-| `contracts` | `tests/contracts/` | 設計書 4.17 の写し（データ・持ち主のスクリプト・共通の試験のデータ）が、持ち主と同じバイト列。写しは部品の中をファイルの名前で探す（まだない写しは理由を書いて飛ばす）。写したスクリプトを写す側が使い、要るライブラリを持つ。`defaults.json` と統括エージェントの表と役割の言葉が合う。MCP サーバーが偽の Coverity で書いたファイルを、一括実行と真偽の調査のスクリプトが受け付ける。確認の文字列（計画のファイルは MCP サーバーのツールで、entries は確認の文字列の関数で） |
-| `independence` | `tests/independence/` | 1段階目の部品に、ほかの部品の名前・プラグインの名前・外を指すパスがない（`output_dir` の既定の値 `../coverity-triage-out` だけは許す。英語の言葉は単語として数え、`uv.lock` は見ない）。部品のフォルダだけをコピーして（スキルは名前を変えたコピーも）試験が通る。エージェントは名前を表にだけ書く。2段階目と3段階目の組が名前で閉じている。上の段の文書に下の段の中身がない。一括実行が実際に書いた指示ファイル（作業・確かめ・作り直し・統合）と頼みの文に、部品の名前がない |
+| `structure` | `tests/structure/` | `plugin.json`・`mcp.json` を公式の schema で（`plugin.json` の `$schema` は Agent Plugins 1.0.0 のまま。なくなると Copilot CLI が `agents/` と `.mcp.json` も読む）。SKILL.md の frontmatter・長さ・指すファイル・目次、`evals/` の形。エージェントの定義の形。Claude Code の形：`.claude-plugin/plugin.json` の name と version が `plugin.json` と同じ、`.mcp.json` が `mcp.json` と同じサーバー（`${CLAUDE_PLUGIN_ROOT}`、env は `${名前:-}`）、`agents/` はエージェントの `.md` だけで plugin-dev の決まりの frontmatter。リポジトリの2つのマーケットプレイス（`.github/plugin/`、`.claude-plugin/`）の名前と版、根の `marketplace.json` と `.plugin/` がないこと。`claude` があれば `claude plugin validate`（ないときは飛ばす） |
+| `contracts` | `tests/contracts/` | 設計書 4.17 の写し（データ・持ち主のスクリプト・共通の試験のデータ）が、持ち主と同じバイト列。写しは部品の中をファイルの名前で探す（まだない写しは理由を書いて飛ばす）。写したスクリプトを写す側が使い、要るライブラリを持つ。`defaults.json` と統括エージェントの表と役割の言葉が合う。Claude Code と Copilot CLI のエージェントの定義が、同じ名前・同じ「使う部品」の表・同じ見出しの並び・同じ報告の形で、ツールの言葉と tools だけが読み替えたもの（Skill・Agent・AskUserQuestion・Bash と skill・task・ask_user・シェル）。Claude Code の統括エージェントは tools を書かず、Edit・Write と書き戻しのツール（2つの名前の形）を外す。書き戻しのツールは、どのエージェントの tools にもない。MCP サーバーが偽の Coverity で書いたファイルを、一括実行と真偽の調査のスクリプトが受け付ける。確認の文字列（計画のファイルは MCP サーバーのツールで、entries は確認の文字列の関数で） |
+| `independence` | `tests/independence/` | 1段階目の部品に、ほかの部品の名前・プラグインの名前・外を指すパスがない（`output_dir` の既定の値 `../coverity-triage-out` だけは許す。英語の言葉は単語として数え、`uv.lock` は見ない）。部品のフォルダだけをコピーして（スキルは名前を変えたコピーも）試験が通る。エージェント（Copilot CLI と Claude Code の両方）は名前を表にだけ書く（Claude Code の frontmatter の name・tools・disallowedTools の行は見ない）。2段階目と3段階目の組が名前で閉じている（Copilot CLI の形の `.github/agents`・`.github/skills` と、Claude Code の形の `.claude/agents`・`.claude/skills`・手で登録した MCP サーバーの両方に取り出して）。上の段の文書に下の段の中身がない。一括実行が実際に書いた指示ファイル（作業・確かめ・作り直し・統合）と頼みの文に、部品の名前がない |
 | `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合。一括のトリアージを、モデルを使わずに最後まで流す（`test_flow.py`：模擬の Coverity の5件の警告、MCP サーバーでの取得、決まった振る舞いの偽のエージェント、一覧、反映の確認の文字列、書き戻し、修正のブランチの push） |
 | `ui` | `tests/ui/` | 結果と設定の画面を、Playwright の Chromium で（幅 390 px と 1280 px、ライトとダーク）。タブが出る、横にはみ出さない、ダークで読める、一覧で選んだ承認と詳細で直した逸脱コメントが `approvals.json` に保存され、反映がそれを読む、サーバを止められる |
-| `docs` | `tests/docs/` | 版の一致、要求の番号の追跡、仕様書と設計書に部品の名前がない、`docs/replace.md` の表が今の部品と合う、README の並び、リンク |
+| `docs` | `tests/docs/` | 版の一致（2つのマニフェストと2つのマーケットプレイスも）、要求の番号の追跡、仕様書と設計書に部品の名前がない、`docs/replace.md` の表が今の部品と合う、README の並びと「Claude Code で使う」の節、変更履歴の 0.2.0、リンク |
 | `eval` | `tests/eval/` | EVAL の道具の、モデルを使わない試験 |
 | `extension` | `tests/extension/` | エクステンション（偽の SDK と偽のコマンド、画面） |
 
-`structure`・`contracts`・`independence`・`integration`・`ui`・`docs` は、部品の名前を書いていません。部品は、フォルダ・`mcp.json`・`defaults.json`・「使う部品」の表・[部品の変え方](../docs/replace.md) の「今の部品」の表から読みます。
+`structure`・`contracts`・`independence`・`integration`・`ui`・`docs` は、部品の名前を書いていません。部品は、フォルダ・`mcp.json`・`defaults.json`・「使う部品」の表・[部品の変え方](../docs/replace.md) の「今の部品」の表から読みます。書き戻しのツールは、MCP サーバーのソースの `destructiveHint=True` から見つけます。
 まだない部品は、理由を書いて飛ばします。
 
 ### モデルを使わずに流す一括のトリアージ（`tests/integration/flowlib.py`）

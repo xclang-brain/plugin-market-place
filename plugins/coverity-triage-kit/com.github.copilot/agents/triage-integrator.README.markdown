@@ -23,6 +23,14 @@
 
 使うスキルは、[統合エージェントの定義](triage-integrator.agent.md#使う部品)の「使う部品」の表にあります。取り出して使うときは、定義を `.github/agents/` に、表のスキルのフォルダを `.github/skills/<名前>/` にコピーします。
 
+## Claude Code で使う
+
+Claude Code 用の定義は、プラグインの `agents/triage-integrator.md` です。使う部品の表と決まりは、Copilot CLI 用の定義と同じです。
+
+- ふつうは、統括エージェントが一括のトリアージの中で呼びます。
+- 自分で頼むときは、まとめるか見たい結果のファイルを伝えて、「triage-integrator エージェントで、<実行フォルダ>/items/20003/result.json と 20004 の結果が同じ原因か確かめて」のように、名前を挙げて頼みます（`@` で選んでもかまいません）。`claude --agent coverity-triage-kit:triage-integrator` で起動してもかまいません。
+- 取り出して使うときは、定義 `agents/triage-integrator.md` を `.claude/agents/`（自分だけで使うときは `~/.claude/agents/`）に、表のスキルのフォルダを `.claude/skills/<名前>/`（自分だけで使うときは `~/.claude/skills/<名前>/`）にコピーします。`/agents` に `triage-integrator` が出れば完了です。
+
 ## うまくいかないとき
 
 | 起きること | すること |

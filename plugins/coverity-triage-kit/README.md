@@ -1,7 +1,10 @@
 # coverity-triage-kit
 
-Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作る GitHub Copilot CLI のプラグインです（C / C++、標準・MISRA・CERT）。
+Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作るプラグインです（C / C++、標準・MISRA・CERT）。GitHub Copilot CLI と Claude Code の両方で使えます。
 大がかりな一括の処理も、スキル1つだけの小さな使い方もできるように、部品を4つの段階で取り出して使えます。
+
+- GitHub Copilot CLI では、4つの段階をすべて使えます。
+- Claude Code では、1〜3段階目を使えます。4段階目（Web管理画面）は Copilot CLI だけです。Claude Code での入れ方と使い方は「[Claude Code で使う](#claude-code-で使う)」にあります。
 
 元のプラグイン [coverity-warning-triage](../coverity-warning-triage/) を作り直したもので、Web管理画面を使うときの使い方は同じです。スキルの名前が同じなので、**coverity-warning-triage とは、どちらか一方だけを入れてください。**
 
@@ -21,14 +24,18 @@ Coverity Connect の警告を渡すと、警告ごとに次のものができま
 
 AI に任せる範囲に合わせて、使う部品を選びます。どの段階も、上の段階なしで使えます。
 
-| 段階 | 使う部品 | 頼み方の例 | 見る文書 |
-| --- | --- | --- | --- |
-| 1段階目 | スキル1つ、または MCP サーバー1つ | 「CID 12345（NULL_RETURNS、src/foo.c の 120 行）の警告が本物か調べて」「この警告の逸脱コメントを書いて」「ストリーム app-main の、Impact が High の警告を一覧にして」 | 各スキルの README（[skills/](skills/) の下）、[MCP サーバーの README](mcp-servers/coverity-connect/README.md) |
-| 2段階目 | 作業エージェント（`/agent` で `triage-worker`） | 「CID 12345 をトリアージして」 | [作業エージェントの README](com.github.copilot/agents/triage-worker.README.markdown) |
-| 3段階目 | 統括・作業・検証・統合のエージェント | `/coverity-run High だけ`、または `/agent` で `triage-orchestrator` を選んで「Coverity の警告をトリアージして」 | [統括エージェントの README](com.github.copilot/agents/triage-orchestrator.README.markdown) |
-| 4段階目 | 3段階目と Web管理画面 | 「Coverity の警告をトリアージして」 | [4段階目のガイド](docs/guide/4-screen.md) |
+| 段階 | 使う部品 | 使えるツール | 頼み方の例（Copilot CLI） | 見る文書 |
+| --- | --- | --- | --- | --- |
+| 1段階目 | スキル1つ、または MCP サーバー1つ | Copilot CLI・Claude Code | 「CID 12345（NULL_RETURNS、src/foo.c の 120 行）の警告が本物か調べて」「この警告の逸脱コメントを書いて」「ストリーム app-main の、Impact が High の警告を一覧にして」 | 各スキルの README（[skills/](skills/) の下）、[MCP サーバーの README](mcp-servers/coverity-connect/README.md) |
+| 2段階目 | 作業エージェント（`/agent` で `triage-worker`） | Copilot CLI・Claude Code | 「CID 12345 をトリアージして」 | [作業エージェントの README](com.github.copilot/agents/triage-worker.README.markdown) |
+| 3段階目 | 統括・作業・検証・統合のエージェント | Copilot CLI・Claude Code | `/coverity-run High だけ`、または `/agent` で `triage-orchestrator` を選んで「Coverity の警告をトリアージして」 | [統括エージェントの README](com.github.copilot/agents/triage-orchestrator.README.markdown) |
+| 4段階目 | 3段階目と Web管理画面 | Copilot CLI だけ | 「Coverity の警告をトリアージして」 | [4段階目のガイド](docs/guide/4-screen.md) |
+
+Claude Code での頼み方は、「[Claude Code で使う](#claude-code-で使う)」の表にあります。
 
 ### チャットで頼むときの言葉
+
+ここは Copilot CLI での言葉です（Claude Code では、Web管理画面のほかは同じに使えます）。
 
 - 「Coverity の警告をトリアージして」：Web管理画面の URL が示されます（4段階目）。画面で条件を選び、開始を押します。
 - `/coverity-run`：チャットで一括のトリアージをします（3段階目）。条件を添えられます（例「misra.yaml」「High だけ」「10 件だけ」「最初に解析して」「解析はしないで」）。
@@ -44,7 +51,7 @@ AI に任せる範囲に合わせて、使う部品を選びます。どの段�
 
 | もの | 確かめ方 |
 | --- | --- |
-| GitHub Copilot CLI | `copilot --version` |
+| GitHub Copilot CLI（Claude Code で使うときは Claude Code） | `copilot --version`（`claude --version`） |
 | uv（Python の道具。Python と要るライブラリを用意します） | `uv --version` |
 | git か svn（いつも使っているもの） | `git --version` / `svn --version` |
 | 社内の Coverity Connect のアカウントと認証キー | ブラウザで Coverity に入れる |
@@ -61,6 +68,8 @@ AI に任せる範囲に合わせて、使う部品を選びます。どの段�
 - スキルやエージェントに1件だけ頼んだときは、結果はチャットに返ります（頼んだときだけファイルに書きます）。
 
 ## 準備
+
+ここからの「準備」「任せたいツールを前もって許可する」「実行中に気をつけること」「うまく始まらないとき」は、Copilot CLI での手順です。Claude Code では「[Claude Code で使う](#claude-code-で使う)」を見ます。
 
 ### 1. インストールする
 
@@ -129,6 +138,59 @@ Web管理画面を動かすエクステンションは、Copilot CLI の試験�
 Web管理画面の終わった後の画面に、課題の一覧と、このプラグインを改善する Issue の案が並びます。案ごとの承認ボタンを押すと、その案だけが GitHub のリポジトリ（xclang-brain/plugin-market-place）に Issue として起票されます。承認していない案は起票されません。
 
 起票するには、`gh`（GitHub の公式のコマンド）を入れて、`gh auth login` でログインしておきます。
+
+## Claude Code で使う
+
+同じプラグインを Claude Code にも入れられます。1〜3段階目（スキル、MCP サーバー、作業エージェント、一括のトリアージ）が使えます。4段階目の Web管理画面は Copilot CLI だけです。
+
+### 1. インストールする
+
+```shell
+claude plugin marketplace add xclang-brain/plugin-market-place
+claude plugin install coverity-triage-kit@plugin-market-place
+```
+
+Claude Code の中では、`/plugin marketplace add xclang-brain/plugin-market-place` と `/plugin install coverity-triage-kit@plugin-market-place` でも入れられます。入れた後は、Claude Code を起動し直します。
+
+- Coverity と通信する部品（MCP サーバー）は、プラグインが登録します。`/mcp` で `plugin:coverity-triage-kit:coverity-connect` が出れば、読み込まれています。
+- 初めて起動するときに要るものを取りに行くので、時間がかかります。先に済ませるときは、「準備」の2のコマンドを、Claude Code のプラグインの置き場所（`~/.claude/plugins/` の下の coverity-triage-kit のフォルダ）で動かします。
+- 設定は、Copilot CLI と同じく、調べたいリポジトリの `.coverity-triage/` に置きます（`/coverity-setup` で作ります）。
+
+### 2. 認証情報を環境変数に入れる
+
+認証情報は、環境変数 `COV_USER` / `COV_AUTH_KEY` に入れてから、Claude Code を起動します（プロキシを使うときは `HTTPS_PROXY` / `NO_PROXY` も）。プラグインが、この4つを MCP サーバーに渡します。入れていない変数は、空として渡ります。設定ファイルとチャットには書きません。
+
+### 3. 段階ごとの呼び方
+
+調べたいリポジトリのフォルダで、Claude Code を起動します。
+
+| 段階 | 呼び方 |
+| --- | --- |
+| 1段階目 | `/coverity-triage-kit:<スキル>`（ほかに同じ名前のスキルがなければ `/<スキル>` でも）。頼みの文に合うスキルを、AI が選ぶこともあります。MCP サーバーのツールは、チャットで頼むと使われます |
+| 2段階目 | 「triage-worker エージェントで CID 12345 をトリアージして」のように、作業エージェントの名前を挙げて頼みます（`@` で選んでもかまいません）。または `claude --agent coverity-triage-kit:triage-worker` で起動して、「CID 12345 をトリアージして」と頼みます |
+| 3段階目 | `claude --agent coverity-triage-kit:triage-orchestrator` で起動して、「High だけトリアージして」のように頼みます。または `/coverity-triage-kit:coverity-run High だけ` と入力します（会話の主役が一括実行のスキルに従い、プラグインの作業・検証・統合のエージェントを呼びます） |
+| 4段階目 | 使えません（Copilot CLI だけ）。「Coverity の警告をトリアージして」と頼んでも、画面は開きません |
+
+- 作業エージェントが質問したいのに、質問の道具がないときは、聞くことを返事に書いて止まります。チャットで答えると続きをします。
+- 統括エージェントが呼んだエージェントは、裏で動くことがあります。終わると、結果が知らせとして届きます。
+
+### 4. 前もって許可する
+
+一括のトリアージは、始めたら終わるまで質問しません。途中で許可の確認で止まらないよう、始める前に、次のどちらかをします。
+
+- チャットで `/add-dir "<output_dir>"` を打ち、出た確認でこのセッションのあいだの許可を選びます。`uv` のコマンドは、`/permissions` で `Bash(uv run *)` を許可します（プラグインのスキルは、Copilot CLI の書き方で許可を持っているので、Claude Code では前もって許可しないと毎回確認が出ます）。
+- または、Claude Code を次のように起動します。
+
+```shell
+claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage"
+```
+
+3段階目を `--agent` で始めるときは、この後ろに `--agent coverity-triage-kit:triage-orchestrator` を足します。Coverity に書き戻すツール（`coverity_update_triage`）は許可しません。サーバーの名前だけの `mcp__plugin_coverity-triage-kit_coverity-connect` も、書き戻すツールまで許可するので使いません。反映（`/coverity-apply`）のときに確認が出ます。
+
+### 5. 気をつけること
+
+- プラグインのフォルダそのものを作業フォルダにして、Claude Code（や Copilot CLI）を起動しないでください。プラグインの MCP サーバーの登録が、そのフォルダの設定としても読まれ、動かない登録が1つ増えます。調べたいリポジトリのフォルダで起動します。
+- プラグインを入れずに、部品だけを `.claude/agents/` と `.claude/skills/` に取り出して使うこともできます。手順は、各エージェントの README の「Claude Code で使う」にあります。
 
 ## 試験
 

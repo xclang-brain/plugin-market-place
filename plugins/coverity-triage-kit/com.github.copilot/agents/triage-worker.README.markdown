@@ -8,7 +8,7 @@ CID を伝えると、警告の情報を取り、本物のバグかを調べ、�
 
 ## 用意するもの
 
-- GitHub Copilot CLI
+- GitHub Copilot CLI（Claude Code でも使えます。下の「Claude Code で使う」）
 - 調べたいリポジトリ（Copilot CLI を、そのフォルダで起動します）
 - CID だけで頼むときは、Coverity と通信する MCP サーバー（下の「Coverity と通信する」）
 
@@ -80,11 +80,45 @@ for s in checker-knowledge triage-investigation code-fix deviation-comment triag
 
 並べたスキルの名前は、定義の表のスキルと同じです。表が変わったら、表に合わせます。
 
+## Claude Code で使う
+
+Claude Code 用の定義は、プラグインの `agents/triage-worker.md` です。使う部品の表と決まりは、Copilot CLI 用の定義と同じです。
+
+### 始め方
+
+- プラグインを入れたとき：調べたいリポジトリのフォルダで Claude Code を起動し、「triage-worker エージェントで CID 12345 をトリアージして」のように、名前を挙げて頼みます（`@` で選んでもかまいません）。
+- 会話の全体をこのエージェントにするときは、`claude --agent coverity-triage-kit:triage-worker` で起動して、上の「頼み方の例」のとおりに頼みます。
+- 質問の道具が使えないときは、聞くことを返事に書いて止まります。チャットで答えると続きをします。
+- MCP サーバーは、プラグインが `plugin:coverity-triage-kit:coverity-connect` として登録します（`/mcp` で見られます）。認証情報の環境変数は、入れてから Claude Code を起動します。
+
+### 取り出して使う
+
+1. 定義 `agents/triage-worker.md` を、リポジトリの `.claude/agents/` にコピーします（自分だけで使うときは `~/.claude/agents/`。Windows では `%USERPROFILE%\.claude\agents\`）。
+2. 定義の「使う部品」の表にあるスキルのフォルダ（`skills/<名前>/`）を、リポジトリの `.claude/skills/<名前>/` にコピーします（自分だけで使うときは `~/.claude/skills/<名前>/`）。
+3. MCP サーバーを使うときは、MCP サーバーの README の「Claude Code」のとおりに、`coverity-connect` という名前で登録します（定義は、この名前のツールも使えるように書いてあります）。
+4. Claude Code を起動し直します。`/agents` に `triage-worker` が出れば完了です。取り出したときは、`claude --agent triage-worker` で起動できます。
+
+コピーのコマンドの例（`<プラグイン>` はこのプラグインのフォルダ、`<リポジトリ>` は調べたいリポジトリ）：
+
+```text
+# Windows（PowerShell）
+New-Item -ItemType Directory -Force "<リポジトリ>\.claude\agents", "<リポジトリ>\.claude\skills"
+Copy-Item "<プラグイン>\agents\triage-worker.md" "<リポジトリ>\.claude\agents\"
+foreach ($s in "checker-knowledge", "triage-investigation", "code-fix", "deviation-comment", "triage-report") { Copy-Item -Recurse -Force "<プラグイン>\skills\$s" "<リポジトリ>\.claude\skills\" }
+# Linux（bash）
+mkdir -p "<リポジトリ>/.claude/agents" "<リポジトリ>/.claude/skills"
+cp "<プラグイン>/agents/triage-worker.md" "<リポジトリ>/.claude/agents/"
+for s in checker-knowledge triage-investigation code-fix deviation-comment triage-report; do cp -r "<プラグイン>/skills/$s" "<リポジトリ>/.claude/skills/"; done
+```
+
+スクリプトを動かすスキルは、`uv` のコマンドで許可の確認が出ます。毎回の確認を省くときは、`/permissions` で `Bash(uv run *)` を許可します。
+
 ## うまくいかないとき
 
 | 起きること | すること |
 | --- | --- |
 | `/agent` の一覧に `triage-worker` がない | プラグインが入っているかを確かめる。取り出したときは、`.github/agents/` に `triage-worker.agent.md` があるかを確かめる |
+| Claude Code で `/agents` に `triage-worker` がない | プラグインが入っているかを `/plugin` で確かめる。取り出したときは、`.claude/agents/` に `triage-worker.md` があるかを確かめる |
 | 警告の情報を取れないと言われる | MCP サーバーが `coverity-connect` の名前で登録されているかを `/mcp show` で確かめる。認証情報の環境変数は、入れてから Copilot CLI を起動し直す。警告の情報をチャットに貼っても続けられる |
 | スキルを使えないと言われる | `/skills list` で、表のスキルが読み込まれているかを確かめる |
 | 思っていたのと違うスキルが使われる | リポジトリの `.github/skills/` や `%USERPROFILE%\.copilot\skills\` に同じ名前のスキルがあると、そちらが使われる。`/skills list` で場所を確かめる |

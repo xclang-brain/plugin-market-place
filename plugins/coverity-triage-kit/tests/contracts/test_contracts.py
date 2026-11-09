@@ -9,6 +9,10 @@
   確認の文字列の試験のデータが、4.10 の決まりと、持ち主の確認の文字列の関数（とその写し）で計算した値と合う。
 - defaults.json：役割（roles）と統括エージェント（orchestrator）が、統括エージェントの「使う部品」の表と、役割の言葉に合う。
   コマンドの場所とスキルがある。
+- エージェントの2つの形（Claude Code の agents/<名前>.md と Copilot CLI の .agent.md）：同じ名前、同じ「使う部品」の表、
+  同じ見出しの並び、同じ報告の形。ツールの言葉と tools は読み替えたもの（Skill・Agent・AskUserQuestion・Bash と
+  skill・task・ask_user・シェル）。Claude Code の統括エージェントは tools を書かず、Edit・Write と書き戻しのツール
+  （2つの名前の形）を disallowedTools で外す。MCP のツールは表のサーバーのものだけ、書き戻しのツールはどのエージェントにもない。
 - 書く部品と読む部品：MCP サーバーの偽の Coverity（api: fake）が書いた issues.json・issue-<CID>.json を、
   一括実行のコマンドが受け付けて作業を始める。真偽の調査のスクリプトが issue-<CID>.json を読める。
   MCP サーバーの確認の文字列が、反映の計画のファイルのバイト列から決まる（計画のファイルの case を MCP サーバーで）。
@@ -604,6 +608,16 @@ class DefaultsTest(unittest.TestCase):
                 self.assertTrue(str(agent_id).startswith(pp.PLUGIN_NAME + ":"), f"{agent_id} は「{pp.PLUGIN_NAME}:<名前>」の形にします")
                 self.assertTrue(pp.agent_path(pp.id_stem(agent_id)).is_file(), f"{agent_id} の定義がありません")
 
+    def test_agent_ids_name_both_definitions(self):
+        """defaults.json のエージェントの id は、Copilot CLI の定義と Claude Code の定義の両方にある
+        （Claude Code でも、プラグインのエージェントは「<プラグイン>:<名前>」になる）"""
+        for agent_id in [self.data["orchestrator"], *self.data["roles"].values()]:
+            stem = pp.id_stem(agent_id)
+            with self.subTest(agent=agent_id):
+                self.assertIn(stem, pp.agent_names(), f"{agent_id} の Copilot CLI の定義がありません")
+                if pp.CLAUDE_AGENTS_DIR.is_dir():
+                    self.assertIn(stem, pp.claude_agent_names(), f"{agent_id} の Claude Code の定義（agents/{stem}.md）がありません")
+
     def test_commands_and_skills_exist(self):
         for key in ("runCommand", "guiCommand"):
             with self.subTest(key=key):
@@ -631,6 +645,151 @@ class DefaultsTest(unittest.TestCase):
         used = {Path(self.data["runCommand"]).parent.parent.name, Path(self.data["guiCommand"]).parent.parent.name,
                 self.data["applySkill"], self.data["setupSkill"]}
         self.assertEqual(sorted(used - names), [], "defaults.json のスキルが、統括エージェントの表にありません")
+
+
+# ---------------------------------------------------------------------------
+# Claude Code と Copilot CLI のエージェントの定義
+# ---------------------------------------------------------------------------
+
+# 本文のツールの言葉（Claude Code の言葉, Copilot CLI の言葉）。片方の定義に、もう片方の言葉を書かない
+TOOL_WORDS = [("Skill ツール", "skill ツール"), ("Agent ツール", "`task`"), ("AskUserQuestion", "ask_user"), ("Bash", "シェル")]
+# frontmatter の tools の読み替え（Copilot CLI → Claude Code）
+COPILOT_TO_CLAUDE = {
+    "read": {"Read", "Grep", "Glob"}, "search": {"Grep", "Glob"}, "edit": {"Edit", "Write"}, "execute": {"Bash"},
+    "shell": {"Bash"}, "skill": {"Skill"}, "ask_user": {"AskUserQuestion"}, "agent": {"Agent"}, "task": {"Agent"},
+}
+FENCE = re.compile(r"(?ms)^[ \t]*```[^\n]*\n.*?^[ \t]*```[ \t]*$")
+
+
+def word_count(word, text):
+    pattern = re.compile(re.escape(word)) if not re.fullmatch(r"\w+", word) else pp.token(word, ignore_case=False)
+    return len(pattern.findall(text))
+
+
+def headings(body):
+    return re.findall(r"(?m)^## (.+?)\s*$", pp.strip_code_blocks(body))
+
+
+class ClaudeCopilotParityTest(unittest.TestCase):
+    """Claude Code のエージェント（agents/<名前>.md）と Copilot CLI のエージェント（com.github.copilot/agents/<名前>.agent.md）が、
+    同じ仕事を同じ部品で、同じ形の報告で行う。違うのはツールの言葉だけ"""
+
+    def setUp(self):
+        self.names = pp.agent_names()
+        if not self.names or not pp.CLAUDE_AGENTS_DIR.is_dir():
+            self.skipTest("どちらかのエージェントの定義がまだありません")
+
+    def pair(self, name):
+        claude = pp.frontmatter(pp.claude_agent_path(name))
+        copilot = pp.frontmatter(pp.agent_path(name))
+        self.assertIsNone(claude[2], f"agents/{name}.md: {claude[2]}")
+        self.assertIsNone(copilot[2], f"{name}{pp.AGENT_SUFFIX}: {copilot[2]}")
+        return claude, copilot
+
+    def test_same_agent_names(self):
+        self.assertEqual(sorted(pp.claude_agent_names()), sorted(self.names), "2つの形のエージェントの名前が違います")
+
+    def test_same_parts_table(self):
+        for name in self.names:
+            with self.subTest(agent=name):
+                (_, a, _), (_, b, _) = self.pair(name)
+                table_a, _ = pp.split_section_table(a, pp.PARTS_HEADING)
+                table_b, _ = pp.split_section_table(b, pp.PARTS_HEADING)
+                self.assertIsNotNone(table_a, f"agents/{name}.md に「## {pp.PARTS_HEADING}」がありません")
+                self.assertEqual(table_a, table_b, f"{name}: 「## {pp.PARTS_HEADING}」の表が、2つの形で違います")
+
+    def test_same_headings_in_the_same_order(self):
+        for name in self.names:
+            with self.subTest(agent=name):
+                (_, a, _), (_, b, _) = self.pair(name)
+                self.assertEqual(headings(a), headings(b), f"{name}: 「## 」の見出しが、2つの形で違います")
+
+    def test_same_report_templates(self):
+        for name in self.names:
+            with self.subTest(agent=name):
+                (_, a, _), (_, b, _) = self.pair(name)
+                self.assertEqual([m.strip() for m in FENCE.findall(a)], [m.strip() for m in FENCE.findall(b)],
+                                 f"{name}: 報告の形（``` で囲んだもの）が、2つの形で違います")
+
+    def test_tool_words_are_mapped(self):
+        """本文のツールの言葉：Claude Code は Skill・Agent・AskUserQuestion・Bash、Copilot CLI は skill・task・ask_user・シェル。
+        同じ数だけ出てきて、もう片方の言葉はない"""
+        for name in self.names:
+            (_, a, _), (_, b, _) = self.pair(name)
+            for claude_word, copilot_word in TOOL_WORDS:
+                with self.subTest(agent=name, word=claude_word):
+                    self.assertEqual(word_count(copilot_word, a), 0, f"agents/{name}.md に Copilot CLI の言葉「{copilot_word}」があります")
+                    self.assertEqual(word_count(claude_word, b), 0, f"{name}{pp.AGENT_SUFFIX} に Claude Code の言葉「{claude_word}」があります")
+                    self.assertEqual(word_count(claude_word, a), word_count(copilot_word, b),
+                                     f"{name}: 「{claude_word}」と「{copilot_word}」の数が違います")
+
+    def test_tools_are_mapped(self):
+        """frontmatter の tools：Copilot CLI のツールを Claude Code の名前に読み替えたものと同じ。
+        MCP の <登録名>/<ツール> は、Claude Code の2つの名前の形（プラグインのサーバー、手で登録したサーバー）"""
+        for name in self.names:
+            (fa, _, _), (fb, _, _) = self.pair(name)
+            want = set()
+            for tool in pp.tool_list(fb.get("tools")):
+                if isinstance(tool, str) and "/" in tool:
+                    want |= set(pp.claude_mcp_tool_names(*tool.split("/", 1)))
+                else:
+                    want |= COPILOT_TO_CLAUDE.get(tool, {f"（読み替えのない {tool}）"})
+            with self.subTest(agent=name):
+                self.assertEqual("tools" in fa, "tools" in fb, f"{name}: tools の行が、片方の形にだけあります")
+                self.assertEqual(sorted(set(pp.tool_list(fa.get("tools")))), sorted(want),
+                                 f"{name}: Claude Code の tools が、Copilot CLI の tools を読み替えたものと違います")
+
+    def write_back(self):
+        tools = set()
+        for server, names in pp.write_back_tools().items():
+            for tool in names:
+                tools |= set(pp.claude_mcp_tool_names(server, tool))
+        return tools
+
+    def test_orchestrator_cannot_edit_or_write_back(self):
+        """Claude Code の統括エージェントは tools を書かず、disallowedTools で Edit・Write と、書き戻しのツール（2つの名前の形）を外す"""
+        data = pp.defaults()
+        if data is None or not data.get("orchestrator"):
+            self.skipTest("defaults.json がまだないため、統括エージェントが分かりません")
+        path = pp.claude_agent_path(pp.id_stem(data["orchestrator"]))
+        if not path.is_file():
+            self.skipTest("Claude Code の統括エージェントがまだありません")
+        fm, _, problem = pp.frontmatter(path)
+        self.assertIsNone(problem, problem)
+        self.assertNotIn("tools", fm, "統括エージェントに tools があります（呼んだエージェントのツールが絞られる）")
+        disallowed = set(pp.tool_list(fm.get("disallowedTools")))
+        must = {"Edit", "Write"} | self.write_back()
+        self.assertEqual(sorted(must - disallowed), [], "統括エージェントの disallowedTools に足りないものがあります")
+        if not self.write_back():
+            self.skipTest("書き戻しのツール（destructiveHint=True）が MCP サーバーに見つかりません")
+
+    def test_mcp_tools_follow_the_table(self):
+        """Claude Code のエージェントの MCP のツールは、表の MCP サーバーのものだけ。2つの名前の形をどちらも書く。
+        書き戻しのツールは、どのエージェントの tools にも入れない（Copilot CLI の形も）"""
+        write_back = self.write_back()
+        plain = {t for names in pp.write_back_tools().values() for t in names}
+        for name in self.names:
+            (fa, a, _), (fb, _, _) = self.pair(name)
+            rows, _ = pp.parts_table(a)
+            table = {row[1] for row in rows or []}
+            tools = pp.tool_list(fa.get("tools"))
+            forms = {}
+            for tool in tools:
+                parsed = pp.parse_claude_mcp_tool(tool)
+                if parsed is None:
+                    continue
+                server, tool_name, form = parsed
+                forms.setdefault((server, tool_name), set()).add(form)
+                with self.subTest(agent=name, tool=tool):
+                    self.assertIn(server, table, f"{name}: tools の {tool} の MCP サーバーが「使う部品」の表にありません")
+                    self.assertNotIn(tool, write_back, f"{name}: tools に書き戻しのツール {tool} があります")
+            for (server, tool_name), seen in sorted(forms.items()):
+                with self.subTest(agent=name, tool=f"{server}/{tool_name}"):
+                    self.assertEqual(seen, {"plugin", "hand"}, f"{name}: {tool_name} を2つの名前の形で書いていません")
+            for tool in pp.tool_list(fb.get("tools")):
+                with self.subTest(agent=name, copilot_tool=tool):
+                    self.assertNotIn(str(tool).split("/", 1)[-1] if "/" in str(tool) else None, plain,
+                                     f"{name}{pp.AGENT_SUFFIX}: tools に書き戻しのツール {tool} があります")
 
 
 # ---------------------------------------------------------------------------

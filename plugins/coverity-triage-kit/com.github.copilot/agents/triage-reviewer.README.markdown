@@ -23,6 +23,14 @@
 
 使うスキルは、[検証エージェントの定義](triage-reviewer.agent.md#使う部品)の「使う部品」の表にあります。取り出して使うときは、定義を `.github/agents/` に、表のスキルのフォルダを `.github/skills/<名前>/` にコピーします。
 
+## Claude Code で使う
+
+Claude Code 用の定義は、プラグインの `agents/triage-reviewer.md` です。使う部品の表と決まりは、Copilot CLI 用の定義と同じです。
+
+- ふつうは、統括エージェントが一括のトリアージの中で呼びます。
+- 自分で頼むときは、確かめる結果のファイルと差分と、調べたリポジトリを伝えて、「triage-reviewer エージェントで、<実行フォルダ>/items/20001/result.json と差分を確かめて」のように、名前を挙げて頼みます（`@` で選んでもかまいません）。`claude --agent coverity-triage-kit:triage-reviewer` で起動してもかまいません。
+- 取り出して使うときは、定義 `agents/triage-reviewer.md` を `.claude/agents/`（自分だけで使うときは `~/.claude/agents/`）に、表のスキルのフォルダを `.claude/skills/<名前>/`（自分だけで使うときは `~/.claude/skills/<名前>/`）にコピーします。`/agents` に `triage-reviewer` が出れば完了です。
+
 ## うまくいかないとき
 
 | 起きること | すること |

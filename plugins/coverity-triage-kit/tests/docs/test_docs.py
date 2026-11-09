@@ -1,12 +1,14 @@
 """文書を確かめる試験（憲章 第6条3項、仕様 REQ-006〜REQ-008、設計書 9.1「文書」）。
 
-- 版：plugin.json・仕様書・設計書・変更履歴と、マーケットプレイスの一覧（リポジトリの根の marketplace.json と README）が同じ版。
+- 版：plugin.json・.claude-plugin/plugin.json・仕様書・設計書・変更履歴と、マーケットプレイスの一覧（リポジトリの
+  .github/plugin/marketplace.json と .claude-plugin/marketplace.json と README）が同じ版。
 - 要求の番号：仕様書の要求は、どれも設計書の「要求の追跡」の表にある。設計書と試験が挙げる REQ-xxx は、仕様書にある。
 - 部品の名前：仕様書と設計書は、部品を役割で呼ぶ。書いてよいのは取り決めの名前（MCP サーバーの登録名、ツールの名前、
   エクステンションのツールの名前、defaults.json の例、取り決めのファイルの名前）だけ。仕様書は、利用者が打つコマンドとして
   スキルの名前を書いてよい（表と /<スキル> の形）。エージェントのファイルの名前とスクリプトの名前は、どちらにも書かない。
 - docs/replace.md の「今の部品」の表が、今ある部品と合う（役割と名前の対応は、ここにだけある）。
 - プラグインの README の並び（REQ-008）と、元のプラグインとどちらか一方だけを入れること（REQ-007）。
+  README に「Claude Code で使う」の節があり、Claude Code で入れるときの名前（<プラグイン>@<マーケットプレイス>）を書く。
 - 文書の相対リンクが、あるファイルと見出しを指す。
 
   python3 -m unittest discover -s tests/docs -v
@@ -27,6 +29,8 @@ CHANGELOG = pp.ROOT / "CHANGELOG.md"
 README = pp.ROOT / "README.md"
 MARKET_ROOT = pp.ROOT.parents[1]
 MARKET_JSON = MARKET_ROOT / ".github" / "plugin" / "marketplace.json"
+CLAUDE_MARKET_JSON = MARKET_ROOT / ".claude-plugin" / "marketplace.json"
+CLAUDE_SECTION = "Claude Code で使う"
 MARKET_README = MARKET_ROOT / "README.md"
 REQ = re.compile(r"REQ-(\d{3})")
 REQ_RANGE = re.compile(r"REQ-(\d{3})\s*〜\s*REQ-(\d{3})")
@@ -70,10 +74,15 @@ class VersionTest(unittest.TestCase):
         top = re.search(r"(?m)^## ([0-9][^\s（(]*)", pp.read(CHANGELOG))
         self.assertIsNotNone(top, "変更履歴に版の見出し（## x.y.z）がありません")
         self.assertEqual(top.group(1), version, "変更履歴のいちばん上の版")
-        if MARKET_JSON.is_file():
-            listed = [p for p in json.loads(pp.read(MARKET_JSON)).get("plugins", []) if p.get("name") == pp.PLUGIN_NAME]
-            self.assertEqual([p.get("version") for p in listed], [version], "リポジトリの marketplace.json の版")
-            self.assertEqual(listed[0].get("source"), f"./plugins/{pp.PLUGIN_NAME}", "リポジトリの marketplace.json の source")
+        if pp.CLAUDE_MANIFEST.is_file():
+            self.assertEqual(json.loads(pp.read(pp.CLAUDE_MANIFEST)).get("version"), version, ".claude-plugin/plugin.json の版")
+        for market in (MARKET_JSON, CLAUDE_MARKET_JSON):
+            if not market.is_file():
+                continue
+            label = market.relative_to(MARKET_ROOT).as_posix()
+            listed = [p for p in json.loads(pp.read(market)).get("plugins", []) if p.get("name") == pp.PLUGIN_NAME]
+            self.assertEqual([p.get("version") for p in listed], [version], f"リポジトリの {label} の版")
+            self.assertEqual(listed[0].get("source"), f"./plugins/{pp.PLUGIN_NAME}", f"リポジトリの {label} の source")
         if MARKET_README.is_file():
             rows = [line for line in pp.read(MARKET_README).splitlines() if line.startswith(f"| [{pp.PLUGIN_NAME}]")]
             self.assertEqual(len(rows), 1, "リポジトリの README の一覧に、このプラグインの行がありません")
@@ -204,6 +213,20 @@ class ReadmeTest(unittest.TestCase):
             self.assertIn(word, self.text, f"README に {word} がありません（REQ-008）")
         for stage in ["1", "2", "3", "4"]:
             self.assertRegex(self.text, rf"{stage}\s*段階", f"README に {stage}段階目の説明がありません")
+
+    def test_claude_code_section(self):
+        """「Claude Code で使う」の節があり、Claude Code で入れるときの名前（<プラグイン>@<マーケットプレイス>）を書く"""
+        found = [h for h in self.headings if CLAUDE_SECTION in h]
+        self.assertTrue(found, f"README に「{CLAUDE_SECTION}」の見出しがありません")
+        part = pp.section(self.text, found[0])
+        self.assertTrue(part and part.strip(), f"README の「{CLAUDE_SECTION}」の節が空です")
+        if CLAUDE_MARKET_JSON.is_file():
+            market = json.loads(pp.read(CLAUDE_MARKET_JSON)).get("name")
+            self.assertIn(f"{pp.PLUGIN_NAME}@{market}", self.text, f"README に、Claude Code で入れるときの名前 {pp.PLUGIN_NAME}@{market} がありません")
+
+    def test_changelog_has_the_claude_code_version(self):
+        """Claude Code の形を足した版（0.2.0）の見出しが、変更履歴にある"""
+        self.assertRegex(pp.read(CHANGELOG), r"(?m)^## 0\.2\.0(?![0-9])", "変更履歴に 0.2.0 の見出しがありません")
 
     def test_original_plugin_is_named(self):
         """元のプラグインとはどちらか一方だけを入れることを書く（REQ-007）。元の名前は仕様書から読む"""

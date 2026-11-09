@@ -8,9 +8,12 @@ REQ-202、REQ-603、設計書 9.1「独立性」）。
 - 1段階目の部品（defaults.json の pluginSkills にないスキルと、MCP サーバー）：フォルダの中に、プラグインの名前（と略）、
   ほかの部品の名前、MCP サーバーの登録名とツールの名前（MCP サーバーの中を除く）、上の段階の言葉、フォルダの外を指すパスがない。
   sys.path でフォルダの外を読まない。フォルダだけを別の場所にコピーして（スキルは名前を変えたコピーも）、その試験が通る。
-- エージェント：部品の名前は「## 使う部品」の表にだけ（そのままの名前で）。tools の MCP のツールは、表の MCP サーバーのものだけ。
-  表の名前は、ある部品を指す。description に、defaults.json の役割の言葉がある。自分の名前を書かない。
-  2段階目の組（作業役とその表）と3段階目の組（統括エージェントの表をたどった部品）が、名前で閉じている。
+- エージェント（Copilot CLI の .agent.md と、Claude Code の agents/<名前>.md の両方）：部品の名前は「## 使う部品」の表にだけ
+  （そのままの名前で。Claude Code の frontmatter の name・tools・disallowedTools の行は見ない）。tools の MCP のツールは、
+  表の MCP サーバーのものだけ。表の名前は、ある部品を指す。description に、defaults.json の役割の言葉がある。自分の名前を書かない。
+  2段階目の組（作業役とその表）と3段階目の組（統括エージェントの表をたどった部品）が、名前で閉じている。Copilot CLI の形
+  （.github/agents、.github/skills）と Claude Code の形（.claude/agents、.claude/skills、MCP サーバーは手で coverity-connect の
+  ような登録名で登録）の両方で取り出して確かめる。
 - プラグイン全体のスキル：部品の名前は、SKILL.md の「## 使う部品」の表にだけ。
 - 上の段の文書（プラグインの README、4段階目のガイド、エージェントの README、変更履歴）に、下の段のスクリプトの名前と設定の項目がない。
 - エクステンション：スキルとエージェントの名前（とスクリプトの名前）は defaults.json にだけ。
@@ -24,6 +27,7 @@ REQ-202、REQ-603、設計書 9.1「独立性」）。
 """
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -154,23 +158,42 @@ def stage1_parts():
     return parts
 
 
-def agent_info(name):
+KINDS = ("copilot", "claude")
+
+
+def kind_path(name, kind="copilot"):
+    return pp.claude_agent_path(name) if kind == "claude" else pp.agent_path(name)
+
+
+def kind_names(kind="copilot"):
+    return pp.claude_agent_names() if kind == "claude" else pp.agent_names()
+
+
+def scan_text(path, kind="copilot"):
+    """名前を探す文。Claude Code の定義は、frontmatter の name・tools・disallowedTools の行を空にする（行の番号は変えない）"""
+    text = pp.read(path)
+    return pp.without_frontmatter_keys(text) if kind == "claude" else text
+
+
+def agent_info(name, kind="copilot"):
     """エージェントの定義を読む：{path, frontmatter, body, table, outside, error}"""
-    path = pp.agent_path(name)
+    path = kind_path(name, kind)
     data, body, problem = pp.frontmatter(path)
     rows, table_error = pp.parts_table(body)
     _, outside_body = pp.split_section_table(body, pp.PARTS_HEADING)
     data = data or {}
-    outside = "\n".join([str(data.get("description", "")), " ".join(map(str, data.get("model") or [])), outside_body])
+    model = data.get("model")
+    model = model if isinstance(model, list) else [model] if model else []
+    outside = "\n".join([str(data.get("description", "")), " ".join(map(str, model)), outside_body])
     return {"path": path, "fm": data, "body": body, "rows": rows or [], "outside": outside,
             "error": problem or table_error}
 
 
-def resolve(name):
-    """表の名前が指す部品の種類（skill / agent / mcp）。なければ None"""
+def resolve(name, kind="copilot"):
+    """表の名前が指す部品の種類（skill / agent / mcp）。なければ None。kind はエージェントの形（copilot / claude）"""
     if (pp.SKILLS_DIR / name / "SKILL.md").is_file():
         return "skill"
-    if pp.agent_path(name).is_file():
+    if kind_path(name, kind).is_file():
         return "agent"
     for entry in mcp_entries().values():
         if name in entry["names"] and entry["folder"] and entry["folder"].is_dir():
@@ -178,20 +201,20 @@ def resolve(name):
     return None
 
 
-def closure(start):
+def closure(start, form="copilot"):
     """エージェントから「使う部品」の表をたどって、使う部品の名前を集める（エージェントは、その表もたどる）"""
     seen, todo, missing = {start}, [start], []
     while todo:
         name = todo.pop()
-        if not pp.agent_path(name).is_file():
+        if not kind_path(name, form).is_file():
             missing.append(name)
             continue
-        for row in agent_info(name)["rows"]:
+        for row in agent_info(name, form)["rows"]:
             part = row[1]
             if part in seen:
                 continue
             seen.add(part)
-            kind = resolve(part)
+            kind = resolve(part, form)
             if kind == "agent":
                 todo.append(part)
             elif kind is None:
@@ -282,49 +305,58 @@ class CopyAlone(unittest.TestCase):
 
 
 class AgentIndependence(unittest.TestCase):
-    """エージェント：部品の名前は「## 使う部品」の表にだけ書く（仕様 REQ-202、設計書 3.3）"""
+    """エージェント：部品の名前は「## 使う部品」の表にだけ書く（仕様 REQ-202、設計書 3.3）。
+    Copilot CLI の定義と Claude Code の定義の両方を確かめる"""
 
     def setUp(self):
-        self.names = pp.agent_names()
-        if not self.names:
+        self.agents = [(kind, name) for kind in KINDS for name in kind_names(kind)]
+        if not self.agents:
             self.skipTest("エージェントの定義がまだありません")
 
     def test_parts_table(self):
-        for name in self.names:
-            info = agent_info(name)
-            with self.subTest(agent=name):
-                self.assertIsNone(info["error"], f"{name}: {info['error']}")
+        for kind, name in self.agents:
+            info = agent_info(name, kind)
+            label = pp.rel(info["path"])
+            with self.subTest(agent=label):
+                self.assertIsNone(info["error"], f"{label}: {info['error']}")
                 parts = [row[1] for row in info["rows"]]
-                self.assertEqual(len(parts), len(set(parts)), f"{name}: 表に同じ部品が2回あります")
+                self.assertEqual(len(parts), len(set(parts)), f"{label}: 表に同じ部品が2回あります")
                 for role, part, when in info["rows"]:
-                    self.assertTrue(role and when, f"{name}: 表の {part} の役割か使うときが空です")
-                    self.assertRegex(part, r"^[a-z0-9][a-z0-9-]*$", f"{name}: 表の部品は、そのままの名前にします（プラグインの名前や : を付けない）：{part}")
-                    self.assertIsNotNone(resolve(part), f"{name}: 表の {part} が、ある部品（スキル・エージェント・MCP サーバー）を指していません")
+                    self.assertTrue(role and when, f"{label}: 表の {part} の役割か使うときが空です")
+                    self.assertRegex(part, r"^[a-z0-9][a-z0-9-]*$", f"{label}: 表の部品は、そのままの名前にします（プラグインの名前や : を付けない）：{part}")
+                    self.assertIsNotNone(resolve(part, kind), f"{label}: 表の {part} が、ある部品（スキル・エージェント・MCP サーバー）を指していません")
 
     def test_names_only_in_the_table(self):
         problems = []
-        for name in self.names:
-            info = agent_info(name)
+        for kind, name in self.agents:
+            info = agent_info(name, kind)
             patterns = part_name_patterns() + script_patterns() + plugin_patterns()
             problems += pp.hits_in_text(f"{pp.rel(info['path'])}（表の外）", info["outside"], patterns)
         self.assertEqual(problems, [], "エージェントの定義の、表の外に部品の名前（か中身）があります：\n" + "\n".join(problems))
 
     def test_does_not_name_itself(self):
-        for name in self.names:
-            with self.subTest(agent=name):
-                found = pp.hits(pp.agent_path(name), [(name, pp.name_token(name))])
+        for kind, name in self.agents:
+            path = kind_path(name, kind)
+            with self.subTest(agent=pp.rel(path)):
+                found = pp.hits_in_text(pp.rel(path), scan_text(path, kind), [(name, pp.name_token(name))])
                 self.assertEqual(found, [], f"{name}: 自分の名前を書いています")
 
     def test_mcp_tools_only_for_servers_in_the_table(self):
         known = pp.all_mcp_tool_names()
-        for name in self.names:
-            info = agent_info(name)
+        for kind, name in self.agents:
+            info = agent_info(name, kind)
             table = {row[1] for row in info["rows"]}
-            for tool in info["fm"].get("tools") or []:
-                if not isinstance(tool, str) or "/" not in tool:
+            for tool in pp.tool_list(info["fm"].get("tools")):
+                if kind == "claude":
+                    parsed = pp.parse_claude_mcp_tool(tool)
+                    if parsed is None:
+                        continue
+                    server, tool_name, _ = parsed
+                elif isinstance(tool, str) and "/" in tool:
+                    server, tool_name = tool.split("/", 1)
+                else:
                     continue
-                server, tool_name = tool.split("/", 1)
-                with self.subTest(agent=name, tool=tool):
+                with self.subTest(agent=pp.rel(info["path"]), tool=tool):
                     self.assertIn(server, table, f"{name}: tools の {tool} の MCP サーバーが「使う部品」の表にありません")
                     if known and tool_name != "*":
                         self.assertIn(tool_name, known, f"{name}: {tool} は、MCP サーバーにないツールです")
@@ -334,8 +366,9 @@ class AgentIndependence(unittest.TestCase):
         patterns = upper_patterns()[:2] + [(w, pp.token(w)) for w in ("extension", "extensions")]
         patterns.append((pp.PLUGIN_NAME + "_", re.compile(re.escape(pp.PLUGIN_NAME + "_"))))
         problems = []
-        for name in self.names:
-            problems += pp.hits(pp.agent_path(name), patterns)
+        for kind, name in self.agents:
+            path = kind_path(name, kind)
+            problems += pp.hits_in_text(pp.rel(path), scan_text(path, kind), patterns)
         self.assertEqual(problems, [], "エージェントが、エクステンションのことを書いています：\n" + "\n".join(problems))
 
     def test_role_words(self):
@@ -346,9 +379,9 @@ class AgentIndependence(unittest.TestCase):
             if role not in roles:
                 continue
             owner = pp.id_stem(roles[role])
-            for name in self.names:
-                description = str(agent_info(name)["fm"].get("description", ""))
-                with self.subTest(role=role, agent=name):
+            for kind, name in self.agents:
+                description = str(agent_info(name, kind)["fm"].get("description", ""))
+                with self.subTest(role=role, agent=pp.rel(kind_path(name, kind))):
                     if name == owner:
                         self.assertIn(word, description, f"{name} の description に、役割の言葉「{word}」がありません")
                     else:
@@ -358,78 +391,140 @@ class AgentIndependence(unittest.TestCase):
         """2段階目の作業役は、3段階目（統括・検証・統合のエージェント）のことを書かない"""
         data = defaults_or_skip(self)
         worker = pp.id_stem((data.get("roles") or {}).get("worker", ""))
-        if not pp.agent_path(worker).is_file():
+        paths = [(kind, kind_path(worker, kind)) for kind in KINDS if kind_path(worker, kind).is_file()]
+        if not paths:
             self.skipTest("作業役の定義がまだありません")
         patterns = [(w, re.compile(re.escape(w))) for w in STAGE3_WORDS_JA] + [(w, pp.token(w)) for w in UPPER_WORDS_EN[2:]]
-        found = pp.hits(pp.agent_path(worker), patterns)
+        found = []
+        for kind, path in paths:
+            found += pp.hits_in_text(pp.rel(path), scan_text(path, kind), patterns)
         self.assertEqual(found, [], "作業役が、3段階目のことを書いています：\n" + "\n".join(found))
 
 
 class Stage2And3Sets(unittest.TestCase):
-    """2段階目と3段階目の組が、名前で閉じている（その組だけを取り出して使える。仕様 REQ-002、REQ-603）"""
+    """2段階目と3段階目の組が、名前で閉じている（その組だけを取り出して使える。仕様 REQ-002、REQ-603）。
+    Copilot CLI の形（.github/agents、.github/skills）と Claude Code の形（.claude/agents、.claude/skills、手で登録した MCP サーバー）で"""
 
-    def extract(self, names):
-        """組の部品を、利用者が置く形（.github/agents、.github/skills、mcp/）に取り出し、
-        取り出した中で表の名前がたどれること、組の外の部品の名前がないことを確かめる"""
+    def extract(self, names, kind="copilot"):
+        """組の部品を、利用者が置く形に取り出し、取り出した中で表の名前がたどれること、組の外の部品の名前がないことを確かめる。
+        Copilot CLI：.github/agents/<名前>.agent.md、.github/skills/、mcp/。
+        Claude Code：.claude/agents/<名前>.md、.claude/skills/、mcp/ と、それを登録名で登録する .mcp.json。
+        Claude Code のエージェントの MCP のツールは、手で登録したときの名前（mcp__<登録名>__<ツール>）でも書いてあること"""
         names = set(names)
         for entry in mcp_entries().values():
             if names & entry["names"]:
                 names |= entry["names"]
+        claude = kind == "claude"
         with tempfile.TemporaryDirectory(prefix="stage-set-") as tmp:
             base = Path(tmp)
-            skills, agents, servers = base / ".github" / "skills", base / ".github" / "agents", base / "mcp"
+            top = base / (".claude" if claude else ".github")
+            skills, agents, servers = top / "skills", top / "agents", base / "mcp"
             for folder in (skills, agents, servers):
                 folder.mkdir(parents=True)
+            suffix = pp.CLAUDE_AGENT_SUFFIX if claude else pp.AGENT_SUFFIX
+            registered = {}
             for name in sorted(names):
-                kind = resolve(name)
-                if kind == "skill":
+                part = resolve(name, kind)
+                if part == "skill":
                     shutil.copytree(pp.SKILLS_DIR / name, skills / name, ignore=pp.copy_ignore)
-                elif kind == "agent":
-                    shutil.copy2(pp.agent_path(name), agents / (name + pp.AGENT_SUFFIX))
-                elif kind == "mcp" and not (servers / name).exists():
+                elif part == "agent":
+                    shutil.copy2(kind_path(name, kind), agents / (name + suffix))
+                elif part == "mcp" and not (servers / name).exists():
                     entry = next(e for e in mcp_entries().values() if name in e["names"])
                     if not any((servers / alias).exists() for alias in entry["names"]):
                         shutil.copytree(entry["folder"], servers / name, ignore=pp.copy_ignore)
-            available = {p.name for p in skills.iterdir()} | {pp.agent_stem(p) for p in agents.iterdir()}
+                        for reg, folder in pp.mcp_registrations().items():
+                            if folder and entry["folder"] and folder.resolve() == entry["folder"].resolve():
+                                registered[reg] = name
+            problems = []
+            if claude and registered:
+                config = {"mcpServers": {}}
+                for reg, folder in sorted(registered.items()):
+                    server = dict((pp.mcp_config().get("mcpServers") or {}).get(reg) or {})
+                    args = list(server.get("args") or [])
+                    for i, arg in enumerate(args[:-1]):
+                        if arg == "--directory":
+                            args[i + 1] = (servers / folder).as_posix()
+                    server["args"] = args
+                    server["env"] = {k: "${" + k + ":-}" for k in server.get("env") or {}}
+                    config["mcpServers"][reg] = server
+                (base / ".mcp.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+            available = {p.name for p in skills.iterdir()} | {p.name[: -len(suffix)] for p in agents.iterdir()}
             for folder in servers.iterdir():
                 available |= next((e["names"] for e in mcp_entries().values() if folder.name in e["names"]), {folder.name})
-            problems = []
             for agent in sorted(agents.iterdir()):
-                _, body, _ = pp.frontmatter(agent)
+                fm, body, _ = pp.frontmatter(agent)
                 rows, _ = pp.parts_table(body)
                 for row in rows or []:
                     if row[1] not in available:
                         problems.append(f"{agent.name} の表の {row[1]} が、取り出した組の中にありません")
+                if claude:
+                    stem = agent.name[: -len(suffix)]
+                    if (fm or {}).get("name") != stem:
+                        problems.append(f"{agent.name} の name が、ファイルの名前と違います")
+                    parsed = [pp.parse_claude_mcp_tool(t) for t in pp.tool_list((fm or {}).get("tools"))]
+                    plugin_form = {(s, t) for s, t, f in filter(None, parsed) if f == "plugin"}
+                    hand_form = {(s, t) for s, t, f in filter(None, parsed) if f == "hand"}
+                    for server, tool in sorted(plugin_form - hand_form):
+                        problems.append(f"{agent.name} の tools に、手で登録したときの名前 mcp__{server}__{tool} がありません")
+                    for server, tool in sorted(hand_form):
+                        if server not in registered:
+                            problems.append(f"{agent.name} の tools の mcp__{server}__{tool} のサーバーが、取り出した組に登録されていません")
             patterns = [(n, pp.name_token(n)) for n in sorted(set(pp.all_part_names()) - names)]
             for path in pp.text_files(base):
                 problems += pp.hits_in_text(path.relative_to(base).as_posix(), pp.read(path), patterns)
             return problems
 
-    def test_stage2_worker_set(self):
+    def worker_set(self, kind):
         data = defaults_or_skip(self)
         worker = pp.id_stem((data.get("roles") or {}).get("worker", ""))
-        if not pp.agent_path(worker).is_file():
+        if not kind_path(worker, kind).is_file():
             self.skipTest("作業役の定義がまだありません")
-        names, missing = closure(worker)
+        names, missing = closure(worker, kind)
         self.assertEqual(missing, [], f"作業役の表に、ない部品があります：{missing}")
         plugin = set(pp.plugin_skill_names())
-        upper = [n for n in names - {worker} if resolve(n) == "agent" or n in plugin]
+        upper = [n for n in names - {worker} if resolve(n, kind) == "agent" or n in plugin]
         self.assertEqual(upper, [], f"作業役の表に、1段階目でない部品があります（2段階目は1段階目の部品だけで動く）：{upper}")
-        self.assertEqual(self.extract(names), [], "2段階目の組を取り出すと、名前がたどれません")
+        return names
 
-    def test_stage3_orchestrator_set(self):
+    def orchestrator_set(self, kind):
         data = defaults_or_skip(self)
         orchestrator = pp.id_stem(data.get("orchestrator", ""))
-        if not pp.agent_path(orchestrator).is_file():
+        if not kind_path(orchestrator, kind).is_file():
             self.skipTest("統括エージェントの定義がまだありません")
-        names, missing = closure(orchestrator)
+        names, missing = closure(orchestrator, kind)
         self.assertEqual(missing, [], f"3段階目の組に、ない部品があります：{missing}")
         plugin = set(pp.plugin_skill_names())
         self.assertEqual(sorted(names & plugin), [], "3段階目の組に、4段階目のスキルがあります（3段階目は4段階目を知らない）")
         for role, agent_id in (data.get("roles") or {}).items():
             with self.subTest(role=role):
                 self.assertIn(pp.id_stem(agent_id), names, f"defaults.json の {role} のエージェントが、統括エージェントの表にありません")
-        self.assertEqual(self.extract(names), [], "3段階目の組を取り出すと、名前がたどれません")
+        return names
+
+    def test_stage2_worker_set(self):
+        self.assertEqual(self.extract(self.worker_set("copilot")), [], "2段階目の組を取り出すと、名前がたどれません")
+
+    def test_stage3_orchestrator_set(self):
+        self.assertEqual(self.extract(self.orchestrator_set("copilot")), [], "3段階目の組を取り出すと、名前がたどれません")
+
+    def test_stage2_worker_set_for_claude_code(self):
+        if not pp.CLAUDE_AGENTS_DIR.is_dir():
+            self.skipTest("Claude Code のエージェントがまだありません")
+        names = self.worker_set("claude")
+        self.assertEqual(self.extract(names, "claude"), [], "2段階目の組を Claude Code の形で取り出すと、名前がたどれません")
+
+    def test_stage3_orchestrator_set_for_claude_code(self):
+        if not pp.CLAUDE_AGENTS_DIR.is_dir():
+            self.skipTest("Claude Code のエージェントがまだありません")
+        names = self.orchestrator_set("claude")
+        self.assertEqual(self.extract(names, "claude"), [], "3段階目の組を Claude Code の形で取り出すと、名前がたどれません")
+
+    def test_both_forms_make_the_same_sets(self):
+        """2つの形の表は同じなので、組も同じ部品になる"""
+        if not pp.CLAUDE_AGENTS_DIR.is_dir():
+            self.skipTest("Claude Code のエージェントがまだありません")
+        self.assertEqual(sorted(self.worker_set("claude")), sorted(self.worker_set("copilot")), "2段階目の組が、2つの形で違います")
+        self.assertEqual(sorted(self.orchestrator_set("claude")), sorted(self.orchestrator_set("copilot")), "3段階目の組が、2つの形で違います")
 
 
 class ReadmeExtractionLists(unittest.TestCase):
@@ -565,13 +660,16 @@ class NoNameCollision(unittest.TestCase):
             if pp.ROOT.parent.is_dir() else []
         if not siblings:
             self.skipTest("ほかのプラグインがありません")
-        ours_agents = set(pp.agent_names())
+        ours_agents = set(pp.agent_names()) | set(pp.claude_agent_names())
         ours_servers = set(pp.mcp_config().get("mcpServers") or {})
         ours_ext = {p.name for p in pp.EXTENSIONS_DIR.iterdir() if p.is_dir()} if pp.EXTENSIONS_DIR.is_dir() else set()
         for other in siblings:
             agents = {pp.agent_stem(p) for p in (other / "com.github.copilot" / "agents").glob("*" + pp.AGENT_SUFFIX)}
-            data = pp.load_json(other / "mcp.json") or {}
-            servers = set(data.get("mcpServers") or {}) if isinstance(data, dict) else set()
+            agents |= {p.stem for p in (other / "agents").glob("*.md")}  # Claude Code の形
+            servers = set()
+            for config in ("mcp.json", ".mcp.json"):
+                data = pp.load_json(other / config) or {}
+                servers |= set(data.get("mcpServers") or {}) if isinstance(data, dict) else set()
             ext_dir = other / "com.github.copilot" / "extensions"
             exts = {p.name for p in ext_dir.iterdir() if p.is_dir()} if ext_dir.is_dir() else set()
             with self.subTest(plugin=other.name):

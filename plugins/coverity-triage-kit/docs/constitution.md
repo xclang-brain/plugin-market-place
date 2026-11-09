@@ -1,6 +1,6 @@
 # coverity-triage-kit 憲章
 
-- 版：1.0.0
+- 版：1.1.0
 - 由来：元のプラグイン coverity-warning-triage の憲章 1.1.0 と、embedded-debug-loop の憲章 1.1.0 をもとに、coverity-triage-kit 自身の決まりにしたもの。条の番号は由来の憲章と同じにしてある。欠番（第4条と、第11条〜第18条）は、coverity-triage-kit に関わらないので載せていない。
 
 ## 第1章 総則
@@ -30,8 +30,8 @@
 
 ### 第5条 準拠仕様
 
-1. Agent Plugins 1.0.0 と GitHub Copilot CLI の公式プラグイン仕様に従う。
-2. 両仕様が両立しない場合は Agent Plugins 1.0.0 を優先する。
+1. Agent Plugins 1.0.0 と、GitHub Copilot CLI と Claude Code の公式プラグイン仕様に従う。1つのフォルダを、両方のツールのプラグインにする。
+2. 仕様が両立しない場合は Agent Plugins 1.0.0 を優先する。Copilot CLI と Claude Code の仕様が両立しないときは、それぞれのツールが読むファイルを分けて両方に従う（分け方は設計書に書き、試験で確かめる）。
 3. 技術的な判断は、その時点の最新の公式の情報（公式の仕様、公式ドキュメント、更新履歴、最新の版での実測）にもとづいて行う。古い版や古いモデルの情報を使うときは、版と時点を書き、最新の情報で確かめ直す。
 4. スキル・MCP サーバー・エージェントは、Anthropic の公式の指針（Skill authoring best practices、Writing effective tools for agents、Building effective agents）に沿って作る。スキルは skill-creator、MCP サーバーは mcp-builder の手順で作り、試す。
 
@@ -130,4 +130,5 @@ PDS サイクルで成果物と作業の進め方を改善する。
 
 | 版 | 日付 | 内容 |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-09 | 第5条1項・2項に、Claude Code の公式プラグイン仕様と、1つのフォルダを両方のツールのプラグインにすることを足した |
 | 1.0.0 | 2026-11-08 | 元のプラグイン coverity-warning-triage の憲章 1.1.0 と embedded-debug-loop の憲章 1.1.0 をもとに作成。第5条に第4項（Anthropic の指針と、skill-creator・mcp-builder で作ること）を足した。第19条1項に、3段階目で検証と統合を外せることを足した。第23条に、一括のトリアージでの Plan の受け持ちを足した。第25条を、取り出して使えること（第2項）、段階の向き（第3項）、取り決め（第4項・第5項）まで広げた。第26条（4つの段階）を足した |
