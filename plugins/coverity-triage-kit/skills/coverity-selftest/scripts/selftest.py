@@ -34,6 +34,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -705,6 +706,21 @@ def cmd_check_config(folder: str) -> dict[str, Any]:
 SOURCE_EXCERPT = re.compile(r"^\s*(\d+\s*)?\|")  # compiler lines that quote the source ("  12 | x = y;")
 
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def kill_tree(proc: "subprocess.Popen[bytes]") -> None:
+    """Stop a process and its children (taskkill /T on Windows, the process group elsewhere)."""
+    if sys.platform == "win32":
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+        subprocess.run([str(taskkill), "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+
+
 def log_tail(text: str) -> str:
     lines = [line.rstrip() for line in text.splitlines() if line.strip() and not SOURCE_EXCERPT.match(line)]
     return "\n".join(line[:200] for line in lines[-LOG_LINES:])
@@ -751,20 +767,31 @@ def cmd_check_build(folder: str) -> dict[str, Any]:
         env = {k: v for k, v in os.environ.items() if k not in hidden}
         progress("試しにビルドしています（時間がかかることがあります）")
         started = time.monotonic()
+        # The output goes to a file and the build runs in its own process group, so that a build that
+        # does not end can be stopped with all its children (a pipe would wait for every grandchild).
+        log = work / "build.log"
+        group: dict[str, Any] = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | NO_WINDOW}
+                                 if sys.platform == "win32" else {"start_new_session": True})
         try:
-            proc = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, timeout=timeout,
-                                  stdin=subprocess.DEVNULL, env=env)
+            with open(log, "wb") as handle:
+                proc = subprocess.Popen(command, shell=True, cwd=cwd, stdout=handle, stderr=subprocess.STDOUT,
+                                        stdin=subprocess.DEVNULL, env=env, **group)
+                try:
+                    code = proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    kill_tree(proc)
+                    proc.wait()
+                    code = None
             seconds = time.monotonic() - started
-            output = (proc.stdout or b"").decode("utf-8", errors="replace") + "\n" + \
-                (proc.stderr or b"").decode("utf-8", errors="replace")
-            if proc.returncode == 0:
+            output = log.read_bytes().decode("utf-8", errors="replace")
+            if code is None:
+                recs.append(results.record("4-1", "fail", f"{timeout // 60} 分で終わりませんでした（止めました）",
+                                           "入力待ちで止まっていないか、verify.timeout_minutes が短すぎないか確かめます"))
+            elif code == 0:
                 recs.append(results.record("4-1", "pass", f"ビルドが通りました（{seconds:.0f} 秒）"))
             else:
-                recs.append(results.record("4-1", "fail", f"ビルドが失敗しました（終了コード {proc.returncode}、{seconds:.0f} 秒）",
+                recs.append(results.record("4-1", "fail", f"ビルドが失敗しました（終了コード {code}、{seconds:.0f} 秒）",
                                            log_tail(output)))
-        except subprocess.TimeoutExpired:
-            recs.append(results.record("4-1", "fail", f"{timeout // 60} 分で終わりませんでした",
-                                       "入力待ちで止まっていないか、verify.timeout_minutes が短すぎないか確かめます"))
         except OSError as exc:
             recs.append(results.record("4-1", "fail", f"ビルドを始められませんでした: {exc}"))
     except CliError as exc:

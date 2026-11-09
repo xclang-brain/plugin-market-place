@@ -341,7 +341,7 @@ if not MISSING:
             from coverity_mcp import connect, tools
 
             self.tools = tools
-            self.tmp = Path(tempfile.mkdtemp(prefix="cov-mcp-test-"))
+            self.tmp = Path(tempfile.mkdtemp(prefix="cov-mcp-test-")).resolve()  # not an 8.3 short path on Windows
             self.addCleanup(self._cleanup)
             self.repo = self.tmp / "repo"
             (self.repo / ".coverity-triage").mkdir(parents=True)

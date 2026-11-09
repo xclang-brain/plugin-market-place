@@ -4,15 +4,19 @@ note-issue, initial-status."""
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET  # noqa: N817 - the usual name
 from pathlib import Path
 from typing import Any
 
 from . import approvals, briefs, checks, initial, issues, jobs, metrics, oplog, report, schema
-from .common import (RunError, append_line, file_lock, inside, mtime, now_iso, read_json, resolve_path, try_json,
-                     write_json)
+from .envvars import KEY_ENVS
+from .common import (RunError, append_line, file_lock, inside, mtime, now_iso, read_json, resolve_path, run_cmd,
+                     try_json, write_json)
 from .config import (DEFAULT_FILTER, PREPARE_HINT, config_path, filter_names, load_config, load_filter, output_dir,
                      parse_filter, read_yaml)
 from .flow import STAGE_JA, STALE_SECONDS
@@ -22,6 +26,7 @@ from .work import VCS_LOCK_STALE, VCS_LOCK_WAIT
 
 STALL_SECONDS = 600
 INITIAL_STALL_SECONDS = 1800
+SCRIPT_STAGES = ("copy", "save", "merge")  # an item's stage while a script (not an agent) works on it: not "stalled"
 LONG_PATH = 240
 AGENT_ROLES = ("worker", "reviewer", "integrator")
 
@@ -33,11 +38,22 @@ def _repo(path: str) -> Path:
     return repo
 
 
-def permission_steps(output: Path) -> list[str]:
-    return [f"チャットで /add-dir \"{output}\" と入力し、最初の確認で「このセッションでは許可」を選びます"
-            "（uv のコマンド、ファイルの書き込み、Coverity との通信のツール）。",
-            f"または、Copilot CLI を copilot --add-dir \"{output}\" --allow-tool 'shell(uv:*)' --allow-tool write "
-            "--allow-tool '<Coverity との通信の MCP サーバーの登録名>' で起動し直します。"]
+MCP_TOOL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\([A-Za-z0-9_]{1,64}\)$")
+
+
+def permission_steps(output: Path, mcp_tools: list[str] | None = None) -> list[str]:
+    """The two ways to pre-approve (REQ-306). The Coverity tools to allow come from the caller as
+    ``<registration name>(<tool>)`` (``--mcp-tool``): only the tools that read. The tool that writes triage
+    back to Coverity is never pre-approved, so writing back always asks (REQ-107)."""
+    tools = [t for t in dict.fromkeys(mcp_tools or []) if MCP_TOOL.match(t)]
+    first = (f"チャットで /add-dir \"{output}\" と入力し、最初の確認で「このセッションでは許可」を選びます"
+             "（uv のコマンド、ファイルの書き込み、Coverity から読むツール）。Coverity に書き戻すツールの確認には、許可を与えません。")
+    restart = f"または、Copilot CLI を copilot --add-dir \"{output}\" --allow-tool 'shell(uv:*)' --allow-tool write"
+    if tools:
+        flags = " ".join(f"--allow-tool '{t}'" for t in tools)
+        return [first, f"{restart} {flags} で起動し直します（Coverity に書き戻すツールは許可しません。反映するときに確認が出ます）。"]
+    return [first, f"{restart} で起動し直します（Coverity から読むツールは、最初の確認で「このセッションでは許可」を選びます。"
+                   "書き戻すツールは前もって許可しません）。"]
 
 
 # ---- settings ---------------------------------------------------------------------------------
@@ -72,7 +88,9 @@ def settings(repo_root: str) -> dict[str, Any]:
             "integration": values["agents"]["integration"], "initial": verify["initial"], "verify": verify["default"],
             "max_items": values["max_items"], "parallel": values["parallel"], "output_dir": str(out_dir),
             "filters": names, "default_filter": DEFAULT_FILTER if DEFAULT_FILTER in names else (names[0] if names else None),
-            "vcs": values["vcs"]["type"], "problems": problems, "ready": not problems}
+            "vcs": values["vcs"]["type"], "problems": problems, "ready": not problems,
+            # names (never values) of the variables that hold credentials: callers mask their values in text they show
+            "secret_envs": [n for n in (values["coverity"]["user_env"], values["coverity"]["key_env"], *KEY_ENVS) if n]}
 
 
 # ---- runs -------------------------------------------------------------------------------------
@@ -103,7 +121,36 @@ def runs(repo_root: str, limit: int = 20) -> dict[str, Any]:
 # ---- new-run ----------------------------------------------------------------------------------
 
 
-def _longest_path(repo: Path) -> int:
+def _versioned(repo: Path, vcs_type: str) -> list[str] | None:
+    """The files a work copy will hold (git ls-files, or svn's versioned items), relative to ``repo``.
+    None when the command fails (then every file is measured)."""
+    try:
+        if vcs_type == "git":
+            proc = run_cmd(["git", "-c", "core.longpaths=true", "ls-files", "-z"], cwd=repo, check=False, timeout=60)
+            if proc.returncode != 0:
+                return None
+            return [p for p in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if p]
+        if vcs_type == "svn":
+            proc = run_cmd(["svn", "status", "-v", "--xml", "--non-interactive"], cwd=repo, check=False, timeout=120)
+            if proc.returncode != 0:
+                return None
+            root = ET.fromstring(proc.stdout)  # svn writes XML in UTF-8 whatever the console code page is
+            out = []
+            for entry in root.iter("entry"):
+                status = entry.find("wc-status")
+                if status is not None and status.get("item") not in ("unversioned", "ignored", "external"):
+                    out.append(os.path.relpath(entry.get("path", ""), repo) if os.path.isabs(entry.get("path", ""))
+                               else entry.get("path", ""))
+            return out
+    except (RunError, OSError, ET.ParseError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def _longest_path(repo: Path, vcs_type: str = "") -> int:
+    files = _versioned(repo, vcs_type) if vcs_type else None
+    if files is not None:
+        return max((len(os.path.normpath(f)) for f in files), default=0)
     longest = 0
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = [d for d in dirnames if d not in (".git", ".svn")]
@@ -112,18 +159,20 @@ def _longest_path(repo: Path) -> int:
     return longest
 
 
-def long_path_problem(work_dir: Path, repo: Path, limit: int = LONG_PATH) -> str | None:
-    """A note when a work copy path would pass ``limit`` characters (Windows tools fail on long paths)."""
-    worst = len(str(work_dir / "w8")) + 1 + _longest_path(repo)
+def long_path_problem(work_dir: Path, repo: Path, limit: int = LONG_PATH, vcs_type: str = "") -> str | None:
+    """A note when a work copy path, or a fixed file's copy, would pass ``limit`` characters (Windows tools fail
+    on long paths). Only the files a work copy holds count (not ignored build trees)."""
+    prefix = max(len(str(work_dir / "w8")), len(str(work_dir.parent / "fixed" / "0000000" / "fix")))
+    worst = prefix + 1 + _longest_path(repo, vcs_type)
     if worst > limit:
         return (f"作業用のコピーのパスが {worst} 文字ほどになり、{limit} 文字を超えます。"
-                "設定 output_dir を短いパス（例 C:\\cov-out）にしてください")
+                "設定 output_dir を短いパス（例 C:/cov-out）にしてください")
     return None
 
 
 def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], limit: int | None, verify: str | None,
             first: bool | None, review: bool | None, integration: bool | None, max_rework: int | None,
-            issues_file: str | None) -> dict[str, Any]:
+            issues_file: str | None, mcp_tools: list[str] | None = None) -> dict[str, Any]:
     repo = _repo(repo_root)
     values, problems = load_config(repo)
     if problems:
@@ -169,7 +218,7 @@ def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], 
         if found:
             raise RunError("警告の一覧のファイルに直すところがあります", problems=found, issues_file=str(source))
     if sys.platform == "win32":
-        problem = long_path_problem(output / "00000000-000000-00" / "work", repo)
+        problem = long_path_problem(output / "00000000-000000-00" / "work", repo, vcs_type=values["vcs"]["type"])
         if problem:
             raise RunError(problem)
     vcs = make_vcs(repo, values)
@@ -199,7 +248,7 @@ def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], 
            "work_dir": str(run.dir / "work"), "output_dir": str(output), "filter_name": spec["name"],
            "stream": spec["streams"][0], "limit": run_limit, "verify": mode, "initial": bool(first), "review": bool(review),
            "integration": bool(integration), "max_rework": int(max_rework), "parallel": values["parallel"],
-           "permission_steps": permission_steps(output), "next": "tick で次にすることを聞く"}
+           "permission_steps": permission_steps(output, mcp_tools), "next": "tick で次にすることを聞く"}
     if requested > run_limit:
         out["note"] = f"1 回の上限（設定 max_items）が {max_items} 件のため、{run_limit} 件にしました"
     return out
@@ -208,7 +257,7 @@ def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], 
 # ---- resume / stop / note-issue -----------------------------------------------------------------
 
 
-def resume(run_dir: str) -> dict[str, Any]:
+def resume(run_dir: str, mcp_tools: list[str] | None = None) -> dict[str, Any]:
     run = Run(run_dir, write=True)
     try:
         values, problems = load_config(run.repo)
@@ -253,7 +302,7 @@ def resume(run_dir: str) -> dict[str, Any]:
             "work_dir": str(run.dir / "work"), "counts": counts(run.state), "back_to_pending": back,
             "initial": bool(run.state.get("initial")), "review": bool(run.state.get("review")),
             "integration": bool(run.state.get("integration")), "max_rework": run.state.get("max_rework"),
-            "permission_steps": permission_steps(output), "next": "tick で次にすることを聞く"}
+            "permission_steps": permission_steps(output, mcp_tools), "next": "tick で次にすることを聞く"}
 
 
 def stop(run_dir: str) -> dict[str, Any]:
@@ -394,7 +443,7 @@ def _item_status(run: Run, item: dict[str, Any], tasks: dict[str, Any], mapped: 
                (int(item["seconds"]) if item.get("seconds") is not None else None))
     return {"id": item_id, "cids": item["cids"], "checker": checker, "status": item["status"], "phase": phase,
             "note": note, "elapsed_seconds": elapsed,
-            "stalled": bool(idle is not None and idle >= STALL_SECONDS and stage != "copy"),
+            "stalled": bool(idle is not None and idle >= STALL_SECONDS and stage not in SCRIPT_STAGES),
             "preparing_copy": stage == "copy", "attempts": item.get("attempts", 0),
             "rework_rounds": item.get("review_rounds", 0), "review": review, "recommendation": recommendation,
             "confidence": confidence, "error": item.get("error") or None}

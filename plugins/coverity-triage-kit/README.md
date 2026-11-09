@@ -73,7 +73,7 @@ Copilot CLI の中では、`/plugin marketplace add xclang-brain/plugin-market-p
 
 ### 2. Coverity と通信する部品の用意を済ませておく
 
-初めて起動するときに要るものを取りに行くので、時間がかかります。先に1回、次を動かしておくと、すぐに起動します（`<プラグインのフォルダ>` は、このプラグインが入っているフォルダ）。
+初めて起動するときに要るものを取りに行くので、時間がかかります。先に1回、次を動かしておくと、すぐに起動します。`<プラグインのフォルダ>` は、このプラグインが入っているフォルダです。GitHub から入れたときは、Copilot CLI のプラグインの置き場所（公式のドキュメントでは `~/.copilot/installed-plugins/<マーケットプレイスの名前>/coverity-triage-kit`）、手元のフォルダのマーケットプレイスから入れたときは、そのフォルダの中の coverity-triage-kit のフォルダです。
 
 ```shell
 uv sync --native-tls --frozen --directory "<プラグインのフォルダ>/mcp-servers/coverity-connect"
@@ -104,9 +104,9 @@ Web管理画面を動かすエクステンションは、Copilot CLI の試験�
 | `copilot --add-dir "<output_dir>"` | 実行フォルダの読み書き |
 | `copilot --allow-tool 'shell(uv:*)'` | `uv` のコマンド（スキルのスクリプト） |
 | `copilot --allow-tool write` | ファイルの書き込み |
-| `copilot --allow-tool 'coverity-connect'` | Coverity と通信するツール |
+| `copilot --allow-tool 'coverity-connect(coverity_check_connection)'`（`coverity_search_issues`・`coverity_get_issue_details`・`coverity_preview_triage` も同じ形で並べる） | Coverity から読むツール |
 
-複数は、`--allow-tool` を並べて書きます。すべてを任せる指定（`--allow-all-tools` など）もありますが、公式のドキュメントは隔離した環境でだけ使うよう勧めています。
+複数は、`--allow-tool` を並べて書きます。Coverity に書き戻すツール（`coverity_update_triage`）は許可しません（サーバーの名前だけの `--allow-tool 'coverity-connect'` は、書き戻すツールまで許可するので使いません）。反映（`/coverity-apply`）のときに確認が出ます。すべてを任せる指定（`--allow-all-tools` など）もありますが、公式のドキュメントは隔離した環境でだけ使うよう勧めています。
 
 ## 実行中に気をつけること
 

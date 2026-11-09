@@ -129,3 +129,16 @@ test('two approvals at once file one issue (the marker is created exclusively)',
   await a;
   assert.equal(h.runner.callsOf('gh:issue').length, 1);
 });
+
+test('REQ-422 issue drafts are masked before they are shown and filed', async () => {
+  const { createMasker } = await importExt('core/mask.mjs');
+  const mask = createMasker({ env: { U_ENV: 'taro.yamada', K_ENV: 'k3y-Secret-0123' }, names: ['U_ENV', 'K_ENV'], user: 'taroy', home: 'C:\\Users\\taroy' });
+  const text = 'HTTP 401 for taro.yamada with k3y-Secret-0123 at https://cov.corp.example:8443/api; file C:\\Users\\taroy\\repo\\a.c, C:/Users/taroy/x, ' +
+    'mail taro@corp.example, host 10.1.2.3, see https://github.com/o/r/issues/1';
+  const out = mask(text);
+  for (const leak of ['taro.yamada', 'k3y-Secret', 'cov.corp.example', 'Users\\taroy', 'Users/taroy', 'taro@corp', '10.1.2.3']) assert.ok(!out.includes(leak), `${leak} in ${out}`);
+  assert.ok(out.includes('https://github.com/o/r/issues/1'), 'GitHub links stay');
+  const { numberIssues } = await importExt('core/analysis.mjs');
+  const [draft] = numberIssues([{ title: 'x 10.0.0.1', body: 'y' }], 'M', 'mechanical', mask);
+  assert.equal(draft.title, 'x *.*.*.*');
+});

@@ -56,14 +56,14 @@ def snapshot(root: Path) -> dict[str, float]:
 
 class ShowPathTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="show-path-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="show-path-")).resolve()  # not an 8.3 short path on Windows
         self.repo = self.tmp / "repo"
         (self.repo / "src").mkdir(parents=True)
         (self.repo / "src" / "reader.c").write_text(numbered(80, {
             38: "int read_header(FILE *fp)",
             40: "\tline = fgets(buf, sizeof buf, fp);",
             42: "\tlen = strlen(line);",
-        }), encoding="utf-8")
+        }), encoding="utf-8", newline="\n")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -193,7 +193,7 @@ class ShowPathTest(unittest.TestCase):
 
     def test_ambiguous_suffix_is_unmapped_with_candidates(self) -> None:
         (self.repo / "lib").mkdir()
-        (self.repo / "lib" / "reader.c").write_text("int x;\n", encoding="utf-8")
+        (self.repo / "lib" / "reader.c").write_text("int x;\n", encoding="utf-8", newline="\n")
         issue = self.base_issue("/other/reader.c")
         code, data, _ = run(["show", "--repo", str(self.repo), "--issue-file", str(self.issue_file(issue))], self.tmp)
         self.assertEqual(code, 0, data)

@@ -322,17 +322,25 @@ def problems(data: Any, fields: dict[tuple[str, ...], Field], where: str) -> lis
 # ---- reading everything the settings screen shows --------------------------------------------
 
 
-def credentials(user_env: Any, key_env: Any, saved_key_env: Any = None) -> dict[str, Any]:
+DEFAULT_USER_ENV = "COV_USER"
+
+
+def credentials(user_env: Any, key_env: Any, saved_key_env: Any = None, saved_user_env: Any = None) -> dict[str, Any]:
     """The user name may be shown; of the key, only whether it is set (the value never leaves this PC's
-    environment). The variable named for the user name is not shown when it is one that holds a key."""
+    environment). The value of the variable named for the user name is shown only when that name is the
+    saved one or the default (the page could name any variable, a token among them); never when it is one
+    that holds a key."""
     user_env = user_env if isinstance(user_env, str) else ""
     key_env = key_env if isinstance(key_env, str) else ""
     names_ok = bool(ENV_NAME.match(user_env)) and bool(ENV_NAME.match(key_env))
     keys = {name.upper() for name in (key_env, saved_key_env if isinstance(saved_key_env, str) else "", *KEY_ENVS) if name}
-    hidden = names_ok and user_env.upper() in keys
+    known = {name.upper() for name in (DEFAULT_USER_ENV, saved_user_env if isinstance(saved_user_env, str) else "") if name}
+    hidden = names_ok and user_env.upper() in keys  # a key's variable: nothing is shown or saved as the user name
+    withheld = names_ok and not hidden and user_env.upper() not in known  # shown once that name is saved
     user = (envvars.get_env(user_env) or "") if names_ok else ""
     return {"user_env": user_env, "key_env": key_env,
-            "user": "" if hidden else user, "user_set": bool(user), "user_hidden": hidden,
+            "user": "" if hidden or withheld else user, "user_set": bool(user), "user_hidden": hidden,
+            "user_withheld": withheld,
             "key_set": bool(envvars.get_env(key_env)) if names_ok else False,
             "can_save": envvars.can_set_user_env()}
 
@@ -346,6 +354,10 @@ def _saved_names(repo: Path) -> dict[str, str]:
 
 def saved_key_env(repo: Path) -> str | None:
     return _saved_names(repo).get("key_env")
+
+
+def saved_user_env(repo: Path) -> str | None:
+    return _saved_names(repo).get("user_env")
 
 
 def _knowledge(repo: Path) -> dict[str, Any]:
@@ -419,7 +431,8 @@ def load_state(repo: Path) -> dict[str, Any]:
         "config_reset": reset, "config_unknown": unknown, "output_dir": str(out_dir), "output_dir_note": out_note,
         "filters": filters, "knowledge": _knowledge(repo),
         "no_grouping": no_grouping, "no_grouping_error": ng_error,
-        "credentials": credentials(config["coverity"]["user_env"], config["coverity"]["key_env"], saved_key_env(repo)),
+        "credentials": credentials(config["coverity"]["user_env"], config["coverity"]["key_env"], saved_key_env(repo),
+                                   saved_user_env(repo)),
     }
 
 

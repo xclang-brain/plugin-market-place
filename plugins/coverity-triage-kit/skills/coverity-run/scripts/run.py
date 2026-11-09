@@ -70,8 +70,13 @@ def parser() -> argparse.ArgumentParser:
     _bool_option(cmd, "integration", "同じ原因の統合（統合役）を使う")
     cmd.add_argument("--max-rework", type=int, dest="max_rework")
     cmd.add_argument("--issues-file", dest="issues_file", help="取ってある警告の一覧（issues.json の形）で始める")
+    mcp = {"dest": "mcp_tools", "action": "append",
+           "help": "許可の案内に書く、Coverity から読むツール（<登録名>(<ツール>)。書き戻すツールは渡さない）"}
+    cmd.add_argument("--mcp-tool", **mcp)
 
-    sub.add_parser("resume", help="途中の実行を続きからにする").add_argument("--run", **run)
+    cmd = sub.add_parser("resume", help="途中の実行を続きからにする")
+    cmd.add_argument("--run", **run)
+    cmd.add_argument("--mcp-tool", **mcp)
     cmd = sub.add_parser("tick", help="次にすることを返す")
     cmd.add_argument("--run", **run)
     cmd.add_argument("--finished", help="終わった task")
@@ -111,9 +116,9 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return views.runs(args.repo, args.limit)
     if c == "new-run":
         return views.new_run(args.repo, args.filter, _overrides(args), args.limit, args.verify, args.initial,
-                             args.review, args.integration, args.max_rework, args.issues_file)
+                             args.review, args.integration, args.max_rework, args.issues_file, args.mcp_tools)
     if c == "resume":
-        return views.resume(args.run)
+        return views.resume(args.run, args.mcp_tools)
     if c == "tick":
         if args.finished and args.failed:
             raise RunError("--finished と --failed は一緒に使えません")

@@ -46,10 +46,10 @@
 - Copilot CLI を、次のように起動し直す。
 
 ```text
-copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect'
+copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect(coverity_check_connection)' --allow-tool 'coverity-connect(coverity_search_issues)' --allow-tool 'coverity-connect(coverity_get_issue_details)' --allow-tool 'coverity-connect(coverity_preview_triage)'
 ```
 
-`<output_dir>` は実行フォルダの置き場所です（既定は、リポジトリの隣の `coverity-triage-out`）。始めるときにも、統括エージェントが同じ手順を1回だけ示します。
+`<output_dir>` は実行フォルダの置き場所です（既定は、リポジトリの隣の `coverity-triage-out`）。書き戻すツール（`coverity_update_triage`）は前もって許可しません。反映のときに確認が出ます。始めるときにも、統括エージェントが同じ手順を1回だけ示します。
 
 ## できるもの
 

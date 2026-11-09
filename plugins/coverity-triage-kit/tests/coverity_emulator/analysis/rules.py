@@ -168,11 +168,12 @@ def null_returns_chain(ctx: Context, sources: list[Source]) -> list[Finding]:
                         continue
                     line = line_of(src.code, off)
                     call = re.sub(r"\s+", " ", src.text[off:end + 1])
+                    member = re.search(r"->\s*(\w+)", src.code[end + 1:end + 60]).group(1)
                     events = [ev("returned_null", f'"{name}" returns "nullptr".', src.path, line,
                                  kind="MODEL"),
                               ev("return_null", "Explicitly returning NULL.", dsrc.path, ret_line, 1),
                               ev("dereference", f'Dereferencing a pointer that might be "nullptr" "{call}" when calling '
-                                 f'"{re.search(r"->\s*(\w+)", src.code[end + 1:end + 60]).group(1)}".', src.path, line,
+                                 f'"{member}".', src.path, line,
                                  main=True)]
                     out.append(Finding("NULL_RETURNS", "none", name, src.path, line, events, "rules", fn))
     return out

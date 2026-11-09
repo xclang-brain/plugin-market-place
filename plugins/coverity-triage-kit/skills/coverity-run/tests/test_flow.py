@@ -16,6 +16,17 @@ ISSUES = [issue(20001, line=6), issue(20002, checker="RESOURCE_LEAK", function="
 
 
 class BasicFlowTest(RunCase):
+    def test_permission_steps_allow_only_the_read_tools_given(self) -> None:
+        created = self.new_run("--mcp-tool", "srv-x(read_a)", "--mcp-tool", "srv-x(read_b)")
+        step = created["permission_steps"][1]
+        self.assertIn("--allow-tool 'srv-x(read_a)' --allow-tool 'srv-x(read_b)'", step)
+        self.assertNotIn("--allow-tool 'srv-x' ", step, "never the whole server (it holds the tool that writes back)")
+        again = self.run_json("resume", "--run", created["run_dir"], "--mcp-tool", "srv-x(read_a)")
+        self.assertIn("--allow-tool 'srv-x(read_a)'", again["permission_steps"][1])
+        odd = self.new_run("--mcp-tool", "x'; rm -rf /", "--mcp-tool", "srv-x")  # not <name>(<tool>): left out
+        self.assertNotIn("rm -rf", odd["permission_steps"][1])
+        self.assertNotIn("'srv-x'", odd["permission_steps"][1])
+
     def test_whole_run_without_options(self) -> None:
         created = self.new_run()
         run_dir = created["run_dir"]
@@ -24,6 +35,9 @@ class BasicFlowTest(RunCase):
             self.assertIn(key, created)
         self.assertFalse(created["initial"])
         self.assertEqual(len(created["permission_steps"]), 2)
+        self.assertNotIn("<", created["permission_steps"][1], "no placeholder in the command to copy (REQ-306)")
+        self.assertNotIn("--allow-tool '", created["permission_steps"][1].split(" で起動し直します")[0].replace(
+            "--allow-tool 'shell(uv:*)'", ""), "without --mcp-name the Coverity flag is left out")
         self.assertTrue((Path(run_dir) / "schemas" / "result.schema.json").is_file())
 
         first = self.tick(run_dir)

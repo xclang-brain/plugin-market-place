@@ -530,7 +530,10 @@ def parse_args(argv):
 def main(argv):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="backslashreplace")
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")  # readable job logs (run.py's own output only)
+            else:
+                stream.reconfigure(errors="backslashreplace")
     args = parse_args(argv)
     if sys.version_info[:2] < MIN_PYTHON:
         print("Python {}.{} 以上が要ります（いまは {}）。{}".format(MIN_PYTHON[0], MIN_PYTHON[1],

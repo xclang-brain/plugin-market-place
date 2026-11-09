@@ -29,11 +29,11 @@ test('design 8.1-2.1 overrides: worker/reviewer/integrator models and efforts, o
   });
 });
 
-test('design 8.1-2.2 new-run gets the screen values, always --review, and the repo', async (t) => {
+test('design 8.1-2.2 new-run gets the screen values, always --review, the repo and the Coverity server name', async (t) => {
   const h = await startWith(t);
   await openAndStart(h, BODY);
   const [call] = h.runner.callsOf('run:new-run');
-  assert.deepEqual(call.args.slice(5), ['--repo', h.dirs.cwd, '--filter', 'misra.yaml', '--impact', 'Medium', '--limit', '15', '--initial', '--review', '--max-rework', '2']);
+  assert.deepEqual(call.args.slice(5), ['--repo', h.dirs.cwd, '--filter', 'misra.yaml', '--impact', 'Medium', '--limit', '15', '--initial', '--review', '--max-rework', '2', ...h.defaults.coverityReadTools.flatMap((x) => ['--mcp-tool', `${h.defaults.coverityServer}(${x})`])]);
   assert.equal(call.env.PYTHONIOENCODING, 'utf-8');
   assert.equal(call.args[3], path.join(h.dirs.pluginRoot, ...h.defaults.runCommand.split('/')));
 });
@@ -41,7 +41,7 @@ test('design 8.1-2.2 new-run gets the screen values, always --review, and the re
 test('design 8.1-2.2 "絞らない", an empty count and "設定どおり" add no arguments; "しない" → --no-initial', async (t) => {
   const h = await startWith(t);
   await openAndStart(h, { conditions: { filter: 'untriaged.yaml', impact: '絞らない', limit: '', initial: '設定どおり' } });
-  assert.deepEqual(h.runner.callsOf('run:new-run')[0].args.slice(5), ['--repo', h.dirs.cwd, '--filter', 'untriaged.yaml', '--review', '--max-rework', '1']);
+  assert.deepEqual(h.runner.callsOf('run:new-run')[0].args.slice(5), ['--repo', h.dirs.cwd, '--filter', 'untriaged.yaml', '--review', '--max-rework', '1', ...h.defaults.coverityReadTools.flatMap((x) => ['--mcp-tool', `${h.defaults.coverityServer}(${x})`])]);
   const h2 = await startWith(t);
   await openAndStart(h2, { conditions: { initial: 'しない' } });
   assert.ok(h2.runner.callsOf('run:new-run')[0].args.includes('--no-initial'));

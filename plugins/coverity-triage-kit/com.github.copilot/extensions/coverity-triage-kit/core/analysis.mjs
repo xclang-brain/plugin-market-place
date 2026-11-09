@@ -1,3 +1,4 @@
+import { createMasker } from './mask.mjs';
 import { LIMITS } from './constants.mjs';
 import { ABORT_REASON_TEXT, ROLE_LABELS } from './messages.mjs';
 import { stableStringify, summarizeText } from './util.mjs';
@@ -236,8 +237,11 @@ export function analyzeEntries(entries, opts) {
 }
 
 // M1, M2… for mechanical issues; O1, O2… for issues the orchestrator wrote down
-export function numberIssues(drafts, prefix, source) {
-  return drafts.map((d, i) => ({ id: `${prefix}${i + 1}`, title: d.title, body: d.body, source }));
+const defaultMask = () => createMasker();
+
+// Titles and bodies are masked here, so the screen shows exactly what would be filed (mask.mjs)
+export function numberIssues(drafts, prefix, source, mask = defaultMask()) {
+  return drafts.map((d, i) => ({ id: `${prefix}${i + 1}`, title: mask(d.title), body: mask(d.body), source }));
 }
 
 // issues_found from status: [{ title, body, at }]

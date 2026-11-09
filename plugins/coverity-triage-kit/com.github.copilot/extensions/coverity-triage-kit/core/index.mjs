@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { realClock } from './clock.mjs';
 import { createCommands } from './commands.mjs';
-import { DEFAULT_FILTER, EFFORT_LEVELS, IMPACT_CHOICES, INITIAL_CHOICES, LIMITS, LIMIT_MAX, LIMIT_MIN, REWORK_MAX, REWORK_MIN, ROLES } from './constants.mjs';
+import { DEFAULT_FILTER, DEFAULT_LIMIT, EFFORT_LEVELS, IMPACT_CHOICES, INITIAL_CHOICES, LIMITS, LIMIT_MAX, LIMIT_MIN, REWORK_MAX, REWORK_MIN, ROLES } from './constants.mjs';
 import { handleEvent } from './events.mjs';
 import { fileIssue, startCanFileCheck, viewIssues } from './filing.mjs';
 import { createGuard } from './guard.mjs';
@@ -22,6 +22,7 @@ import {
   applyGuide,
   setupHint,
 } from './messages.mjs';
+import { useSecretEnvs } from './mask.mjs';
 import { normalizeModels, pickDefaultModel, readAgentModels } from './models.mjs';
 import { stopPolling } from './poller.mjs';
 import { SerialQueue } from './queue.mjs';
@@ -49,7 +50,7 @@ function initialConditions(ctx) {
   return {
     filter: req.filter ?? suggested ?? (filters.length === 0 || filters.includes(DEFAULT_FILTER) ? DEFAULT_FILTER : filters[0]),
     impact: req.impact ?? IMPACT_CHOICES[0],
-    limit: req.limit ?? null,
+    limit: req.limit ?? DEFAULT_LIMIT,
     initial: req.initial ?? INITIAL_CHOICES[0],
   };
 }
@@ -59,6 +60,7 @@ async function loadSettings(ctx) {
   const r = await ctx.commands.settings(ctx.cwd);
   if (ctx.setup !== setup) return; // the screen was reset meanwhile
   if (r.ok) {
+    useSecretEnvs(r.data.secret_envs);
     const values = {};
     for (const key of SETTING_KEYS) if (r.data[key] !== undefined) values[key] = clone(r.data[key]);
     setup.settings = {
@@ -92,7 +94,7 @@ async function refreshSetup(ctx) {
   const currentModel = current.status === 'ok' ? String(current.value?.model ?? current.value?.modelId ?? '') : '';
   const isAuto = current.status === 'ok' && Boolean(current.value?.isAuto);
   const ids = { orchestrator: ctx.defaults.orchestrator, ...ctx.defaults.roles };
-  const candidates = Object.fromEntries(ROLES.map((role) => [role, readAgentModels(ctx.pluginRoot, ids[role])]));
+  const candidates = Object.fromEntries(ROLES.map((role) => [role, readAgentModels(ctx.pluginRoot, ids[role], ctx.defaults.agentDir)]));
   if (models.length === 0) {
     // no list: offer the definitions' first choices and the current model
     const fallback = [...new Set([...ROLES.flatMap((r) => candidates[r].slice(0, 1)), currentModel].filter(Boolean))];

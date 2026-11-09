@@ -32,19 +32,22 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04]
-        # 3.12 は確かめた版。3.x は、そのときの最新の安定版（Windows の py -3 が選ぶもの）
-        python: ['3.12', '3.x']
+        # 3.10 は決めた最低の版。3.12 は確かめた版。3.x は、そのときの最新の安定版（Windows の py -3 が選ぶもの）
+        python: ['3.10', '3.12', '3.x']
     defaults:
       run:
         working-directory: plugins/coverity-triage-kit
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
+        id: py
         with:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@v6
-      # skills/ と mcp-servers/ の下の、tests/ があるフォルダを、すべて動かす
+      # skills/ と mcp-servers/ の下の、tests/ があるフォルダを、すべて動かす（uv run のスクリプトも、この版の Python で動かす）
       - name: 部品ごとの試験
+        env:
+          UV_PYTHON: ${{ steps.py.outputs.python-path }}
         run: python tests/run.py --only parts
 
   checks:

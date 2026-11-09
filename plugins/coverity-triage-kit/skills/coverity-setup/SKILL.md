@@ -49,7 +49,7 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/setup.py" 
 - Windows（PowerShell）：`powershell -ExecutionPolicy ByPass -NoProfile -Command "irm https://astral.sh/uv/install.ps1 | iex"`
 - Linux・macOS：`curl -LsSf https://astral.sh/uv/install.sh | sh`
 
-入れた直後に `uv` が見つからないときは、Windows は `%USERPROFILE%/.local/bin/uv.exe`、Linux・macOS は `~/.local/bin/uv` のフルパスで動かす。社内のプロキシで失敗したら、環境変数 `HTTPS_PROXY` の設定が要るか、社内の担当に確かめるよう伝える。
+入れた直後に `uv` が見つからないときは、Windows（PowerShell）は `& "$env:USERPROFILE\.local\bin\uv.exe" --version`、Linux・macOS は `~/.local/bin/uv --version` のようにフルパスで動かして、入ったことを確かめる。ほかの部品（MCP サーバーやスクリプト）が `uv` を見つけられるよう、新しいターミナルで Copilot CLI を起動し直してから続けるよう伝える。社内のプロキシで失敗したら、環境変数 `HTTPS_PROXY` の設定が要るか、社内の担当に確かめるよう伝える。
 
 ### 2. リポジトリ
 

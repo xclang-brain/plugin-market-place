@@ -162,7 +162,7 @@ def user_env(name: str) -> tuple[str | None, str | None]:
     """
     value = os.environ.get(name)
     if usable(value):
-        return value, "process"
+        return value.strip(), "process"
     if sys.platform == "win32":
         try:
             import winreg
@@ -175,7 +175,7 @@ def user_env(name: str) -> tuple[str | None, str | None]:
         if kind == getattr(winreg, "REG_EXPAND_SZ", 2):
             stored = ntpath.expandvars(stored)  # %NAME% as Windows expands it
         if usable(stored):
-            return stored, "user"
+            return stored.strip(), "user"
     return None, None
 
 

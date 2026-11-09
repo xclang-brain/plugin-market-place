@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import time
 import unittest
 from pathlib import Path
 
@@ -289,7 +290,11 @@ class CommandsTest(RunCase):
         out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
         self.do_fetch(out["actions"][0], ISSUES[:1])
         out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
-        brief = self.brief_path(out["actions"][0]).read_text(encoding="utf-8")
+        deadline = time.monotonic() + 90  # the work copy is made by a detached job: a slow PC needs more ticks
+        while not any(a["type"] == "launch" for a in out["actions"]) and time.monotonic() < deadline:
+            out = self.tick(run_dir)
+        launch = next(a for a in out["actions"] if a["type"] == "launch")
+        brief = self.brief_path(launch).read_text(encoding="utf-8")
         for section in ("## フォルダとファイル", "## 守ること", "## 警告", "## 返す形", "★"):
             self.assertIn(section, brief)
         self.assertIn("schemas/result.schema.json".replace("/", "/"), brief.replace("\\", "/"))

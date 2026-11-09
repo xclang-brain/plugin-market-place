@@ -619,7 +619,7 @@ table.items td.acts { white-space: nowrap; }
             </div>
           </div>
           <div class="help" style="margin:0 0 14px" data-show="initial">初回解析では、<code>cov-analyze</code> のあと <code>cov-commit-defects</code> でサーバに登録します。登録先は条件ファイルのストリーム、<code>--version</code> は開いているフォルダの今のリビジョンです。認証キーはコマンドに書かず、環境変数で渡します。</div>
-          <p class="help" style="margin:0">ビルドのコマンドは、保存の前に、手元のターミナルで一度試しておくのがおすすめです（認証キーは使いません）。</p>
+          <p class="help" style="margin:0">この画面には「試しにビルドする」ボタンはありません。ビルドのコマンドは、準備の手順（設定を対話で用意するスキル）の「試しのビルド」で確かめられます。手元のターミナルで一度試してもかまいません（認証キーは使いません）。</p>
         </div>
       </div>
 
@@ -849,7 +849,7 @@ table.items td.acts { white-space: nowrap; }
   <div class="body">
     <p>この画面のサーバを止めます。止めると、この画面（監視・結果・設定）は使えなくなります。</p>
     <ul class="problems" id="stopNotes" hidden></ul>
-    <p class="help">動いている一括のトリアージは止まりません。もう一度開くときは、チャットで「結果と設定の画面を開いて」と頼みます。なお、2 時間使われないと、サーバは自分で止まります。</p>
+    <p class="help">動いている一括のトリアージは止まりません。もう一度開くときは、チャットで「結果と設定の画面を開いて」と頼みます。</p>
   </div>
   <div class="foot">
     <button class="btn" type="button" id="stopCancel">戻る</button>
@@ -1058,7 +1058,8 @@ function renderCred() {
   $("#f-key").disabled = !c.can_save;
   // A user name variable that holds a key: its value is not shown (and the user name is not saved there).
   $("#f-user").disabled = !c.can_save || !!c.user_hidden;
-  $("#f-user").placeholder = c.user_hidden ? "認証キーを入れる環境変数の名前なので、値は表示しません" : "";
+  $("#f-user").placeholder = c.user_hidden ? "認証キーを入れる環境変数の名前なので、値は表示しません"
+    : c.user_withheld ? "まだ保存していない変数の名前なので、今の値は表示しません（入れた値で保存できます）" : "";
   const userSet = "user_set" in c ? !!c.user_set : !!c.user;
   const us = $("#user-state"), ks = $("#key-state");
   us.className = "pill " + (userSet ? "ok" : "ng"); us.textContent = userSet ? "設定済み" : "未設定";
@@ -1519,7 +1520,7 @@ function serverLost() {
   serverDown = true;
   clearInterval(pingTimer);
   stopMonitor();
-  sysBanner("ng", "画面のサーバが止まっています（「サーバを止める」を押したか、2 時間使われなかったため）。設定や承認の保存はできません。もう一度開くときは、チャットで「結果と設定の画面を開いて」と頼みます。");
+  sysBanner("ng", "画面のサーバが止まっています（「サーバを止める」を押したか、PC を再起動したため）。設定や承認の保存はできません。もう一度開くときは、チャットで「結果と設定の画面を開いて」と頼みます。");
   $("#saveBtn").disabled = true;
   if ($("#apSave")) $("#apSave").disabled = true;
 }

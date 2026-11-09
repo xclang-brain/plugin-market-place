@@ -84,6 +84,8 @@ export function createCommands({ runner, pluginRoot, defaults, clock, env = proc
       if (initial === false) args.push('--no-initial');
       args.push('--review'); // the screen always runs the review (spec ch.9)
       if (Number.isInteger(maxRework)) args.push('--max-rework', String(maxRework));
+      // the permission steps pre-approve only the Coverity tools that read (never the one that writes back)
+      if (defaults.coverityServer) for (const tool of defaults.coverityReadTools) args.push('--mcp-tool', `${defaults.coverityServer}(${tool})`);
       return call(runScript, args, LIMITS.NEW_RUN_TIMEOUT_MS);
     },
     status: (runDir) => call(runScript, ['status', '--run', runDir], LIMITS.STATUS_TIMEOUT_MS),

@@ -1,8 +1,8 @@
 import { NO_MATCH } from './messages.mjs';
 
 // End reasons (design 8.2). The code decides them from the batch run's status, not the AI.
-//   all_passed   finished; every item done, every review passed, no errors and nothing left
-//   max_reached  finished; some items flagged, unreviewed, failed or left over
+//   all_passed   finished; every item done, every review passed, every run-level check passed, no errors and nothing left
+//   max_reached  finished; some items flagged, unreviewed, failed or left over, or a run-level check failed
 //   user_stopped the stop button
 //   aborted      the run ended midway (detail tells why)
 
@@ -32,6 +32,10 @@ export function finishedOutcome(st, summaryData) {
   if (unreviewed) notes.push(`未検証 ${unreviewed} 件`);
   if (errors) notes.push(`エラー ${errors} 件`);
   if (unprocessed) notes.push(`未処理 ${unprocessed} 件`);
+  // Run-level criteria (run_checks of the batch run's summary/status): a failed one means not every criterion was met
+  const checks = Array.isArray(summaryData?.run_checks) ? summaryData.run_checks : (Array.isArray(st?.run_checks) ? st.run_checks : []);
+  const failedChecks = checks.filter((c) => c && c.ok === false).map((c) => String(c.id ?? '')).filter(Boolean);
+  if (failedChecks.length) notes.push(`実行ごとの基準 ${failedChecks.join('・')} が不合格`);
   if (notes.length > 0) return { kind: 'max_reached', detail: null, notes };
   return { kind: 'all_passed', detail: null, notes: total === 0 ? [NO_MATCH] : [] };
 }

@@ -113,7 +113,7 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/lint_resul
 
 （例は findings を2つだけ載せています。実際は20個すべてを書きます。）
 
-- ファイルに書くよう頼まれたときは、書いたあとで確かめます（RUN）。`ok` が `false` なら、`problems` のとおりに**確かめの結果のファイルだけ**を直し、通るまで繰り返します。
+- ファイルに書くよう頼まれたときは、書いたあとで確かめます（RUN）。`ok` が `false` なら、`problems` のとおりに**確かめの結果のファイルだけ**を直し、通るまで繰り返します。3 回直しても `ok` にならなければ、それ以上は直さず、残った `problems` と今の案をそのまま返して止めます（決まりは曲げません）。
 
 ```
 uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/check_review.py" --review "<review.json>" --item "<作業の ID>" --checker "<チェッカーの名前>"

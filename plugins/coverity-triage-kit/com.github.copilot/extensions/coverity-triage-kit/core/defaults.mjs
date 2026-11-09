@@ -25,6 +25,8 @@ export function normalizeDefaults(raw) {
     pluginSkills: Object.freeze((Array.isArray(v.pluginSkills) ? v.pluginSkills : []).map(text).filter(Boolean)),
     port,
     issueRepo: text(v.issueRepo),
+    coverityServer: text(v.coverityServer),
+    agentDir: text(v.agentDir) || 'com.github.copilot/agents',
     coverityReadTools: Object.freeze((Array.isArray(v.coverityReadTools) ? v.coverityReadTools : []).map(text).filter(Boolean)),
   });
 }

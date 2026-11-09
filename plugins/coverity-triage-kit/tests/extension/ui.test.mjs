@@ -83,7 +83,7 @@ test('REQ-405 the setup shows the request text, what it filled, and the phrases 
   assert.match(textOf($('request-used')), /「misra.yaml」→ 条件ファイル/);
   assert.equal($('filter').value, 'misra.yaml');
   assert.equal($('impact').querySelector('option[selected]').value, 'High');
-  assert.equal($('limit').value, '');
+  assert.equal($('limit').value, '20', 'the count starts at 20, as in the original');
   assert.equal($('initial').querySelector('option[selected]').value, '設定どおり');
 });
 

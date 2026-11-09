@@ -70,7 +70,7 @@ flowchart TB
 | 1 | MCP サーバー | `mcp-servers/<名前>/` | Coverity Connect と、データの取り決め（4.1〜4.4、4.10）だけ |
 | 2 | 作業エージェント | `com.github.copilot/agents/<名前>.agent.md` | 使う部品の名前と役割（「使う部品」の表） |
 | 3 | 統括・検証・統合のエージェント | `com.github.copilot/agents/<名前>.agent.md` | 使う部品の名前と役割（表） |
-| 4 | エクステンション | `com.github.copilot/extensions/coverity-triage-kit/` | エージェントとスキルの名前とコマンドの場所（`defaults.json` にだけ）、一括実行と画面のコマンドの出力の形（4.12、4.16） |
+| 4 | エクステンション | `com.github.copilot/extensions/coverity-triage-kit/` | エージェントとスキルの名前とコマンドの場所（`defaults.json` にだけ）、一括実行と画面のコマンドの出力の形（4.12、4.16）、役のエージェントの定義の `model:` の行（場所は `defaults.json` の `agentDir`） |
 | 4 | プラグイン全体のスキル（画面の入口・困ったとき・自己診断） | `skills/<名前>/`（`defaults.json` の `pluginSkills` に名前がある） | 使う部品の名前と役割（SKILL.md の「使う部品」の表）、エクステンションのツールの名前（画面の入口だけ） |
 
 ### 2.2 プラグインのフォルダ
@@ -144,8 +144,9 @@ coverity-triage-kit/
 
 - 実行フォルダはリポジトリの外にあるので、エージェントがそこに書くと、Copilot CLI はパスの許可を求める。`uv run` の呼び出しと MCP のツールの初めての呼び出しも、許可を求める。
 - 3段階目：一括実行のスキルは、始める前に1回だけ、次のどちらかを示す（REQ-306）。
-  - チャットで `/add-dir "<output_dir>"` を打ち、最初の確認で「このセッションでは許可」を選ぶ（シェルの `uv`、ファイルの書き込み、Coverity との通信のツール）。
-  - Copilot CLI を `copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<MCP の登録名>'` で起動し直す。
+  - チャットで `/add-dir "<output_dir>"` を打ち、最初の確認で「このセッションでは許可」を選ぶ（シェルの `uv`、ファイルの書き込み、Coverity から読むツール）。
+  - Copilot CLI を `copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<MCP の登録名>(<読むツール>)' …` で起動し直す（読むツールは `new-run`/`resume` の `--mcp-tool` で渡されたもの）。
+  - Coverity に書き戻すツールは、どちらでも前もって許可しない（サーバーの名前だけの `--allow-tool '<登録名>'` を示さない）。書き戻しは、いつも確認が出る。
 - スクリプトを動かすスキルは `allowed-tools: ["shell(uv run:*)"]` を持つ。
 - 作業・検証・統合のエージェントは、3段階目ではコマンドを使わない（指示ファイルがそう決める）。確かめは一括実行のスクリプトが行う（4.12）。
 - 4段階目：エクステンションは許可の求めに答えない（元のプラグインと同じ。見て画面に出すだけ）。準備の画面と入口のスキルの注意に、上の手順を示す。
@@ -363,7 +364,7 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 | --- | --- | --- | --- |
 | `run.json` | 一括実行 | 画面、反映、困ったとき、自己診断 | `format`、`tool_version`、`run_id`、`repo_root`、`created_at`、`filter_name`、`stream`、`stage`、`stopped`、`halted`、`halt_reason`、`finished`、`review`、`integration`、`integrated`、`parallel`、`initial`、`items[].{id, cids, status, merged_into, review, started, seconds, attempts, review_rounds, slot, stage, error}` |
 | `jobs/<名前>.json` | 一括実行 | 画面 | `name`、`kind`、`status`、`pid`、`started`、`args.item` |
-| `agents/<役>/progress.json`、`agents/reviewer/<ID>.progress.json` | 検証役・統合役 | 画面 | 4.8 |
+| `agents/<役>/progress.json`（検証役も `agents/reviewer/progress.json` の1つ） | 検証役・統合役 | 画面 | 4.8 |
 | `apply-code.result.json` | 反映 | 反映、画面 | 反映の README（何を反映したか、確認の文字列ごとの結果、効果の記録） |
 | `items/<ID>/result.json` | 作業役 | 画面、反映、自己診断 | 4.5 のすべて |
 | `items/<ID>/review.json` | 検証役 | 画面、反映 | 4.6 |
@@ -382,10 +383,10 @@ JSON Schema：一括実行の `assets/run.schema.json`（上の項目だけを�
 
 | コマンド | 使う部品 | 出力の主な項目 |
 | --- | --- | --- |
-| `settings --repo R` | 統括、エクステンション | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）、条件ファイルの名前の一覧 `filters[]` と既定の `default_filter`、設定の問題 `problems[]`。読むだけ |
+| `settings --repo R` | 統括、エクステンション | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）、条件ファイルの名前の一覧 `filters[]` と既定の `default_filter`、設定の問題 `problems[]`、認証情報を入れる環境変数の名前 `secret_envs[]`（値は出さない。呼んだ側が、見せる文の中の値を伏せるのに使う）。読むだけ |
 | `runs --repo R` | 統括、エクステンション | `runs[{run_id, run_dir, created_at, filter_name, counts, unfinished, has_summary, foreign}]` |
-| `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N]` | 統括、エクステンション | `run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps` |
-| `resume --run D` | 統括 | `run_dir, counts` |
+| `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N] [--issues-file F] [--mcp-tool '<登録名>(<読むツール>)']…` | 統括、エクステンション | `run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps`（`--mcp-tool` の読むツールだけを前もって許可する案内。書き戻すツールは入れない） |
+| `resume --run D [--mcp-tool …]…` | 統括 | `run_dir, counts, permission_steps` |
 | `tick --run D [--finished T] [--failed T --reason R] [--wait S]` | 統括 | 下の「tick の出力」 |
 | `status --run D` | 統括、エクステンション | 下の「status の出力」。読むだけで、鍵を取らない |
 | `summary --run D` | 統括、エクステンション | `summary_html, counts{warnings, items, groups, fix, deviation, low, error, unprocessed}, approvals_counts{fix, deviation, reject, none, changed}, results[{id, cids, checker, recommendation, confidence, judgement, summary, approval, detail}], unprocessed[{id, reason}], run_checks[], criteria[], criteria_results[], say[]`。終わった実行では何度動かしてもよい（作業用のコピーは、未処理の作業がないときだけ消す） |
@@ -480,7 +481,7 @@ status の出力（画面のため。読むだけ）：
 
 `uv run --native-tls --quiet "<画面のスキルのフォルダ>/scripts/gui.py" open --repo R [--run D] [--view monitor|summary|settings] [--item ID] [--no-browser]` → `{ok, url, reused, browser_opened}`。
 
-- サーバーは切り離して動き、準備ができたら URL を返す（呼んだ側はプロセスを持たない）。リポジトリごとに1つで、動いていれば使い回す。2時間使われなければ自分で止まる。画面の「サーバを止める」でも止まる。
+- サーバーは切り離して動き、準備ができたら URL を返す（呼んだ側はプロセスを持たない）。リポジトリごとに1つで、動いていれば使い回す。使われないまま時間がたっても止まらない（元と同じ）。画面の「サーバを止める」で止まる。
 - URL：`http://127.0.0.1:<ポート>/?t=<合言葉>#run=<実行の ID>&view=<区分>&item=<ID>`。127.0.0.1 だけで待ち受け、合言葉（URL かクッキー）が合わない要求を断る。
 - 状態の置き場所：`~/.<スキルのフォルダの名前>/`。
 
@@ -508,7 +509,9 @@ status の出力（画面のため。読むだけ）：
 | 実行フォルダと承認の形 | 一括実行（`assets/run.schema.json`、`assets/approvals.schema.json`） | 反映、結果と設定の画面、自己診断（困ったときは `run.schema.json` だけ） |
 | `issues.json`・`issue-<CID>.json` | MCP サーバー | 一括実行、真偽の調査（読むだけ） |
 
-- Windows のユーザーの環境変数の読み方は、MCP サーバー・準備・一括実行・結果と設定の画面・困ったときが、それぞれ持つ（写しではない。各部品の試験と Windows の CI で確かめる）。
+- 実行フォルダと承認の形の写し（JSON Schema）は、読み書きの実行時には使わない。反映と結果と設定の画面は、それぞれのコードで形を確かめ、その試験が、自分の書くもの・読むものの見本を写しで確かめる（写しは、形の取り決めを各部品の中で見えるようにするためのもの）。
+- Windows のユーザーの環境変数の読み方は、MCP サーバー・準備・一括実行・結果と設定の画面・困ったときが、それぞれ持つ（写しではない）。決まりは同じにする：前後の空白を除く、`${…}` のままの値は無いものとする、`REG_EXPAND_SZ` の値は `%NAME%` を展開する。各部品の試験と Windows の CI で確かめる。
+- 「止まっているかもしれない」の決まり（10 分、初回解析は 30 分、スクリプトが動いている段 `copy`・`save`・`merge` は除く）は、一括実行の `status` と結果と設定の画面の監視が、それぞれ持つ。`tests/contracts` が、両方の値が同じかを確かめる。
 - 写しのファイルは、持ち主と同じ名前で、スクリプトは写す側の `scripts/`（MCP サーバーはパッケージ `src/coverity_mcp/`）、データは `assets/` に置く（スクリプトは自分のフォルダの `assets/` を `Path(__file__).parents[1]` で探すので、同じ場所に置けば同じに動く）。人に見せる確信度の決まりは、一括実行が `scripts/confidence.py` に持つ。
 
 ## 5. MCP サーバー（Coverity との通信）
@@ -601,8 +604,8 @@ status の出力（画面のため。読むだけ）：
 
 | 理由 | 決め方 |
 | --- | --- |
-| すべて合格した | `finished`、作業がすべて done、確かめがすべて pass、エラーと未処理がない（条件に合う警告がないときも。「条件に合う警告はなかった」を添える） |
-| 上限の回数に達した | `finished`、要確認（flag）・未検証・エラー・未処理の作業がある（その数を添える） |
+| すべて合格した | `finished`、作業がすべて done、確かめがすべて pass、実行ごとの基準（`run_checks`）に不合格がない、エラーと未処理がない（条件に合う警告がないときも。「条件に合う警告はなかった」を添える） |
+| 上限の回数に達した | `finished`、要確認（flag）・未検証・エラー・未処理の作業がある、または実行ごとの基準に不合格がある（その数や基準の ID を添える） |
 | ユーザーが止めた | 止めるボタン |
 | 途中で終わった | 一括実行が続けられなかった（tick の error）／統括エージェントが途中で終えた（始め直しの上限を超えた）／統括エージェントの失敗／チャットからの中断／AI クレジットの上限／`/clear` で切れた／エクステンションの再起動 |
 
@@ -612,6 +615,8 @@ status の出力（画面のため。読むだけ）：
 
 - 止めた実行のエージェント（木のすべて）のツールは、すべて拒む。
 - この実行の統括エージェント（`startAgent` で始めた id）には、次だけを許す：読む・探すツール（view、grep、glob、rg）、エージェントのツール（task、read_agent、list_agents、write_agent）、skill、Coverity との通信の読むツール、シェル（この実行の `run.py` か、画面の `gui.py` を動かすときだけ）。
+  - シェルは、引用符の外に `; & | < >`、バッククォート、`$(`、改行がない1つのコマンドだけを許す。引用符の中（C のコードやエラーの文）は問わない。ただし `"…"` の中のバッククォートと `$(` は拒む。入力を渡す形は `echo '<JSON>' | uv run … "<run.py>" <コマンド> … --stdin` の1つだけを許す。
+  - Coverity の読むツールは、名前だけか、`coverityServer` の登録名で修飾した名前（`<登録名>/…`、`<登録名>-…`、`mcp__<登録名>__…` など）だけを許す。ほかのサーバーの同じ名前のツールは拒む。
 - 検証役のほかのエージェントが `items/*/review.json` を書くのを拒む。
 - メインの会話のエージェントと、この実行の外のエージェントは拒まない（チャットのほかの作業を止めない）。
 - フックは例外を投げない。拒む理由は「Denied by preToolUse hook: <理由>」でモデルに返る。
@@ -632,14 +637,16 @@ status の出力（画面のため。読むだけ）：
  "guiCommand": "skills/coverity-gui/scripts/gui.py",
  "applySkill": "coverity-apply", "setupSkill": "coverity-setup",
  "pluginSkills": ["coverity-triage-screen", "coverity-help", "coverity-selftest"],
- "coverityReadTools": ["coverity-connect/coverity_check_connection", "coverity-connect/coverity_search_issues",
-                       "coverity-connect/coverity_get_issue_details", "coverity-connect/coverity_preview_triage"],
- "port": 8731, "issueRepo": "xclang-brain/plugin-market-place"}
+ "port": 8731, "issueRepo": "xclang-brain/plugin-market-place",
+ "agentDir": "com.github.copilot/agents", "coverityServer": "coverity-connect",
+ "coverityReadTools": ["coverity_check_connection", "coverity_search_issues", "coverity_get_issue_details",
+                       "coverity_preview_triage"]}
 ```
 
 - `roles` と `orchestrator` の `:` の後ろは、統括エージェントの「使う部品」の表の名前と同じ（`tests/contracts/` で確かめる）。
 - コマンドの場所は、プラグインのフォルダからの相対パス。
-- `coverityReadTools` は、守り（8.3）で統括エージェントに許す、Coverity との通信の読むツール。
+- `coverityReadTools` は、守り（8.3）で統括エージェントに許す、Coverity との通信の読むツールの名前。`coverityServer` は、その MCP サーバーの登録名で、守りの照合と、`new-run --mcp-name`（許可の案内の起動のコマンド）に使う。
+- `agentDir` は、役のエージェントの定義のフォルダ（プラグインのフォルダからの相対パス）。画面は、その定義の `model:` を読んで、役ごとの既定のモデルの候補にする（REQ-404）。定義がなければ候補なしとして、今のモデルを使う。
 - Issue の起票先は `issueRepo`。起票には `gh` とログインが要る。起票できないときは、案を並べ、手順（`gh` を入れて `gh auth login`、起票先のリポジトリに書き込めること）を示す。
 
 ## 9. 試験

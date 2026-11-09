@@ -353,6 +353,26 @@ class LongPathTest(unittest.TestCase):
         self.assertIsNone(views.long_path_problem(Path("C:/out/run/work"), tmp))
         self.assertIn("output_dir", views.long_path_problem(Path("C:/" + "o" * 200), tmp))
 
+    def test_ignored_build_trees_do_not_count(self) -> None:
+        import shutil
+        import subprocess
+
+        from runlib import views
+
+        if shutil.which("git") is None:
+            self.skipTest("git がありません")
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        subprocess.run(["git", "init", "-q", str(tmp)], check=True)
+        (tmp / ".gitignore").write_text("build/\n", encoding="utf-8")
+        (tmp / "main.c").write_text("int x;\n", encoding="utf-8")
+        deep = tmp / "build" / ("d" * 120) / ("e" * 100)
+        deep.mkdir(parents=True)
+        (deep / "obj.o").write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tmp), "add", "-A"], check=True)
+        self.assertIsNone(views.long_path_problem(Path("C:/out/run/work"), tmp, vcs_type="git"))
+        self.assertIsNotNone(views.long_path_problem(Path("C:/out/run/work"), tmp), "without the VCS, every file counts")
+
 
 if __name__ == "__main__":
     unittest.main()

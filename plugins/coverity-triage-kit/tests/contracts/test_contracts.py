@@ -637,6 +637,32 @@ class DefaultsTest(unittest.TestCase):
 # 書く部品と読む部品（部品を動かす）
 # ---------------------------------------------------------------------------
 
+class StallRuleTest(unittest.TestCase):
+    """一括実行の status と、結果と設定の画面の監視で、「止まっているかもしれない」の決まりが同じ（憲章 第25条5項）"""
+
+    NAMES = ("STALL_SECONDS", "INITIAL_STALL_SECONDS", "SCRIPT_STAGES")
+
+    def constants(self, path):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                if node.targets[0].id in self.NAMES:
+                    found[node.targets[0].id] = ast.literal_eval(node.value)
+        return found
+
+    def test_same_stall_rule(self):
+        run, gui = part_folder("一括実行"), part_folder("結果と設定の画面")
+        if run is None or gui is None:
+            self.skipTest("一括実行か結果と設定の画面の部品がありません")
+        a = self.constants(run / "scripts" / "runlib" / "views.py")
+        b = self.constants(gui / "scripts" / "guilib" / "monitor.py")
+        if set(a) != set(self.NAMES) or set(b) != set(self.NAMES):
+            self.skipTest("部品が、この決まりを別の形で持っています")
+        self.assertEqual({k: tuple(v) if isinstance(v, (list, tuple)) else v for k, v in a.items()},
+                         {k: tuple(v) if isinstance(v, (list, tuple)) else v for k, v in b.items()})
+
+
 class McpClient:
     """MCP サーバーと stdio で話す小さなクライアント（JSON-RPC 2.0、1行に1つ）"""
 

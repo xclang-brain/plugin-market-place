@@ -66,7 +66,7 @@
 | 繰り返しの上限の回数 | 設定の値（ふつうは 1） | 警告ごとに、検証で差し戻されたときに作り直す回数の上限（0〜2） |
 | 条件ファイルの名前 | untriaged.yaml | 調べる警告の条件。一覧にない名前も入れられる |
 | Impact で絞る | 絞らない | High・Medium・Low・Unspecified のどれかに絞る |
-| 調べる件数の上限 | 空（条件ファイルの上限） | 1〜100 |
+| 調べる件数の上限 | 20（元のプラグインと同じ。空にすると条件ファイルの上限） | 1〜100 |
 | 最初に解析するか | 設定どおり | 「する」は、ビルドして解析し、Coverity に登録してから調べる（数十分かかることがある） |
 
 - 頼みの文は、画面にそのまま出ます。条件ファイル・Impact・件数・最初に解析するかに当たる言い方は、最初の値に入ります。それ以外の言い方は「頼みの文の「…」は使いません。条件は画面で選んでください。」と出ます。条件を画面で選び直してください。
@@ -107,7 +107,7 @@
   | 理由 | どういうときか |
   | --- | --- |
   | すべて合格した | すべての警告を処理し、確かめがすべて合格した（条件に合う警告がなかったときも） |
-  | 上限の回数に達した | 作り直しの上限で「要確認」が残った、または処理できなかった警告がある |
+  | 上限の回数に達した | 作り直しの上限で「要確認」が残った、処理できなかった警告がある、または実行ごとの評価基準（C-24 など）に合わないものがある |
   | ユーザーが止めた | 「止める」を押した |
   | 途中で終わった | 一括実行が続けられなかった、統括エージェントが途中で終えた、統括エージェントの失敗、チャットからの中断、AI クレジットの上限、`/clear` で切れた、エクステンションの再起動 |
 
@@ -144,10 +144,12 @@
 
 ```text
 # Windows（PowerShell）
-copilot --add-dir "C:\coverity-triage-out" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect'
+copilot --add-dir "C:\coverity-triage-out" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect(coverity_check_connection)' --allow-tool 'coverity-connect(coverity_search_issues)' --allow-tool 'coverity-connect(coverity_get_issue_details)' --allow-tool 'coverity-connect(coverity_preview_triage)'
 # Linux（bash）
-copilot --add-dir "$HOME/coverity-triage-out" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect'
+copilot --add-dir "$HOME/coverity-triage-out" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect(coverity_check_connection)' --allow-tool 'coverity-connect(coverity_search_issues)' --allow-tool 'coverity-connect(coverity_get_issue_details)' --allow-tool 'coverity-connect(coverity_preview_triage)'
 ```
+
+書き戻すツール（`coverity_update_triage`）は前もって許可しません。反映のときに確認が出ます。サーバーの名前だけの `--allow-tool 'coverity-connect'` は、書き戻すツールまで許可するので使いません。
 
 ## うまく始まらないとき
 

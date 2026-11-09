@@ -91,7 +91,7 @@ def fake_claude_script(base: Path, body: str) -> list[str]:
 class EvalkitTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -267,7 +267,7 @@ class EvalkitTest(unittest.TestCase):
 class McpEvalTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -303,8 +303,12 @@ class McpEvalTest(unittest.TestCase):
         self.assertNotIn("--disallowedTools", mcp_eval.build_argv(["c"], "q", Path("m"), "s", [], "m", 1))
 
     def test_evaluation_prompt_is_mcp_builders(self):
-        source = Path("/root/.claude/skills")
-        found = sorted(source.glob("**/mcp-builder/scripts/evaluation.py")) if source.is_dir() else []
+        # where the official skills are installed for this user (MCP_BUILDER_DIR, or ~/.claude/skills)
+        source = Path(os.environ.get("MCP_BUILDER_DIR") or Path.home() / ".claude" / "skills")
+        try:
+            found = sorted(source.glob("**/mcp-builder/scripts/evaluation.py")) if source.is_dir() else []
+        except OSError:  # a folder this user cannot read
+            found = []
         if not found:
             self.skipTest("mcp-builder の evaluation.py がない")
         text = found[0].read_text(encoding="utf-8")
@@ -390,7 +394,7 @@ src/reader.c:20-21 — fclose せずに return
 class Stage2Test(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -560,7 +564,7 @@ class Stage2Test(unittest.TestCase):
 class Stage3Test(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -674,7 +678,7 @@ class Stage3Test(unittest.TestCase):
 class Stage4Test(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
 
     def tearDown(self):
         self.tmp.cleanup()

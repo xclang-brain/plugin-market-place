@@ -1088,7 +1088,7 @@
     if (issues.length === 0 && !finished) return null;
     return [
       h('h2', null, '課題と Issue の案'),
-      h('p', { class: 'help' }, 'Issue は、GitHub に登録する課題の記録です。承認ボタンを押した案だけが、このプラグインの GitHub リポジトリに起票されます。'),
+      h('p', { class: 'help' }, `Issue は、GitHub に登録する課題の記録です。承認ボタンを押した案だけが、このプラグインの GitHub リポジトリ${typeof canFile.repo === 'string' && canFile.repo ? `（${canFile.repo}）` : ''}に起票されます。案の本文（ストリームの名前、ファイルのパス、エラーの文を含むことがあります）は、そのリポジトリで見えるようになります。`),
       canFile.ok === false && issues.length ? cannotFileView(canFile) : null,
       issues.length === 0 ? h('p', { class: 'muted' }, '今回の実行では、課題は見つかりませんでした。') : issues.map((issue) => issueItem(issue, canFile)),
     ];

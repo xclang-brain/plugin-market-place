@@ -42,12 +42,12 @@ export function parseModelList(markdown) {
   return [];
 }
 
-// The agent definition is <plugin>/com.github.copilot/agents/<name>.agent.md. Missing file → no candidates.
-export function readAgentModels(pluginRoot, agentId) {
+// The agent definition is <plugin>/<agentDir>/<name>.agent.md (agentDir from defaults.json). Missing file → no candidates.
+export function readAgentModels(pluginRoot, agentId, agentDir = 'com.github.copilot/agents') {
   const stem = agentStem(agentId);
   if (!pluginRoot || !stem || /[\\/]/.test(stem)) return [];
   try {
-    return parseModelList(readFileSync(path.join(pluginRoot, 'com.github.copilot', 'agents', `${stem}.agent.md`), 'utf8'));
+    return parseModelList(readFileSync(path.join(pluginRoot, ...String(agentDir).split('/').filter(Boolean), `${stem}.agent.md`), 'utf8'));
   } catch {
     return [];
   }

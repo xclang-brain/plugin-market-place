@@ -58,8 +58,9 @@ def code_version() -> str:
 class GuiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
+    request_queue_size = 64  # Windows refuses connections beyond the backlog (a page opens several at once)
 
-    def __init__(self, repo: Path, token: str, port: int = 0, idle_seconds: float = 7200):
+    def __init__(self, repo: Path, token: str, port: int = 0, idle_seconds: float = 0.0):
         super().__init__(("127.0.0.1", port), Handler)
         self.repo = repo
         self.token = token
@@ -255,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": True, **settings.load_state(repo)}
         if path == "/api/credentials":
             names = [(query.get(key) or [""])[0] for key in ("user_env", "key_env")]
-            return {"ok": True, **settings.credentials(*names, settings.saved_key_env(repo))}
+            return {"ok": True, **settings.credentials(*names, settings.saved_key_env(repo), settings.saved_user_env(repo))}
         if path == "/api/runs":
             return runs.runs_list(repo)
         route = RUN_ROUTE.match(path)

@@ -54,7 +54,7 @@ test('REQ-404 the setup values come from `settings`; models from the agent defin
   assert.equal(setup.settings.state, 'ok');
   assert.equal(setup.maxReworkDefault, 2);
   assert.deepEqual(setup.settings.filters, ['untriaged.yaml', 'misra.yaml']);
-  assert.deepEqual(setup.conditions, { filter: 'untriaged.yaml', impact: '絞らない', limit: null, initial: '設定どおり' });
+  assert.deepEqual(setup.conditions, { filter: 'untriaged.yaml', impact: '絞らない', limit: 20, initial: '設定どおり' }, 'the count starts at 20, as in the original');
   assert.deepEqual(setup.defaults, { orchestrator: 'claude-sonnet-5.5', worker: 'gpt-6-luna', reviewer: 'claude-sonnet-5.5', integrator: 'gpt-6-luna' });
   assert.deepEqual(setup.effortLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.match(setup.overrideNotice, /ほかのエージェントに設定したモデルと思考の深さの指定も消えます/);

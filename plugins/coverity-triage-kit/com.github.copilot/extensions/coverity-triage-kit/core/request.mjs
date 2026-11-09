@@ -26,12 +26,19 @@ const RULES = [
   },
   {
     field: 'limit',
-    re: /(\d+)\s*件(?:\s*(?:だけ|まで|のみ|に絞って))?/g,
+    re: /(\d+)\s*(?:件|items?\b)(?:\s*(?:だけ|まで|のみ|に絞って))?/gi,
     value: (m) => {
       const n = Number(m[1]);
       return Number.isInteger(n) && n >= LIMIT_MIN && n <= LIMIT_MAX ? n : undefined;
     },
   },
+];
+
+// Negated conditions (「High 以外」「Low は除外」「not High」): the screen cannot take them, so they are
+// reported as not used before the rules run, instead of being read as the opposite condition.
+const NEGATED = [
+  /(?:(?:impact\s*(?:が|は|を|=|:)?\s*)?\b(?:high|medium|low|unspecified)\b|\d+\s*(?:件|items?\b)|[A-Za-z0-9_][A-Za-z0-9_.-]*\.ya?ml|(?:初回の?|最初の?)?解析)\s*(?:は|を|が)?\s*(?:以外(?:の\S*)?|を?除いて|を?除く|を?除外(?:して|する)?|でない|ではない|じゃない|でなく|ではなく)/gi,
+  /\b(?:except|excluding|not|without|other than)\s+(?:impact\s+)?(?:high|medium|low|unspecified)\b/gi,
 ];
 
 // Condition-like phrases the screen cannot take (they are reported as not used)
@@ -42,6 +49,8 @@ const UNUSED_PATTERNS = [
   /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g, // checker-like names (NULL_RETURNS)
   /\b(?:MISRA|CERT)\b[^、。,，\n]*/gi,
   /\S*\/\S+|\S+\.(?:c|h|cc|cpp|hpp|cxx)\b/g, // paths and source files
+  /\S*解析\S*/g, // initial-analysis wording the rules did not take
+  /\S*\d+\s*(?:件|items?\b)\S*/gi, // count wording the rules did not take
 ];
 const KEYWORD = /(だけ|のみ|以外|を除いて|を除く|に絞って|で絞って|に限って)/;
 const CLAUSE = /[^、。,，．!！?？\n]+/g;
@@ -62,6 +71,13 @@ export function parseRequest(input) {
     const p = phrase.replace(/\s+/g, ' ').trim();
     if (p && !unused.includes(p)) unused.push(p);
   };
+
+  for (const re of NEGATED) {
+    s = s.replace(re, (m) => {
+      addUnused(m);
+      return blank(m);
+    });
+  }
 
   for (const rule of RULES) {
     s = s.replace(rule.re, (...args) => {

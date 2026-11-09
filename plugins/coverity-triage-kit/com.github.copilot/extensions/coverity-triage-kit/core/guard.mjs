@@ -38,10 +38,49 @@ function writesReview(tool, args) {
   return false;
 }
 
-// "uv run ... "<the batch-run or screen script>" <command> ..." and nothing chained before or after it
+// The command with every quoted part replaced by Q, or null when a quote is left open or a double-quoted
+// part could expand something (` or $ inside "…": bash and PowerShell expand $var, $(…) and `…`).
+// Single-quoted text never expands (bash and PowerShell).
+function outsideQuotes(c) {
+  let out = '';
+  for (let i = 0; i < c.length; i += 1) {
+    const ch = c[i];
+    if (ch === "'") {
+      const end = c.indexOf("'", i + 1);
+      if (end < 0) return null;
+      out += 'Q';
+      i = end;
+    } else if (ch === '"') {
+      let j = i + 1;
+      for (; j < c.length && c[j] !== '"'; j += 1) {
+        if (c[j] === '`' || c[j] === '$') return null;
+        if (c[j] === '\\' && c[j + 1] === '"') j += 1; // \" inside "…" (bash)
+      }
+      if (j >= c.length) return null;
+      out += 'Q';
+      i = j;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+// outside quotes: chaining and redirection (bash, cmd), and PowerShell expressions ((…), @(…), {…}, $var)
+const UNQUOTED_META = /[;&|`<>\r\n(){}@$]/;
+const STDIN_INPUT = /^echo\s+'[^']*'\s*\|\s*/;
+
+// "uv run ... "<the batch-run or screen script>" <command> ..." and nothing chained before or after it.
+// Quoted arguments may hold any text (C code, error messages). The one input form allowed is
+// echo '<single-quoted text>' | uv run ... "<script>" <command> ... --stdin
 export function isAllowedCommand(command, scripts) {
-  const c = String(command ?? '').trim().replace(/\s+2>&1\s*$/, '');
-  if (!c || /[;&|`<>\r\n]|\$\(/.test(c)) return false;
+  let c = String(command ?? '').trim().replace(/\s+2>&1\s*$/, '');
+  if (!c) return false;
+  const piped = STDIN_INPUT.exec(c);
+  if (piped) c = c.slice(piped[0].length);
+  const outside = outsideQuotes(c);
+  if (outside === null || UNQUOTED_META.test(outside)) return false;
+  if (piped && !/(?:^|\s)--stdin(?=\s|$)/.test(outside)) return false;
   // uv run [--flags] "<script>" <command> ...: the first argument after the flags must be the script itself
   const m = /^["']?uv(?:\.exe)?["']?\s+run\s+((?:--[\w-]+\s+)*)("[^"]+"|'[^']+'|\S+)/i.exec(c);
   if (!m) return false;
@@ -49,18 +88,26 @@ export function isAllowedCommand(command, scripts) {
   return scripts.filter(Boolean).some((s) => script === norm(s));
 }
 
-function readToolMatches(tool, readTools) {
+// A Coverity read tool: the bare name, or the name qualified by the Coverity server's registration name
+// (defaults.json coverityServer) with any separator, e.g. <server>/x, <server>-x, mcp__<server>__x.
+// Without coverityServer, any qualifier is accepted.
+const SEP = /[/\-_:.]/;
+function readToolMatches(tool, readTools, server) {
   return readTools.some((t) => {
     if (tool === t) return true;
-    if (!tool.endsWith(t)) return false;
-    return /[/\-_:.]/.test(tool.charAt(tool.length - t.length - 1));
+    if (!tool.endsWith(t) || !SEP.test(tool.charAt(tool.length - t.length - 1))) return false;
+    if (!server) return true;
+    const head = tool.slice(0, tool.length - t.length).replace(/[/\-_:.]+$/, '');
+    if (!head.endsWith(server)) return false;
+    const before = head.charAt(head.length - server.length - 1);
+    return before === '' || SEP.test(before);
   });
 }
 
 export function createGuard(ctx) {
   function orchestratorVerdict(tool, args) {
     if (ORCHESTRATOR_TOOLS.has(tool) || SHELL_SIDE_TOOLS.has(tool)) return null;
-    if (readToolMatches(tool, ctx.defaults.coverityReadTools)) return null;
+    if (readToolMatches(tool, ctx.defaults.coverityReadTools, ctx.defaults.coverityServer)) return null;
     if (SHELL_TOOLS.has(tool)) {
       const command = args.command ?? args.cmd ?? args.script;
       return isAllowedCommand(command, [ctx.commands.runScript, ctx.commands.guiScript]) ? null : { deny: true, reason: SHELL_DENY };

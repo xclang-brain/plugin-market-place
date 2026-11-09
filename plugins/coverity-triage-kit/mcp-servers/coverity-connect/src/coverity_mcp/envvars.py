@@ -48,11 +48,11 @@ def get_env(name: str) -> str | None:
     """The value of a user's variable, or None when it is not set (see the module rules)."""
     value = os.environ.get(name)
     if not is_unset(value):
-        return value
+        return value.strip()
     if sys.platform == "win32":
         stored = _registry(name)
         if not is_unset(stored):
-            return stored
+            return stored.strip()
     return None
 
 

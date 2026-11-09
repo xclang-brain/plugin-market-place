@@ -73,6 +73,14 @@ class SettingsTest(unittest.TestCase):
             self.assertNotIn(b"Secret-Value", body)
         status, credentials = self.srv.get("/api/credentials?user_env=COV_AUTH_KEY&key_env=MY_KEY")
         self.assertTrue(credentials["user_hidden"])
+        # any other variable the page names (a token, a proxy with a password) is not shown until it is saved
+        status, other = self.srv.get("/api/credentials?user_env=PATH&key_env=MY_KEY")
+        self.assertEqual(status, 200)
+        self.assertTrue(other["user_withheld"])
+        self.assertFalse(other["user_hidden"], "a user name can still be typed for it")
+        self.assertEqual(other["user"], "")
+        status, credentials = self.srv.get("/api/credentials?user_env=COV_USER&key_env=MY_KEY")
+        self.assertEqual(credentials["user"], "triage-bot")
 
     @unittest.skipIf(sys.platform == "win32", "on Windows the credentials can be saved")
     def test_credentials_cannot_be_saved_off_windows(self) -> None:

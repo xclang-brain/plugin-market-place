@@ -12,5 +12,7 @@
   "pluginSkills": ["coverity-triage-screen", "coverity-help", "coverity-selftest"],
   "port": 8731,
   "issueRepo": "xclang-brain/plugin-market-place",
+  "agentDir": "com.github.copilot/agents",
+  "coverityServer": "coverity-connect",
   "coverityReadTools": ["coverity_check_connection", "coverity_search_issues", "coverity_get_issue_details", "coverity_preview_triage"]
 }

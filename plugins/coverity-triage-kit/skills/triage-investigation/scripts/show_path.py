@@ -197,6 +197,13 @@ class PathMapper:
             root = _norm(str(self.repo)).rstrip("/") + "/"
             if norm.lower().startswith(root.lower()) and (self.repo / norm[len(root):]).is_file():
                 return norm[len(root):], "inside", ""
+            # the same folder written another way (an 8.3 short name, a link, a subst drive): resolve the file
+            try:
+                real = Path(original).resolve()
+                if real.is_file():
+                    return real.relative_to(self.repo).as_posix(), "inside", ""
+            except (OSError, ValueError):
+                pass
         lowered = norm.lower()
         for prefix in self.prefixes:
             if lowered.startswith(prefix.lower()):

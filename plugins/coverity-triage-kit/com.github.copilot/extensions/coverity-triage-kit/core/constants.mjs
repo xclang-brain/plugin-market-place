@@ -53,6 +53,7 @@ export const INITIAL_CHOICES = Object.freeze(['設定どおり', 'する', 'し�
 export const DEFAULT_FILTER = 'untriaged.yaml';
 export const LIMIT_MIN = 1;
 export const LIMIT_MAX = 100;
+export const DEFAULT_LIMIT = 20; // the screen's first value for the count (the original's task.json default)
 export const REWORK_MIN = 0;
 export const REWORK_MAX = 2;
 

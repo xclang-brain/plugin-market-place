@@ -26,6 +26,9 @@ test('the orchestrator may read, search, call agents, use skill and the Coverity
   for (const tool of ['coverity_search_issues', 'coverity-connect/coverity_get_issue_details', 'coverity-connect-coverity_check_connection', 'mcp__coverity-connect__coverity_preview_triage']) {
     assert.equal(await ask(root, tool, {}), undefined, tool);
   }
+  for (const tool of ['other-server/coverity_search_issues', 'evil_coverity_search_issues', 'mcp__other__coverity_get_issue_details']) {
+    assert.ok(denied(await ask(root, tool, {})), `${tool}: another server's tool of the same name`);
+  }
 });
 
 test('the orchestrator may not edit, write, fetch, use other tools, or write back to Coverity', async (t) => {
@@ -44,6 +47,9 @@ test('the orchestrator may run only this run command or the screen command, one 
     `uv run --native-tls --quiet "${run}" note-issue --run "/o" --stdin`,
     `uv run --native-tls --quiet "${gui}" open --repo "/r" --no-browser 2>&1`,
     `uv run --native-tls --quiet "${run.replace(/\//g, '\\')}" status --run "C:\\o"`,
+    `uv run --native-tls --quiet "${run}" note-issue --run "/o" --title "ptr->len の確かめ" --body "<stdio.h> と a && b; x | y"`,
+    `uv run --native-tls --quiet "${run}" tick --run "/o" --failed T1 --reason 'error: a < b; see "x" | y'`,
+    `echo '{"title": "長い題", "body": "1行目\\n2行目 a->b; c | d"}' | uv run --native-tls --quiet "${run}" note-issue --run "/o" --stdin`,
   ];
   for (const command of ok) {
     assert.equal(await ask(root, 'bash', { command }), undefined, command);
@@ -61,6 +67,17 @@ test('the orchestrator may run only this run command or the screen command, one 
     `uv run python -c "import os" "${run}"\nrm x`,
     `uv run python -c "import os" "${run}"`,
     `uv run --with requests "${run}" tick`,
+    `uv run --native-tls --quiet "${run}" tick --reason "$(whoami)"`,
+    `uv run --native-tls --quiet "${run}" tick --reason "\`whoami\`"`,
+    `uv run --native-tls --quiet "${run}" tick --reason "open`,
+    `echo '{}' | uv run --native-tls --quiet "${run}" tick --run "/o"`,
+    `echo "$(whoami)" | uv run --native-tls --quiet "${run}" note-issue --run "/o" --stdin`,
+    `cat /etc/passwd | uv run --native-tls --quiet "${run}" note-issue --run "/o" --stdin`,
+    `uv run --native-tls --quiet "${run}" status --run (Remove-Item -Recurse -Force C:\\repo)`,
+    `uv run --native-tls --quiet "${run}" status --run @(Get-ChildItem)`,
+    `uv run --native-tls --quiet "${run}" status --run $env:COV_AUTH_KEY`,
+    `uv run --native-tls --quiet "${run}" note-issue --run "/o" --body "$env:COV_AUTH_KEY"`,
+    `uv run --native-tls --quiet "${run}" status --run {Remove-Item x}`,
   ];
   for (const command of bad) {
     const r = await ask(root, 'bash', { command });

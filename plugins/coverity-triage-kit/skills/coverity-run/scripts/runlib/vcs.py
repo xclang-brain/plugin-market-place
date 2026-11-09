@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import tarfile
+import xml.etree.ElementTree as ET  # noqa: N817 - the usual name
 from pathlib import Path
 from typing import Any
 
@@ -192,9 +193,26 @@ class SvnVcs(Vcs):
                 shutil.rmtree(dest, ignore_errors=True)
         self.svn("checkout", "--quiet", "-r", str(revision), self.url(), str(dest))
 
+    # svn status --xml: always UTF-8 (the text form uses the console or ANSI code page on Windows, which
+    # garbles non-ASCII names). wc-status/@item → the first column of the text form.
+    STATUS_CODES = {"modified": "M", "added": "A", "deleted": "D", "unversioned": "?", "missing": "!",
+                    "replaced": "R", "ignored": "I", "conflicted": "C", "external": "X", "obstructed": "~",
+                    "incomplete": "!"}
+
     def _status(self, dest: Path, *extra: str) -> list[tuple[str, str]]:
-        lines = out_text(self.svn("status", *extra, cwd=dest)).splitlines()
-        return [(line[:1], line[8:]) for line in lines if len(line) > 8 and line[:1] != " "]
+        proc = self.svn("status", "--xml", *extra, cwd=dest)
+        try:
+            root = ET.fromstring(proc.stdout)
+        except ET.ParseError as e:
+            raise RunError(f"svn status の結果を読めませんでした: {e}") from e
+        out = []
+        for entry in root.iter("entry"):
+            status = entry.find("wc-status")
+            code = self.STATUS_CODES.get(status.get("item", "") if status is not None else "")
+            path = entry.get("path", "")
+            if code and path and path != ".":
+                out.append((code, path))
+        return out
 
     def reset_copy(self, dest: Path, revision: str) -> None:
         self.ensure_copy(dest, revision)

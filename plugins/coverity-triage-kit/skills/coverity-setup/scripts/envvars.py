@@ -33,9 +33,14 @@ def _user_registry(name: str) -> str | None:
         return None
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            stored, _kind = winreg.QueryValueEx(key, name)
+            stored, kind = winreg.QueryValueEx(key, name)
     except OSError:
         return None
+    if kind == getattr(winreg, "REG_EXPAND_SZ", 2):  # a value saved with %NAME% in it
+        try:
+            stored = winreg.ExpandEnvironmentStrings(str(stored))
+        except (AttributeError, OSError):
+            pass
     return _usable(str(stored))
 
 

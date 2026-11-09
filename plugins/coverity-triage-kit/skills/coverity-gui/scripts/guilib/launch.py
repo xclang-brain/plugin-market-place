@@ -4,7 +4,8 @@ The server runs detached from the command that opened it. Where it is (address, 
 ``~/.<this skill's folder name>/<hash of the repository>.json`` (only the user can read it; tests set
 ``GUI_STATE_DIR``). ``open`` reuses a server that answers for the same repository with the same scripts,
 and else starts one and waits for its ready file. A server stops when 「サーバを止める」 is pressed,
-after 2 hours without use (``GUI_IDLE_SECONDS``), or when another server has taken its place in the file.
+or when another server has taken its place in the file. Like the original screen it does not stop on idle; an idle stop
+is only used when ``GUI_IDLE_SECONDS`` is set to a positive number of seconds (tests).
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ VIEWS = ("monitor", "summary", "settings")
 TOKEN_ENV = "GUI_TOKEN"
 STATE_ENV = "GUI_STATE_DIR"
 IDLE_ENV = "GUI_IDLE_SECONDS"
-IDLE_SECONDS = 2 * 60 * 60
+IDLE_SECONDS = 0.0  # no idle stop unless GUI_IDLE_SECONDS asks for one
 READY_SECONDS = 30
 CALL_SECONDS = 3
 WATCH_SECONDS = 3
@@ -217,10 +218,39 @@ def open_screen(repo_root: str, run: str | None = None, view: str | None = None,
 def stop_screen(repo_root: str) -> dict[str, Any]:
     repo = _repo(repo_root)
     found = _read_record(server_file(repo))
-    if found is None or call(found["port"], found["token"], "GET", "/api/ping") is None:
+    if found is None:
         return {"ok": True, "stopped": False, "note": "このリポジトリの画面のサーバは動いていません"}
-    answer = call(found["port"], found["token"], "POST", "/api/close")
-    return {"ok": True, "stopped": answer is not None}
+    # a busy PC can make one call time out: try a few times before saying the server is not running
+    for _ in range(3):
+        if call(found["port"], found["token"], "GET", "/api/ping") is not None:
+            break
+    else:
+        if _pid_alive(found.get("pid")):
+            return {"ok": True, "stopped": False, "note": "画面のサーバが返事をしません（動いているかもしれません）。少し待って、もう一度止めてください"}
+        return {"ok": True, "stopped": False, "note": "このリポジトリの画面のサーバは動いていません"}
+    for _ in range(3):
+        if call(found["port"], found["token"], "POST", "/api/close") is not None:
+            return {"ok": True, "stopped": True}
+        # the answer can be lost while the server is closing: a server that answered a moment ago and now
+        # does not is stopped
+        if call(found["port"], found["token"], "GET", "/api/ping") is None:
+            return {"ok": True, "stopped": True}
+    return {"ok": True, "stopped": False, "note": "画面のサーバが止める頼みに返事をしません。少し待って、もう一度止めてください"}
+
+
+def _pid_alive(pid: Any) -> bool:
+    """Whether the recorded server process still exists (best effort; False when unknown)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        return False  # no cheap check without extra libraries; the note then says it is not running
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _watch(server: GuiServer, path: Path, stopped: threading.Event) -> None:
@@ -240,7 +270,7 @@ def serve(repo_root: str, ready_file: str | None, port: int = 0) -> dict[str, An
         idle = float(os.environ.get(IDLE_ENV) or IDLE_SECONDS)
     except ValueError:
         idle = IDLE_SECONDS
-    server = GuiServer(repo, token, port, idle_seconds=max(1.0, idle))
+    server = GuiServer(repo, token, port, idle_seconds=max(1.0, idle) if idle > 0 else 0.0)
     path = server_file(repo)
     record = {"url": server.url, "pid": os.getpid(), "port": server.port, "token": token, "repo": str(repo),
               "version": server.version}
@@ -249,7 +279,8 @@ def serve(repo_root: str, ready_file: str | None, port: int = 0) -> dict[str, An
     try:
         if ready_file:
             write_text(Path(ready_file), json.dumps({"url": server.url, "pid": os.getpid(), "port": server.port}))
-        threading.Thread(target=server.watch_idle, args=(stopped,), daemon=True).start()
+        if server.idle_seconds > 0:
+            threading.Thread(target=server.watch_idle, args=(stopped,), daemon=True).start()
         if remembered:
             threading.Thread(target=_watch, args=(server, path, stopped), daemon=True).start()
         server.serve_forever(poll_interval=0.2)

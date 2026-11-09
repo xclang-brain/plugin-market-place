@@ -171,7 +171,7 @@ class MappingTest(unittest.TestCase):
 class FakePluginTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
         self.root = self.base / "plugin"
         self.agents = make_fake_plugin(self.root)
         self.ws = self.base / "ws"

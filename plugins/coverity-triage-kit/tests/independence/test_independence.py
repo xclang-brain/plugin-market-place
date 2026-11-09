@@ -432,6 +432,40 @@ class Stage2And3Sets(unittest.TestCase):
         self.assertEqual(self.extract(names), [], "3段階目の組を取り出すと、名前がたどれません")
 
 
+class ReadmeExtractionLists(unittest.TestCase):
+    """エージェントの README の「取り出して使う」のスキルの一覧が、定義の表からたどったスキルと同じ（REQ-003）"""
+
+    def skills_of(self, agent):
+        seen, _ = closure(agent)
+        return {name for name in seen if resolve(name) == "skill"}
+
+    def test_copy_lists_follow_the_tables(self):
+        found = 0
+        for readme in sorted(pp.AGENTS_DIR.glob("*.README.markdown")):
+            agent = readme.name[: -len(".README.markdown")]
+            text = readme.read_text(encoding="utf-8")
+            lists = []
+            for m in re.finditer(r"^for s in ([^;\n]+); do", text, re.M):  # bash
+                lists.append(("bash", m.group(1).split()))
+            for m in re.finditer(r"^foreach \(\$s in ([^)]+)\)", text, re.M):  # PowerShell
+                lists.append(("PowerShell", re.findall(r'"([^"]+)"', m.group(1))))
+            for m in re.finditer(r"次の(\d+)個です：([^\n]+)", text):  # a sentence that lists them
+                names = re.findall(r"`([^`]+)`", m.group(2))
+                lists.append(("文", names))
+                self.assertEqual(int(m.group(1)), len(names), f"{readme.name}: 数と並べた名前の数が合わない")
+                for n in re.findall(r"`/skills list` に(\d+)個のスキル", text):
+                    self.assertEqual(int(n), len(names), f"{readme.name}: /skills list の数")
+            if not lists:
+                continue
+            want = self.skills_of(agent)
+            for kind, names in lists:
+                found += 1
+                with self.subTest(readme=readme.name, kind=kind):
+                    self.assertEqual(set(names), want, f"{readme.name} の一覧（{kind}）が、{agent} の表からたどったスキルと違う")
+        if found == 0:
+            self.skipTest("一覧を書いたエージェントの README がまだありません")
+
+
 class PluginSkillIndependence(unittest.TestCase):
     """プラグイン全体のスキル（4段階目）：部品の名前は、SKILL.md の「## 使う部品」の表にだけ（仕様 REQ-101）"""
 

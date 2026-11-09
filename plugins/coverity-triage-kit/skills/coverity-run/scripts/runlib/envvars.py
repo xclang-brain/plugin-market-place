@@ -19,17 +19,22 @@ def get_env(name: str) -> str | None:
         return None
     value = os.environ.get(name)
     if value and not _placeholder(value):
-        return value
+        return value.strip()
     if sys.platform == "win32":
         try:
             import winreg
 
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-                stored, _ = winreg.QueryValueEx(key, name)
+                stored, kind = winreg.QueryValueEx(key, name)
         except OSError:
             return None
+        if kind == getattr(winreg, "REG_EXPAND_SZ", 2):  # a value saved with %NAME% in it
+            try:
+                stored = winreg.ExpandEnvironmentStrings(str(stored))
+            except (AttributeError, OSError):
+                pass
         stored = str(stored or "")
-        return None if _placeholder(stored) else stored
+        return None if _placeholder(stored) else stored.strip()
     return None
 
 

@@ -112,7 +112,7 @@
 実行フォルダはリポジトリの外にあるので、エージェントがそこに書くたびに、Copilot CLI がパスの許可を求めます。`uv run` と Coverity のツールの初めての呼び出しも許可を求めます。始める前に、usage.md の「許可を前もって与える」の、どちらかを1回します。
 
 - `/add-dir "<output_dir>"` の後、最初の確認で「このセッションでは許可」を選ぶ。
-- `copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<登録名>'` で起動し直す（`<登録名>` は Coverity との通信の部品の名前）。
+- `copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<登録名>(<読むツール>)' …` で起動し直す（`<登録名>` は Coverity との通信の部品の名前。読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ）ごとに `--allow-tool '<登録名>(<そのツールの名前>)'` を並べます（ツールの名前は、一括実行が示す許可の案内か、Coverity との通信の部品の README にあります）。書き戻すツールは前もって許可しません。反映のときに確認が出ます。）。
 
 ## 反映のエラー
 

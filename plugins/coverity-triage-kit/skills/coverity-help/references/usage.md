@@ -172,5 +172,7 @@ Web管理画面から始めた実行では、確かめがいつも動きます�
 2. Copilot CLI を、次のように起動し直す（`<登録名>` は Coverity との通信の部品の名前）。
 
 ```text
-copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<登録名>'
+copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<登録名>(<読むツール>)' …
 ```
+
+   読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ）ごとに `--allow-tool '<登録名>(<そのツールの名前>)'` を並べます（ツールの名前は、一括実行が示す許可の案内か、Coverity との通信の部品の README にあります）。書き戻すツールは前もって許可しません。反映のときに確認が出ます。サーバーの名前だけの `--allow-tool '<登録名>'` は、書き戻すツールまで許可するので使わない。
