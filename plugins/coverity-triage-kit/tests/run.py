@@ -93,8 +93,25 @@ def test_env(extra=None):
     """試験に渡す環境変数。バイトコードを書かない。文字コードの環境変数は足さない（利用者の PC と同じ既定で動かす）"""
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.update(quiet_git(env))
     env.update(extra or {})
     return env
+
+
+def quiet_git(env):
+    """git が commit などの後に裏で始める保守（.git の中のファイルを変える）を止める設定を、環境変数で足す。
+    試験が「ファイルを変えていない」を確かめるときに、git の保守と取り違えないため"""
+    try:
+        count = int(env.get("GIT_CONFIG_COUNT") or 0)
+    except ValueError:
+        count = 0
+    out = {}
+    for key, value in (("maintenance.auto", "false"), ("gc.auto", "0")):
+        out[f"GIT_CONFIG_KEY_{count}"] = key
+        out[f"GIT_CONFIG_VALUE_{count}"] = value
+        count += 1
+    out["GIT_CONFIG_COUNT"] = str(count)
+    return out
 
 
 def output_encoding():

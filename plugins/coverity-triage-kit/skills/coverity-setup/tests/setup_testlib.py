@@ -87,7 +87,9 @@ def run_script(*args: str, cwd: Path | None = None, env: dict[str, str] | None =
 def git(cwd: Path, *args: str) -> str:
     env = base_env(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t",
                    GIT_COMMITTER_EMAIL="t@example.com")
-    proc = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, check=True)
+    # no background maintenance (it changes .git while a test compares the folder)
+    proc = subprocess.run(["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args], cwd=cwd, env=env,
+                          capture_output=True, check=True)
     return proc.stdout.decode("utf-8", "replace").strip()
 
 

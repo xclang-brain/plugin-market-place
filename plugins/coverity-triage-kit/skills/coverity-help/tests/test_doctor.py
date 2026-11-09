@@ -98,7 +98,9 @@ class DoctorCheckTest(unittest.TestCase):
                             GIT_COMMITTER_EMAIL="t@localhost")
             subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True, env=env)
             subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, env=env)
-            subprocess.run(["git", "commit", "-q", "-m", "s"], cwd=self.repo, check=True, env=env)
+            # no background maintenance after the commit: it changes .git while the folder is compared
+            subprocess.run(["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-q", "-m", "s"],
+                           cwd=self.repo, check=True, env=env)
 
     def test_missing_folder_is_an_error(self):
         code, result, _ = run_doctor("check", "--repo", str(self.tmp / "nothing"))
