@@ -127,6 +127,7 @@ def worker(run: Run, item: dict[str, Any], fix_problems: list[str] | None = None
         lines += ["## グループ", "",
                   "同じ原因と思われる警告をまとめた作業です。すべてが同じ原因かを確かめ、原因の違う CID は "
                   "group_excluded_cids に入れます（その CID は別の作業になります。迷うときは外します。1 つは残します）。"
+                  "すべてが同じ原因なら、group_excluded_cids は空の配列 [] にします（この欄は省きません）。"
                   "修正案と逸脱コメント案は、残した CID に対して作ります。", ""]
     lines += _merge_lines(run, item) + _rework_lines(run, item)
     if fix_problems:
