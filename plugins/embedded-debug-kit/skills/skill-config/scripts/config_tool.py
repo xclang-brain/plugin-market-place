@@ -2,12 +2,12 @@
 """ほかのスキルの設定ファイル <作業フォルダ>/.<スキルの名前>/config.ini を読み書きする。
 
   config_tool.py show <スキルの名前> [--workdir 作業フォルダ]
-  config_tool.py set <スキルの名前> <項目> --stdin [--workdir 作業フォルダ]
+  config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]
 
 show は、項目ごとに、値と、すぐ上のコメントから読んだこと（必須・秘密・例・選べる値）を返す。何も作らない。
-set は、標準入力の値を1つの項目に書く。その項目の行だけを書き換え、コメントと並びは残す。
+set は、標準入力の値を1つの項目に書く（--empty なら空にする）。その項目の行だけを書き換え、コメントと並びは残す。
 標準出力には結果の JSON を1つだけ、ASCII で書く。
-終了コード：0 成功、1 書き込みの失敗、2 設定ファイルや引数の問題。
+終了コード：0 成功、1 書き込みの失敗や思わぬエラー、2 設定ファイルや引数の問題。
 Python 3.8 以上の標準ライブラリだけで動く。
 """
 
@@ -27,17 +27,20 @@ import traceback
 # このスキルの名前は、このスクリプトのフォルダの親の名前。名前を変えて写せば、その名前になる。
 SKILL_NAME = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SECTION = "settings"
-MASK = "＊＊＊"
+MASK = "***"  # ほかのスキルと同じ伏せ方
 INDENT = "    "
 USAGE = ("使い方：config_tool.py show <スキルの名前> [--workdir 作業フォルダ]、"
-         "config_tool.py set <スキルの名前> <項目> --stdin [--workdir 作業フォルダ]")
+         "config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]")
 HOW_TO_PASS = ("bash は「--stdin <<'END'」の次の行から値を書いて END の行で閉じ、"
-               "PowerShell は @' と '@ の間に値を書いて、パイプで渡してください。")
+               "PowerShell は @' と '@ の間に値を書いて、パイプで渡してください。"
+               "空にするときは、--stdin の代わりに --empty を付けてください。")
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REQUIRED_RE = re.compile(r"[（(]必須[）)]")
 SECRET_RE = re.compile(r"[（(]秘密[）)]")
-# コメントに（秘密）がなくても、名前がパスワードらしい項目は伏せる
-SECRET_NAME_RE = re.compile(r"password|passwd|passphrase|secret|token|api_?key", re.IGNORECASE)
+# コメントに（秘密）がなくても、名前がパスワードらしい項目は伏せる。_ . - で区切った語で見る（max_tokens は除く）
+SECRET_NAME_RE = re.compile(r"(^|[_.-])(pass(word|wd|phrase)?|pwd|secret|token|api_?key|private_?key)([_.-]|$)",
+                            re.IGNORECASE)
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 EXAMPLE_RE = re.compile(r"^例\s*[：:]\s*(.*)$")
 CHOICES_RE = re.compile(r"^選べる値\s*[：:]\s*(.*)$")
 NEWLINE_RE = re.compile(r"(\r\n|\r|\n)")  # configparser がファイルを読むときと同じ区切り
@@ -122,7 +125,7 @@ class Item(object):
             if example:
                 self.examples.append(example.group(1).strip())
             elif choices:
-                self.choices = [v.strip() for v in choices.group(1).split("/") if v.strip()]
+                self.choices = [v.strip() for v in re.split(r"[/／]", choices.group(1)) if v.strip()]
             elif c:
                 words.append(c)
         self.comment = "\n".join(words)
@@ -138,7 +141,7 @@ def scan(lines):
             item.end = i  # 値の続きの行（字下げしたコメントも、この項目の中にある）
             continue
         item = None
-        if text.startswith(COMMENT) and not indented:
+        if text.startswith(COMMENT):  # configparser と同じく、字下げしたコメントの行もコメント
             comments.append(text[1:].strip())
             continue
         header = None if indented else SECTCRE.match(text)
@@ -194,10 +197,13 @@ class Doc(object):
     def value(self, item):
         return to_value(self.values[item.key])
 
+    def get(self, key):
+        return next((i for i in self.items if i.key == key.strip().lower()), None)
+
     def find(self, key):
-        for item in self.items:
-            if item.key == key.strip().lower():
-                return item
+        item = self.get(key)
+        if item is not None:
+            return item
         raise Stop("設定ファイル %s に、項目 %s はありません。ある項目：%s。"
                    % (self.path, key, "、".join(i.key for i in self.items)))
 
@@ -274,16 +280,17 @@ def decode_input(data, encodings=None):
 
 
 def read_input():
-    """標準入力の値を、行のリストにする。前後の空白と空の行は除く。"""
+    """標準入力の値を、行のリストにする。前後の空白と空の行は除く。値の行がなければ Stop。"""
     stream = getattr(sys.stdin, "buffer", None)
     try:
-        waiting = stream is None or stream.isatty()
+        waiting = stream is None or stream.isatty()  # 端末なら、入力を待ったまま止まる。待たずに知らせる
     except (OSError, ValueError):
         waiting = True
-    if waiting:  # 渡し忘れると、入力を待ったまま止まる。待たずに知らせる
+    text = "" if waiting else decode_input(stream.read())
+    lines = [line.strip() for line in re.split(r"\r\n|\r|\n", text) if line.strip()]
+    if not lines:  # 渡し忘れを、空にする頼みと取り違えない
         raise Stop("値が標準入力で渡されていません。" + HOW_TO_PASS)
-    text = decode_input(stream.read())
-    return [line.strip() for line in re.split(r"\r\n|\r|\n", text) if line.strip()]
+    return lines
 
 
 def checked_values(doc, item, values):
@@ -292,6 +299,11 @@ def checked_values(doc, item, values):
         hint = "%s_env に環境変数の名前を書くか、" % item.key if item.key + "_env" in doc.values else ""
         raise Stop("%s は（秘密）の項目なので、値はここでは書けません。%s利用者がファイルを開いて書いてください。"
                    "空にすることはできます。" % (item.key, hint))
+    pair = doc.get(item.key[:-4]) if item.key.endswith("_env") else None  # （秘密）の項目と対の <項目>_env
+    if pair is not None and pair.secret and values and not (len(values) == 1 and ENV_NAME_RE.match(values[0])):
+        # パスワードそのものを書かれたかもしれないので、値は出さない
+        raise Stop("%s には、環境変数の名前を1つだけ書いてください（英数字と _。数字では始めない）。"
+                   "パスワードそのものは書けません。" % item.key)
     if any(CONTROL_RE.search(v) for v in values):
         raise Stop("値に制御文字が入っています。%s の値を確かめてください。" % item.key)
     if len(values) > 1 and any(v.startswith(COMMENT) for v in values):
@@ -351,13 +363,13 @@ def write_atomic(path, data):
         raise
 
 
-def cmd_set(path, skill, key, workdir, result):
+def cmd_set(path, skill, key, empty, workdir, result):
     LOG.open(workdir)
     result["log"] = LOG.path
     LOG("set を始めます。設定ファイル：%s、項目：%s" % (path, key))
     doc = load(path, skill)
     item = doc.find(key)
-    values = checked_values(doc, item, read_input())
+    values = checked_values(doc, item, [] if empty else read_input())
     before, value = doc.value(item), to_value("\n".join(values))
     result.update(key=item.key, value=shown(item, value), changed=False)
     if value == before:
@@ -390,12 +402,14 @@ def parse_args(argv):
     parser.add_argument("skill")
     parser.add_argument("key", nargs="?")
     parser.add_argument("--stdin", action="store_true")
+    parser.add_argument("--empty", action="store_true")
     parser.add_argument("--workdir")
     args = parser.parse_intermixed_args(argv)
     if (args.command == "show") == bool(args.key):
         raise Stop("コマンドの書き方が違います。" + USAGE)
-    if args.command == "set" and not args.stdin:
-        raise Stop("値は、--stdin を付けて標準入力で渡してください。" + HOW_TO_PASS)
+    if args.command == "set" and args.stdin == args.empty:
+        raise Stop("set には、--stdin か --empty のどちらか1つを付けてください。値は、--stdin を付けて"
+                   "標準入力で渡します。" + HOW_TO_PASS)
     if not SKILL_NAME_RE.match(args.skill):
         raise Stop("スキルの名前 %s は使えません。スキルのフォルダの名前（英数字とハイフンなど）で指定してください。"
                    % args.skill)
@@ -403,18 +417,18 @@ def parse_args(argv):
 
 
 def main(argv=None):
-    result = {"ok": False, "message": "", "problems": [], "config": None, "file": None, "log": None}
+    result = {"ok": False, "message": "", "problems": [], "config": None, "log": None}
     try:
         args = parse_args(sys.argv[1:] if argv is None else argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir)
         path = os.path.join(workdir, "." + args.skill, "config.ini")
-        result["config"] = result["file"] = path
+        result["config"] = path
         if args.command == "show":
             cmd_show(path, args.skill, result)
         else:
-            cmd_set(path, args.skill, args.key, workdir, result)
+            cmd_set(path, args.skill, args.key, args.empty, workdir, result)
         code = 0
     except Stop as e:
         result.update(ok=False, message=e.message)
