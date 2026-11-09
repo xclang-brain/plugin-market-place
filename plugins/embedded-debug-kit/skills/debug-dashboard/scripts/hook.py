@@ -49,6 +49,8 @@ CONTENT_KEYS = {"content", "new_string", "old_string", "new_str", "old_str", "fi
 EVENTS = {"userpromptsubmit": "UserPromptSubmit", "userpromptsubmitted": "UserPromptSubmit",
           "pretooluse": "PreToolUse", "subagentstop": "SubagentStop",
           "stop": "Stop", "agentstop": "Stop"}
+NOTICE = "<task-notification>"  # バックグラウンドのサブエージェントが終わった知らせ。利用者の依頼ではない
+HANDBACK = "subagenthandback"   # 自動モードで、サブエージェントが最後の報告を渡すツール
 
 DENY_REASON = ("利用者が Web管理画面で実行を止めました。これ以上ツールを使わずに作業を終え、"
                "ここまでにしたことを報告してください。")
@@ -86,6 +88,11 @@ def mask_data(value):
 def short(name):
     """plugin:agent の形から、エージェントの名前だけを取り出す"""
     return text_of(name).split(":")[-1].strip()
+
+
+def clean(value):
+    """ファイルの名前に使えるように、英数字・_・- のほかを _ に替える"""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", text_of(value))[:64]
 
 
 def now():
@@ -188,6 +195,23 @@ def append(folder, event):
     write_file(path, fit(dict(event, time=now())), True)
 
 
+def requested(folder, agent):
+    """このセッションで、そのエージェントへの依頼（Agent の呼び出し）を記録したか。
+    記録は encode() で書いた形なので、行の始まりで見分ける"""
+    path = os.path.join(folder, "events.jsonl")
+    if os.path.islink(path) or not os.path.isfile(path):
+        return False
+    head = '{"kind": "request", "agent": %s,' % json.dumps(agent, ensure_ascii=False)
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return any(line.startswith(head) for line in f)
+
+
+def waiting(data):
+    """バックグラウンドで動いているサブエージェントがあるか（Stop の入力の background_tasks）"""
+    tasks = pick(data, "background_tasks", "backgroundTasks")
+    return isinstance(tasks, list) and any(isinstance(t, dict) and t.get("type") == "subagent" for t in tasks)
+
+
 def is_recording(base):
     recording = os.path.join(base, "recording")
     if os.path.islink(base) or os.path.islink(recording) or not os.path.isfile(recording):
@@ -214,30 +238,47 @@ def handle(args, raw, base):
     event = EVENTS.get(text_of(args[0] if args else pick(data, "hook_event_name", "hookEventName")).lower())
     if event is None:
         return
-    session = re.sub(r"[^A-Za-z0-9_-]", "_", text_of(pick(data, "session_id", "sessionId")))[:64] or "default"
+    session = clean(pick(data, "session_id", "sessionId")) or "default"
     folder = session_folder(base, session)
     if folder is None:
         return
     stop = os.path.join(folder, "stop")
     agent = short(pick(data, "agent_type", "agentType", "agentName"))
-    sub = bool(pick(data, "agent_id", "agentId"))
+    agent_id = clean(pick(data, "agent_id", "agentId"))
+    handback = os.path.join(folder, "handback-" + agent_id)  # このサブエージェントの報告は記録した
     if event == "UserPromptSubmit":
+        prompt = text_of(pick(data, "prompt"))
+        if prompt.strip().startswith(NOTICE):
+            return
         if os.path.lexists(stop):
             os.remove(stop)
-        append(folder, {"kind": "prompt", "text": mask(text_of(pick(data, "prompt")))})
+        append(folder, {"kind": "prompt", "text": mask(prompt)})
     elif event == "PreToolUse":
+        tool = text_of(pick(data, "tool_name", "toolName"))
+        tool_input = pick(data, "tool_input", "toolInput", "toolArgs")
+        if tool.lower() == HANDBACK:  # 断ると報告が届かないので、止めていても断らない
+            message = tool_input.get("message") if isinstance(tool_input, dict) else tool_input
+            append(folder, {"kind": "report", "agent": agent, "sub": True, "text": mask(text_of(message))})
+            if agent_id:
+                write_file(handback, b"", False)
+            return
         stopped = os.path.lexists(stop)
         if stopped:
             deny()
-        record = tool_record(text_of(pick(data, "tool_name", "toolName")),
-                             pick(data, "tool_input", "toolInput", "toolArgs"))
-        record.update({"from" if record["kind"] == "request" else "agent": agent, "sub": sub})
+        record = tool_record(tool, tool_input)
+        record.update({"from" if record["kind"] == "request" else "agent": agent, "sub": bool(agent_id)})
         if stopped:
             record["denied"] = True
         append(folder, record)
     else:
         text = mask(text_of(pick(data, "last_assistant_message", "lastAssistantMessage")))
-        append(folder, {"kind": "report", "agent": agent, "sub": event == "SubagentStop", "text": text})
+        if event == "SubagentStop":
+            if agent_id and os.path.lexists(handback):
+                os.remove(handback)
+            elif agent and requested(folder, agent):  # CLI が中で動かすエージェントは記録しない
+                append(folder, {"kind": "report", "agent": agent, "sub": True, "text": text})
+        elif not waiting(data):  # サブエージェントが残っていれば、まだ最後の報告ではない
+            append(folder, {"kind": "report", "agent": agent, "sub": False, "text": text})
 
 
 def main():

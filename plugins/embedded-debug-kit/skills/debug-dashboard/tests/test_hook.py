@@ -170,6 +170,60 @@ class RecordingTest(unittest.TestCase):
         self.assertEqual(os.listdir(str(self.base / "sessions")), ["______evil"])
         self.assertFalse((self.project.parent / "evil").exists())
 
+    def stop_run(self):
+        stop = self.base / "sessions" / "s1" / "stop"
+        stop.parent.mkdir(parents=True, exist_ok=True)
+        stop.write_text("")
+        return stop
+
+    def test_task_notification_is_not_a_prompt(self):
+        """バックグラウンドのサブエージェントが終わった知らせは、利用者の依頼ではない"""
+        stop = self.stop_run()
+        run_hook(self.project, {"session_id": "s1", "prompt": "\n<task-notification>\n<task-id>a1</task-id>\n"},
+                 "UserPromptSubmit")
+        self.assertTrue(stop.exists(), "サブエージェントの知らせで、止めた状態が解けました")
+        self.assertEqual(read_events(self.project), [])
+
+    def test_stop_waits_for_background_subagents(self):
+        stop = {"session_id": "s1", "hook_event_name": "Stop", "last_assistant_message": "待っています"}
+        run_hook(self.project, dict(stop, background_tasks=[{"id": "t1", "type": "subagent", "agent_type": WORKER}]))
+        run_hook(self.project, dict(stop, backgroundTasks=[{"id": "t1", "type": "subagent"}]))
+        self.assertEqual(read_events(self.project), [])
+        run_hook(self.project, dict(stop, background_tasks=[{"id": "t2", "type": "shell"}],
+                                    last_assistant_message="結論：成功"))
+        self.assertEqual([e["text"] for e in read_events(self.project)], ["結論：成功"])
+
+    def test_handback_is_the_report(self):
+        """自動モードでは、サブエージェントは SubagentHandback で最後の報告を渡す"""
+        report = "変えたこと：…\npassword=pw16\n" + "x" * 3000
+        sub = {"agent_id": "../a1", "agent_type": WORKER}
+        done = {"session_id": "s1", "hook_event_name": "SubagentStop", "last_assistant_message": "渡しました"}
+        run_hook(self.project, pre("Agent", {"subagent_type": WORKER, "prompt": "試行 1"}))
+        self.stop_run()
+        self.assertEqual(run_hook(self.project, pre("SubagentHandback", {"message": report}, **sub)), (0, ""))
+        folder = self.base / "sessions" / "s1"
+        self.assertIn("handback-___a1", os.listdir(str(folder)))
+        run_hook(self.project, dict(done, **sub))
+        self.assertNotIn("handback-___a1", os.listdir(str(folder)))
+        run_hook(self.project, dict(done, agent_id="a2", agent_type=WORKER, last_assistant_message="報告 2"))
+        events = read_events(self.project)
+        self.assertEqual([e["kind"] for e in events], ["request", "report", "report"])
+        self.assertEqual((events[1]["agent"], events[1]["sub"]), ("worker-agent", True))
+        self.assertEqual(events[1]["text"], report.replace("pw16", "***"))
+        self.assertEqual(events[2]["text"], "報告 2")
+
+    def test_reports_only_from_requested_agents(self):
+        """CLI が中で動かすエージェント（入力の候補、/btw）の SubagentStop は記録しない"""
+        done = {"session_id": "s1", "hook_event_name": "SubagentStop", "agent_id": "x1", "last_assistant_message": "候補"}
+        run_hook(self.project, pre("Agent", {"subagent_type": VERIFIER, "prompt": "確かめて"}))
+        for agent_type in ("", "my-plugin:debug-orchestrator", WORKER):
+            run_hook(self.project, dict(done, agent_type=agent_type))
+        run_hook(self.project, dict(done, agent_type=VERIFIER, last_assistant_message="C1：合格。"))
+        events = read_events(self.project)
+        self.assertEqual([(e["kind"], e["agent"]) for e in events],
+                         [("request", "debug-verifier"), ("report", "debug-verifier")])
+        self.assertEqual(events[1]["text"], "C1：合格。")
+
 
 class LimitTest(unittest.TestCase):
     def setUp(self):
@@ -255,7 +309,7 @@ class HooksJsonTest(unittest.TestCase):
 
     PAYLOADS = {
         "UserPromptSubmit": {"session_id": "s1", "prompt": "直して"},
-        "PreToolUse": pre("Bash", {"command": "ls"}),
+        "PreToolUse": pre("Agent", {"subagent_type": WORKER, "prompt": "試行 1"}),
         "SubagentStop": {"session_id": "s1", "agent_id": "a1", "agent_type": WORKER, "last_assistant_message": "報告"},
         "Stop": {"session_id": "s1", "last_assistant_message": "結論"},
     }
@@ -267,6 +321,11 @@ class HooksJsonTest(unittest.TestCase):
             env["PATH"] = path
         return subprocess.run([BASH, "-c", command], input=json.dumps(self.PAYLOADS[event]).encode("utf-8"),
                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+
+    def test_pre_tool_use_goes_ahead_when_the_hook_fails(self):
+        """Git Bash のない Windows では、失敗した PreToolUse のフックがツールを止めることがある"""
+        hook = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]["hooks"][0]
+        self.assertEqual(hook.get("onFailure"), "continue")
 
     def test_bash_is_not_wsl(self):
         self.assertNotIn("system32", BASH.lower(),
@@ -284,7 +343,7 @@ class HooksJsonTest(unittest.TestCase):
         mark_recording(project)
         for event in self.PAYLOADS:
             self.assertEqual(self.run_command(project, event).returncode, 0, event)
-        self.assertEqual([e["kind"] for e in read_events(project)], ["prompt", "tool", "report", "report"])
+        self.assertEqual([e["kind"] for e in read_events(project)], ["prompt", "request", "report", "report"])
 
     def test_with_stop_marker_denies(self):
         project = temp_project(self)

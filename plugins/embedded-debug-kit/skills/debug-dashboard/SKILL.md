@@ -24,7 +24,7 @@ Python は、Windows では `py -3`、ほかでは `python3` で動かす（下�
 起動したら、利用者に次のことを伝える。
 
 1. `url` をブラウザーで開く。
-2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のチャットに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する（プラグインなしで入れたときは `claude --agent debug-orchestrator`）。Copilot CLI では `/agent` で選ぶが、フックの設定がまだないので記録されない。
+2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のチャットに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する。Copilot CLI では `/agent` で選ぶが、フックの設定がまだないので記録されない。
 3. 「実行を止める」は、次のツールの呼び出しから効く。すでに動いているコマンドは、終わるまで止まらない。
 4. 画面が動いている間は、この作業フォルダのチャットをすべて記録する。使い終わったら `/debug-dashboard stop` で終了する。
 
