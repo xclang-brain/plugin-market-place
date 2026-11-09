@@ -1,13 +1,13 @@
 # ftp-deploy の使い方
 
 PC のファイルを、FTP で組み込み機器のフォルダに送るスキルです。
-一時的な名前で送り、サイズを確かめてから置き換えます。途中で失敗したら、途中までのファイルを消します。それより前のファイルは、送ったままになります。
+一時的な名前で送り、サイズを確かめてから置き換えます。途中で失敗したら、送りかけのファイルを消します。それまでに送り終えたファイルは、機器に残ります。
 必要なら、送ったあとに権限（755 など）も変えます。
 
 ## 要るもの
 
 - Python 3.8 以上。ほかに入れるものはありません。
-- 機器の FTP サーバー。サイズの問い合わせ（SIZE）、名前の変更（RNFR・RNTO）、削除（DELE）に対応していること。送り先のフォルダを作らせるなら MKD、権限を変えるなら SITE CHMOD にも。
+- 機器の FTP サーバー。サイズの問い合わせ（SIZE）、名前の変更（RNFR・RNTO）、削除（DELE）に対応していること。送り先のフォルダを作るなら MKD に、権限を変えるなら SITE CHMOD にも対応していること。
 - PC から機器に FTP でつながること。
 
 ## 入れ方
@@ -21,7 +21,7 @@ PC のファイルを、FTP で組み込み機器のフォルダに送るスキ�
 | Claude Code | `<プロジェクト>/.claude/skills/ftp-deploy/` | `~/.claude/skills/ftp-deploy/` |
 | GitHub Copilot CLI | `<プロジェクト>/.github/skills/ftp-deploy/` | `~/.copilot/skills/ftp-deploy/` |
 
-`~` は、Windows では `C:\Users\<ユーザー名>`（PowerShell では `$env:USERPROFILE`）です。
+`~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。設定とログのフォルダも `.<新しい名前>/` になります。
 
 ## 頼み方
@@ -64,7 +64,10 @@ files =
 - PowerShell：`$env:DEVICE_FTP_PASSWORD = '機器のパスワード'`
 - bash：`export DEVICE_FTP_PASSWORD='機器のパスワード'`
 
-コマンドの履歴にパスワードを残したくないときは、bash では `read -rs DEVICE_FTP_PASSWORD; export DEVICE_FTP_PASSWORD`、PowerShell 7.1 以降では `$env:DEVICE_FTP_PASSWORD = Read-Host -MaskInput` と打ってから、パスワードを入れます。
+コマンドの履歴にパスワードを残したくないときは、次のコマンドを打ってから、パスワードを入れます。
+
+- PowerShell 7.1 以降：`$env:DEVICE_FTP_PASSWORD = Read-Host -MaskInput`
+- bash：`read -rs DEVICE_FTP_PASSWORD; export DEVICE_FTP_PASSWORD`
 
 `.ftp-deploy/` には、中身が `*` の `.gitignore` を置きます。設定とログは Git に入りません。
 
@@ -78,7 +81,7 @@ files =
 
 ## 困ったとき
 
-| 言われたこと | 確かめること |
+| AI が伝えたこと | 確かめること |
 | --- | --- |
 | ホスト名が見つからない | `host` |
 | 接続を断られた（FTP サーバーが動いていない） | 機器で FTP サーバーが動いているか。`port` |
@@ -108,11 +111,11 @@ python3 -m pip install -r tests/requirements.txt
 python3 -B -m unittest discover -s tests
 ```
 
-テストは、PC の上で FTP サーバー（pyftpdlib）を動かし、それを機器の代わりにします。外のネットワークは使いません。
+テストは、PC の上で動かした FTP サーバー（pyftpdlib）を、機器の代わりに使います。外のネットワークは使いません。
 pyftpdlib がなければ FTP のテストを、pyOpenSSL がなければ FTPS のテストを飛ばします。
 
 ## してはいけないこと
 
-- パスワードをチャットに書かない。
-- `.ftp-deploy/` の `.gitignore` を消さない。
-- `remote_dir` を、機器のシステムのフォルダ（`/bin` など）にしない。同じ名前のファイルは置き換わる。
+- パスワードをチャットに書かないでください。
+- `.ftp-deploy/` の `.gitignore` を消さないでください。
+- `remote_dir` を、機器のシステムのフォルダ（`/bin` など）にしないでください。同じ名前のファイルが置き換わります。

@@ -37,17 +37,17 @@
 | `docs/guide/2-device-debugger.md` | 作業エージェントの使い方 | 人 |
 | `docs/guide/3-debug-orchestrator.md` | 3段階目の使い方 | 人 |
 | `docs/guide/4-debug-dashboard.md` | Web管理画面の使い方 | 人 |
-| `docs/` のほか | 憲章・仕様書・設計書 | 人 |
+| `docs/`（`guide/` 以外） | 憲章・仕様書・設計書 | 人 |
 | `tests/` | プラグイン全体のテスト | 人・CI |
 
-リポジトリのルートには、`.github/plugin/marketplace.json`（Copilot CLI）と `.claude-plugin/marketplace.json`（Claude Code）の両方に、このプラグインを載せる。
+このプラグインは、リポジトリのルートの `.github/plugin/marketplace.json`（Copilot CLI）と `.claude-plugin/marketplace.json`（Claude Code）の両方に載せる。
 
 確かめた事実（2026年11月9日。Claude Code 2.1.319 での実測と公式文書、@github/copilot 1.0.107 の配布物と公式文書、Agent Plugins 1.0.0 の仕様）：
 
-- Agent Plugins 1.0.0 の部品は、スキル（`skills/`）と MCP サーバー（`mcp.json`）だけである。CLI に固有のファイルは、その CLI の名前空間のフォルダに置く（第8節）。Claude Code の名前空間は決まっていないので、`com.anthropic.claude-code` とした。
+- Agent Plugins 1.0.0 の部品は、スキル（`skills/`）と MCP サーバー（`mcp.json`）だけである。CLI に固有のファイルは、その CLI の名前空間のフォルダに置く（Agent Plugins 1.0.0 の第8節）。Claude Code の名前空間は決まっていないので、`com.anthropic.claude-code` とした。
 - Copilot CLI は、Agent Plugins 1.0.0 の `$schema` を持つルートの `plugin.json` を、`.claude-plugin/plugin.json` より優先して読む。
-- Claude Code は `.claude-plugin/plugin.json` を読む。`agents` にエージェントのファイルを並べると、既定の `agents/` の代わりにそれを読む（`claude plugin validate` は、フォルダの指定を受け付けない）。`hooks` を書くと、そこのフックを足す。
-- Claude Code のプラグインのスキルの説明は、スキルのフォルダの場所を示す。Copilot CLI も同じである。
+- Claude Code は `.claude-plugin/plugin.json` を読む。`agents` にエージェントのファイルを並べると、既定の `agents/` の代わりに、並べたファイルを読む（`claude plugin validate` は、フォルダの指定を受け付けない）。`hooks` を書くと、そこのフックを足す。
+- Claude Code も Copilot CLI も、プラグインのスキルの説明で、スキルのフォルダの場所を示す。
 
 ## 3. スキルの共通の決まり
 
@@ -61,13 +61,13 @@
 | 結果 | 標準出力に JSON を1つ。共通の項目は `ok`・`message`・`problems`・`config`（設定ファイルの場所）・`log` |
 | 文字コード | JSON は ASCII だけで書く（日本語は `\uXXXX`）。PowerShell も bash も、これなら化けない |
 | 終了コード | 0：成功、1：作業の失敗、2：設定や引数の問題 |
-| 設定ファイル | `<作業フォルダ>/.<スキルの名前>/config.ini`。節は `[settings]` だけ。リストは、項目の後の行に、行頭に空白を入れて1つずつ書く |
+| 設定ファイル | `<作業フォルダ>/.<スキルの名前>/config.ini`。節は `[settings]` だけ。リストは、項目の次の行から、行頭に空白を入れて1つずつ書く |
 | 読み方 | `configparser.ConfigParser(interpolation=None)` で、`encoding="utf-8-sig"` を付けて読む。値の中の `%` をそのまま扱い、BOM があっても読める |
 | ログ | `<作業フォルダ>/.<スキルの名前>/logs/` に UTF-8 で書く |
 | Git に入れない | `init` と `run` は、`.<スキルの名前>/` に何かを書く前に、その直下に中身が `*` の `.gitignore` を置く |
-| パスワード | 項目の名前を `password` などにし、コメントに「（秘密）」と書く。対に、環境変数の名前を書く `<項目>_env` を置く。環境変数があれば、そちらを使う。結果とログでは伏せる |
+| パスワード | 項目の名前を `password` などにし、コメントに「（秘密）」と書く。対になる項目として、環境変数の名前を書く `<項目>_env` を置く。環境変数があれば、そちらを使う。結果とログでは伏せる |
 
-INI にしたのは、標準ライブラリで読めて、自前の読み取り処理が要らないからである。
+INI にしたのは、標準ライブラリで読めるからである。
 
 ## 4. 各スキル
 
@@ -75,12 +75,12 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 | --- | --- | --- |
 | cross-build | ビルドのコマンドを動かし、結果と、できたファイルの有無・更新の有無・サイズ・ELF の種類を返す。時間切れのときは、子プロセスも止める | `source_dir`、`sdk_env`、`build_command`、`outputs`、`timeout_seconds` |
 | ftp-deploy | ファイルを FTP で機器に送る。一時的な名前で送り、サイズを確かめてから名前を変える。必要なら権限を変える（SITE CHMOD）。送り先は `remote_dir` の中だけ。`tls` で FTPS も選べる | `host`、`port`、`user`、`password`、`files`、`remote_dir`、`file_mode`、`tls` |
-| serial-console | シリアルで機器のシェルにつなぎ、必要ならログインし、コマンドを順に動かして、出力と終了コードを返す。動かすコマンドは、設定の `commands` か、`--command` か `--stdin`（1行に1つ）で渡したもの | `port`、`baud`、`login_user`、`login_password`、`prompt`、`commands` |
+| serial-console | シリアルで機器のシェルにつなぎ、必要ならログインし、コマンドを順に動かして、出力と終了コードを返す。動かすコマンドは、設定の `commands`、`--command`、`--stdin`（1行に1つ）のどれかで渡す | `port`、`baud`、`login_user`、`login_password`、`prompt`、`commands` |
 | skill-config | スキルの名前を受け取り、`<作業フォルダ>/.<名前>/config.ini` のコメントを読んで、利用者に質問しながら値を書き込む。ファイルがなければ、そのスキルの `init` を使うよう伝える | なし |
 | debug-dashboard | Web管理画面の起動と終了。フックから呼ばれて記録と停止をする（4段階目、8章） | なし |
 
 - serial-console は、pyserial 3.5（BSD ライセンス）を `scripts/vendor/` に同梱する。
-- skill-config の書き込みは、同梱のスクリプトで、その項目の行だけを書き換える（コメントと並びを残す）。値は標準入力で渡す。
+- skill-config は、同梱のスクリプトで、その項目の行だけを書き換える（コメントと並びは残す）。値は標準入力で渡す。
 - skill-config は自分の設定を持たないので、サブコマンドは `show`（読むだけ。何も作らない）と `set` にする。SKILL.md には、質問の進め方の節を足す。
 - debug-dashboard のサブコマンドは `start`・`stop`・`status`。利用者が呼んだときだけ動くよう、SKILL.md に `disable-model-invocation: true` を書く（REQ-401。Claude Code と Copilot CLI の両方が対応している）。skill-creator の検証スクリプト（quick_validate）は、Agent Skills の基本の項目しか認めないので、この1行だけを理由に失敗する。
 
@@ -92,20 +92,20 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 | debug-orchestrator | 3 | メインの会話として動かす | 作業エージェントと検証エージェントへの依頼、ファイルの読み取り、検索、利用者への質問 |
 | debug-verifier | 3 | 統括エージェントから依頼される | ファイルの読み取り、検索 |
 
-- 統括エージェントは、メインの会話として動かす。サブエージェントは利用者に質問できないためである。また、サブエージェントがさらにサブエージェントを呼べるかは、環境変数 `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` で変わる（Claude Code 2.1.319 の公式文書と実測）。Claude Code では `claude --agent embedded-debug-kit:debug-orchestrator`、Copilot CLI では `/agent` で選ぶ。
-- `Agent(…)` で依頼できる相手を絞れるのも、`--agent` で動かしたときだけである（サブエージェントとして呼ばれると無視され、利用者への質問もできない。公式文書と実測）。そのため description で「メインの会話としてだけ使う」と書き、本文で、利用者に質問できないときは何も依頼せずに終えるようにする。
+- 統括エージェントは、メインの会話として動かす。サブエージェントは利用者に質問できないためである。また、サブエージェントがさらにサブエージェントを呼べるかは、環境変数 `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` で変わる（Claude Code 2.1.319 の公式文書と実測）。Claude Code では `claude --agent embedded-debug-kit:debug-orchestrator` で起動し、Copilot CLI では `/agent` で選ぶ。
+- `Agent(…)` で依頼できる相手を絞れるのも、`--agent` で動かしたときだけである。サブエージェントとして呼ばれると、この絞り込みは無視される（公式文書と実測）。そのため、description に「メインの会話としてだけ使う」と書く。本文には、利用者に質問できないときは何も依頼せずに終えるよう書く。
 - 統括エージェントのツールに、ファイルの編集・コマンド・スキルを入れない。依頼できる相手も、Claude Code では `Agent(embedded-debug-kit:device-debugger, embedded-debug-kit:debug-verifier)` と書いて絞る（REQ-303）。Copilot CLI では `tools` で相手を絞れないので、定義に、統括エージェントが動いている間だけ働くフックを書き、ほかへの依頼を断る（6章）。
 - 作業エージェントの定義は、使うスキルの名前だけを並べる（REQ-202）。Claude Code では frontmatter の `skills` に書き、スキルを最初から読み込ませる（実測で、プラグインのスキルを名前だけで指定できることを確かめた）。
 - description は「何をするか」と「いつ使うか」だけを書く。CLI は、これを見て任せる相手を決める（両方の CLI の公式文書）。
-- 本文は、役割 → 進め方 → 報告の形 → してはいけないこと の順に書く。本文にはツールの名前を書かない（「利用者に質問する」「エージェントに依頼する」と書く）。そのため、本文は両方の CLI で同じにできる。
+- 本文は、役割 → 進め方 → 報告の形 → 困ったとき（要るときだけ）→ してはいけないこと の順に書く。本文にはツールの名前を書かない（「利用者に質問する」「エージェントに依頼する」と書く）。そのため、本文は両方の CLI で同じにできる。
 
 ### 5.1 統括エージェントの依頼文
 
-統括エージェントと、作業・検証エージェントの間の取り決めは、統括エージェントの依頼文のひな形だけで決める。作業エージェントと検証エージェントの定義には、統括エージェントとの決まりを書かない。
+統括エージェントと、作業・検証エージェントの間の取り決めは、統括エージェントの依頼文のひな形にだけ書く。作業エージェントと検証エージェントの定義には書かない。
 
 | 依頼 | 相手 | 報告・判定の形 |
 | --- | --- | --- |
-| 作業（1回だけ試す） | 作業エージェント | 変えたこと、手順ごとの結果、判断に要るログの行、ログの場所。設定が足りないときや聞きたいことがあるときは、作業をせず、それを書く |
+| 作業（1回だけ試す） | 作業エージェント | 変えたこと、手順ごとの結果、判断に要るログの行、ログの場所。設定が足りないときや聞きたいことがあるときは、作業をせず、足りない設定や聞きたいことを書く |
 | 評価 | 検証エージェント | 条件ごとに1行、「C<番号>：<判定>。<理由>」。判定は「合格」「不合格」「判断できない」のどれか1つ。最後に「次に試すとよいこと：…」 |
 
 - 作業の依頼文には、「合否は決めない」「利用者には質問しない」と書く（REQ-207）。
@@ -137,21 +137,21 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 | モデル | `model: inherit` | 書かない（セッションのモデルを使う） |
 | 利用者がスキルを呼ぶ | `/<スキルの名前>` | `/embedded-debug-kit:<スキルの名前>` |
 
-- Copilot CLI 版のエージェントは、Claude Code 版から、frontmatter だけを替えて作る。本文は同じにし、同じであることをテストで確かめる。description も同じ文にし、CLI の名前（`claude --agent`）だけを替える。
+- Copilot CLI 版のエージェントは、Claude Code 版から、frontmatter だけを替えて作る。本文は同じにし、テストで確かめる。description も同じ文にし、CLI の名前（`claude --agent`）だけを替える。
 - フックの違いは 8.2 と 8.3 に書く。
 
 確かめた事実（2026年11月9日。Copilot CLI 1.0.108 での実測と、公式文書・更新履歴）：
 
 - ツールの名前は、大文字と小文字を区別しない。知らない名前は、何も言わずに無視される。`execute` でコマンド（Windows では PowerShell、ほかでは bash）、`read` で読み取り、`edit` で編集と作成、`search` で検索、`agent` でエージェントへの依頼、`skill` でスキルを使える。`AskUserQuestion` は `ask_user` の別名ではない。
-- 利用者への質問（`ask_user`）は、対話のセッションのメインのエージェントだけが使える。`-p` で動かしたときと、サブエージェントでは使えない。統括エージェントをメインの会話として動かすのは、Claude Code と同じである。
+- 利用者への質問（`ask_user`）は、対話のセッションで、メインのエージェントだけが使える。`-p` で動かしたときと、サブエージェントでは使えない。統括エージェントをメインの会話として動かすのは、Claude Code と同じである。
 - `--agent` で動かしたメインのエージェントには、`tools` に書かなくても、スキル（`skill`）とセッションのデータベース（`sql`）のツールが付く。統括エージェント自身は、コマンドもファイルの編集も使えない。
-- 依頼の相手の一覧には、ほかから呼べるすべてのエージェントが並ぶ。コマンドとファイルの編集を持つ組み込みのエージェント（`general-purpose`、`task` など）も入るので、そのままでは、それらに依頼して作業をさせられる（実測で、`general-purpose` がコマンドを動かした）。`agent/<名前>` のように書くと、依頼そのものができなくなる。
+- 依頼の相手の一覧には、ほかから呼べるすべてのエージェントが並ぶ。コマンドとファイルの編集を持つ組み込みのエージェント（`general-purpose`、`task` など）も入るので、そのままでは、それらに依頼して作業をさせられる（実測で、`general-purpose` がコマンドを動かした）。`tools` に `agent/<名前>` のように書くと、依頼そのものができなくなる。
 - そのため、統括エージェントの frontmatter の `hooks` に、PreToolUse のフック（`matcher: Agent`）を書く。エージェントのフックは Copilot CLI だけの機能で、そのエージェントが動いている間だけ働く（ほかのエージェントが動いているときと、サブエージェントのツールの呼び出しでは働かない）。プラグインのエージェントでも、`-p` でも働く。
-- このフックは、入力に `"agent_type":"embedded-debug-kit:device-debugger"` か `"agent_type":"embedded-debug-kit:debug-verifier"` の文字があれば何も出さずに 0 で終え、なければ断る（`permissionDecision` が `deny`）。入力は空白のない JSON で渡り、依頼文の中の `"` は `\"` になるので、依頼文に書かれた名前では通らない。断った理由はエージェントに届く。
-- Python を使わず、`bash` の欄と `powershell` の欄に書き分ける。PreToolUse のフックは 0 以外で終わると呼び出しを断るので、書き間違えると作業・検証エージェントへの依頼も止まる。これを `tests/independence/` で、bash と PowerShell（Windows の CI）で確かめる。断る理由の日本語は、PowerShell の出力の文字コードに左右されないよう、`\u` で書く。
+- このフックは、入力に `"agent_type":"embedded-debug-kit:device-debugger"` か `"agent_type":"embedded-debug-kit:debug-verifier"` の文字があれば、何も出さずに 0 で終える。なければ断る（`permissionDecision` が `deny`）。入力は空白のない JSON で渡る。依頼文の中の `"` は `\"` になるので、依頼文に名前を書いても通らない。断った理由はエージェントに届く。
+- Python を使わず、`bash` の欄と `powershell` の欄に書き分ける。PreToolUse のフックは 0 以外で終わると呼び出しを断るので、書き間違えると作業・検証エージェントへの依頼も止まる。このフックの動きは、`tests/independence/` で、bash と PowerShell（Windows の CI）の両方で確かめる。断る理由の日本語は、PowerShell の出力の文字コードに左右されないよう、`\u` で書く。
 - `disable-model-invocation: true` のエージェントは、依頼の相手の一覧から外れるが、`--agent` と `/agent` では選べる。
 - `user-invocable: false` のエージェントは、`/agent` の一覧に出ないが、ほかのエージェントからは呼べる。`--agent` で名前を指定すれば動かせる。
-- `skills` に書いたスキルは、エージェントの始めに中身が読み込まれる（Claude Code と同じ）。この項目は公式文書の表にないが、更新履歴（「Custom agents can now declare a `skills` field to eagerly load skill content into agent context at startup」）と実測で確かめた。
+- `skills` に書いたスキルは、エージェントが動き始めるときに中身が読み込まれる（Claude Code と同じ）。この項目は公式文書の表にないが、更新履歴（「Custom agents can now declare a `skills` field to eagerly load skill content into agent context at startup」）と実測で確かめた。
 - エージェントの名前は `embedded-debug-kit:<ファイルの名前から .agent.md を除いたもの>` になる。プラグインの名前を省くと見つからない。
 - プラグインのスキルを利用者が呼ぶときは、`/embedded-debug-kit:<スキルの名前>` と入力する。`/<スキルの名前>` だけでは「Unknown command」になる。
 
@@ -198,16 +198,16 @@ INI にしたのは、標準ライブラリで読めて、自前の読み取り�
 Copilot CLI では、イベントを PascalCase の名前（`UserPromptSubmit` など）で登録する。こうすると入力の項目の名前が Claude Code と同じ snake_case になり、同じ hook.py を使える。ただし、次の点が Claude Code と違う（Copilot CLI 1.0.108 での実測）。
 
 - `--agent` で動かしたメインの会話の入力には、`agent_type` がない。
-- サブエージェントの中のフックの入力は、`session_id` がサブエージェント自身の ID（`agent_id` と同じ）になる。このときは `parent_agent_id` のセッションに記録し、そのセッションの止める目印で断る。統括エージェントが直接依頼したエージェントなら、これがメインの会話である。依頼されたエージェントがさらに依頼すると、その先は別のセッションになるが、このプラグインの作業・検証エージェントは依頼をしないので起きない。
+- サブエージェントの中で動くフックでは、入力の `session_id` がサブエージェント自身の ID（`agent_id` と同じ）になる。このときは `parent_agent_id` のセッションに記録し、そのセッションの止める目印で断る。統括エージェントが直接依頼したエージェントなら、`parent_agent_id` のセッションはメインの会話である。依頼されたエージェントがさらに依頼すると、その先は別のセッションになる。ただし、このプラグインの作業・検証エージェントは依頼をしないので、そうはならない。
 - サブエージェントも、始めに UserPromptSubmit（依頼文）、終わりに Stop を起こす（`agent_id` つき）。これは記録せず、止める目印も消さない。依頼と報告は、PreToolUse（`Agent`）と SubagentStop で記録する。
 - Stop の入力に、最後の報告がない。そのため、入力の `transcript_path`（`session-state/<セッション>/events.jsonl`。1行に1件の JSON）から、次のように読む。見るのは、メインのエージェントの行（`agentId` がなく、`checkpoint` でない）だけである。
   1. ターンの終わり：`type` が `hook.start`、`data.hookType` が `agentStop`、`timestamp` が入力と同じ行。
-  2. ターンの始まり：その前の、`type` が `user.message` の行か、`timestamp` の違う 1 の形の行（前のターンの終わり）。
+  2. ターンの始まり：その前の、`type` が `user.message` の行か、1 と同じ形で `timestamp` が違う行（前のターンの終わり）。
   3. 始まりと終わりの間の、最後の発言（`type` が `assistant.message`、`data.content` が空でない）を、最後の報告にする。なければ記録しない。
   4. 終わりの行は、フックが動き始めてから少し遅れて書かれる（実測で 0.25 秒ほど）。3 秒まで待ち、書かれなければ記録しない。
 
-  この形は公式文書になく（ファイルの名前だけ）、配布物の `schemas/session-events.schema.json` と実測によるので、Copilot CLI の版を上げたら確かめ直す。
-- 作業フォルダ（`COPILOT_PROJECT_DIR`。`CLAUDE_PROJECT_DIR` も同じ値）は、Git のリポジトリの中で起動すると、CLI を起動したフォルダではなく、リポジトリのいちばん上のフォルダになる。これはエージェントのシェルには渡らないので、debug-dashboard のスクリプトは、`COPILOT_CLI` があるときは、今のフォルダから上へ `.git` を探し、見つかったフォルダを作業フォルダにする。このため、Copilot CLI では、画面はリポジトリの中のどのフォルダで起動したチャットも記録する（REQ-407）。
+  この形は公式文書になく（載っているのはファイルの名前だけ）、配布物の `schemas/session-events.schema.json` と実測から調べた。Copilot CLI の版を上げたら確かめ直す。
+- 作業フォルダ（`COPILOT_PROJECT_DIR`。`CLAUDE_PROJECT_DIR` も同じ値）は、Git のリポジトリの中で起動すると、CLI を起動したフォルダではなく、リポジトリのいちばん上のフォルダになる。この環境変数は、エージェントのシェルには渡らない。そのため、debug-dashboard のスクリプトは、`COPILOT_CLI` があるときは、今のフォルダから上へ `.git` を探し、見つかったフォルダを作業フォルダにする。その結果、Copilot CLI では、リポジトリの中のどのフォルダで起動したチャットも、画面が記録する（REQ-407）。
 
 ### 8.3 フックの呼び方
 
@@ -215,16 +215,16 @@ Copilot CLI では、イベントを PascalCase の名前（`UserPromptSubmit` �
 
 | CLI | 呼び方 |
 | --- | --- |
-| Claude Code | `bash` で動かす。目印がなければ `exit 0`。`py` があれば `py -3`、なければ `python3` でスクリプトを動かし、失敗しても `true` で 0 にする。Git Bash のない Windows では、フックが PowerShell で動いて失敗すると、ツールの呼び出しが止まることがあるので、PreToolUse には `"onFailure": "continue"` を付ける（Claude Code 2.1.295 以降） |
-| Copilot CLI | `bash` の欄（Linux・macOS）と `powershell` の欄（Windows）に書き分ける。どちらも目印を確かめてから、Python（bash では `py -3`、なければ `python3`。PowerShell では `py -3`、なければ `python`、`python3`）でスクリプトを動かし、最後に 0 で終える。Copilot CLI は、PreToolUse のフックが 0 以外で終わるか落ちると、ツールの呼び出しを断るためである（時間切れのときは通す）。時間切れは 10 秒にする |
+| Claude Code | `bash` で動かす。目印がなければ `exit 0`。`py` があれば `py -3`、なければ `python3` でスクリプトを動かし、失敗しても `true` で 0 にする。Git Bash のない Windows では、フックが PowerShell で動いて失敗すると、ツールの呼び出しが止まることがある。そのため、PreToolUse には `"onFailure": "continue"` を付ける（Claude Code 2.1.295 以降） |
+| Copilot CLI | `bash` の欄（Linux・macOS）と `powershell` の欄（Windows）に書き分ける。どちらも目印を確かめてから、Python でスクリプトを動かし、最後に 0 で終える。Copilot CLI は、PreToolUse のフックが 0 以外で終わるか落ちると、ツールの呼び出しを断るためである（時間切れのときは通す）。Python は、bash では `py -3`・`python3`、PowerShell では `py -3`・`python`・`python3` の順に試す。時間切れは 10 秒にする |
 
-断るときの出力は、CLI ごとの形にする。Claude Code は `hookSpecificOutput` の `permissionDecision`、Copilot CLI は `permissionDecision`。どちらかは、Copilot CLI が渡す環境変数 `COPILOT_CLI` で見分ける。Copilot CLI 1.0.108 で、断った理由がエージェントに届くことを確かめた。
+断るときの出力は、CLI ごとの形にする。Claude Code は `hookSpecificOutput` の `permissionDecision`、Copilot CLI は `permissionDecision`。どちらの CLI かは、Copilot CLI が渡す環境変数 `COPILOT_CLI` で見分ける。Copilot CLI 1.0.108 で、断った理由がエージェントに届くことを確かめた。
 
-Copilot CLI のフックの動き（1.0.108。bash は実測。PowerShell は公式文書と配布物の中の文字列からで、Windows での実測はまだない）：
+Copilot CLI 1.0.108 のフックの動き（bash は実測。PowerShell は公式文書と配布物の中の文字列から調べたもので、Windows ではまだ実測していない）：
 
 - `bash` の欄は、`/bin/bash --norc --noprofile -c '<欄の文字>'` で動く。`powershell` の欄は、PowerShell 7 以降（`pwsh`）があればそれで、なければ Windows PowerShell（`powershell.exe`）で、`-NoProfile -NoLogo` を付けて動く。
-- 入力の JSON は、シェルの標準入力に UTF-8 のまま渡る（日本語も `\u` に変えない）。シェルから起動した Python は、その標準入力を受け継いで読む。hook.py はバイトのまま読んで UTF-8 として解くので、コードページに左右されない。PowerShell の欄では `$input` を使わない。使うと、PowerShell が先に標準入力を読み、文字コードを変えてしまう。
-- プラグインのフォルダは、環境変数 `PLUGIN_ROOT`（Agent Plugins の名前）で受け取る（bash は `$PLUGIN_ROOT`、PowerShell は `$env:PLUGIN_ROOT`）。Copilot CLI は、欄の中の `${PLUGIN_ROOT}` などをシェルに渡す前に文字として置き換えるが、フォルダの名前に引用符などがあると壊れるので、環境変数として読む。作業フォルダは `COPILOT_PROJECT_DIR` で受け取る。ほかに `COPILOT_PLUGIN_ROOT`・`CLAUDE_PLUGIN_ROOT`・`CLAUDE_PROJECT_DIR`・`COPILOT_CLI=1` も渡る。
+- 入力の JSON は、シェルの標準入力に UTF-8 のまま渡る（日本語も `\u` に変わらない）。シェルから起動した Python は、その標準入力を受け継いで読む。hook.py はバイトのまま読んで UTF-8 として解釈するので、コードページに左右されない。PowerShell の欄では `$input` を使わない。使うと、PowerShell が先に標準入力を読み、文字コードを変えてしまう。
+- プラグインのフォルダは、Agent Plugins の仕様にある環境変数 `PLUGIN_ROOT` で受け取る（bash は `$PLUGIN_ROOT`、PowerShell は `$env:PLUGIN_ROOT`）。Copilot CLI は、欄の中の `${PLUGIN_ROOT}` などを、シェルに渡す前に文字として置き換える。ただし、フォルダの名前に引用符などがあると壊れるので、環境変数として読む。作業フォルダは `COPILOT_PROJECT_DIR` で受け取る。ほかに `COPILOT_PLUGIN_ROOT`・`CLAUDE_PLUGIN_ROOT`・`CLAUDE_PROJECT_DIR`・`COPILOT_CLI=1` も渡る。
 - プラグインのフックは、`-p` で動かしたときも、信頼していないフォルダでも動く。
 
 ### 8.4 記録する内容

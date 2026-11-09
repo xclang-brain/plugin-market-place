@@ -20,10 +20,10 @@ Python は、Windows では `py -3`、ほかでは `python3` で動かす（下�
 | 設定の `commands` を順に動かす | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" run` |
 | 渡したコマンドを順に動かす（設定の `commands` は使わない） | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" run --command 'uname -a' --command 'ls /opt/app'` |
 | 標準入力の1行を1つのコマンドとして、順に動かす（設定の `commands` は使わない） | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin` |
-| 設定を確かめる。プロンプトが出るまで進め（必要ならログインし）、コマンドは動かさない。何も作らない | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" check` |
+| 設定を確かめる。必要ならログインし、プロンプトが出るまで進める。コマンドは動かさず、何も作らない | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" check` |
 | 設定ファイルをひな形から作る。もうあれば、そのままにする | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" init` |
 
-`"` を含むコマンド（PowerShell のとき）と、`/` で始まるコマンド（Windows の Git Bash のとき）は、`--command` では正しく渡らない。`--stdin` で渡す。
+PowerShell で `"` を含むコマンドと、Windows の Git Bash で `/` で始まるコマンドは、`--command` では正しく渡らない。`--stdin` で渡す。
 
 bash：
 
@@ -44,7 +44,7 @@ grep "a b" /var/log/messages
 '@ | py -3 "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin
 ```
 
-run は、最長でおよそ「コマンドの数 ×（`command_timeout_seconds` ＋ 5 秒）＋ 1 分」かかる（`command_timeout_seconds` の既定は 30 秒）。コマンドを動かすツールの待ち時間は、それより長くする。
+run は、最長でおよそ「コマンドの数 ×（`command_timeout_seconds` ＋ 5 秒）＋ 1 分」かかる。`command_timeout_seconds` の既定は 30 秒。コマンドを動かすツールの待ち時間は、それより長くする。
 
 `--command` の値の書き方、機器を再起動するコマンドの動かし方、機器とのやりとりの詳細は [reference/console.md](reference/console.md) にある。
 
@@ -56,7 +56,7 @@ run は、最長でおよそ「コマンドの数 ×（`command_timeout_seconds`
 | --- | --- |
 | `ok`・`message` | 成功したかと、その説明。失敗のときは、確かめることも書いてある |
 | `problems` | 設定や引数の問題（終了コード 2 のとき）。直してから、もう一度動かす |
-| `config`・`log` | 設定ファイルとログの場所。ログには、機器からの出力がすべて入る（色などの制御文字と、終了コードを読むやりとりは除く。パスワードは `***`）。check はログを作らない |
+| `config`・`log` | 設定ファイルとログの場所。ログには、機器からの出力がすべて入る。ただし、色などの制御文字と、終了コードを読むやりとりは除く。パスワードは `***` に替える。check はログを作らない |
 | `commands` | run：動かしたコマンドごとの `command`、`output`（色などの制御文字を除いた出力）、`exit_code`（機器での終了コード。読めなければ `null`）、`timed_out`（時間切れで Ctrl-C を送ったか）、`truncated`（`output` を最後の 60 行・8,000 字に切ったか） |
 | `not_run` | run：動かさなかったコマンド |
 | `ports` | ポートが見つからないとき：この PC で見つかったシリアルポート |
