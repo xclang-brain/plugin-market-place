@@ -374,5 +374,43 @@ class LongPathTest(unittest.TestCase):
         self.assertIsNotNone(views.long_path_problem(Path("C:/out/run/work"), tmp), "without the VCS, every file counts")
 
 
+class LockTest(unittest.TestCase):
+    """file_lock on Windows: creating a lock that another process is deleting is refused as access denied."""
+
+    def flaky_open(self, failures: int):
+        real_open = os.open
+        calls = []
+
+        def fake(path, flags, *args):
+            calls.append(path)
+            if len(calls) <= failures:
+                raise PermissionError(13, "Access is denied", str(path))
+            return real_open(path, flags, *args)
+        return fake, calls
+
+    def test_access_denied_on_windows_means_wait(self) -> None:
+        from unittest import mock
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        fake, calls = self.flaky_open(2)
+        with mock.patch.object(common.os, "open", fake), mock.patch.object(common.sys, "platform", "win32"):
+            with common.file_lock(tmp / "vcs", timeout=5):
+                self.assertTrue((tmp / "vcs.lock").exists())
+        self.assertEqual(len(calls), 3)
+        self.assertFalse((tmp / "vcs.lock").exists())
+
+    def test_access_denied_elsewhere_is_an_error(self) -> None:
+        from unittest import mock
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        fake, _ = self.flaky_open(1)
+        with mock.patch.object(common.os, "open", fake), mock.patch.object(common.sys, "platform", "linux"):
+            with self.assertRaises(PermissionError):
+                with common.file_lock(tmp / "vcs", timeout=1):
+                    pass
+
+
 if __name__ == "__main__":
     unittest.main()

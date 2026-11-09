@@ -153,11 +153,15 @@ export function createStore({ dataRoot, clock }) {
     createMarkerExclusive(runId, issueId, marker) {
       mkdirSync(issuesDir(runId), { recursive: true, mode: 0o700 });
       let fd;
-      try {
-        fd = openSync(markerPath(runId, issueId), 'wx', 0o600);
-      } catch (e) {
-        if (e.code === 'EEXIST') return false;
-        throw e;
+      for (let i = 0; fd === undefined; i += 1) {
+        try {
+          fd = openSync(markerPath(runId, issueId), 'wx', 0o600);
+        } catch (e) {
+          if (e.code === 'EEXIST') return false;
+          // Windows refuses a create for a moment while another session renames or deletes the same file
+          if (i >= 5 || (e.code !== 'EPERM' && e.code !== 'EACCES' && e.code !== 'EBUSY')) throw e;
+          sleepSync(50 * (i + 1));
+        }
       }
       try {
         writeSync(fd, JSON.stringify(marker));

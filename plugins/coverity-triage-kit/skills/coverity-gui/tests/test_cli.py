@@ -91,5 +91,33 @@ class CliTest(unittest.TestCase):
         self.assertFalse(list(copy.rglob("__pycache__")))
 
 
+class LockTest(unittest.TestCase):
+    """file_lock on Windows: creating a lock that another process is deleting is refused as access denied."""
+
+    def test_access_denied_on_windows_means_wait(self) -> None:
+        import os
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        real_open = os.open
+        calls = []
+
+        def fake(path, flags, *args):
+            calls.append(path)
+            if len(calls) == 1:
+                raise PermissionError(13, "Access is denied", str(path))
+            return real_open(path, flags, *args)
+
+        with mock.patch.object(common.os, "open", fake), mock.patch.object(common.sys, "platform", "win32"):
+            with common.file_lock(tmp / "approvals.json", timeout=5):
+                self.assertTrue((tmp / "approvals.json.lock").exists())
+        self.assertEqual(len(calls), 2)
+        self.assertFalse((tmp / "approvals.json.lock").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

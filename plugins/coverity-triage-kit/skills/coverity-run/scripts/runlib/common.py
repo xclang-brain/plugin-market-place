@@ -158,9 +158,14 @@ def file_lock(path: Path, timeout: float = 30.0, stale: float | None = None) -> 
                 if time.time() - lock.stat().st_mtime > stale:
                     lock.unlink()
                     continue
-            if time.monotonic() > deadline:
-                raise RunError(f"ほかの処理が終わるのを待ちましたが、終わりませんでした: {lock}") from None
-            time.sleep(0.05)
+        except PermissionError:
+            # Windows: while another process deletes the lock (delete pending), creating it is refused with
+            # "access denied" instead of "exists". The lock is still taken: wait like for an existing one.
+            if sys.platform != "win32":
+                raise
+        if time.monotonic() > deadline:
+            raise RunError(f"ほかの処理が終わるのを待ちましたが、終わりませんでした: {lock}") from None
+        time.sleep(0.05)
     try:
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
