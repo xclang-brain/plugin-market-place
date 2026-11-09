@@ -41,7 +41,7 @@ claude plugin install embedded-debug-kit@plugin-market-place
 | `com.anthropic.claude-code/` | Claude Code 用のエージェントとフック |
 | `docs/` | 憲章、仕様書、設計書、使い方 |
 | `tests/` | 部品の独立性、文書、通しのテスト |
-| `evals/` | `claude plugin eval` のケース |
+| `evals/`、`skills/<名前>/evals/` | `claude plugin eval` のケース |
 
 ## テスト
 

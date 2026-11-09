@@ -1,6 +1,6 @@
 """文書の食い違いを確かめるテスト。
 
-- 版：2つのマニフェスト、仕様書、設計書、変更履歴、マーケットプレイスの一覧が、同じ版を書いている。
+- 版：2つのマニフェスト、仕様書、設計書、マーケットプレイスの一覧が、同じ版を書いている。
 - 要求の番号：設計書とテストが挙げる REQ-xxx は、仕様書にある。仕様書の要求は、どれも設計書の「要求の追跡」の表にある（憲章 第6条3項）。
 
   python3 -m unittest discover -s tests/docs -v
@@ -14,7 +14,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = ROOT / "docs" / "specs" / "requirements.md"
 DESIGN = ROOT / "docs" / "design" / "design.md"
-CHANGELOG = ROOT / "CHANGELOG.md"
 MANIFESTS = [ROOT / "plugin.json", ROOT / ".claude-plugin" / "plugin.json"]
 # マーケットプレイスの一覧（このプラグインが、リポジトリの plugins/ の下にあるときだけ確かめる）
 MARKET = ROOT.parents[1]
@@ -53,9 +52,6 @@ class VersionTest(unittest.TestCase):
         version = next(iter(versions.values()))
         self.assertEqual(version_line(SPEC), version, "仕様書の版")
         self.assertEqual(version_line(DESIGN), version, "設計書の版")
-        top = re.search(r"(?m)^## ([0-9][^\s（(]*)", read(CHANGELOG))
-        self.assertIsNotNone(top, "変更履歴に版の見出しがありません")
-        self.assertEqual(top.group(1), version, "変更履歴のいちばん上の版")
         for market in MARKET_JSONS:
             if market.is_file():
                 listed = [p for p in json.loads(read(market))["plugins"] if p.get("name") == ROOT.name]

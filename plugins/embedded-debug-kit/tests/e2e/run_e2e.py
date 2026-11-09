@@ -161,6 +161,7 @@ def case_orchestrator(base, ftp, shell):
         "ほかのエージェントに頼んでいない": all(c.endswith(("device-debugger", "debug-verifier")) for c in called),
         "統括エージェントが自分でファイルを直していない": not direct,
         "結論と条件ごとの判定を報告した": "C1" in text and ("成功" in text or "失敗" in text or "人の判断" in text),
+        "振り返りを書いた": "振り返り" in text,
     }
     return checks, text
 
