@@ -5,11 +5,14 @@
 """
 
 import configparser
+import ctypes
 import importlib.util
+import io
 import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -156,7 +159,7 @@ class TemplateTest(unittest.TestCase):
         parser = configparser.ConfigParser(interpolation=None)
         parser.read(TEMPLATE, encoding="utf-8-sig")
         self.assertEqual(parser.sections(), ["settings"])
-        self.assertEqual(parser["settings"]["timeout_seconds"], "600")
+        self.assertEqual(parser["settings"]["timeout_seconds"], "480")
 
 
 class InitTest(unittest.TestCase):
@@ -260,22 +263,49 @@ class CheckTest(unittest.TestCase):
         for word in ("build_comand", "zsh", "timeout_seconds"):
             self.assertIn(word, text)
 
-    def test_command_not_on_path(self):
+    def test_command_not_on_path_is_a_note(self):
         p = Project(self)
         p.configure(build_command="no-such-command-xyz all", outputs="app")
         code, data = p.run("check")
-        self.assertEqual(code, 2, data)
-        self.assertIn("no-such-command-xyz", data["message"])
-
-    def test_command_not_on_path_is_a_note_with_sdk_env(self):
-        p = Project(self)
-        sdk = "sdk.bat" if IS_WINDOWS else "sdk.sh"
-        with open(p.path(sdk), "w") as f:
-            f.write("")
-        p.configure(sdk_env=sdk, build_command="no-such-command-xyz all", outputs="app")
-        code, data = p.run("check")
         self.assertEqual(code, 0, data)
         self.assertIn("no-such-command-xyz", data["notes"][0])
+        self.assertIn("no-such-command-xyz", data["message"])
+
+    def test_variables_and_paths_in_the_command(self):
+        p = Project(self)
+        os.mkdir(p.path("tools"))
+        name = "mk.bat" if IS_WINDOWS else "mk"
+        with open(p.path("tools", name), "w") as f:
+            f.write("")
+        os.chmod(p.path("tools", name), 0o755)
+        s = {"shell": "cmd" if IS_WINDOWS else "bash", "source_dir": p.dir}
+        self.assertTrue(build.command_exists("tools/mk", s))  # Windows では .bat を補う
+        self.assertFalse(build.command_exists("tools/none", s))
+        self.assertTrue(build.command_exists("$NO_SUCH_VAR_XYZ/mk", s))  # 今は決まらない変数は調べない
+        with mock.patch.dict(os.environ, {"MY_TOOLS_XYZ": p.path("tools")}):
+            self.assertTrue(build.command_exists("$MY_TOOLS_XYZ/mk", s))
+            self.assertFalse(build.command_exists("$MY_TOOLS_XYZ/none", s))
+
+    def load(self, p, shell_program="shell", windows=IS_WINDOWS):
+        """設定を、このプロセスの中で読む（見つかるシェルと OS を決めて）。"""
+        with mock.patch.object(build, "find_shell", return_value=shell_program), \
+                mock.patch.object(build, "IS_WINDOWS", windows):
+            return build.load(p.config, p.dir)
+
+    def test_sdk_env_must_match_the_shell(self):
+        p = Project(self)
+        with open(p.path("sdk.sh"), "w") as f:
+            f.write("")
+        p.configure(shell="powershell", sdk_env="sdk.sh", build_command="make", outputs="app")
+        problems = self.load(p)[1]
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn(".ps1", problems[0])
+
+    def test_cmd_cannot_use_a_network_folder(self):
+        p = Project(self)
+        p.configure(source_dir="//server/share/fw", build_command="make", outputs="app")
+        problems = self.load(p, windows=True)[1]
+        self.assertTrue(any("ネットワークのフォルダ" in x for x in problems), problems)
 
     def test_unreadable_config(self):
         p = Project(self)
@@ -313,6 +343,57 @@ class FirstWordTest(unittest.TestCase):
             build.first_word("make 'all", "bash")
 
 
+class FindShellTest(unittest.TestCase):
+
+    def test_windows_bash_skips_the_wsl_launchers(self):
+        root = tempfile.mkdtemp(prefix="cross-build-shell-")
+        self.addCleanup(shutil.rmtree, root, True)
+        places = [os.path.join(root, *parts) for parts in
+                  (("Windows", "System32"), ("Microsoft", "WindowsApps"), ("Git", "bin"))]
+        for place in places:
+            os.makedirs(place)
+            with open(os.path.join(place, "bash.exe"), "w") as f:
+                f.write("")
+        env = {"PATH": os.pathsep.join(places), "SystemRoot": os.path.join(root, "Windows")}
+        with mock.patch.object(build, "IS_WINDOWS", True), mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(build.find_shell("bash"), os.path.join(places[2], "bash.exe"))
+            os.environ["PATH"] = os.pathsep.join(places[:2])
+            self.assertIsNone(build.find_shell("bash"))
+
+
+class ScanTest(unittest.TestCase):
+
+    def scan(self, *lines):
+        scanner = build.Scanner(io.StringIO())
+        for line in lines:
+            scanner.add(line)
+        return scanner
+
+    def test_error_and_warning_lines_of_many_compilers(self):
+        errors = ["main.c:3:5: error: 'x' undeclared", "main.c(3): error C2065: 'x': undeclared identifier",
+                  'Error[Pe020]: identifier "x" is undefined',
+                  '"../main.c", line 12: error #20: identifier "foo" is undefined',
+                  "main.o: undefined reference to `foo'"]
+        warnings = ["main.c:1:1: warning: unused variable", '"../main.c", line 3: warning #225-D: declared implicitly']
+        others = ["gcc -Werror -c error.c -o error.o", "gcc -Wno-error=unused -c src/error/x.c", "0 Error(s)"]
+        s = self.scan(*errors + warnings + others)
+        self.assertEqual(s.errors, errors)
+        self.assertEqual(s.warnings, warnings)
+
+
+class ShellCommandTest(unittest.TestCase):
+
+    def test_cmd_does_not_run_the_build_when_sdk_env_fails(self):
+        s = {"shell": "cmd", "shell_program": r"C:\Windows\System32\cmd.exe", "source_dir": r"C:\fw",
+             "sdk_env": r"C:\ti\setenv.bat", "build_command": "gmake clean & gmake all"}
+        argv = build.shell_command(s, tempfile.gettempdir(), "loaded")[0]
+        self.assertTrue(argv.endswith('&& (gmake clean & gmake all)"'), argv)
+
+    @unittest.skipUnless(sys.maxsize > 2 ** 32, "64 ビットの大きさを確かめる")
+    def test_job_limits_has_the_windows_size(self):
+        self.assertEqual(ctypes.sizeof(build.JobLimits), 144)  # 64 ビットの Windows と同じ並び
+
+
 class DecodeTest(unittest.TestCase):
 
     def test_line_that_is_not_utf8_uses_the_os_encoding(self):
@@ -321,8 +402,16 @@ class DecodeTest(unittest.TestCase):
             self.assertEqual(build.decode("エラー".encode("utf-8")), "エラー")
 
     def test_os_encoding_ignores_utf8_mode(self):
-        with mock.patch.object(build.locale, "getencoding", create=True, return_value="cp932"), \
+        with mock.patch.object(build, "IS_WINDOWS", False), \
+                mock.patch.object(build.locale, "getencoding", create=True, return_value="cp932"), \
                 mock.patch.object(build.locale, "getpreferredencoding", return_value="utf-8"):
+            self.assertEqual(build.fallback_encoding(), "cp932")
+
+    def test_windows_uses_the_ansi_code_page(self):
+        windll = mock.Mock()
+        windll.kernel32.GetACP.return_value = 932
+        with mock.patch.object(build, "IS_WINDOWS", True), \
+                mock.patch.object(build.ctypes, "windll", windll, create=True):
             self.assertEqual(build.fallback_encoding(), "cp932")
 
 
@@ -415,12 +504,90 @@ class RunTest(unittest.TestCase):
         self.assertIn("コマンドが見つかりません", data["message"])
         self.assertIn("no-such-command-xyz", data["message"])
 
+    def test_real_error_comes_before_a_missing_command(self):
+        p = Project(self)
+        p.configure(build_command=fake("say", "/bin/sh: 1: git-not-installed: not found",
+                                       "+", "say", "main.c:3:5: error: 'x' undeclared", "+", "exit", "2"),
+                    outputs="app")
+        code, data = p.run("run")
+        self.assertEqual(code, 1, data)
+        self.assertTrue(data["message"].startswith("ビルドが失敗しました"), data["message"])
+        self.assertIn("main.c:3:5: error:", data["message"])
+        self.assertIn("git-not-installed", data["message"])
+
+    def test_other_not_recognized_lines_are_not_a_missing_command(self):
+        p = Project(self)
+        p.configure(build_command=fake("say", "option --xyz is not recognized", "+", "exit", "1"), outputs="app")
+        code, data = p.run("run")
+        self.assertEqual(code, 1, data)
+        self.assertNotIn("コマンドが見つかりません", data["message"])
+
+    def test_shell_that_cannot_start(self):
+        p = Project(self)
+        p.configure(build_command="make", outputs="app")
+        with mock.patch.object(build, "find_shell", return_value=p.path("no-such-shell")):
+            code, data = build.cmd_run(p.dir)
+        self.assertEqual(code, 1, data)
+        self.assertIsNone(data["exit_code"])
+        self.assertIn("起動できませんでした", data["message"])
+
+    def test_second_run_in_the_same_folder_does_not_build(self):
+        p = Project(self)
+        p.configure(build_command=fake("write", "app"), outputs="app")
+        lock = build.lock_run(p.data)
+        self.addCleanup(lock.close)
+        code, data = p.run("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("ほかの run", data["message"])
+        self.assertFalse(os.path.exists(p.path("app")))
+        lock.close()
+        self.assertEqual(p.run("run")[0], 0)
+
     def test_timeout_stops_the_whole_tree(self):
         self.check_timeout()
 
     @unittest.skipIf(IS_WINDOWS, "SIGTERM は POSIX だけ")
     def test_timeout_stops_children_that_ignore_term(self):
         self.check_timeout("ignore-term")
+
+    @unittest.skipIf(IS_WINDOWS, "SIGTERM は POSIX だけ")
+    def test_timeout_gives_the_build_time_to_clean_up(self):
+        p = Project(self)
+        p.configure(build_command=fake("term", p.path("cleaned.txt")), outputs="app", timeout_seconds=2)
+        code, data = p.run("run")
+        self.assertTrue(data["timed_out"], data)
+        self.assertTrue(os.path.exists(p.path("cleaned.txt")), "SIGTERM の後、片付ける前に止められました")
+
+    @unittest.skipIf(IS_WINDOWS, "SIGTERM は POSIX だけ")
+    def test_stopping_the_script_stops_the_build(self):
+        p = Project(self)
+        pids_file = p.path("pids.txt")
+        p.configure(build_command=fake("spawn", pids_file), outputs="app", timeout_seconds=100)
+        proc = subprocess.Popen([sys.executable, SCRIPT, "run", "--workdir", p.dir], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(proc.kill)
+        end = time.time() + 30
+        while time.time() < end and not os.path.exists(pids_file):
+            time.sleep(0.1)
+        time.sleep(0.5)  # 記録ファイルを書き終えるのを待つ
+        proc.send_signal(signal.SIGTERM)
+        out = proc.communicate(timeout=60)[0]
+        data = json.loads(out.decode("ascii"))
+        self.assertEqual(proc.returncode, 1, data)
+        self.assertIn("途中で止められた", data["message"])
+        self.assertTrue(data["log"], data)
+        with open(pids_file, encoding="utf-8") as f:
+            pids = [int(x) for x in f.read().split()]
+        self.assertEqual(wait_until_gone(pids), [], "ビルドの子のプロセスが残っています")
+
+    def test_sdk_env_that_exits_midway(self):
+        p = Project(self)
+        sdk = self.write_sdk(p, "exit 0\n", "@exit 0\n")
+        p.configure(sdk_env=sdk, outputs="app", build_command=fake("write", "app"))
+        code, data = p.run("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("途中で", data["message"])
+        self.assertFalse(os.path.exists(p.path("app")))
 
     def check_timeout(self, *spawn_args):
         p = Project(self)

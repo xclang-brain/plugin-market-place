@@ -1,26 +1,26 @@
 ---
 name: cross-build
-description: 組み込み機器向けの C/C++ プログラムを、設定ファイルに書いたコマンドでビルドし、結果（エラーと警告の行、できたファイルの有無・更新・サイズ・CPU の種類）を返す。ビルドやクロスコンパイルを頼まれたとき、その設定ファイルを作るときや確かめるときに使う。
+description: 組み込み機器向けの C/C++ プログラムを、設定ファイルに書いたコマンドでビルドし、結果（エラーと警告の行、できたファイルの有無・更新・サイズ・CPU の種類）を返す。機器で動かすプログラムのビルド・コンパイル・クロスコンパイル（make など）を頼まれたとき、その設定ファイルを作るときや確かめるときに使う。
 ---
 
 # cross-build
 
 sdk_env（クロスツールチェーンを使えるようにするスクリプト）を読み込んでからビルドのコマンドを動かし、結果を返す。
 
-設定ファイルは `<作業フォルダ>/.cross-build/config.ini`。各項目の意味は、項目のすぐ上のコメントにある。
+設定ファイルは `<作業フォルダ>/.<このスキルのフォルダの名前>/config.ini`（このままなら `.cross-build/config.ini`）。各項目の意味は、項目のすぐ上のコメントにある。
 
 ## コマンド
 
 Python は、Windows では `py -3`、ほかでは `python3` で動かす（下の表は `python3` で書く）。
-作業フォルダで動かすか、`--workdir <作業フォルダ>` を付ける。
+作業フォルダで動かすか、`--workdir "<作業フォルダ>"` を付ける。
 
 | すること | コマンド |
 | --- | --- |
-| ビルドする | `python3 <このスキルのフォルダ>/scripts/cross_build.py run` |
-| 設定を確かめる。何も作らない | `python3 <このスキルのフォルダ>/scripts/cross_build.py check` |
-| 設定ファイルをひな形から作る。もうあれば、そのままにする | `python3 <このスキルのフォルダ>/scripts/cross_build.py init` |
+| ビルドする | `python3 "<このスキルのフォルダ>/scripts/cross_build.py" run` |
+| 設定を確かめる。何も作らない | `python3 "<このスキルのフォルダ>/scripts/cross_build.py" check` |
+| 設定ファイルをひな形から作る。もうあれば、そのままにする | `python3 "<このスキルのフォルダ>/scripts/cross_build.py" init` |
 
-run は、最長で設定の `timeout_seconds`（既定 600 秒）かかる。コマンドを動かすツールの待ち時間は、それより長くする。
+run は、最長で `timeout_seconds`（既定 480 秒）に 1 分を足した時間かかる。コマンドを動かすツールの待ち時間は、それより長くする。そこまで待てないときは、バックグラウンドで動かし、終わってから結果を読む。
 
 ## 結果
 
@@ -28,25 +28,29 @@ run は、最長で設定の `timeout_seconds`（既定 600 秒）かかる。�
 
 | 項目 | 中身 |
 | --- | --- |
-| `ok` | 成功したら `true` |
-| `message` | 起きたことと、確かめること。利用者にはこれを伝える |
+| `ok`・`message` | 成功したかと、起きたこと・確かめること。利用者にはこれを伝える |
 | `problems` | 設定の問題の一覧（終了コード 2 のとき） |
-| `exit_code`、`duration_seconds`、`timed_out` | ビルドのコマンドの終了コード（時間切れなら `null`）、かかった秒数、時間切れで止めたか |
-| `error_lines`、`warning_lines` | エラーと警告らしい行（それぞれ最大 20 行） |
-| `tail` | 出力の最後の 30 行 |
-| `outputs` | 設定の `outputs` のファイルごとに、`path`、`exists`、`updated`（今回のビルドで変わったか）、`size`（バイト数）、`elf_machine`（ELF なら CPU の種類。例：`ARM`、`AArch64`、`x86-64`） |
-| `notes`、`settings` | check の注意と、使う設定の値 |
-| `config`、`log` | 設定ファイルとログの場所。ログにはビルドの出力がすべて入る（`check` はログを作らない） |
+| `config`・`log` | 設定ファイルとログの場所。ログにはビルドの出力がすべて入る（check はログを作らない） |
+| `exit_code` | run：ビルドのコマンドの終了コード（時間切れ、途中で止められたとき、シェルを起動できなかったときは `null`） |
+| `duration_seconds`・`timed_out` | run：かかった秒数と、時間切れで止めたか |
+| `error_lines`・`warning_lines` | run：エラーと警告らしい行（それぞれ最大 20 行） |
+| `tail` | run：出力の最後の 30 行 |
+| `outputs` | run：設定の `outputs` のファイルごとに、`path`、`exists`、`updated`（今回のビルドで変わったか）、`size`（バイト数）、`elf_machine`（ELF なら CPU の種類。例：`ARM`、`AArch64`、`x86-64`） |
+| `notes`・`settings` | check：見つかった注意点と、読み取った設定の値 |
+| `created` | init：設定ファイルを作ったか |
 
+- `error_lines`・`warning_lines`・`tail` の1行は、最大 300 字。
 - 失敗したら、`message` と、`error_lines`（なければ `tail`）の主な行を伝える。
+- check の `ok` が `true` でも、`notes` があれば伝える。
 - `updated` が `false` のファイルは前のビルドのままで、ソースの変更が入っていないかもしれない。
-- `elf_machine` が機器の CPU と違えば、機器向けのコンパイラーが使われていない。`sdk_env` を確かめる。
+- `elf_machine` が機器の CPU と違うとき（PC と同じ `x86-64` のときなど）は、機器向けのコンパイラーが使われていない。`sdk_env` を確かめる。
 
-シェルごとの動き方と、出力の読み方は [reference/shells.md](reference/shells.md) にある。
+sdk_env の読み込みに失敗したとき、cmd で `%変数%` が置き換わらないとき、WSL の中の SDK を使うとき、Windows で bash が見つからないとき、エラーの行の拾い方を知りたいときは、[reference/shells.md](reference/shells.md) を読む。
 
 ## してはいけないこと
 
 - このスクリプトを通さずにビルドしない。sdk_env が読み込まれず、ログも残らない。
-- 同じ作業フォルダで、run を同時に2つ動かさない。
+- 同じ source_dir で、run を同時に2つ動かさない。
 - `updated` が `false` のファイルを、今回ビルドしたものとして扱わない。
+- `build_command` に、機器への転送や書き込みのコマンドを入れない。設定を頼まれたときも、ビルドだけにする。
 - 頼まれていないのに、設定ファイルを書き換えない。

@@ -13,9 +13,12 @@
   sleep 秒                 待つ
   spawn 記録ファイル [ignore-term]
                            子のプロセスを起動し、「自分の番号 子の番号」を書いてから長く待つ
+  term 記録ファイル        長く待つ。SIGTERM を受けたら、1 秒後に記録ファイルを作って終わる
+                           （make が作りかけのファイルを消す代わり）
 """
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -62,6 +65,15 @@ def act(name, args):
         with open(args[0], "w", encoding="utf-8") as f:
             f.write("{} {}\n".format(os.getpid(), child.pid))
         say("spawned")
+        time.sleep(120)
+    elif name == "term":
+        def clean_up(signum, frame):
+            time.sleep(1)
+            with open(args[0], "w", encoding="utf-8") as f:
+                f.write("cleaned\n")
+            sys.exit(1)
+        signal.signal(signal.SIGTERM, clean_up)
+        say("waiting")
         time.sleep(120)
 
 

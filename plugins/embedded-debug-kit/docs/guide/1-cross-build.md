@@ -14,14 +14,14 @@ SDK の環境設定のスクリプト（sdk_env）を読み込んでから、設
 
 プラグインとして入れたときは、何もしなくても使えます。
 
-プラグインなしで使うときは、`skills/cross-build/` フォルダを次のどれかにコピーし、CLI を起動し直します。`tests/` はコピーしなくてもかまいません。
+プラグインなしで使うときは、`skills/cross-build/` フォルダを次のどれかにコピーして、CLI を起動し直します。`tests/` はコピーしなくてもかまいません。
 
 | CLI | 1つのプロジェクトで使う | どのプロジェクトでも使う |
 | --- | --- | --- |
 | Claude Code | `<プロジェクト>/.claude/skills/cross-build/` | `~/.claude/skills/cross-build/` |
 | GitHub Copilot CLI | `<プロジェクト>/.github/skills/cross-build/` | `~/.copilot/skills/cross-build/` |
 
-`~` は、Windows では `%USERPROFILE%` です。
+`~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。設定とログのフォルダも `.<新しい名前>/` になります。
 
 ## 頼み方
@@ -35,16 +35,16 @@ SDK の環境設定のスクリプト（sdk_env）を読み込んでから、設
 
 ## 設定
 
-設定ファイルは `<作業フォルダ>/.cross-build/config.ini` です。各項目の意味は、ファイルの中のコメントにもあります。
+設定ファイルは `<作業フォルダ>/.cross-build/config.ini` です。詳しい書き方は、ファイルの中の各項目のすぐ上のコメントにあります。
 
 | 項目 | 意味 | ひな形の値 |
 | --- | --- | --- |
 | `source_dir` | ビルドするフォルダ。作業フォルダからの相対パスか、絶対パス | `.` |
-| `sdk_env` | クロスツールチェーンを使えるようにするスクリプト。`shell` が cmd なら `.bat` か `.cmd`、PowerShell なら `.ps1`。空なら読み込まない | 空 |
-| `shell` | コマンドを動かすシェル（`auto` / `bash` / `cmd` / `powershell`）。`auto` は、Windows では cmd、ほかでは bash | `auto` |
-| `build_command` | ビルドのコマンド（必須）。`source_dir` で動かす。1行で書く | 空 |
+| `shell` | コマンドを動かすシェル（`auto` / `bash` / `cmd` / `powershell`） | `auto` |
+| `sdk_env` | クロスツールチェーンを使えるようにするスクリプト。作業フォルダからの相対パスか、絶対パス。`shell` に合ったもの（cmd は `.bat`、PowerShell は `.ps1`、bash はシェルスクリプト）にする。空なら読み込まない | 空 |
+| `build_command` | ビルドのコマンド（必須）。`source_dir` で動かす | 空 |
 | `outputs` | ビルドでできるファイル（必須）。`source_dir` からの相対パス | 空 |
-| `timeout_seconds` | ビルドを待つ最長の秒数。過ぎたら、ビルドを子のプロセスごと止める | `600` |
+| `timeout_seconds` | ビルドを待つ最長の秒数。過ぎたら、ビルドを子のプロセスごと止める | `480` |
 
 `outputs` が2つ以上なら、次の行から1行に1つずつ、行頭に空白を入れて書きます。
 
@@ -71,7 +71,7 @@ outputs =
 
 ## 困ったとき
 
-| 言われたこと | 確かめること |
+| AI が伝えたこと | 確かめること |
 | --- | --- |
 | コマンドが見つからない | ツールが入っているか。`PATH`。`sdk_env` が `PATH` を足しているか |
 | `sdk_env` の読み込みに失敗した | SDK が入っているか。`shell` に合ったファイルか。スクリプトの最後のコマンドが 0 以外で終わっていないか |
@@ -79,8 +79,11 @@ outputs =
 | 更新されていない（前のビルドのまま） | ソースが変わっていないか（変わっていなければ、make は作り直さない）。毎回作り直すなら、`build_command` を `make clean all` などにする |
 | CPU の種類が PC と同じ（x86-64 など） | `sdk_env` を書いたか。Makefile がコンパイラーを決め打ちしていないか |
 | 時間切れで止めた | ビルドが入力を待っていないか。`timeout_seconds` |
+| 結果が返ってこない（CLI の待ち時間切れ） | `timeout_seconds` を、CLI がコマンドを待てる時間（Claude Code は最長 10 分）より 1 分以上短くする。長いビルドは、バックグラウンドで動かすよう頼む |
+| ほかの run が動いている | そのビルドが終わるのを待つ |
 | Windows で bash が見つからない | Git for Windows を入れるか、`shell` を cmd か powershell にする。WSL の bash は使えない |
-| cmd で、`build_command` の `%変数%` が `sdk_env` の値にならない | cmd は、`sdk_env` を動かす前に `%変数%` を置き換える。手順をバッチファイルにまとめ、`build_command` でそれを呼ぶ |
+| cmd で、`build_command` の `%変数%` が `sdk_env` の値にならない | 手順をバッチファイルにまとめ、`build_command` でそれを呼ぶ |
+| cmd がネットワークのフォルダ（`\\` で始まる）で動けない | フォルダをドライブに割り当てるか、`shell` を powershell か bash にする |
 
 WSL の中の SDK を使うときは、`sdk_env` を空にし、`build_command` を `wsl bash -c ". /opt/sdk/environment-setup-xxx && make"` のようにします。
 
@@ -97,6 +100,6 @@ PowerShell（pwsh か powershell）がなければ、PowerShell のテストは�
 
 ## してはいけないこと
 
-- `build_command` に、機器への転送や書き込みのコマンドを入れない。ビルドだけにする。
-- 同じ作業フォルダで、2つのビルドを同時に動かさない。
-- `.cross-build/` の `.gitignore` を消さない。
+- `build_command` に、機器への転送や書き込みのコマンドを入れないでください。ビルドだけにします。
+- 同じ `source_dir` で、2つのビルドを同時に動かさないでください。
+- `.cross-build/` の `.gitignore` を消さないでください。
