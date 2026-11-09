@@ -1,0 +1,415 @@
+"""Test helpers: a temporary git repository with settings, the scripts run as the agents run them, and the
+files the Coverity tool and the agents would write (design 4.3, 4.4, 4.5, 4.6, 4.7).
+
+Nothing is written inside the skill folder: every repository, run folder and cache lives in a temporary
+folder that is removed afterwards.
+"""
+
+from __future__ import annotations
+
+import atexit
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from typing import Any
+
+# No bytecode cache in the skill's folder: the modules imported from now on are not cached, and the cache of
+# the test module that the test runner imported first is removed when the tests end.
+sys.dont_write_bytecode = True
+atexit.register(shutil.rmtree, Path(__file__).resolve().parent / "__pycache__", True)
+
+SKILL = Path(__file__).resolve().parents[1]
+RUN = SKILL / "scripts" / "run.py"
+SCRIPTS = SKILL / "scripts"
+STREAM = "app-main"
+TIMEOUT = 120
+
+READER_C = """#include <stdio.h>
+#include <stdlib.h>
+
+char *read_header(FILE *fp) {
+    char *buf = malloc(64);
+    fgets(buf, 64, fp);
+    return buf;
+}
+
+int open_file(const char *name) {
+    FILE *fp = fopen(name, "r");
+    if (fp == NULL) {
+        return -1;
+    }
+    return 0;
+}
+
+int parse(const char *p) {
+    int n = 0;
+    while (*p) {
+        n += *p++ - '0';
+    }
+    return n;
+}
+"""
+
+_RUNNER: list[str] | None = None
+
+
+def script_runner(script: Path) -> list[str]:
+    """How a script of this folder is run: with uv as in real use (it reads the script's PEP 723 header),
+    else with this Python when pyyaml and jsonschema are there."""
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "run", "--native-tls", "--quiet", str(script)]
+    try:
+        import jsonschema  # noqa: F401
+        import yaml  # noqa: F401
+    except ImportError:
+        raise unittest.SkipTest("uv も、pyyaml と jsonschema のある Python もないため、スクリプトを動かせません") from None
+    return [sys.executable, str(script)]
+
+
+def runner() -> list[str]:
+    """How run.py is run."""
+    global _RUNNER
+    if _RUNNER is None:
+        _RUNNER = script_runner(RUN)
+    return _RUNNER
+
+
+def import_runlib() -> None:
+    """Make ``import runlib`` work in the tests (the package of this skill's scripts)."""
+    sys.dont_write_bytecode = True  # no __pycache__ in the skill's folder
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+
+
+def base_env(tmp: Path) -> dict[str, str]:
+    gitconfig = tmp / "gitconfig"
+    if not gitconfig.exists():
+        gitconfig.write_text("[init]\n\tdefaultBranch = main\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("COV_USER", "COV_AUTH_KEY", "COVERITY_PASSPHRASE", "PYTHONIOENCODING", "VIRTUAL_ENV")}
+    env.update(PYTHONDONTWRITEBYTECODE="1", GIT_CONFIG_GLOBAL=str(gitconfig), GIT_CONFIG_NOSYSTEM="1",
+               GIT_TERMINAL_PROMPT="0", PYTHONIOENCODING="utf-8")
+    return env
+
+
+def git(repo: Path, *args: str, env: dict[str, str]) -> str:
+    proc = subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, check=True)
+    return proc.stdout.decode("utf-8", "replace").strip()
+
+
+CONFIG = """# テストの設定
+coverity:
+  url: https://coverity.example.com/
+  api: fake
+  user_env: COVTEST_USER
+  key_env: COVTEST_KEY
+vcs:
+  type: git
+  base_branch: main
+output_dir: {parent}/out
+parallel: {parallel}
+options:
+  markdown: {markdown}
+  metrics: {metrics}
+verify:
+  default: {verify}
+  initial: {initial}
+  build_command: {build_command}
+agents:
+  review: {review}
+  integration: {integration}
+  max_rework: {max_rework}
+unknown_key_for_other_parts: 1
+"""
+
+FILTER = """name: 分類がまだの警告
+project: app
+streams: [app-main]
+triage:
+  classification: [Unclassified]
+limit: 20
+"""
+
+
+class RunCase(unittest.TestCase):
+    """A temporary repository with settings, and helpers to drive a run as an agent would."""
+
+    settings: dict[str, Any] = {}
+
+    def setUp(self) -> None:
+        if not shutil.which("git"):
+            raise unittest.SkipTest("git がありません")
+        self.cmd = runner()
+        self.tmp = Path(tempfile.mkdtemp(prefix="runskill-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.env = base_env(self.tmp)
+        self.repo = self.tmp / "repo"
+        (self.repo / "src").mkdir(parents=True)
+        (self.repo / "src" / "reader.c").write_text(READER_C, encoding="utf-8")
+        self.write_config(**self.settings)
+        git(self.repo, "init", "-q", "-b", "main", env=self.env)
+        git(self.repo, "add", "-A", env=self.env)
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init", env=self.env)
+
+    def write_config(self, **values: Any) -> None:
+        defaults = {"parent": os.pardir, "parallel": 2, "markdown": "false", "metrics": "false", "verify": "none", "initial": "false",
+                    "build_command": '""', "review": "false", "integration": "false", "max_rework": 1}
+        defaults.update(values)
+        folder = self.repo / ".coverity-triage"
+        (folder / "filters").mkdir(parents=True, exist_ok=True)
+        (folder / "config.yaml").write_text(CONFIG.format(**defaults), encoding="utf-8")
+        (folder / "filters" / "untriaged.yaml").write_text(FILTER, encoding="utf-8")
+
+    # ---- the scripts ----------------------------------------------------------------------
+
+    def run_json(self, *args: str, ok: bool = True, stdin: str | None = None, env: dict[str, str] | None = None) -> dict[str, Any]:
+        proc = subprocess.run([*self.cmd, *args], env=env or self.env, capture_output=True, timeout=TIMEOUT,
+                              input=stdin.encode("utf-8") if stdin is not None else None)
+        text = proc.stdout.decode("utf-8")
+        try:
+            data = json.loads(text)
+        except ValueError:
+            self.fail(f"one JSON object expected: {text!r} {proc.stderr.decode('utf-8', 'replace')}")
+        if ok:
+            self.assertTrue(data.get("ok"), data)
+            self.assertEqual(proc.returncode, 0, data)
+        else:
+            self.assertFalse(data.get("ok"), data)
+            self.assertEqual(proc.returncode, 1, data)
+        return data
+
+    def new_run(self, *extra: str) -> dict[str, Any]:
+        return self.run_json("new-run", "--repo", str(self.repo), *extra)
+
+    def tick(self, run_dir: str, *extra: str, wait: int = 10) -> dict[str, Any]:
+        return self.run_json("tick", "--run", run_dir, "--wait", str(wait), *extra)
+
+    def tick_until(self, run_dir: str, *report: str, until=None, timeout: float = 180.0, wait: int = 25) -> dict[str, Any]:
+        """tick (giving the report once), then plain ticks until ``until(out)`` (default: an action came), done
+        or stop. Work copies and saves are detached jobs: on a slow PC one can outlast a tick's wait, and an
+        answer without actions only says "call tick again"."""
+        until = until or (lambda o: bool(o["actions"]))
+        out = self.tick(run_dir, *report, wait=wait)
+        deadline = time.monotonic() + timeout
+        while not (until(out) or out["done"] or out["stop"]):
+            self.assertFalse(out["actions"], f"an action came before the one waited for: {out}")
+            self.assertLess(time.monotonic(), deadline, f"nothing came in {timeout:.0f} s: {out}\n{self.explain(run_dir)}")
+            out = self.tick(run_dir, wait=wait)
+        return out
+
+    def explain(self, run_dir: str) -> str:
+        """What a failed check needs to say why: each item's status and error, the alerts, and each job's
+        status, error and the end of its log (a job that died early has its traceback only there)."""
+        run = Path(run_dir)
+        try:
+            st = self.state(run_dir)
+        except (OSError, ValueError) as exc:
+            return f"run.json unreadable: {exc!r}"
+        found = {}
+        for path in sorted((run / "jobs").glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                data = {"unreadable": repr(exc)}
+            log = path.with_suffix(".log")
+            try:
+                tail = log.read_bytes()[-2000:].decode("utf-8", "replace") if log.is_file() else ""
+            except OSError as exc:
+                tail = repr(exc)
+            found[path.stem] = {"status": data.get("status"), "error": data.get("error"),
+                                "reap_error": data.get("reap_error"), "log": tail}
+        return json.dumps({"items": {i["id"]: [i["status"], i.get("stage"), i.get("error")] for i in st.get("items") or []},
+                           "alerts": st.get("alerts"), "jobs": found}, ensure_ascii=False, indent=1)
+
+    def state(self, run_dir: str) -> dict[str, Any]:
+        return json.loads((Path(run_dir) / "run.json").read_text(encoding="utf-8"))
+
+    def edit_state(self, run_dir: str, fn: Any) -> None:
+        path = Path(run_dir) / "run.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        fn(data)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # ---- what the Coverity tool writes ---------------------------------------------------
+
+    def write_issues(self, path: Path, issues: list[dict[str, Any]], finished: bool = True, **extra: Any) -> None:
+        data = {"filter_sha": "x", "stream": STREAM, "limit": 20, "started_at": "2026-11-08T10:00:00",
+                "finished_at": "2026-11-08T10:00:05" if finished else None, "next_offset": 0, "limited": False,
+                "revision_field": "sourceVersion", "revision_checked": True, "analyzed_revision": None,
+                "revision_error": None, "issues": issues, "excluded_count": 0, "excluded": [], "excluded_cids": [],
+                "requests": [], **extra}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def write_details(self, folder: Path, issue: dict[str, Any], events: list[dict[str, Any]] | None = None) -> None:
+        events = events if events is not None else [
+            {"file": issue["file"], "line": issue["line"] - 1, "tag": "alloc", "description": "確保する", "main": False},
+            {"file": issue["file"], "line": issue["line"], "tag": issue["checker"].lower(), "description": "ここで問題", "main": True}]
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"issue-{issue['cid']}.json").write_text(json.dumps(
+            {"fetched_at": "2026-11-08T10:00:06", "issue": issue, "events": events, "checker_description": "説明"},
+            ensure_ascii=False), encoding="utf-8")
+
+    def do_fetch(self, action: dict[str, Any], issues: list[dict[str, Any]]) -> None:
+        """Do what the Coverity tool does for a fetch action."""
+        if action["type"] == "fetch_issues":
+            self.write_issues(Path(action["output_file"]), issues)
+        elif action["type"] == "fetch_details":
+            by_cid = {i["cid"]: i for i in issues}
+            for cid in action["cids"]:
+                self.write_details(Path(action["output_dir"]), by_cid[cid])
+
+    # ---- what the agents write -------------------------------------------------------------
+
+    @staticmethod
+    def brief_path(action: dict[str, Any]) -> Path:
+        prompt = action["prompt"]
+        return Path(prompt.split("指示ファイル ", 1)[1].split(" を読み", 1)[0])
+
+    @staticmethod
+    def brief_value(brief: Path, label: str) -> str:
+        for line in brief.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"| {label}"):
+                return line.split("`")[1]
+        raise AssertionError(f"{label} not in {brief}")
+
+    def work_as_worker(self, action: dict[str, Any], recommendation: str = "fix", change: bool = True,
+                       comment: str | None = None, excluded: list[int] | None = None, **result_extra: Any) -> dict[str, Any]:
+        brief = self.brief_path(action)
+        fix_dir = Path(self.brief_value(brief, "直すフォルダ"))
+        result_file = Path(self.brief_value(brief, "結果ファイル（書く）"))
+        if change:
+            target = fix_dir / "src" / "reader.c"
+            text = target.read_text(encoding="utf-8")
+            marker = f"/* fix {action['item']} */\n"
+            target.write_text(text.replace("#include <stdlib.h>\n", "#include <stdlib.h>\n" + marker, 1), encoding="utf-8")
+        result = result_json(action["item"], recommendation, comment=comment, excluded=excluded, **result_extra)
+        result_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        return result
+
+    @staticmethod
+    def not_applicable_in(brief: Path) -> set[str]:
+        """The criteria the reviewer brief marks as not applying to the item."""
+        found = set()
+        for line in brief.read_text(encoding="utf-8").splitlines():
+            if line.startswith("- C-") and "この警告には当てはまらない" in line:
+                found.add(line[2:].split("（", 1)[0].split(":", 1)[0])
+        return found
+
+    def review_as_reviewer(self, action: dict[str, Any], outcome: str = "pass", **extra: Any) -> dict[str, Any]:
+        brief = self.brief_path(action)
+        out = Path(self.brief_value(brief, "確かめの結果（書く）"))
+        extra.setdefault("not_applicable", self.not_applicable_in(brief))
+        review = review_json(action["item"], outcome, **extra)
+        out.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+        return review
+
+    def drive(self, run_dir: str, issues: list[dict[str, Any]], worker=None, reviewer=None, integrator=None,
+              max_ticks: int = 60, out: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run the tick loop as the agent does, with fake tools and agents, until done or stop."""
+        out = out or self.tick(run_dir)
+        queue = list(out["actions"])
+        for _ in range(max_ticks):
+            if out.get("done") or out.get("stop"):
+                return out
+            if not queue:
+                out = self.tick(run_dir)
+                queue += out["actions"]
+                continue
+            action = queue.pop(0)
+            flag = "--finished"
+            if action["type"] in ("fetch_issues", "fetch_details"):
+                self.do_fetch(action, issues)
+            elif action["type"] == "launch":
+                handler = {"worker": worker or (lambda a: self.work_as_worker(a)),
+                           "reviewer": reviewer or (lambda a: self.review_as_reviewer(a)),
+                           "integrator": integrator}[action["role"]]
+                if handler(action) == "fail":
+                    flag = "--failed"
+            extra = ["--reason", "テストで失敗させた"] if flag == "--failed" else []
+            out = self.tick(run_dir, flag, action["task"], *extra)
+            queue += out["actions"]
+        self.fail(f"the run did not end: {out}")
+
+
+def issue(cid: int, checker: str = "NULL_RETURNS", file: str = "src/reader.c", function: str = "read_header",
+          line: int = 6, **extra: Any) -> dict[str, Any]:
+    return {"cid": cid, "checker": checker, "file": file, "function": function, "line": line, "impact": "High",
+            "stream": STREAM, "classification": "Unclassified", "action": "Undecided", "status": "New", **extra}
+
+
+def result_json(item: str, recommendation: str = "fix", comment: str | None = None, excluded: list[int] | None = None,
+                **extra: Any) -> dict[str, Any]:
+    judgement = "true_bug" if recommendation == "fix" else "false_positive"
+    deviation = ({"classification": "Bug", "action": "Ignore", "severity": "Moderate"} if judgement == "true_bug"
+                 else {"classification": "False Positive", "action": "Ignore", "severity": "Unspecified"})
+    data = {"item": item,
+            "verdict": {"judgement": judgement, "summary": "戻り値を確かめずに使っている", "rationale": "呼び出し元でも確かめていない",
+                        "evidence": [{"file": "src/reader.c", "line": 6, "note": "ここで使う"}]},
+            "recommendation": recommendation, "confidence": "high", "confidence_reason": "経路をすべて読んだ",
+            "deviation": {**deviation, "comment": comment if comment is not None else
+                          ("本物の不具合。fgets の戻り値を確かめていないが、入力は固定のファイル（src/reader.c:6）だけである。"
+                           if judgement == "true_bug" else "誤検知。呼び出し元 main()（src/reader.c:6）で NULL を除いてから渡している。")},
+            "fix": {"classification": "Bug", "action": "Fix Required", "severity": "Major", "summary": "NULL を確かめる",
+                    "impact": "戻り値が NULL のときだけ動きが変わる", "exceeded_constraints": [], "already_fixed_on_latest": False},
+            "revision_drift": {"status": "none", "detail": ""},
+            "group_excluded_cids": excluded or []}
+    data.update(extra)
+    return data
+
+
+# For a standard checker in an item that was not merged: the integration, MISRA and CERT criteria do not apply.
+NOT_FOR_STANDARD = frozenset({"C-20", "C-22", "C-23"})
+
+
+def review_json(item: str, outcome: str = "pass", fail: tuple[str, ...] = (),
+                not_applicable: frozenset[str] | set[str] = NOT_FOR_STANDARD, **extra: Any) -> dict[str, Any]:
+    """A review.json as a reviewer writes it: every scope:item criterion once (those that do not apply: ok, 対象外)."""
+    criteria = json.loads((SKILL / "assets" / "criteria.json").read_text(encoding="utf-8"))["criteria"]
+    if outcome == "rework" and not fail:
+        fail = ("C-12",)  # a send-back names the criterion it failed
+    findings = []
+    for c in criteria:
+        if c["scope"] != "item":
+            continue
+        if c["id"] in not_applicable:
+            findings.append({"check": c["id"], "ok": True, "detail": "対象外"})
+            continue
+        ok = c["id"] not in fail
+        detail = "確かめた" if ok else "根拠の行にそのコードがない"
+        findings.append({"check": c["id"], "ok": ok, "detail": detail, "file": "src/reader.c", "line": 6})
+    data = {"item": item, "outcome": outcome, "findings": findings,
+            "confidence_cap": "medium" if outcome == "flag" else None,
+            "rework": ["根拠の行を読み直して直す"] if outcome == "rework" else [], "note": "根拠の行と経路の条件を確かめた"}
+    data.update(extra)
+    return data
+
+
+def wait_for(predicate, timeout: float = 30.0, step: float = 0.1) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(step)
+    return predicate()
+
+
+def windows_unlink():
+    """os.unlink as Windows does it: a read-only file cannot be deleted (for unittest.mock.patch)."""
+    import stat
+
+    real = os.unlink
+
+    def unlink(path, *, dir_fd=None):
+        mode = os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode
+        if not stat.S_ISLNK(mode) and not mode & stat.S_IWRITE:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real(path, dir_fd=dir_fd)
+    return unlink

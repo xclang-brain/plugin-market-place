@@ -1,0 +1,60 @@
+# 試用用の偽 Coverity データ。src/reader.c の内容に対応しています。
+snapshot:
+  sourceVersion: ""
+issues:
+  # 本物のバグ: fgets 失敗時に fp を閉じていない
+  - cid: 20001
+    project: Sample
+    stream: Sample-main
+    checker: RESOURCE_LEAK
+    file: src/reader.c
+    function: open_and_read
+    line: 20
+    impact: High
+    cwe: 404
+    status: New
+    classification: Unclassified
+    action: Undecided
+    checker_description: 確保したリソースが、ある経路で解放されていません。
+    events:
+      - {file: src/reader.c, line: 15, tag: alloc_fn, description: "fopen() でリソースを確保"}
+      - {file: src/reader.c, line: 19, tag: cond_true, description: "fgets() が NULL を返す分岐を通る"}
+      - {file: src/reader.c, line: 20, tag: leaked_storage, description: "fp を閉じずに return", main: true}
+  # 誤検知になり得る: 呼び出し元で path を検証済み
+  - cid: 20002
+    project: Sample
+    stream: Sample-main
+    checker: FORWARD_NULL
+    file: src/reader.c
+    function: open_and_read
+    line: 15
+    impact: Medium
+    cwe: 476
+    status: New
+    classification: Unclassified
+    action: Undecided
+    checker_description: NULL の可能性がある値を参照しています。
+    events:
+      - {file: src/reader.c, line: 13, tag: param, description: "path は NULL の可能性がある"}
+      - {file: src/reader.c, line: 15, tag: var_deref_model, description: "fopen() に NULL の可能性がある path を渡す", main: true}
+  # 本物のバグ: malloc の戻り値を確認していない
+  - cid: 20003
+    project: Sample
+    stream: Sample-main
+    checker: NULL_RETURNS
+    file: src/reader.c
+    function: first_char
+    line: 49
+    impact: High
+    cwe: 476
+    status: New
+    classification: Unclassified
+    action: Undecided
+    checker_description: NULL を返し得る関数の戻り値を、確認せずに参照しています。
+    events:
+      - {file: src/reader.c, line: 47, tag: returned_null, description: "get_buf() は NULL を返す可能性がある"}
+      - {file: src/reader.c, line: 49, tag: dereference, description: "NULL の可能性がある buf を参照", main: true}
+  # 同じ関数の同じ規則違反（グループ化される）
+  - {cid: 20004, project: Sample, stream: Sample-main, checker: MISRA C-2012 Rule 10.3, file: src/reader.c, function: to_u8, line: 57, impact: Low, status: New, classification: Unclassified, action: Undecided, checker_description: "より狭い型への代入（暗黙の変換）", events: [{file: src/reader.c, line: 57, tag: misra_violation, description: "int を unsigned char に代入", main: true}]}
+  - {cid: 20005, project: Sample, stream: Sample-main, checker: MISRA C-2012 Rule 10.3, file: src/reader.c, function: to_u8, line: 58, impact: Low, status: New, classification: Unclassified, action: Undecided, checker_description: "より狭い型への代入（暗黙の変換）", events: [{file: src/reader.c, line: 58, tag: misra_violation, description: "int を unsigned char に代入", main: true}]}
+  - {cid: 20006, project: Sample, stream: Sample-main, checker: MISRA C-2012 Rule 10.3, file: src/reader.c, function: to_u8, line: 59, impact: Low, status: New, classification: Unclassified, action: Undecided, checker_description: "より狭い型への代入（暗黙の変換）", events: [{file: src/reader.c, line: 59, tag: misra_violation, description: "int を unsigned char に代入", main: true}]}

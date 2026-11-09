@@ -1,0 +1,12 @@
+diff --git a/src/buf.c b/src/buf.c
+--- a/src/buf.c
++++ b/src/buf.c
+@@ -44,7 +44,7 @@ int total_count(int k)
+     int i;
+     int sum = 0;
+ 
+-    for (i = 0; i <= k; i++) {
++    for (i = 0; i < k; i++) {
+         sum += msgs[i].count;
+     }
+     return sum;

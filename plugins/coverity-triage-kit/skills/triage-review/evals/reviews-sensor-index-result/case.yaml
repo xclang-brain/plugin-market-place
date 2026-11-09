@@ -1,0 +1,12 @@
+schema_version: "1.1"
+name: reviews-sensor-index-result
+expected_outcome: |
+  判定 undetermined と推奨 fix はコードに合う（read_reg() はリポジトリになく、値の範囲が決められない）が、
+  確信度 high は基準に合わない（コードで決められない前提によるので low）。はっきりした誤りではないので
+  outcome は flag、confidence_cap は low、C-03 が ok: false（C-04 も ok: false でよい）、rework は空。
+  推奨が修正なので、言い切れないときの形（「本物の不具合。」と Bug / Ignore で、言える範囲だけを書いて
+  「直さない理由は説明できない」で終わる逸脱案）は許される形で、
+  C-09・C-10・C-11・C-28 は ok: true。findings は20個の基準を1回ずつで、check_review.py が ok: true を返す。
+  result.json とコードは変えない。
+context:
+  scaffold_script: place-files.sh

@@ -1,0 +1,1668 @@
+{
+  "version": 1,
+  "contract": "result",
+  "cases": [
+    {
+      "name": "valid_true_bug_fix",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "valid_false_positive_deviation_with_optional_fields_omitted",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "誤検知。copy_name() の唯一の呼び出し元 read_all()（src/io/reader.c:32）で NULL を除いてから渡しているため、NULL を参照することはない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "item_mismatch",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20009",
+        "cids": [
+          20009
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "extra_top_level_key",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [],
+          "notes": "memo"
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "extra_key_in_verdict",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ],
+            "cause": "x"
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "whitespace_only_summary",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "　 ",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "missing_revision_drift",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "missing_fix_proposal",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "誤検知。copy_name() の唯一の呼び出し元 read_all()（src/io/reader.c:32）で NULL を除いてから渡しているため、NULL を参照することはない。"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "unknown_judgement",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "unknown_confidence",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "very_high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "evidence_line_zero",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 0,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "evidence_line_as_text",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": "18",
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "evidence_without_file",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "empty_evidence_list_is_valid_shape",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": []
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "detail_and_note_may_be_empty",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": ""
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "item_as_number",
+      "input": {
+        "result": {
+          "item": 20001,
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "comment_exactly_200_chars",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "誤検知。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "comment_201_chars",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "誤検知。ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "comment_leading_space",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": " 誤検知。copy_name() の唯一の呼び出し元 read_all()（src/io/reader.c:32）で NULL を除いてから渡しているため、NULL を参照することはない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "comment_without_category",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "呼び出し元 read_all()（src/io/reader.c:32）で NULL を除いている。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "comment_with_tadashi",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "誤検知。ただし、read_all()（src/io/reader.c:32）を通る場合に限り NULL にならない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "comment_with_request",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "False Positive",
+            "action": "Ignore",
+            "severity": "Unspecified",
+            "comment": "誤検知。read_all()（src/io/reader.c:32）で NULL を除いている。確認してください。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "combo_mismatch_is_only_a_warning",
+      "input": {
+        "result": {
+          "item": "20002",
+          "verdict": {
+            "judgement": "false_positive",
+            "summary": "呼び出し元 read_all() で NULL を除いている",
+            "rationale": "get_buf() は NULL を返しうるが、唯一の呼び出し元 read_all() が 32 行で NULL を除いてから渡す。",
+            "evidence": [
+              {
+                "file": "src/io/reader.c",
+                "line": 32,
+                "note": "NULL を除く"
+              },
+              {
+                "file": "src/io/reader.c",
+                "line": null
+              }
+            ]
+          },
+          "recommendation": "deviation",
+          "confidence": "high",
+          "confidence_reason": "呼び出し元はリポジトリに1つだけで、コードで確かめた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Major",
+            "comment": "誤検知。copy_name() の唯一の呼び出し元 read_all()（src/io/reader.c:32）で NULL を除いてから渡しているため、NULL を参照することはない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Minor",
+            "summary": "copy_name() の先頭で dst の NULL を確かめる",
+            "impact": "dst が NULL のときは何もせず 0 を返す。今の呼び出し元では動きは変わらない"
+          },
+          "revision_drift": {
+            "status": "none"
+          }
+        },
+        "item": "20002",
+        "cids": [
+          20002
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "comment_category_differs_from_judgement_is_only_a_warning",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "意図的。エラーのときの後始末は呼び出し元 load()（src/load.c:30）で行う設計である。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "severity_may_be_omitted",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": []
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "group_excludes_some_cids",
+      "input": {
+        "result": {
+          "item": "G1",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            30003
+          ]
+        },
+        "item": "G1",
+        "cids": [
+          30001,
+          30002,
+          30003
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "group_excludes_all_cids",
+      "input": {
+        "result": {
+          "item": "G1",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            30001,
+            30002,
+            30003
+          ]
+        },
+        "item": "G1",
+        "cids": [
+          30001,
+          30002,
+          30003
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "group_excludes_unknown_cid",
+      "input": {
+        "result": {
+          "item": "G1",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            39999
+          ]
+        },
+        "item": "G1",
+        "cids": [
+          30001,
+          30002
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "group_without_excluded_field",
+      "input": {
+        "result": {
+          "item": "G1",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          }
+        },
+        "item": "G1",
+        "cids": [
+          30001,
+          30002
+        ]
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "single_cid_with_excluded",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            20001
+          ]
+        },
+        "item": "20001",
+        "cids": [
+          20001
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "single_cid_item_without_cids_with_excluded",
+      "input": {
+        "result": {
+          "item": "20001",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            20001
+          ]
+        },
+        "item": "20001"
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "group_item_without_cids_is_not_checked",
+      "input": {
+        "result": {
+          "item": "G1",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            30003
+          ]
+        },
+        "item": "G1"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "excluded_cids_as_text",
+      "input": {
+        "result": {
+          "item": "G1",
+          "verdict": {
+            "judgement": "true_bug",
+            "summary": "エラーのとき fp を閉じずに戻っている",
+            "rationale": "fopen（src/reader.c:12）のあと、18 行の return で fclose を通らずに戻る。",
+            "evidence": [
+              {
+                "file": "src/reader.c",
+                "line": 18,
+                "note": "fclose の前の return"
+              }
+            ]
+          },
+          "recommendation": "fix",
+          "confidence": "high",
+          "confidence_reason": "経路をコードで最後まで追えた",
+          "deviation": {
+            "classification": "Bug",
+            "action": "Ignore",
+            "severity": "Moderate",
+            "comment": "本物の不具合。read_config()（src/reader.c:18）はエラーのとき fp を閉じずに戻っており、直さない理由は説明できない。"
+          },
+          "fix": {
+            "classification": "Bug",
+            "action": "Fix Required",
+            "severity": "Moderate",
+            "summary": "18 行の return の前で fclose する",
+            "impact": "エラーのときだけ fp を閉じるようになる。正常なときの動きは変わらない",
+            "exceeded_constraints": [],
+            "already_fixed_on_latest": false
+          },
+          "revision_drift": {
+            "status": "none",
+            "detail": ""
+          },
+          "group_excluded_cids": [
+            "30003"
+          ]
+        },
+        "item": "G1",
+        "cids": [
+          30001,
+          30002,
+          30003
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "not_an_object",
+      "input": {
+        "result": [
+          "item",
+          "20001"
+        ],
+        "item": "20001"
+      },
+      "expect": {
+        "ok": false
+      }
+    }
+  ]
+}

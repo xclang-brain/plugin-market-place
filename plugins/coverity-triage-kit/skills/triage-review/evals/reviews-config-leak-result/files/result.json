@@ -1,0 +1,18 @@
+{
+  "item": "20001",
+  "verdict": {
+    "judgement": "false_positive",
+    "summary": "エラーのときも fclose してから戻っている",
+    "rationale": "fopen（12 行）のあと、parse_line() が失敗したときは 17 行で fclose してから 18 行で戻るため、fp が漏れることはない。",
+    "evidence": [{"file": "src/config.c", "line": 17, "note": "fclose(fp) してから戻る"}]
+  },
+  "recommendation": "deviation",
+  "confidence": "high",
+  "confidence_reason": "経路をコードで最後まで追えた",
+  "deviation": {"classification": "False Positive", "action": "Ignore", "severity": "Unspecified",
+                "comment": "誤検知。parse_line() が失敗したときも fclose（src/config.c:17）してから戻るため、fp が漏れることはない。"},
+  "fix": {"classification": "Bug", "action": "Fix Required", "severity": "Moderate",
+          "summary": "18 行の return の前で fclose する", "impact": "エラーのときだけ fp を閉じる",
+          "exceeded_constraints": [], "already_fixed_on_latest": false},
+  "revision_drift": {"status": "none", "detail": ""}
+}

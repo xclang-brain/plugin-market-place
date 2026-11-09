@@ -1,0 +1,42 @@
+[
+  {
+    "cid": 20001,
+    "checker": "NULL_RETURNS",
+    "file": "src/reader.c",
+    "function": "read_header",
+    "line": 42,
+    "impact": "High",
+    "stream": "app-main",
+    "path_notes": []
+  },
+  {
+    "cid": 20002,
+    "checker": "RESOURCE_LEAK",
+    "file": "src/reader.c",
+    "function": "open_file",
+    "line": 88,
+    "impact": "High",
+    "stream": "app-main",
+    "path_notes": []
+  },
+  {
+    "cid": 20003,
+    "checker": "INTEGER_OVERFLOW",
+    "file": "src/parse.c",
+    "function": "parse",
+    "line": 21,
+    "impact": "Medium",
+    "stream": "app-main",
+    "path_notes": []
+  },
+  {
+    "cid": 20004,
+    "checker": "INTEGER_OVERFLOW",
+    "file": "src/parse.c",
+    "function": "parse",
+    "line": 22,
+    "impact": "Medium",
+    "stream": "app-main",
+    "path_notes": []
+  }
+]

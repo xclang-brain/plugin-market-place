@@ -1,0 +1,21 @@
+{
+  "name": "coverity-triage-kit",
+  "version": "0.2.0",
+  "description": "Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作るプラグイン（C / C++、標準・MISRA・CERT）。スキルや MCP サーバー1つ、作業エージェント1つ、統括エージェントでの一括のトリアージ、の段階で使える（Web管理画面は GitHub Copilot CLI だけ）。",
+  "author": {
+    "name": "xclang-brain",
+    "url": "https://github.com/xclang-brain"
+  },
+  "homepage": "https://github.com/xclang-brain/plugin-market-place/tree/main/plugins/coverity-triage-kit",
+  "repository": "https://github.com/xclang-brain/plugin-market-place",
+  "license": "MIT",
+  "keywords": [
+    "coverity",
+    "static-analysis",
+    "triage",
+    "misra",
+    "cert",
+    "c",
+    "cpp"
+  ]
+}

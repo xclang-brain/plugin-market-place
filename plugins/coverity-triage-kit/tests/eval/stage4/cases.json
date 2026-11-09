@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "about": "EVAL stage 4 (entry routing). expect: open = the open tool is called once with requestText equal to the prompt; not_open = the open tool is not called; no_tool = the open tool is absent, the user says they are on GitHub Copilot CLI, and the reply explains the three causes without starting work; no_tool_claude = the open tool is absent in Claude Code, and the reply says the screen is a Copilot CLI feature and shows claude --agent and /{run}, names none of the three causes and starts no work. {run} and {screen} are the names of the batch-run skill and the screen-entry skill (read from docs/replace.md by role).",
+  "cases": [
+    {"name": "triage", "prompt": "Coverity の警告をトリアージして", "expect": "open"},
+    {"name": "untriaged-proposals", "prompt": "未処理の Coverity 警告を調べて修正案と逸脱コメントを作って", "expect": "open"},
+    {"name": "on-screen", "prompt": "Coverity の警告を画面で見ながらトリアージしたい", "expect": "open"},
+    {"name": "run-command", "prompt": "/{run} High だけ", "expect": "not_open", "expect_skill": "{run}"},
+    {"name": "one-cid", "prompt": "CID 12345 が本物か調べて", "expect": "not_open"},
+    {"name": "tool-missing", "prompt": "GitHub Copilot CLI でプラグインを入れて使っています。Coverity の警告をトリアージして", "expect": "no_tool", "mcp": false, "expect_skill": "{screen}"},
+    {"name": "tool-missing-claude-code", "prompt": "Claude Code にプラグインを入れました。Coverity の警告をトリアージして", "expect": "no_tool_claude", "mcp": false, "expect_skill": "{screen}"}
+  ]
+}

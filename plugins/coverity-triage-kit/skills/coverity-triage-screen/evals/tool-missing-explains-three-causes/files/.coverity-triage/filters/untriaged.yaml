@@ -1,0 +1,6 @@
+name: 分類がまだの警告
+project: Sample
+streams: [Sample-main]
+triage:
+  classification: [Unclassified]
+limit: 20

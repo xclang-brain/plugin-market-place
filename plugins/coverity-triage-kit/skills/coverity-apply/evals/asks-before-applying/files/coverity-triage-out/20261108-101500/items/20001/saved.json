@@ -1,0 +1,9 @@
+{
+  "fix": {
+    "files": [
+      "src/reader.c"
+    ],
+    "branch": "coverity-fix/cid-20001",
+    "commit": null
+  }
+}

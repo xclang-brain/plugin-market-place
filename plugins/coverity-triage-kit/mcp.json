@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "coverity-connect": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--native-tls",
+        "--frozen",
+        "--quiet",
+        "--directory",
+        "${PLUGIN_ROOT}/mcp-servers/coverity-connect",
+        "coverity-connect-mcp"
+      ],
+      "env": {
+        "COV_USER": "${COV_USER}",
+        "COV_AUTH_KEY": "${COV_AUTH_KEY}",
+        "HTTPS_PROXY": "${HTTPS_PROXY}",
+        "NO_PROXY": "${NO_PROXY}"
+      }
+    }
+  }
+}

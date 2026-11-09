@@ -1,0 +1,37 @@
+{
+  "item": "20012",
+  "verdict": {
+    "judgement": "true_bug",
+    "summary": "body[16] に BUF_LEN 回まで書き、配列の外を書く",
+    "rationale": "set_body() は i を BUF_LEN まで回し、34 行で body[i] に書く。呼び出し元の src の長さはリポジトリの中では決まっていない。",
+    "evidence": [
+      {
+        "file": "src/buf.c",
+        "line": 34,
+        "note": "body[i] に書く"
+      }
+    ]
+  },
+  "recommendation": "fix",
+  "confidence": "medium",
+  "confidence_reason": "呼び出し元が渡す src の長さを、リポジトリの中で確かめきれなかった（推定がある）",
+  "deviation": {
+    "classification": "Bug",
+    "action": "Ignore",
+    "severity": "Major",
+    "comment": "本物の不具合。set_body() は body の大きさ 16 を超えて書きうる（src/buf.c:34）ため、直さない理由は説明できない。"
+  },
+  "fix": {
+    "classification": "Bug",
+    "action": "Fix Required",
+    "severity": "Major",
+    "summary": "34 行のループの上限を sizeof m->body にする",
+    "impact": "body に書くのが 16 文字までになる",
+    "exceeded_constraints": [],
+    "already_fixed_on_latest": false
+  },
+  "revision_drift": {
+    "status": "none",
+    "detail": ""
+  }
+}

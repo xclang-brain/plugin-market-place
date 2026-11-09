@@ -1,0 +1,9 @@
+# Coverity の警告のトリアージの設定
+coverity:
+  url: https://coverity.example.co.jp:8443
+  api: auto
+  user_env: COV_USER
+  key_env: COV_AUTH_KEY
+vcs:
+  type: git
+  base_branch: main

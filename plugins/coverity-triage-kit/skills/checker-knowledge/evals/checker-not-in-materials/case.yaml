@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: checker-not-in-materials
+expected_outcome: |
+  ASSERT_SIDE_EFFECT はチェッカーの見方の資料にないことを伝えたうえで、示された Coverity の説明にもとづくと明記して答える。
+  鍵は、製品のビルドで NDEBUG が定義され assert() が消えるか、消えたときに副作用（代入、関数の呼び出し、++ など）が
+  なくなって動きが変わるかであり、それをビルドの設定とコードで確かめる方法と、直し方（副作用を assert() の外に出す）を示す。
+  判定の考え方（NDEBUG のビルドで動きが変わるなら true_bug、副作用が結果に影響しないなら false_positive か intentional、
+  製品のビルドの設定が分からず決められなければ undetermined。言い切れなければ修正を推奨）も示す。
+  確かめていない Coverity の注釈（抑止の書き方）やイベントの名前を作らない。

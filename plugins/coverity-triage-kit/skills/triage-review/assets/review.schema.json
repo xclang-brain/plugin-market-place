@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review.schema.json",
+  "title": "1件の結果の確かめ（review.json）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["item", "outcome", "note"],
+  "properties": {
+    "item": {"$ref": "#/$defs/text"},
+    "outcome": {"enum": ["pass", "flag", "rework"], "description": "pass＝合格、flag＝要確認、rework＝差し戻し"},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "confidence_cap": {"enum": ["high", "medium", "low", null]},
+    "rework": {"type": "array", "items": {"$ref": "#/$defs/text"}, "description": "差し戻しのとき、作業役が直すこと"},
+    "note": {"$ref": "#/$defs/text", "description": "人が読む1〜2文"}
+  },
+  "allOf": [
+    {"if": {"properties": {"outcome": {"const": "rework"}}, "required": ["outcome"]},
+     "then": {"required": ["rework"], "properties": {"rework": {"minItems": 1}}}}
+  ],
+  "$defs": {
+    "text": {"type": "string", "pattern": "\\S"},
+    "finding": {
+      "type": "object", "additionalProperties": false, "required": ["check", "ok", "detail"],
+      "properties": {
+        "check": {"$ref": "#/$defs/text", "description": "確かめた項目の名前"},
+        "ok": {"type": "boolean"},
+        "detail": {"$ref": "#/$defs/text"},
+        "file": {"type": ["string", "null"]},
+        "line": {"type": ["integer", "null"]}
+      }
+    }
+  }
+}
