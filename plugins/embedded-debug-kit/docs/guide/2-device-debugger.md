@@ -9,7 +9,10 @@
 2. 直したいソースのフォルダで、作業エージェントを指定して CLI を起動します。
 
    ```shell
+   # Claude Code
    claude --agent embedded-debug-kit:device-debugger
+   # GitHub Copilot CLI（起動してから /agent で選んでもかまいません）
+   copilot --agent embedded-debug-kit:device-debugger
    ```
 
 3. 初めて使うときは、「スキルを設定したい」と頼みます。質問に答えると、ビルドの方法や機器への接続の設定ができます。
@@ -40,7 +43,7 @@ sensor_app を機器で動かすと、AVG=3 と出ます。正しくは AVG=25 �
 
 | 起きること | すること |
 | --- | --- |
-| エージェントが見つからないと言われる | プラグインが入っていて、有効かを確かめる（`claude plugin list`） |
+| エージェントが見つからないと言われる | プラグインが入っていて、有効かを確かめる（`claude plugin list` か `copilot plugin list`） |
 | 設定が足りないと言われる | 「スキルを設定したい」と頼む |
 | 機器とやり取りできない | 機器の電源、ケーブル、設定を確かめる |
 

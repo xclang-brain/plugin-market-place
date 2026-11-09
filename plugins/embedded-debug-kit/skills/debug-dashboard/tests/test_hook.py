@@ -25,6 +25,40 @@ def pre(tool, args, **extra):
     return dict({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": args}, **extra)
 
 
+STAMP = "2026-11-09T18:46:36.580Z"
+
+
+def transcript_line(kind, data, agent=None, stamp="2026-11-09T18:46:30.000Z", **extra):
+    """Copilot CLI の会話の記録（session-state/<セッション>/events.jsonl）の1行"""
+    event = dict({"type": kind, "id": "e", "timestamp": stamp, "parentId": None, "data": data}, **extra)
+    if agent:
+        event["agentId"] = agent
+    return json.dumps(event, ensure_ascii=False) + "\n"
+
+
+def copilot_transcript(folder, final="結論：成功。最後の報告です。", stop_line=True):
+    """メインのエージェントの発言、サブエージェントの発言、Stop のフックの開始の行を持つ会話の記録を作る"""
+    lines = [transcript_line("user.message", {"content": "直して"}),
+             transcript_line("assistant.message", {"content": "計画を立てます。", "toolRequests": [{"name": "task"}]}),
+             transcript_line("assistant.message", {"content": "サブエージェントの報告"}, agent="a1"),
+             transcript_line("assistant.message", {"content": final}),
+             transcript_line("assistant.message", {"content": "古い記録の写し"}, checkpoint=True),
+             transcript_line("assistant.message", {"content": ""}),
+             transcript_line("hook.start", {"hookInvocationId": "h1", "hookType": "agentStop"}, agent="a1", stamp=STAMP)]
+    if stop_line:
+        lines.append(transcript_line("hook.start", {"hookInvocationId": "h2", "hookType": "agentStop"}, stamp=STAMP))
+    lines.append(transcript_line("assistant.message", {"content": "次のターンの発言"}))
+    path = folder / "events.jsonl"
+    path.write_text("".join(lines), encoding="utf-8")
+    return path
+
+
+def copilot_stop(path):
+    """Copilot CLI の Stop の入力（PascalCase のイベント）。最後の報告はない"""
+    return {"hook_event_name": "Stop", "session_id": "s1", "timestamp": STAMP, "cwd": "/w",
+            "transcript_path": str(path), "stop_reason": "end_turn", "stop_hook_active": False}
+
+
 class NotRecordingTest(unittest.TestCase):
     def setUp(self):
         self.project = temp_project(self)
@@ -225,6 +259,103 @@ class RecordingTest(unittest.TestCase):
         self.assertEqual(events[1]["text"], "C1：合格。")
 
 
+class CopilotTest(unittest.TestCase):
+    """Copilot CLI の PascalCase のイベントの入力（Copilot CLI 1.0.108 での実測の形）"""
+
+    def setUp(self):
+        self.project = temp_project(self)
+        self.base = mark_recording(self.project)
+
+    def stop_run(self):
+        stop = self.base / "sessions" / "s1" / "stop"
+        stop.parent.mkdir(parents=True, exist_ok=True)
+        stop.write_text("")
+        return stop
+
+    def test_subagent_tools_go_to_the_main_session(self):
+        """サブエージェントの中のフックは、session_id がサブエージェント自身の ID になる"""
+        sub = {"session_id": "a1", "agent_id": "a1", "agent_type": WORKER, "parent_agent_id": "s1"}
+        run_hook(self.project, pre("Agent", {"name": "t1", "agent_type": WORKER, "prompt": "試行 1"}), COPILOT_CLI="1")
+        run_hook(self.project, pre("Bash", {"command": "make", "description": "build"}, **sub), COPILOT_CLI="1")
+        self.stop_run()
+        code, out = run_hook(self.project, pre("Bash", {"command": "make"}, **sub), COPILOT_CLI="1")
+        self.assertEqual((code, json.loads(out)["permissionDecision"]), (0, "deny"))
+        events = read_events(self.project)
+        self.assertEqual([(e["kind"], e["agent"]) for e in events],
+                         [("request", "worker-agent"), ("tool", "worker-agent"), ("tool", "worker-agent")])
+        self.assertTrue(events[2]["denied"] and events[2]["sub"])
+        self.assertFalse((self.base / "sessions" / "a1").exists())
+
+    def test_subagent_prompt_and_stop_are_not_recorded(self):
+        """サブエージェントも、始めに UserPromptSubmit、終わりに Stop を起こす。依頼でも最後の報告でもない"""
+        stop = self.stop_run()
+        sub = {"session_id": "a1", "agent_id": "a1", "agent_type": WORKER, "parent_agent_id": "s1"}
+        run_hook(self.project, dict(sub, hook_event_name="UserPromptSubmit", prompt="試行 1"), COPILOT_CLI="1")
+        run_hook(self.project, dict(sub, hook_event_name="Stop", transcript_path="/nowhere", stop_reason="end_turn"),
+                 COPILOT_CLI="1")
+        self.assertTrue(stop.exists(), "サブエージェントの始まりで、止めた状態が解けました")
+        self.assertEqual(read_events(self.project), [])
+        self.assertEqual(os.listdir(str(self.base / "sessions")), ["s1"])
+
+    def test_subagent_report(self):
+        run_hook(self.project, pre("Agent", {"agent_type": VERIFIER, "prompt": "確かめて"}), COPILOT_CLI="1")
+        run_hook(self.project, {"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a2",
+                                "agent_type": VERIFIER, "agent_name": VERIFIER, "agent_display_name": "debug-verifier",
+                                "parent_agent_id": "s1", "last_assistant_message": "C1：合格。", "stop_reason": "end_turn"},
+                 COPILOT_CLI="1")
+        self.assertEqual([(e["kind"], e["agent"], e.get("text")) for e in read_events(self.project)],
+                         [("request", "debug-verifier", "確かめて"), ("report", "debug-verifier", "C1：合格。")])
+
+    def test_stop_reads_the_last_message_from_the_transcript(self):
+        path = copilot_transcript(temp_project(self), final="結論：成功。password=pw1")
+        self.assertEqual(run_hook(self.project, copilot_stop(path), COPILOT_CLI="1"), (0, ""))
+        events = read_events(self.project)
+        self.assertEqual([(e["kind"], e["sub"], e["text"]) for e in events], [("report", False, "結論：成功。password=***")])
+
+    def test_stop_waits_for_the_transcript(self):
+        """会話の記録は、Stop のフックが動いてから少し遅れて書かれる"""
+        folder = temp_project(self)
+        path = folder / "events.jsonl"
+        data = json.dumps(copilot_stop(path)).encode("utf-8")
+        proc = subprocess.Popen([sys.executable, str(support.SCRIPTS / "hook.py"), "Stop"], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, env=support.clean_env(CLAUDE_PROJECT_DIR=str(self.project),
+                                                                              COPILOT_CLI="1"))
+        proc.stdin.write(data)
+        proc.stdin.close()
+        time.sleep(0.5)
+        copilot_transcript(folder)
+        self.assertEqual(proc.wait(30), 0)
+        proc.stdout.close()
+        self.assertEqual([e["text"] for e in read_events(self.project)], ["結論：成功。最後の報告です。"])
+
+    def test_stop_records_nothing_without_its_line(self):
+        """このターンの Stop の行が書かれなければ、前のターンの発言を最後の報告にしない"""
+        path = copilot_transcript(temp_project(self), stop_line=False)
+        started = time.time()
+        self.assertEqual(run_hook(self.project, copilot_stop(path), COPILOT_CLI="1"), (0, ""))
+        self.assertLess(time.time() - started, 9, "フックの時間切れ（10 秒）までに終わること")
+        self.assertEqual(read_events(self.project), [])
+        missing = dict(copilot_stop(path), transcript_path=str(path.parent / "none.jsonl"))
+        self.assertEqual(run_hook(self.project, missing, COPILOT_CLI="1"), (0, ""))
+        self.assertEqual(read_events(self.project), [])
+
+    def test_stop_ignores_the_previous_turn(self):
+        """このターンにメインのエージェントの発言がなければ、前のターンの発言を最後の報告にしない"""
+        previous = [transcript_line("user.message", {"content": "1つ目の依頼"}),
+                    transcript_line("assistant.message", {"content": "前のターンの最後の報告"}),
+                    transcript_line("hook.start", {"hookInvocationId": "h0", "hookType": "agentStop"})]
+        this_turn = [transcript_line("assistant.message", {"content": ""}),
+                     transcript_line("hook.start", {"hookInvocationId": "h1", "hookType": "agentStop"}, stamp=STAMP)]
+        cases = {"依頼あり": previous + [transcript_line("user.message", {"content": "2つ目の依頼"})] + this_turn,
+                 "前のターンの終わりだけ": previous + this_turn}
+        for name, lines in cases.items():
+            with self.subTest(name):
+                path = temp_project(self) / "events.jsonl"
+                path.write_text("".join(lines), encoding="utf-8")
+                self.assertEqual(run_hook(self.project, copilot_stop(path), COPILOT_CLI="1"), (0, ""))
+                self.assertEqual(read_events(self.project), [])
+
+
 class LimitTest(unittest.TestCase):
     def setUp(self):
         self.project = temp_project(self)
@@ -368,6 +499,104 @@ class HooksJsonTest(unittest.TestCase):
             proc = self.run_command(project, event, path=folder)
             self.assertEqual((proc.returncode, proc.stdout), (0, b""), event)
         self.assertEqual(read_events(project), [])
+
+
+COPILOT_HOOKS_JSON = support.SKILL_DIR.parents[1] / "com.github.copilot" / "hooks" / "hooks.json"
+POWERSHELLS = [p for p in (shutil.which("pwsh"), shutil.which("powershell")) if p]
+JAPANESE = "直してください。合格の条件：ログに「完了」と出る"
+
+
+@unittest.skipUnless(COPILOT_HOOKS_JSON.is_file(),
+                     "プラグインの Copilot CLI の hooks.json がありません（スキルのフォルダだけをコピーしたとき）")
+class CopilotHooksJsonTest(unittest.TestCase):
+    """Copilot CLI のフックの設定のコマンドを、bash の欄は bash で、powershell の欄は PowerShell で動かす。
+    Copilot CLI は、PLUGIN_ROOT・COPILOT_PROJECT_DIR・COPILOT_CLI を渡し、入力の JSON を標準入力に UTF-8 で書く"""
+
+    def setUp(self):
+        self.config = json.loads(COPILOT_HOOKS_JSON.read_text(encoding="utf-8"))
+        self.transcript = copilot_transcript(temp_project(self))
+
+    def payload(self, event):
+        return {
+            "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": JAPANESE},
+            "PreToolUse": pre("Agent", {"name": "t1", "agent_type": WORKER, "prompt": "試行 1"}),
+            "SubagentStop": {"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a1",
+                             "agent_type": WORKER, "parent_agent_id": "s1", "last_assistant_message": "報告"},
+            "Stop": copilot_stop(self.transcript),
+        }[event]
+
+    def shells(self):
+        found = [("bash", BASH, [BASH, "-c"])] if BASH else []
+        found += [("powershell", ps, [ps, "-NoProfile", "-NoLogo", "-Command"]) for ps in POWERSHELLS]  # Copilot CLI と同じ
+        if not found:
+            self.skipTest("bash も PowerShell もありません")
+        return found
+
+    def run_command(self, field, prefix, project, event, path=None):
+        env = support.clean_env(PLUGIN_ROOT=str(COPILOT_HOOKS_JSON.parents[2]), COPILOT_PROJECT_DIR=str(project),
+                                COPILOT_CLI="1")
+        env.pop("PSModulePath", None)  # pwsh から受け継いだものを Windows PowerShell 5.1 に渡さない（モジュールを読み違える）
+        env.pop("PSMODULEPATH", None)
+        if path:
+            env["PATH"] = path
+        command = self.config["hooks"][event][0][field]
+        return subprocess.run(prefix + [command], input=json.dumps(self.payload(event)).encode("utf-8"), env=env,
+                              cwd=str(COPILOT_HOOKS_JSON.parents[2]), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              timeout=60)
+
+    def test_every_event_has_both_shells(self):
+        self.assertEqual(self.config["version"], 1)
+        self.assertEqual(sorted(self.config["hooks"]), sorted(HooksJsonTest.PAYLOADS))
+        for event, hooks in self.config["hooks"].items():
+            self.assertEqual(len(hooks), 1, event)
+            self.assertTrue(hooks[0]["bash"] and hooks[0]["powershell"], event)
+            self.assertEqual(hooks[0]["timeoutSec"], 10, event)
+
+    def test_without_marker_exits_0_and_records_nothing(self):
+        for field, shell, prefix in self.shells():
+            project = temp_project(self)
+            for event in self.config["hooks"]:
+                with self.subTest(shell=shell, event=event):
+                    proc = self.run_command(field, prefix, project, event)
+                    self.assertEqual((proc.returncode, proc.stdout), (0, b""), proc.stderr[-2000:])
+            self.assertFalse((project / DATA).exists(), shell)
+
+    def test_records_every_event(self):
+        for field, shell, prefix in self.shells():
+            with self.subTest(shell=shell):
+                project = temp_project(self)
+                mark_recording(project)
+                for event in self.config["hooks"]:
+                    proc = self.run_command(field, prefix, project, event)
+                    self.assertEqual((proc.returncode, proc.stdout), (0, b""), (event, proc.stderr[-2000:]))
+                events = read_events(project)
+                self.assertEqual([e["kind"] for e in events], ["prompt", "request", "report", "report"])
+                self.assertEqual(events[0]["text"], JAPANESE, "日本語の依頼が化けました")
+                self.assertEqual(events[3]["text"], "結論：成功。最後の報告です。")
+
+    def test_with_stop_marker_denies(self):
+        for field, shell, prefix in self.shells():
+            with self.subTest(shell=shell):
+                project = temp_project(self)
+                base = mark_recording(project)
+                (base / "sessions" / "s1").mkdir(parents=True)
+                (base / "sessions" / "s1" / "stop").write_text("")
+                proc = self.run_command(field, prefix, project, "PreToolUse")
+                self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+                decision = json.loads(proc.stdout.decode("ascii"))
+                self.assertEqual(decision["permissionDecision"], "deny")
+                self.assertTrue(read_events(project)[-1]["denied"])
+
+    def test_without_python_exits_0(self):
+        for field, shell, prefix in self.shells():
+            with self.subTest(shell=shell):
+                folder = temp_project(self)  # PATH を、何もないフォルダだけにする。シェルは絶対パスで動かす
+                project = temp_project(self)
+                mark_recording(project)
+                for event in self.config["hooks"]:
+                    proc = self.run_command(field, prefix, project, event, path=str(folder))
+                    self.assertEqual((proc.returncode, proc.stdout), (0, b""), (event, proc.stderr[-2000:]))
+                self.assertEqual(read_events(project), [])
 
 
 if __name__ == "__main__":

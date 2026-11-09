@@ -24,6 +24,8 @@ SESSION_BYTES = 20 * 1024 * 1024  # 1つのセッションの記録の上限
 KEEP_SESSIONS = 30                # 残すセッションの数
 COMMAND_CHARS = 1000              # コマンドは先頭のこれだけを残す
 MASK_CHARS = 16 * 1024            # 伏せる前に、文をこの長さまでにする。1件は 8 KB までなので、これより後ろは残らない
+TRANSCRIPT_WAIT = 3.0             # Copilot CLI は、Stop のフックを動かしてから会話の記録を書き足す。これだけ待つ
+TRANSCRIPT_TAIL = 4 * 1024 * 1024  # 会話の記録は、後ろのこれだけを読む
 FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
 
 SECRET_WORDS = re.compile(r"(?i)pass|token|secret|key")
@@ -212,6 +214,59 @@ def waiting(data):
     return isinstance(tasks, list) and any(isinstance(t, dict) and t.get("type") == "subagent" for t in tasks)
 
 
+def session_of(data):
+    """記録を置くセッション。Copilot CLI のサブエージェントの中のフックは、session_id がサブエージェント自身の ID
+    （agent_id と同じ）なので、親の parent_agent_id にまとめる。統括エージェントが直接依頼したエージェントなら、親はメインの会話"""
+    session = pick(data, "session_id", "sessionId")
+    agent_id = pick(data, "agent_id", "agentId")
+    parent = pick(data, "parent_agent_id", "parentAgentId")
+    if agent_id and parent and session == agent_id:
+        session = parent
+    return clean(session) or "default"
+
+
+def transcript_lines(path):
+    """会話の記録（JSONL）の後ろの部分を、行ごとに返す。最初の行は途中から始まることがあるが、JSON として読めないので飛ばされる"""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - TRANSCRIPT_TAIL))
+        return f.read().decode("utf-8", "replace").splitlines()
+
+
+def copilot_last_message(data):
+    """Copilot CLI の Stop の入力には、最後の報告がない。会話の記録（transcript_path の events.jsonl）から、
+    このターンのメインのエージェント（agentId がない）の最後の発言（assistant.message）を返す。
+    このターンの終わりは、Stop のフックの開始（hook.start、agentStop、入力と同じ timestamp）の行。
+    始まりは、その前のメインの依頼（user.message）か、前のターンの Stop のフックの開始の行。
+    このターンに発言がなければ None（前のターンの発言を使わない）。
+    記録は少し遅れて書かれるので、終わりの行が書かれるまで待つ。待っても書かれなければ None（記録しない）"""
+    path, stamp = text_of(pick(data, "transcript_path", "transcriptPath")), text_of(pick(data, "timestamp"))
+    deadline = time.time() + TRANSCRIPT_WAIT
+    while path and stamp:
+        last = None
+        for line in (transcript_lines(path) if os.path.isfile(path) else []):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("agentId") or event.get("checkpoint"):
+                continue
+            body = event.get("data") if isinstance(event.get("data"), dict) else {}
+            kind = event.get("type")
+            if kind == "user.message":
+                last = None  # ターンの始まり
+            elif kind == "assistant.message" and text_of(body.get("content")).strip():
+                last = text_of(body.get("content"))
+            elif kind == "hook.start" and body.get("hookType") == "agentStop":
+                if event.get("timestamp") == stamp:
+                    return last
+                last = None  # 前のターンの終わり
+        if time.time() >= deadline:
+            break
+        time.sleep(0.1)
+    return None
+
+
 def is_recording(base):
     recording = os.path.join(base, "recording")
     if os.path.islink(base) or os.path.islink(recording) or not os.path.isfile(recording):
@@ -238,13 +293,14 @@ def handle(args, raw, base):
     event = EVENTS.get(text_of(args[0] if args else pick(data, "hook_event_name", "hookEventName")).lower())
     if event is None:
         return
-    session = clean(pick(data, "session_id", "sessionId")) or "default"
-    folder = session_folder(base, session)
+    agent_id = clean(pick(data, "agent_id", "agentId"))
+    if agent_id and event in ("UserPromptSubmit", "Stop"):
+        return  # Copilot CLI は、サブエージェントの始めと終わりにも、これらを起こす。依頼と報告は、Agent と SubagentStop で記録する
+    folder = session_folder(base, session_of(data))
     if folder is None:
         return
     stop = os.path.join(folder, "stop")
     agent = short(pick(data, "agent_type", "agentType", "agentName"))
-    agent_id = clean(pick(data, "agent_id", "agentId"))
     handback = os.path.join(folder, "handback-" + agent_id)  # このサブエージェントの報告は記録した
     if event == "UserPromptSubmit":
         prompt = text_of(pick(data, "prompt"))
@@ -271,14 +327,18 @@ def handle(args, raw, base):
             record["denied"] = True
         append(folder, record)
     else:
-        text = mask(text_of(pick(data, "last_assistant_message", "lastAssistantMessage")))
+        text = pick(data, "last_assistant_message", "lastAssistantMessage")
         if event == "SubagentStop":
             if agent_id and os.path.lexists(handback):
                 os.remove(handback)
             elif agent and requested(folder, agent):  # CLI が中で動かすエージェントは記録しない
-                append(folder, {"kind": "report", "agent": agent, "sub": True, "text": text})
+                append(folder, {"kind": "report", "agent": agent, "sub": True, "text": mask(text_of(text))})
         elif not waiting(data):  # サブエージェントが残っていれば、まだ最後の報告ではない
-            append(folder, {"kind": "report", "agent": agent, "sub": False, "text": text})
+            if text is None and os.environ.get("COPILOT_CLI"):
+                text = copilot_last_message(data)
+                if text is None:
+                    return
+            append(folder, {"kind": "report", "agent": agent, "sub": False, "text": mask(text_of(text))})
 
 
 def main():

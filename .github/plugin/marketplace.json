@@ -36,6 +36,12 @@
       "description": "病棟の申し送りの3つの形（AI なし／AI が全体を下書き／事実の欄だけ AI）の机上の比較で、正解の一覧・申し送り・判定シート・時間の記録から形ごとに漏れや時間を数え、結論つきの比較報告 compare_report.md を作るプラグイン",
       "version": "0.1.0",
       "source": "./plugins/handoff-compare-report"
+    },
+    {
+      "name": "embedded-debug-kit",
+      "description": "組み込み機器の C/C++ の不具合を、AI が実機で試しながら直すプラグイン。スキル、作業エージェント、統括・検証エージェント、Web管理画面の4つの段階で使える",
+      "version": "0.1.0",
+      "source": "./plugins/embedded-debug-kit"
     }
   ]
 }

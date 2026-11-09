@@ -5,9 +5,9 @@ debug-dashboard スキルで画面を起動すると、CLI のフックが、依
 
 ## 要るもの
 
-- Claude Code（Copilot CLI では、まだ記録できません）
+- Claude Code か GitHub Copilot CLI
 - Python 3.8 以上（Windows は `py -3`、ほかは `python3` で動くもの）。ほかに入れるものはありません。
-- bash（Windows では、Claude Code が使う Git Bash）
+- Claude Code では bash（Windows では Git Bash）。Copilot CLI では、Windows は PowerShell、ほかは bash
 - ブラウザー
 - 3段階目が使える状態（[統括エージェントと検証エージェント](3-debug-orchestrator.md)）
 
@@ -15,7 +15,7 @@ debug-dashboard スキルで画面を起動すると、CLI のフックが、依
 
 プラグインとして入れたときは、何もしなくても使えます。スキルとフックの両方が入ります。
 
-プラグインなしで使うときは、次の2つをして、CLI を起動し直します。
+Claude Code でプラグインなしで使うときは、次の2つをして、CLI を起動し直します。Copilot CLI では、プラグインとして入れたときだけ記録できます。
 
 1. `skills/debug-dashboard/` フォルダを、`<プロジェクト>/.claude/skills/debug-dashboard/` にコピーします。フォルダの名前は `debug-dashboard` のままにします（フックの設定が、この名前を使います）。`tests/` はコピーしなくてもかまいません。
 2. プラグインの `com.anthropic.claude-code/hooks/hooks.json` の `hooks` の中身を、`<プロジェクト>/.claude/settings.json` の `hooks` に写します。すでに同じイベントのフックがあれば、その配列の後ろに足します。写したら、`${CLAUDE_PLUGIN_ROOT}/skills` を `${CLAUDE_PROJECT_DIR}/.claude/skills` に書き換えます。
@@ -27,7 +27,7 @@ debug-dashboard スキルで画面を起動すると、CLI のフックが、依
 このスキルは、利用者が呼んだときだけ動きます。AI が自分から画面を起動することはありません。
 
 1. 直したいソースのフォルダで CLI を起動し、`/debug-dashboard` と入力します。画面が起動し、URL が出ます。
-   画面が動いている間は、このフォルダで動かしたすべてのチャットを記録します。ブラウザーや CLI を閉じても、画面は動き続けます。
+   画面が動いている間は、このフォルダで動かしたすべてのチャットを記録します。Copilot CLI では、Git のリポジトリの中なら、リポジトリの中のどのフォルダで動かしたチャットも記録します。ブラウザーや CLI を閉じても、画面は動き続けます。
 2. URL をブラウザーで開きます。
 3. 「設定」のタブで、直したいこと・合格の条件・試行の上限を入れます。依頼文ができたら「コピー」を押します。
 4. 同じ PC の別のターミナルで、同じフォルダから統括エージェントを起動し（[始め方](3-debug-orchestrator.md#始め方)）、依頼文を貼り付けて送ります。
@@ -35,7 +35,7 @@ debug-dashboard スキルで画面を起動すると、CLI のフックが、依
 6. 終わったら、「結果」のタブで、統括エージェントの最後の報告と、検証エージェントの最後の判定を見ます。前の実行も選べます。
 7. 使い終わったら、`/debug-dashboard stop` と入力して画面を終了します。動いているかは `/debug-dashboard status` で確かめられます。
 
-ほかのプラグインと名前がぶつかるときは、`/embedded-debug-kit:debug-dashboard` と入力します。
+Copilot CLI では、`/debug-dashboard` の代わりに、いつも `/embedded-debug-kit:debug-dashboard` と入力します（`stop`・`status` も同じ）。Claude Code でも、ほかのプラグインと名前がぶつかるときは、この形で入力します。
 
 画面では、1つのチャットを「実行」と呼びます。画面は、エージェントに依頼したチャットのうち、いちばん新しいものを見せます。
 
@@ -59,7 +59,7 @@ debug-dashboard スキルで画面を起動すると、CLI のフックが、依
 
 ## 結果とログ
 
-記録は、作業フォルダの `.debug-dashboard/` に置きます。中身が `*` の `.gitignore` を置くので、Git に入りません。Linux では、本人だけが読み書きできるフォルダにします。Windows では、作業フォルダの権限をそのまま受け継ぎます。
+記録は、作業フォルダの `.debug-dashboard/` に置きます。Copilot CLI を Git のリポジトリの中で起動したときは、リポジトリのいちばん上のフォルダが作業フォルダになります。中身が `*` の `.gitignore` を置くので、Git に入りません。Linux では、本人だけが読み書きできるフォルダにします。Windows では、作業フォルダの権限をそのまま受け継ぎます。
 
 | 場所 | 中身 |
 | --- | --- |
@@ -88,9 +88,10 @@ debug-dashboard スキルで画面を起動すると、CLI のフックが、依
 | 「応答しません」と出る | PC が混んでいれば、しばらく待ってからもう一度。続くときは、出たプロセス番号のプロセスを止める |
 | 「トークンが違います」と出る | スキルが出した URL を開き直す。画面を起動し直すと URL は変わる |
 | 「画面のサーバーにつながりません」と出る | `/debug-dashboard status` で確かめ、止まっていれば起動し直す |
-| 進み具合に何も出ない | 統括エージェントを、画面を起動したのと同じフォルダで起動したか。`py -3` か `python3` が動くか。`.debug-dashboard/logs/hook.log` |
-| Windows で進み具合に何も出ない | `where bash` の最初が `C:\Windows\System32\bash.exe` なら、Git for Windows の bash を PATH の前に置く |
+| 進み具合に何も出ない | 統括エージェントを、画面を起動したのと同じフォルダで起動したか。`py -3` か `python3`（Copilot CLI の Windows では `py -3` か `python`）が動くか。`.debug-dashboard/logs/hook.log` |
+| Claude Code の Windows で進み具合に何も出ない | `where bash` の最初が `C:\Windows\System32\bash.exe` なら、Git for Windows の bash を PATH の前に置く |
 | 統括エージェントでないチャットが出る | 統括エージェントがエージェントに依頼すると、そのチャットに移る。待てなければ「結果」のタブの「前の実行」で選ぶ |
+| Copilot CLI で、「結果」のタブに統括エージェントの最後の報告が出ない | CLI の会話の記録が遅れて書かれ、読めなかった。最後の報告はチャットで見る |
 | 「実行を止める」を押しても止まらない | 動いているコマンドが終わるのを待つ。待てなければ、CLI で Esc を押す |
 | 今の段（計画・作業・評価）が「作業」や「評価」のまま変わらない | エージェントが途中で止まると起きる。そのチャットで次の依頼を送ると戻る |
 | PC の再起動などで、画面のサーバーが落ちた | `/debug-dashboard stop` で、残った目印を片づける。残っていると、ツールを呼ぶたびにフックが Python を起動する |
@@ -104,7 +105,7 @@ python3 -m unittest discover -s tests
 ```
 
 テストは、PC の上で画面のサーバーを動かし、フックに偽の入力を渡して確かめます。外のネットワークは使いません。ほかに入れるものはありません。
-プラグインのフックの設定を使うテストは、bash（Windows では Git Bash）で動かします。スキルのフォルダだけをコピーしたときは飛ばします。
+プラグインのフックの設定を使うテストは、bash（Windows では Git Bash）で動かします。PowerShell（`pwsh` か `powershell`）があれば、Copilot CLI 用の `powershell` の欄のコマンドも試します。スキルのフォルダだけをコピーしたときは飛ばします。
 
 ## してはいけないこと
 

@@ -100,6 +100,18 @@ class DashboardTest(unittest.TestCase):
         self.assertTrue((self.project / DATA / "recording").is_file())
         self.assertFalse((sub / DATA).exists())
 
+    def test_copilot_uses_the_repository_root(self):
+        """Copilot CLI のフックは、Git のリポジトリのいちばん上のフォルダを作業フォルダとして渡す。シェルにはそれが渡らない"""
+        (self.project / ".git").mkdir()
+        sub = self.project / "src" / "app"
+        sub.mkdir(parents=True)
+        self.addCleanup(dashboard, "stop", cwd=str(sub), COPILOT_CLI="1")
+        code, result = dashboard("start", cwd=str(sub), COPILOT_CLI="1")
+        self.assertEqual(code, 0, result)
+        self.assertTrue((self.project / DATA / "recording").is_file())
+        self.assertFalse((sub / DATA).exists())
+        self.assertEqual(dashboard("status", cwd=str(sub))[1]["running"], False, "Claude Code では今のフォルダを使う")
+
     def test_unresponsive_server_is_left_alone(self):
         """応答しないサーバーの目印を消さず、2つ目のサーバーも起動しない"""
         listener = socket.socket()

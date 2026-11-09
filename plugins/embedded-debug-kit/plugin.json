@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "embedded-debug-kit",
+  "version": "0.1.0",
+  "description": "組み込み機器の C/C++ の不具合を、AI が実機で試しながら直す。スキル、作業エージェント、統括・検証エージェント、Web管理画面の4つの段階で使える。",
+  "author": {
+    "name": "xclang-brain"
+  },
+  "repository": "https://github.com/xclang-brain/plugin-market-place",
+  "license": "MIT",
+  "keywords": [
+    "embedded",
+    "debug",
+    "cross-compile",
+    "ftp",
+    "serial"
+  ]
+}

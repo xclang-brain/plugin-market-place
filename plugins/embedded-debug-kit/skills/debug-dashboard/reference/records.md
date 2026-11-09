@@ -35,16 +35,16 @@
 
 - `recording` がない、2 分より古い、またはシンボリックリンクである。
 - `.debug-dashboard/` か、その中のフォルダがシンボリックリンクである。
-- CLI を、画面を起動したのと違うフォルダで起動した（作業フォルダは `CLAUDE_PROJECT_DIR` で決まる）。
-- Python が見つからない（`py` も `python3` もない）。
-- Windows で、`bash` が WSL のもの（`C:\Windows\System32\bash.exe`）になっている。
-- Copilot CLI で動かした（フックの設定がまだない）。
-- プラグインなしで入れて、フックを settings.json に写していないか、写した後に CLI を起動し直していない。
+- CLI を、画面を起動したのと違うフォルダで起動した（作業フォルダは、Claude Code では `CLAUDE_PROJECT_DIR`、Copilot CLI では `COPILOT_PROJECT_DIR` で決まる。Copilot CLI では、Git のリポジトリの中なら、そのいちばん上のフォルダになる）。
+- Python が見つからない（`py` も `python3` もない。Copilot CLI の Windows では、`py` も `python` も `python3` もない）。
+- Claude Code の Windows で、`bash` が WSL のもの（`C:\Windows\System32\bash.exe`）になっている。
+- プラグインなしで入れた。Claude Code では、フックを settings.json に写して CLI を起動し直すまで記録しない。Copilot CLI は、プラグインとして入れたときだけ記録する。
 
 また、次のものは記録しない。
 
 - バックグラウンドのサブエージェントが終わった知らせ（`<task-notification>` で始まる依頼）。「実行を止める」も解けない。
 - バックグラウンドのサブエージェントを待っている間の、メインの会話の報告。
+- Copilot CLI で、メインの会話の最後の報告を、3 秒のうちに読めなかったとき（Copilot CLI はフックに最後の報告を渡さないので、CLI の会話の記録から読む）。そのターンにメインの会話の発言がなかったときも、記録しない。
 - そのチャットで依頼文を記録していないエージェントの報告。CLI が中で動かすエージェント（入力の候補、`/btw` など）や、画面を起動する前に依頼したエージェントがこれにあたる。`recording` が古くなっていた間（PC のスリープ中など）に依頼したものも同じ。
 
 ## 画面が見せるチャット

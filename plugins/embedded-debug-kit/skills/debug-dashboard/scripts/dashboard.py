@@ -7,6 +7,7 @@
   stop    画面のサーバーを終了する。記録も「実行を止める」も止まる
   status  動いているかを返す（何も作らない）
 作業フォルダの既定は、CLI が渡す CLAUDE_PROJECT_DIR（なければ COPILOT_PROJECT_DIR、今のフォルダ）。
+Copilot CLI から動かしたときは、今のフォルダが Git のリポジトリの中なら、そのいちばん上のフォルダ（フックと同じ）。
 終了コード：0＝成功、1＝起動や終了の失敗、2＝引数や作業フォルダの問題。
 """
 
@@ -208,11 +209,28 @@ def status(paths):
     return output(0, True, "Web管理画面は動いていません。", paths)
 
 
+def default_workdir():
+    """フックと同じ作業フォルダ。CLI が渡す CLAUDE_PROJECT_DIR か COPILOT_PROJECT_DIR、なければ今のフォルダ。
+    Copilot CLI のフックは、Git のリポジトリの中では、いちばん上のフォルダを作業フォルダとして渡す。
+    Copilot CLI から動かしたとき（COPILOT_CLI がある）は、それに合わせる"""
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("COPILOT_PROJECT_DIR")
+    if project:
+        return project
+    here = folder = os.getcwd()
+    while os.environ.get("COPILOT_CLI"):
+        if os.path.exists(os.path.join(folder, ".git")):
+            return folder
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    return here
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Web管理画面を起動・終了する")
     parser.add_argument("command", choices=("start", "stop", "status"))
-    parser.add_argument("--workdir", default=os.environ.get("CLAUDE_PROJECT_DIR")
-                        or os.environ.get("COPILOT_PROJECT_DIR") or os.getcwd())
+    parser.add_argument("--workdir", default=default_workdir())
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:

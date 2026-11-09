@@ -2,7 +2,8 @@
 
 - 1段階目のスキルは、そのフォルダだけで完結する（REQ-108）。
 - 上の段階は、下の段階の中身を持たない（REQ-002、REQ-003、REQ-006、REQ-202、REQ-304、REQ-409）。
-- 両方の CLI のエージェントの本文が同じ（REQ-004）。
+- 両方の CLI のエージェントの本文が同じ。Copilot CLI の frontmatter が Claude Code 版と合う（REQ-004）。
+- Copilot CLI の統括エージェントは、作業・検証エージェントのほかに依頼できない（REQ-303）。
 - 定義と使い方の文書は、最後の節が「してはいけないこと」（REQ-007）。
 - 名前は、ほかとぶつかりにくい形（REQ-008）。
 
@@ -11,12 +12,14 @@
   python3 -m unittest discover -s tests/independence -v
 """
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -150,12 +153,105 @@ class UpperStageTest(unittest.TestCase):
                 self.assertEqual(found, [], f"{path.name} が1段階目のスキルの名前を書いています")
 
 
+def copilot_front(name):
+    """Copilot CLI のエージェントの frontmatter（tools は JSON の配列として読む）"""
+    front = split_front(COPILOT_AGENTS / f"{name}.agent.md")[0]
+    return dict(front, tools=json.loads(front.get("tools") or "[]"))
+
+
+def block_values(path):
+    """frontmatter の「<キー>: |」の複数行の値を、キーごとに字下げを除いて返す"""
+    lines = re.match(r"---\n(.*?)\n---\n", read(path), re.S).group(1).splitlines()
+    found, i = {}, 0
+    while i < len(lines):
+        m = re.match(r"(\s*)([A-Za-z_-]+): \|$", lines[i])
+        i += 1
+        if m:
+            start = i
+            while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > len(m.group(1))):
+                i += 1
+            found[m.group(2)] = textwrap.dedent("\n".join(lines[start:i])) + "\n"
+    return found
+
+
+def hook_shells():
+    """Copilot CLI がフックを動かすのと同じ形のシェル。bash の欄は bash、powershell の欄は PowerShell"""
+    bash = shutil.which("bash")
+    found = [("bash", [bash, "--norc", "--noprofile", "-c"])] if bash and "system32" not in bash.lower() else []
+    found += [("powershell", [ps, "-NoProfile", "-NoLogo", "-Command"])
+              for ps in (shutil.which("pwsh"), shutil.which("powershell")) if ps]
+    return found
+
+
 class BothCliTest(unittest.TestCase):
+    # Copilot CLI の tools に書けるもの。知らない名前は何も言わずに無視されるので、書き違いをここで見つける
+    COPILOT_TOOLS = {"agent", "read", "search", "execute", "edit", "skill", "ask_user"}
+
     def test_copilot_agents_have_the_same_body(self):
         for name, (_, body) in Parts.agents.items():
             copilot = COPILOT_AGENTS / f"{name}.agent.md"
             self.assertTrue(copilot.is_file(), f"{copilot.relative_to(ROOT)} がありません")
             self.assertEqual(split_front(copilot)[1], body, f"{name} の本文が、Claude Code と Copilot CLI で違います")
+
+    def test_copilot_frontmatter(self):
+        for name in Parts.agents:
+            front = copilot_front(name)
+            self.assertEqual(front.get("name"), name)
+            self.assertLessEqual(set(front["tools"]), self.COPILOT_TOOLS, f"{name} の tools に、知らない名前があります")
+        self.assertEqual(copilot_front(Parts.worker).get("skills"), Parts.agents[Parts.worker][0]["skills"],
+                         "作業エージェントの skills が、Claude Code と Copilot CLI で違います")
+        orchestrator = copilot_front(Parts.orchestrator)
+        self.assertIn("agent", orchestrator["tools"])
+        self.assertFalse({"execute", "edit"} & set(orchestrator["tools"]), "統括エージェントが、コマンドかファイルの編集を使えます")
+        self.assertEqual(orchestrator.get("disable-model-invocation"), "true")
+        verifier = copilot_front(Parts.verifier)
+        self.assertEqual(set(verifier["tools"]), {"read", "search"})
+        self.assertEqual(verifier.get("user-invocable"), "false")
+
+
+class CopilotOrchestratorHookTest(unittest.TestCase):
+    """Copilot CLI の統括エージェントの定義のフックは、作業エージェントと検証エージェントのほかへの依頼を断る（REQ-303）。
+    Copilot CLI は、入力を空白のない JSON で標準入力に渡し、PreToolUse のフックが 0 以外で終わると呼び出しを断る"""
+
+    PATH = COPILOT_AGENTS / f"{Parts.orchestrator}.agent.md"
+    PLUGIN = json.loads(read(ROOT / "plugin.json"))["name"]
+
+    def run_hook(self, field, prefix, agent_type, prompt="試行 1 です。"):
+        payload = {"hook_event_name": "PreToolUse", "session_id": "s1", "timestamp": "2026-11-09T19:48:50.572Z",
+                   "cwd": str(ROOT), "tool_use_id": "call_1", "tool_name": "Agent",
+                   "tool_input": {"name": "t1", "description": "d", "agent_type": agent_type, "prompt": prompt, "mode": "sync"}}
+        env = dict(os.environ)
+        env.pop("PSModulePath", None)  # pwsh から受け継いだものを Windows PowerShell 5.1 に渡さない
+        env.pop("PSMODULEPATH", None)
+        return subprocess.run(prefix + [block_values(self.PATH)[field]], cwd=str(ROOT), env=env, timeout=60,
+                              input=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_hook_is_declared_for_agent_calls(self):
+        front = re.match(r"---\n(.*?)\n---\n", read(self.PATH), re.S).group(1)
+        self.assertRegex(front, r"(?m)^hooks:\n  PreToolUse:\n    - type: command\n      matcher: Agent\n")
+        self.assertEqual(sorted(block_values(self.PATH)), ["bash", "powershell"])
+
+    def test_allows_only_the_worker_and_the_verifier(self):
+        shells = hook_shells()
+        if not shells:
+            self.skipTest("bash も PowerShell もありません")
+        allowed = [f"{self.PLUGIN}:{Parts.worker}", f"{self.PLUGIN}:{Parts.verifier}"]
+        hidden = '"agent_type":"%s"' % allowed[0]  # 依頼文の中に書かれた名前では通さない
+        denied = [("general-purpose", "試行 1"), ("task", "試行 1"), (Parts.worker, "試行 1"), ("general-purpose", hidden)]
+        for field, prefix in shells:
+            for agent_type in allowed:
+                with self.subTest(shell=prefix[0], agent_type=agent_type):
+                    run = self.run_hook(field, prefix, agent_type, "直してください。ログに「完了」と出ること")
+                    self.assertEqual((run.returncode, run.stdout.strip()), (0, b""), run.stderr[-2000:])
+            for agent_type, prompt in denied:
+                with self.subTest(shell=prefix[0], agent_type=agent_type, prompt=prompt):
+                    run = self.run_hook(field, prefix, agent_type, prompt)
+                    self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+                    decision = json.loads(run.stdout.decode("ascii"))
+                    self.assertEqual(decision["permissionDecision"], "deny")
+                    for name in allowed:
+                        self.assertIn(name, decision["permissionDecisionReason"])
 
 
 class WritingTest(unittest.TestCase):

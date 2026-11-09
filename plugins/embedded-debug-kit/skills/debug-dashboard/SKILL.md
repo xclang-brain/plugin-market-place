@@ -11,7 +11,7 @@ Web管理画面のサーバーを、作業フォルダで起動・終了する�
 ## コマンド
 
 Python は、Windows では `py -3`、ほかでは `python3` で動かす（下の表は `python3` で書く）。
-作業フォルダ（CLI を起動したフォルダ）で動かすか、`--workdir "<作業フォルダ>"` を付ける。
+CLI を起動したフォルダで、`--workdir` を付けずに動かす。スクリプトが、フックが記録するのと同じ作業フォルダを選ぶ。利用者が別のフォルダを指定したときだけ、`--workdir "<作業フォルダ>"` を付ける。
 画面を閉じたいと言われたら `stop`、動いているかを聞かれたら `status`、それ以外なら `start` を動かす。
 実行（統括エージェントの作業）を止めたいと言われたら、画面の「進み具合」のタブの「実行を止める」を押すよう伝える。
 
@@ -24,9 +24,9 @@ Python は、Windows では `py -3`、ほかでは `python3` で動かす（下�
 起動したら、利用者に次のことを伝える。
 
 1. `url` をブラウザーで開く。
-2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のチャットに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する。Copilot CLI では `/agent` で選ぶが、フックの設定がまだないので記録されない。
+2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のチャットに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する。Copilot CLI では、同じように `copilot --agent embedded-debug-kit:debug-orchestrator` を起動する（`/agent` で選んでもよい）。
 3. 「実行を止める」は、次のツールの呼び出しから効く。すでに動いているコマンドは、終わるまで止まらない。
-4. 画面が動いている間は、この作業フォルダのチャットをすべて記録する。使い終わったら `/debug-dashboard stop` で終了する。
+4. 画面が動いている間は、この作業フォルダのチャットをすべて記録する。使い終わったら `/debug-dashboard stop`（Copilot CLI では `/embedded-debug-kit:debug-dashboard stop`）で終了する。
 
 ## 結果
 

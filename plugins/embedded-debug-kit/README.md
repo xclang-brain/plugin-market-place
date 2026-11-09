@@ -17,7 +17,7 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 
 ## 要るもの
 
-- Claude Code
+- Claude Code か GitHub Copilot CLI（1.0.107 以降）
 - Python 3.8 以上（Windows は `py -3`、ほかは `python3` で動くもの）
 - 機器向けのクロスコンパイラーと、ビルドの方法（make など）
 - 機器の FTP サーバーと、シリアルのシェル
@@ -26,9 +26,18 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 
 ## 入れ方
 
+Claude Code：
+
 ```shell
 claude plugin marketplace add xclang-brain/plugin-market-place
 claude plugin install embedded-debug-kit@plugin-market-place
+```
+
+GitHub Copilot CLI：
+
+```shell
+copilot plugin marketplace add xclang-brain/plugin-market-place
+copilot plugin install embedded-debug-kit@plugin-market-place
 ```
 
 スキルだけを使うときは、プラグインを入れずに、スキルのフォルダをプロジェクトにコピーしても使えます（各スキルの使い方を参照）。
@@ -37,8 +46,11 @@ claude plugin install embedded-debug-kit@plugin-market-place
 
 | 場所 | 中身 |
 | --- | --- |
-| `skills/` | スキル（1段階目と、4段階目の debug-dashboard） |
+| `plugin.json` | マニフェスト（Agent Plugins 1.0.0。Copilot CLI が読む） |
+| `.claude-plugin/plugin.json` | Claude Code が読むマニフェスト |
+| `skills/` | スキル（1段階目と、4段階目の debug-dashboard）。両方の CLI で同じものを使う |
 | `com.anthropic.claude-code/` | Claude Code 用のエージェントとフック |
+| `com.github.copilot/` | Copilot CLI 用のエージェントとフック |
 | `docs/` | 憲章、仕様書、設計書、使い方 |
 | `tests/` | 部品の独立性、文書、通しのテスト |
 | `evals/`、`skills/<名前>/evals/` | `claude plugin eval` のケース |

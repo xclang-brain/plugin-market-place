@@ -9,7 +9,10 @@
 2. 直したいソースのフォルダで、統括エージェントを指定して CLI を起動します。
 
    ```shell
+   # Claude Code
    claude --agent embedded-debug-kit:debug-orchestrator
+   # GitHub Copilot CLI（起動してから /agent で選んでもかまいません）
+   copilot --agent embedded-debug-kit:debug-orchestrator
    ```
 
 ## 頼み方
@@ -51,7 +54,7 @@ Issue は、配布元のリポジトリ（xclang-brain/plugin-market-place）に
 
 | 起きること | すること |
 | --- | --- |
-| エージェントが見つからないと言われる | プラグインが入っていて、有効かを確かめる（`claude plugin list`） |
+| エージェントが見つからないと言われる | プラグインが入っていて、有効かを確かめる（`claude plugin list` か `copilot plugin list`） |
 | すぐに「人の判断が必要」で終わる | 作業エージェントだけで同じ依頼を試し、設定や機器の接続に問題がないかを確かめる |
 | 判定が「判断できない」になる | 合格の条件を、ログに出る文字など、ファイルを読んで確かめられる形にする |
 
