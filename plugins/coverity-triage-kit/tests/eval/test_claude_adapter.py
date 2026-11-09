@@ -562,7 +562,7 @@ class ClaudePluginFormatTest(unittest.TestCase):
         for flag in ("--agents", "--mcp-config", "--strict-mcp-config", "--model"):
             self.assertNotIn(flag, argv)
         allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
-        self.assertEqual(allowed, ["Bash(uv run *)", "Skill(fake-kit:*)", f"Read(/{self.dest.resolve().as_posix()}/**)",
+        self.assertEqual(allowed, ["Bash(uv run *)", "Skill(fake-kit:*)", ca.plugin_read_rule(self.dest),
                                    "mcp__plugin_fake-kit_fake-server__*"],
                          "the rules a user is asked for: the skills ask before use, their references are outside the folder")
         self.assertEqual(argv[argv.index("--add-dir") + 1], str(out.resolve()))
