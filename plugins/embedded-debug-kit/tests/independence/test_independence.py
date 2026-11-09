@@ -66,7 +66,8 @@ def short(name):
     return name.split(":")[-1].strip()
 
 
-class Parts:
+def find_parts():
+    """エージェントの定義から、各部品の名前を読む"""
     agents = {p.stem: split_front(p) for p in sorted(CLAUDE_AGENTS.glob("*.md"))}
     worker = next(n for n, (f, _) in agents.items() if f.get("skills"))
     orchestrator = next(n for n, (f, _) in agents.items() if "Agent(" in (f.get("tools") or ""))
@@ -74,6 +75,11 @@ class Parts:
     verifier = next(n for n in called if n != worker)
     stage1 = list(agents[worker][0]["skills"])
     others = sorted(p.name for p in SKILLS.iterdir() if p.is_dir() and p.name not in stage1)
+    return type("Parts", (), dict(agents=agents, worker=worker, orchestrator=orchestrator,
+                                  verifier=verifier, stage1=stage1, others=others))
+
+
+Parts = find_parts()
 
 
 class StageOneTest(unittest.TestCase):
