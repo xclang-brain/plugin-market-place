@@ -85,18 +85,80 @@ def permission_steps(output: Path, mcp_tools: list[str] | None = None, client: s
                    "書き戻すツールは前もって許可しません）。"]
 
 
-def _claude_steps(output: Path, tools: list[str]) -> list[str]:
+SKILLS_DIR = Path(__file__).resolve().parents[3]  # <skills>/coverity-run/scripts/runlib/views.py
+_SKILL_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+# A path that can go into a permission rule and into the double-quoted command to copy as it is.
+_RULE_PATH = re.compile(r'^[^"`$\\()*?\[\]!\n\r]+$')
+
+
+def _rule_path(path: Path) -> str | None:
+    """An absolute path in Claude Code's rule form: //<path> (on Windows C:\\a becomes //c/a). None when the
+    path has a character that the rule or the double-quoted command would read in another way."""
+    text = path.as_posix()
+    drive = re.match(r"^([A-Za-z]):/(.*)$", text)
+    if not drive and not text.startswith("/"):
+        return None
+    rule = f"//{drive.group(1).lower()}/{drive.group(2)}" if drive else "/" + text
+    return rule if _RULE_PATH.match(rule) else None
+
+
+def _asks_before_use(skill_md: Path) -> bool:
+    """True when the frontmatter of a SKILL.md has allowed-tools with `uv run` (Claude Code asks before such a skill)."""
+    try:
+        text = skill_md.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return False
+    head = text.split("\n---", 1)[0] if text.startswith("---") else ""
+    return any(line.startswith("allowed-tools") and "uv run" in line for line in head.splitlines())
+
+
+def claude_skill_rules(skills_dir: Path = SKILLS_DIR) -> list[str]:
+    """The Claude Code rules that let the kit's skills run unasked (their frontmatter has allowed-tools, so Claude
+    Code asks before each one) and let their reference files be read (the skill folder of an installed plugin is
+    outside the repository, so each read asks). In a plugin, Skill(<plugin>:*); with the skills taken out on their
+    own (.claude/skills/), Skill(<skill>) for each. The Read rule only reads: nothing in that folder is written."""
+    rules: list[str] = []
+    try:
+        manifest = read_json(skills_dir.parent / ".claude-plugin" / "plugin.json", {})
+    except RunError:  # a broken manifest: the skills are named one by one below
+        manifest = {}
+    name = manifest.get("name") if isinstance(manifest, dict) else None
+    if isinstance(name, str) and _SKILL_NAME.match(name):
+        rules.append(f"Skill({name}:*)")
+    else:  # only the skills next to this one that Claude Code asks about: they allow `uv run` the way this kit does
+        found: list[str] = []
+        try:
+            for d in sorted(skills_dir.iterdir(), key=lambda p: p.name):
+                skill_md = d / "SKILL.md"
+                if _SKILL_NAME.match(d.name) and skill_md.is_file() and _asks_before_use(skill_md):
+                    found.append(d.name)
+        except OSError:
+            pass
+        rules += [f"Skill({n})" for n in found]
+    folder = _rule_path(skills_dir)
+    if folder:
+        rules.append(f"Read({folder}/**)")
+    return rules
+
+
+def _claude_steps(output: Path, tools: list[str], skill_rules: list[str] | None = None) -> list[str]:
     """Claude Code's two ways. /add-dir only adds the folder: it allows neither Write/Edit nor the Coverity tools,
     and an agent that runs in the background cannot show a confirmation, so the in-session way also allows them
     through /permissions. Starting Claude Code again with --allowedTools is the reliable way for a night run."""
+    rules = claude_skill_rules() if skill_rules is None else skill_rules
     read = (f"Coverity から読むツール（{'、'.join(tools)}）" if tools else
             "Coverity から読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ。/mcp で見える名前）")
+    skills = (f"スキルを使うこととスキルの参照資料を読むこと（{'、'.join(rules)}）、" if rules else "")
+    why = ("Skill と Read を許可しないと、スキルを使うたびと参照資料を読むたびに確認が出ます（Read は読むだけで、そのフォルダには書きません）。"
+           if rules else "")
     first = (f"チャットで /add-dir \"{output}\" と入力し、確認で、このセッションのあいだの許可を選びます。"
              "/add-dir だけでは足りません（フォルダが加わるだけで、ファイルの書き込みもツールも許可されません）。"
-             f"続けて /permissions で Bash(uv run *)、ファイルの書き込み（Write・Edit）、{read}を許可します。"
+             f"続けて /permissions で Bash(uv run *)、{skills}ファイルの書き込み（Write・Edit）、{read}を許可します。"
+             f"{why}"
              "Write と Edit の許可は、このセッションのどのファイルにも効きます（実行フォルダにだけ書くのは、エージェントの決まりです）。"
              "Coverity に書き戻すツールは許可しません。")
-    restart = f"または、Claude Code を claude --add-dir \"{output}\" --allowedTools \"Bash(uv run *)\" \"Write\" \"Edit\""
+    allowed = " ".join(f'"{r}"' for r in ["Bash(uv run *)", *rules, "Write", "Edit"])
+    restart = f"または、Claude Code を claude --add-dir \"{output}\" --allowedTools {allowed}"
     agent = "エージェントを --agent で起動して始めたときは、同じ --agent も後ろに足します。"
     sure = "夜通しの実行には、こちらが確実です。"
     apply = "反映するときに確認が出ます。反映は、--agent を付けずに起動したセッションでします"

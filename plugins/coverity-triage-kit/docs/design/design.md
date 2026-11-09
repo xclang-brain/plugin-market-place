@@ -115,7 +115,7 @@ coverity-triage-kit/
 
 - `plugin.json` の `$schema` を消さない。消えると、Copilot CLI は古い形として読み、`agents/` と `.mcp.json` を読む。構造の試験が `$schema` を確かめる。
 - リポジトリの一番上に `marketplace.json` と `.plugin/` を置かない。Copilot CLI は、`marketplace.json`（一番上）、`.plugin/marketplace.json`、`.github/plugin/marketplace.json`、`.claude-plugin/marketplace.json` の最初にあるものを使うので、Copilot CLI の一覧は `.github/plugin/marketplace.json` のままにする。`.claude-plugin/marketplace.json` は Claude Code だけが読む。2つの一覧のマーケットプレイスの名前は同じにする。
-- スキルの `allowed-tools` は、Copilot CLI の書き方（`shell(uv run:*)`）だけにする。Copilot CLI は、知らない書き方があるとスキルを使うたびに警告を出すため。Claude Code では `Bash(uv run *)` を、利用者が前もって許可する（3.5、README）。
+- スキルの `allowed-tools` は、Copilot CLI の書き方（`shell(uv run:*)`）だけにする。Copilot CLI は、知らない書き方があるとスキルを使うたびに警告を出すため。Claude Code では `Bash(uv run *)` を、利用者が前もって許可する（3.5、README）。`allowed-tools` を持つスキルは、Claude Code が使う前に毎回確認するので、`Skill(<プラグイン>:*)` も前もって許可する。
 - Claude Code は、`skills/` のすべてのスキルを読む（マニフェストの `skills` は、読む所を足すだけで、減らせない。2.1.319 で確認）。画面の入口のスキルも読まれるが、エクステンションのツールがないので、画面を開かず、作業を始めない。Claude Code で動いているときは、Copilot CLI の3つの原因（REQ-402）を示さず、Web管理画面は Copilot CLI だけの機能であることと、3段階目の2つの始め方（統括エージェントを `claude --agent <プラグイン>:<名前>` で起動する、一括実行のスキルを `/` で呼ぶ）を、呼び方だけ伝える（REQ-009）。
 - 開発のときに、プラグインのフォルダを作業フォルダにして、どちらのツールも起動しない。どちらも `.mcp.json` をそのフォルダの MCP サーバーの登録として読み、`${CLAUDE_PLUGIN_ROOT}` が展開されないまま、動かない登録が1つ増える。
 
@@ -206,8 +206,9 @@ Claude Code での名前（2.1.319 で確認）：
   - Coverity に書き戻すツールは、どちらでも前もって許可しない（サーバーの名前だけの `--allow-tool '<登録名>'` を示さない）。書き戻しは、いつも確認が出る。
 - スクリプトを動かすスキルは `allowed-tools: ["shell(uv run:*)"]` を持つ。
 - Claude Code の3段階目：一括実行のスキルは、Claude Code で動いているとき、`new-run`/`resume` に `--client claude-code` を渡し、返った `permission_steps`（Claude Code の形）を示す。README の「Claude Code で使う」と統括エージェントの README にも同じことを書く。
-  - 確実なのは、起動のときの指定：`claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_<プラグイン>_<登録名>__<読むツール>" …`（3段階目を `--agent` で始めるときは、後ろに `--agent` を足す）。夜通しの実行には、こちらを勧める。
-  - 起動した後の会話でするときは、`/add-dir "<output_dir>"` に加えて、`/permissions` で `Bash(uv run *)`・`Write`・`Edit`・読むツールを許可する。`/add-dir` はフォルダを足すだけで、ツールを許可しない。裏で動くエージェントは許可の確認を出せず、前もって許可していないツールを使えない。
+  - 確実なのは、起動のときの指定：`claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Skill(<プラグイン>:*)" "Read(<スキルのフォルダ>/**)" "Write" "Edit" "mcp__plugin_<プラグイン>_<登録名>__<読むツール>" …`（3段階目を `--agent` で始めるときは、後ろに `--agent` を足す）。夜通しの実行には、こちらを勧める。
+  - 起動した後の会話でするときは、`/add-dir "<output_dir>"` に加えて、`/permissions` で `Bash(uv run *)`・`Skill(…)`・`Read(…)`・`Write`・`Edit`・読むツールを許可する。`/add-dir` はフォルダを足すだけで、ツールを許可しない。裏で動くエージェントは許可の確認を出せず、前もって許可していないツールを使えない。
+  - スキルと参照資料（2.1.319 で確認）：`allowed-tools` を持つスキルは、使う前に確認が出る。入れたプラグインのスキルのフォルダ（`~/.claude/plugins/cache/…`）はリポジトリの外なので、参照資料を Read で読むたびにも確認が出る。裏で動くエージェントと `claude -p` では、どちらも断られ、作業エージェントが参照資料を読めずに止まる。そこで `Skill(<プラグイン>:*)`（部品を取り出したときは `Skill(<スキル>)` をスキルごと）と、スキルのフォルダを読むだけの `Read(//<スキルのフォルダ>/**)` を許可に入れる。`permission_steps` は、一括実行のスクリプトの場所からスキルのフォルダと `.claude-plugin/plugin.json` の名前を決めて、実際の名前を入れる（Windows の `C:\a` は `//c/a`。ルールやコマンドで別の意味になる文字を含むフォルダでは、Read を示さない）。文書は、既定の入れ場所の `Read(~/.claude/plugins/**)` を示す。
   - `Write`・`Edit` の許可は、セッションのすべてのファイルに効く（パスで絞る書き方は使わない）。書く場所を実行フォルダに限るのは、エージェントの決まり（指示ファイル、4.14）である。文書にそう書く。
   - 書き戻すツールと、サーバーの名前だけの `mcp__plugin_<プラグイン>_<登録名>` は示さない。スキルの `allowed-tools` は Copilot CLI の書き方なので（2.3）、Claude Code では `uv` を前もって許可しないと、毎回確認が出る。
 - 作業・検証・統合のエージェントは、3段階目ではコマンドを使わない（指示ファイルがそう決める）。確かめは一括実行のスクリプトが行う（4.12）。
@@ -743,7 +744,7 @@ status の出力（画面のため。読むだけ）：
 
 ### 9.3 Claude Code で試すとき
 
-- Claude Code の形（`agents/`、`.mcp.json`、`.claude-plugin/plugin.json`）は、本物のプラグインとして動かす：`claude -p --plugin-dir <プラグインのフォルダ> --agent <プラグイン>:<エージェント> --setting-sources project --permission-mode acceptEdits --allowedTools Skill "Bash(uv run *)" "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（`Skill` を許さないと、`allowed-tools` を持つスキルを `-p` で読めない）。作業フォルダは、プラグインのフォルダの外にする（2.3）。偽の Coverity は、MCP サーバーの環境変数（`COVERITY_API=fake` など）で渡す。
+- Claude Code の形（`agents/`、`.mcp.json`、`.claude-plugin/plugin.json`）は、本物のプラグインとして動かす：`claude -p --plugin-dir <プラグインのフォルダ> --agent <プラグイン>:<エージェント> --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run *)" "Skill(<プラグイン>:*)" "Read(//<一時のプラグインのフォルダ>/**)" "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（`Skill` を許さないと、`allowed-tools` を持つスキルを `-p` で読めない。`Read` を許さないと、スキルの参照資料を読めない。どちらも利用者に勧める許可と同じ形）。作業フォルダは、プラグインのフォルダの外にする（2.3）。偽の Coverity は、MCP サーバーの環境変数（`COVERITY_API=fake` など）で渡す。
 - 2段階目・3段階目の EVAL の道具（`tests/eval/claude_adapter.py` と各段の動かし方）は、2つの形を持つ。
   - `--format claude-plugin`：Claude Code の定義を EVAL するときの形。`agents/<名前>.md`、その表をたどったスキルと MCP サーバーを、そのまま一時のプラグインのフォルダ（課題のフォルダの `claude-plugin/`。自分の `.claude-plugin/plugin.json` と `.mcp.json` を持つ）にコピーし、上の `claude -p --plugin-dir <そのフォルダ> --agent <プラグイン>:<名前>` で動かす。ツールの名前は `mcp__plugin_<プラグイン>_<登録名>__<ツール>`。利用者が動かすときと同じにするため、既定では `--tools` を付けない（Claude Code の既定のツールのまま）。定義の組み込みのツールを合わせた `--tools` は、選んだときだけ付ける。コピーを変えるのは、モデルを選んだときの `model` の行だけ。
   - `--format copilot-converted`：Copilot CLI の定義の文を確かめるときの形（下の置き換え）。置き換えた定義を、作業フォルダの `.claude/` に置く。

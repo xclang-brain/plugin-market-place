@@ -950,6 +950,13 @@ def _fresh_plugin_dir(dest: Path) -> None:
     (dest / PLUGIN_MARKER).write_text(json.dumps(PLUGIN_MARKER_DATA) + "\n", encoding="utf-8")
 
 
+def plugin_read_rule(plugin_dir: Path) -> str:
+    """Claude Code's rule that reads (only) a folder: Read(//<absolute path>/**); on Windows C:\\a is //c/a."""
+    text = Path(plugin_dir).resolve().as_posix()
+    drive = re.match(r"^([A-Za-z]):/(.*)$", text)
+    return f"Read(//{drive.group(1).lower()}/{drive.group(2)}/**)" if drive else f"Read(/{text}/**)"
+
+
 def plugin_argv(claude_bin: list[str], prompt: str, plugin_dir: Path, agent_ref: str, plugin: str,
                 mcp_names: list[str], output_dir: Path | None, model: str | None, extra: list[str],
                 tools: list[str] | None = None) -> list[str]:
@@ -958,7 +965,10 @@ def plugin_argv(claude_bin: list[str], prompt: str, plugin_dir: Path, agent_ref:
                                "--setting-sources", "project", "--permission-mode", "acceptEdits"]
     if tools:
         argv += ["--tools", ",".join(tools)]
-    argv += ["--allowedTools", PLUGIN_BASH_ALLOW, "Skill"]
+    # The same rules the README asks of a user (2.1.319): the plugin's skills have allowed-tools, so each use asks,
+    # and the copied plugin is outside the working folder, so each read of a skill's reference file asks; claude -p
+    # and the agents it starts in the background deny what would ask. The Read rule only reads.
+    argv += ["--allowedTools", PLUGIN_BASH_ALLOW, f"Skill({plugin}:*)", plugin_read_rule(plugin_dir)]
     argv += [f"mcp__plugin_{plugin}_{n}__*" for n in mcp_names]
     if output_dir is not None:
         argv += ["--add-dir", str(output_dir)]

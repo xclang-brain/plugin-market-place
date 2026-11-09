@@ -46,7 +46,7 @@ cp -r "<このフォルダ>" ~/.copilot/skills/<名前>
 スラッシュなしの「Coverity の警告をトリアージして」だけでは、新しい実行を始めません（コマンドとして呼んだときだけ始めます）。すでにある実行の「進み具合は？」「一覧を作り直して」は、チャットで頼めます。
 
 AI は、始める前に 1 回だけ、実行フォルダの読み書きと `uv` のコマンドを、このセッションのあいだ許可するしかたを示します。
-Copilot CLI では `/add-dir` と `copilot --add-dir … --allow-tool …` を、Claude Code では `/add-dir` と `/permissions`（`Bash(uv run *)`・`Write`・`Edit`・Coverity から読むツール。`/add-dir` だけでは足りません）と `claude --add-dir … --allowedTools …` を示します（Claude Code の夜通しの実行には、起動し直すほうが確実です。`Write` と `Edit` の許可はセッションのどのファイルにも効き、実行フォルダにだけ書くのはエージェントの決まりです）。どちらでも、Coverity に書き戻すツールは前もって許可しません。Claude Code での反映は、`--agent` を付けずに起動したセッションでします。
+Copilot CLI では `/add-dir` と `copilot --add-dir … --allow-tool …` を、Claude Code では `/add-dir` と `/permissions`（`Bash(uv run *)`・スキルを使うことの `Skill(…)`・スキルのフォルダを読むことの `Read(…)`・`Write`・`Edit`・Coverity から読むツール。`Skill` と `Read` には、このスキルが入っている場所から決めた名前が入ります。`/add-dir` だけでは足りません）と `claude --add-dir … --allowedTools …` を示します（Claude Code の夜通しの実行には、起動し直すほうが確実です。`Write` と `Edit` の許可はセッションのどのファイルにも効き、実行フォルダにだけ書くのはエージェントの決まりです）。どちらでも、Coverity に書き戻すツールは前もって許可しません。Claude Code での反映は、`--agent` を付けずに起動したセッションでします。
 始めたら、終わるまで質問しません。
 
 ## スクリプトを直接動かす

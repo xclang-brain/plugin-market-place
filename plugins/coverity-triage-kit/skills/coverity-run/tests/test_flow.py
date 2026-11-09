@@ -8,7 +8,11 @@ import time
 import unittest
 from pathlib import Path
 
-from support import RunCase, issue
+from support import RunCase, import_runlib, issue
+
+import_runlib()
+
+from runlib import views  # noqa: E402
 
 ISSUES = [issue(20001, line=6), issue(20002, checker="RESOURCE_LEAK", function="open_file", line=12),
           issue(20003, checker="INTEGER_OVERFLOW", function="parse", line=21),
@@ -35,6 +39,12 @@ class BasicFlowTest(RunCase):
         out = Path(created["run_dir"]).parent
         self.assertIn(f'/add-dir "{out}"', first)
         self.assertIn("/permissions で Bash(uv run *)", first)
+        # the kit's skills ask before each use and live outside the repository when installed: both are allowed
+        rules = views.claude_skill_rules()
+        self.assertEqual([r.split("(")[0] for r in rules], ["Skill", "Read"], rules)
+        self.assertEqual(rules[-1], f"Read({views._rule_path(views.SKILLS_DIR)}/**)")
+        self.assertIn("、".join(rules), first)
+        self.assertIn("Read は読むだけ", first)
         # /add-dir allows neither the file writes nor the Coverity tools: the first way allows them too
         self.assertIn("/add-dir だけでは足りません", first)
         self.assertIn("ファイルの書き込み（Write・Edit）", first)
@@ -43,7 +53,8 @@ class BasicFlowTest(RunCase):
         self.assertIn("書き戻すツールは許可しません", first)
         self.assertIn("夜通しの実行には、こちらが確実です", restart)
         self.assertIn("反映は、--agent を付けずに起動したセッションでします", restart)
-        self.assertIn(f'claude --add-dir "{out}" --allowedTools "Bash(uv run *)" "Write" "Edit" '
+        named = " ".join(f'"{r}"' for r in rules)
+        self.assertIn(f'claude --add-dir "{out}" --allowedTools "Bash(uv run *)" {named} "Write" "Edit" '
                       '"mcp__srv-x__read_a" "mcp__plugin_kit-x_srv-x__get_b_details" で起動し直します', restart)
         self.assertIn("--agent", restart)
         for step in (first, restart):

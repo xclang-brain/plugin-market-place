@@ -182,15 +182,17 @@ Claude Code の中では、`/plugin marketplace add xclang-brain/plugin-market-p
 **起動のときに指定する**：Claude Code を次のように起動します。
 
 ```shell
-claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage"
+claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Skill(coverity-triage-kit:*)" "Read(~/.claude/plugins/**)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage"
 ```
 
 3段階目を `--agent` で始めるときは、この後ろに `--agent coverity-triage-kit:triage-orchestrator` を足します。
 
-**起動した後のチャットで指定する**：`/add-dir "<output_dir>"` を打ち、出た確認でこのセッションのあいだの許可を選びます。`/add-dir` は、フォルダを使えるようにするだけで、ツールを許可しません。続けて `/permissions` で、次の7つを許可します（起動のときの指定と同じものです）。
+**起動した後のチャットで指定する**：`/add-dir "<output_dir>"` を打ち、出た確認でこのセッションのあいだの許可を選びます。`/add-dir` は、フォルダを使えるようにするだけで、ツールを許可しません。続けて `/permissions` で、次の9つを許可します（起動のときの指定と同じものです）。
 
 ```text
 Bash(uv run *)
+Skill(coverity-triage-kit:*)
+Read(~/.claude/plugins/**)
 Write
 Edit
 mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection
@@ -201,6 +203,8 @@ mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage
 
 - `<output_dir>` は実行フォルダの置き場所です（既定は、リポジトリの隣の `coverity-triage-out`）。
 - `Bash(uv run *)` を許可するのは、プラグインのスキルが Copilot CLI の書き方で許可を持っているためです。Claude Code では、前もって許可しないと毎回確認が出ます。
+- `Skill(coverity-triage-kit:*)` は、このプラグインのスキルを使うことの許可です。スキルが許可（`allowed-tools`）を持っているので、Claude Code は、スキルを使う前に毎回確認します。
+- `Read(~/.claude/plugins/**)` は、入れたプラグインのフォルダを読むことの許可です。スキルの参照資料はこのフォルダにあり、調べているリポジトリの外なので、許可しないと読むたびに確認が出ます。読むだけで、書くことは許可しません。`CLAUDE_CONFIG_DIR` で設定の場所を変えているときは `~/.claude` をその場所に、`--plugin-dir` で入れたときは `Read(//<プラグインのフォルダ>/**)`（絶対パスの前に `/` を1つ足す形）にします。一括実行が示す許可の案内には、実際のフォルダの名前が入っています。
 - `Write` と `Edit` の許可は、実行フォルダだけでなく、このセッションのすべてのファイル（調べているリポジトリも）に効きます。書く場所を実行フォルダに限っているのは、エージェントの決まり（実行フォルダの中の、作業用のコピーと結果のファイルにだけ書く）です。許可の指定で場所を絞ることはしていません。
 - Coverity に書き戻すツール（`coverity_update_triage`）は許可しません。サーバーの名前だけの `mcp__plugin_coverity-triage-kit_coverity-connect` も、書き戻すツールまで許可するので使いません。
 - 反映（`/coverity-triage-kit:coverity-apply`）は、`--agent` を付けずに起動した Claude Code で行います（統括エージェントの会話には、ファイルを書く道具と、反映の確かめ・書き戻しのツールがありません）。書き戻すツールの確認は、そのときに出ます。

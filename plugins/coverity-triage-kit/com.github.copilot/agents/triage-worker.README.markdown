@@ -110,7 +110,7 @@ cp "<プラグイン>/agents/triage-worker.md" "<リポジトリ>/.claude/agents
 for s in checker-knowledge triage-investigation code-fix deviation-comment triage-report; do cp -r "<プラグイン>/skills/$s" "<リポジトリ>/.claude/skills/"; done
 ```
 
-スクリプトを動かすスキルは、`uv` のコマンドで許可の確認が出ます。毎回の確認を省くときは、`/permissions` で `Bash(uv run *)` を許可します。
+スクリプトを動かすスキルは、`uv` のコマンドで許可の確認が出ます。許可（`allowed-tools`）を持つスキルは、使う前にも確認が出ます。毎回の確認を省くときは、`/permissions` で `Bash(uv run *)` と、`Skill(triage-investigation)`・`Skill(deviation-comment)`・`Skill(triage-report)` を許可します（取り出したスキルはリポジトリの中にあるので、参照資料を読む許可はいりません。プラグインとして入れたときは `Skill(coverity-triage-kit:*)` と `Read(~/.claude/plugins/**)` です）。
 
 ## うまくいかないとき
 

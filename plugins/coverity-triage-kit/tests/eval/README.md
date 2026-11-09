@@ -208,7 +208,9 @@ python3 tests/eval/claude_adapter.py collect --format claude-plugin agents/triag
 python3 tests/eval/claude_adapter.py build --format claude-plugin --workspace "<作業フォルダ>" --plugin-dir "<一時のプラグイン>" --parts-from-table agents/triage-worker.md --fake-data "<偽の警告のファイル>" --prompt "List the tools and skills you have, one per line" --run --inspect
 ```
 
-作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run *)" Skill "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
+作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run *)" "Skill(<プラグイン>:*)" "Read(//<一時のプラグイン>/**)" "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
+
+- `Skill(<プラグイン>:*)` と `Read(//<一時のプラグイン>/**)` は、README で利用者に勧める許可と同じ形です。スキルは `allowed-tools` を持つので使う前に確認が出、一時のプラグインは作業フォルダの外なので参照資料を読むたびに確認が出ます。`claude -p` と裏で動くエージェントは、それを断ります（2.1.319 で確認。これがないと、作業エージェントが参照資料を読めずに止まります）。
 
 - 既定では `--tools` を付けません。利用者がプラグインを動かすときと同じ、Claude Code の既定のツールのままです（既定のツールに足りないものがあれば、利用者にも足りないので、EVAL でもそれが出るようにするため）。`--tools-from-definitions` を付けたときだけ、copilot-converted と同じ決まりで、写した定義の `tools` の組み込みのツールを合わせたものを `--tools` に渡します（`tools` のない定義は基本のツールすべて）。
 - `--mcp-config` と `--strict-mcp-config` は付けません（プラグインの MCP サーバーは、`.mcp.json` から読まれます）。

@@ -115,6 +115,20 @@ class ReadmeClaudeSectionTest(unittest.TestCase):
     def test_permission_lines_are_in_the_section(self):
         self.assertIn("--allowedTools", self.body, f"README の「{HEADING}」に、起動のときに許可する指定がありません")
 
+    def test_skills_and_their_folder_are_allowed(self):
+        """スキルは allowed-tools を持つので使う前に確認が出て、入れたプラグインの参照資料はリポジトリの外にある
+        （2.1.319 で確認）。裏で動くエージェントは確認を出せないので、2つの許可のしかたの両方に入れる"""
+        rules = [f"Skill({pp.PLUGIN_NAME}:*)", "Read(~/.claude/plugins/**)"]
+        starts = [line for line in self.body.splitlines() if line.startswith("claude --add-dir")]
+        self.assertTrue(starts, f"README の「{HEADING}」に起動のコマンドがありません")
+        for line in starts:
+            for rule in rules:
+                self.assertIn(f'"{rule}"', line, f"起動のコマンドに {rule} がありません")
+        blocks = [b.splitlines() for b in re.findall(r"```text\n(.*?)```", self.body, re.S)]
+        self.assertTrue(any(all(rule in lines for rule in rules) for lines in blocks),
+                        f"/permissions で許可する一覧に {rules} がありません")
+        self.assertNotRegex(self.body, r"(Edit|Write)\(~/\.claude/plugins", "プラグインのフォルダは読むだけ")
+
 
 def permission_docs():
     """前もって許可するしかたを書く文書：プラグインの README、エージェントの README（すべて）、使い方の案内"""

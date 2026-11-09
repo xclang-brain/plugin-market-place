@@ -225,6 +225,14 @@ class ClaudeCodeTest(unittest.TestCase):
         step1 = body[body.index("\n1. チャットで `/add-dir"):body.index("\n2. Claude Code を")]
         for word in ["`/permissions`", "`Bash(uv run *)`", "`Write`", "`Edit`", "読む4つのツール", "書き戻すツールは許可しない"]:
             self.assertIn(word, step1)
+        # the skills ask before each use, and an installed plugin's skill folder is outside the repository:
+        # both ways allow the skills and the reading of that folder (only reading)
+        rules = ["Skill(<プラグインの名前>:*)", "Read(~/.claude/plugins/**)"]
+        command = [b for b in re.findall(r"```[a-z]*\n(.*?)```", body, re.S) if "--allowedTools" in b][0]
+        for rule in rules:
+            self.assertIn(f"`{rule}`", step1)
+            self.assertIn(f'"{rule}"', command)
+        self.assertIn("読むだけの許可", body)
         self.assertIn("2 の起動のしかたが確実", body)
         self.assertIn("このセッションのどのファイルにも効きます", body)
         self.assertIn("エージェントの決まり", body)

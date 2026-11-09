@@ -562,7 +562,9 @@ class ClaudePluginFormatTest(unittest.TestCase):
         for flag in ("--agents", "--mcp-config", "--strict-mcp-config", "--model"):
             self.assertNotIn(flag, argv)
         allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
-        self.assertEqual(allowed, ["Bash(uv run *)", "Skill", "mcp__plugin_fake-kit_fake-server__*"])
+        self.assertEqual(allowed, ["Bash(uv run *)", "Skill(fake-kit:*)", f"Read(/{self.dest.resolve().as_posix()}/**)",
+                                   "mcp__plugin_fake-kit_fake-server__*"],
+                         "the rules a user is asked for: the skills ask before use, their references are outside the folder")
         self.assertEqual(argv[argv.index("--add-dir") + 1], str(out.resolve()))
         self.assertNotIn("--tools", argv, "by default the plugin runs with Claude Code's own tools, like a user's session")
         self.assertIsNone(res["tools"])
@@ -593,6 +595,14 @@ class ClaudePluginFormatTest(unittest.TestCase):
         self.assertIsNone(rows["lead"]["tools"])
         self.assertIn("Edit", rows["lead"]["disallowed_tools"])
         self.assertIn("'Bash(uv run *)'", res["command_line_bash"])
+
+    def test_plugin_read_rule(self):
+        if os.name == "nt":
+            self.assertEqual(ca.plugin_read_rule(Path("C:/a/b")), "Read(//c/a/b/**)")
+        else:
+            here = Path(__file__).resolve().parent
+            self.assertEqual(ca.plugin_read_rule(here), f"Read(/{here.as_posix()}/**)")
+            self.assertTrue(ca.plugin_read_rule(here).startswith("Read(//"))
 
     def test_build_stage2_shape_and_options(self):
         res = self.build(parts_from_table=str(self.agents / "helper-a.md"), model="claude-haiku-5-5")

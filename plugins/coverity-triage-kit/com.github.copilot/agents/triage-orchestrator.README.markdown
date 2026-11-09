@@ -93,12 +93,13 @@ Claude Code 用の定義は、プラグインの `agents/triage-orchestrator.md`
 統括エージェントが呼んだエージェントは裏で動くことがあり、そのときは許可の確認を出せないので、前もって許可していないツールは使えずに止まります。夜通し動かすときは、確実な、起動のときの指定を使います。
 
 ```text
-claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage" --agent coverity-triage-kit:triage-orchestrator
+claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Skill(coverity-triage-kit:*)" "Read(~/.claude/plugins/**)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage" --agent coverity-triage-kit:triage-orchestrator
 ```
 
-起動した後のチャットでするときは、`/add-dir "<output_dir>"` を打ってこのセッションのあいだの許可を選び、続けて `/permissions` で、上の指定と同じ7つ（`Bash(uv run *)`、`Write`、`Edit`、Coverity から読む4つのツール）を許可します。`/add-dir` だけでは、ツールは許可されません。
+起動した後のチャットでするときは、`/add-dir "<output_dir>"` を打ってこのセッションのあいだの許可を選び、続けて `/permissions` で、上の指定と同じ9つ（`Bash(uv run *)`、`Skill(coverity-triage-kit:*)`、`Read(~/.claude/plugins/**)`、`Write`、`Edit`、Coverity から読む4つのツール）を許可します。`/add-dir` だけでは、ツールは許可されません。
 
 - `Write` と `Edit` の許可は、このセッションのすべてのファイル（調べているリポジトリも）に効きます。書く場所を実行フォルダに限っているのは、エージェントの決まりです。
+- `Skill(coverity-triage-kit:*)` と `Read(~/.claude/plugins/**)` がないと、裏で動く作業エージェントは、スキルを使えず、スキルの参照資料も読めずに止まります（スキルが許可を持っているので使う前に確認が出て、入れたプラグインのフォルダはリポジトリの外なので読むたびに確認が出るため）。Read は読むだけの許可です。`--plugin-dir` で入れたときは `Read(//<プラグインのフォルダ>/**)` にします。
 - 書き戻すツール（`coverity_update_triage`）は前もって許可しません。
 - 部品を取り出して MCP サーバーを自分で登録したときは、ツールの名前が `mcp__coverity-connect__<ツール>` になります。
 

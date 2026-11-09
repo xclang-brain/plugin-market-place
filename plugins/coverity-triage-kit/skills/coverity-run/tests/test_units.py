@@ -394,6 +394,63 @@ class LongPathTest(unittest.TestCase):
         self.assertIsNotNone(views.long_path_problem(Path("C:/out/run/work"), tmp), "without the VCS, every file counts")
 
 
+class ClaudeSkillRulesTest(unittest.TestCase):
+    """The Skill and Read rules that Claude Code needs for the kit's skills (they ask before each use, and the
+    skill folder of an installed plugin is outside the repository)."""
+
+    def make_skills(self, plugin: str | None) -> Path:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        root = tmp / ("kit" if plugin else ".claude")
+        skills = root / "skills"
+        for name, front in (("run-x", 'allowed-tools: ["shell(uv run:*)"]\n'), ("plain", ""),
+                            ("Bad_Name", 'allowed-tools: ["shell(uv run:*)"]\n')):
+            (skills / name).mkdir(parents=True)
+            (skills / name / "SKILL.md").write_text(f"---\nname: {name}\n{front}---\nallowed-tools uv run\n",
+                                                    encoding="utf-8")
+        if plugin:
+            (root / ".claude-plugin").mkdir()
+            (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": plugin}), encoding="utf-8")
+        return skills
+
+    def test_plugin_allows_its_skills_and_reads_its_folder(self) -> None:
+        from runlib import views
+
+        skills = self.make_skills("kit-x")
+        self.assertEqual(views.claude_skill_rules(skills),
+                         ["Skill(kit-x:*)", f"Read({views._rule_path(skills)}/**)"])
+
+    def test_taken_out_skills_are_named_one_by_one(self) -> None:
+        from runlib import views
+
+        skills = self.make_skills(None)
+        rules = views.claude_skill_rules(skills)
+        self.assertEqual(rules[0], "Skill(run-x)", "only the skills that ask before use, with a valid name")
+        self.assertEqual(len(rules), 2)
+
+    def test_odd_manifest_name_falls_back(self) -> None:
+        from runlib import views
+
+        skills = self.make_skills("Kit X")
+        self.assertEqual(views.claude_skill_rules(skills)[0], "Skill(run-x)")
+
+    def test_rule_path(self) -> None:
+        from runlib import views
+
+        self.assertEqual(views._rule_path(Path("C:/Users/a b/kit/skills")), "//c/Users/a b/kit/skills")
+        self.assertEqual(views._rule_path(Path("/home/u/kit/skills")), "//home/u/kit/skills")
+        for odd in ("/home/u/$x/skills", '/home/u/"q"/skills', "/home/u/(x)/skills", "/home/u/*/skills",
+                    "relative/skills"):
+            self.assertIsNone(views._rule_path(Path(odd)), odd)
+
+    def test_steps_without_rules_say_nothing_of_them(self) -> None:
+        from runlib import views
+
+        first, restart = views._claude_steps(Path("/o/out"), ["mcp__s__read_a"], skill_rules=[])
+        self.assertNotIn("Skill(", first + restart)
+        self.assertIn('--allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__s__read_a"', restart)
+
+
 class LockTest(unittest.TestCase):
     """file_lock on Windows: creating a lock that another process is deleting is refused as access denied."""
 
