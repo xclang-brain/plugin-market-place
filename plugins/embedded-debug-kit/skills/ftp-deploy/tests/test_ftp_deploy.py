@@ -668,8 +668,7 @@ class FTPSTest(Case):
         try:
             conn, _ = ftp.ntransfercmd("NLST")
             self.assertTrue(conn.session_reused)
-            conn.close()
-            ftp.voidresp()
+            conn.close()  # 読み終える前に閉じるので、機器は 426 を返すことがある。close は、それを気にしない
         finally:
             ftp_deploy.close(ftp)
 

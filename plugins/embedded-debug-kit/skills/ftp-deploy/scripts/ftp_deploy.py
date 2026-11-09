@@ -544,7 +544,7 @@ def cmd_check(workdir, result):
         close(ftp)
     if missing in names:
         raise Stop("機器 %s にはログインできましたが、送り先のフォルダ %s に入れません。"
-                   "%s がフォルダかと、user に入る権限があるかを確かめてください。" % (s["host"], remote_dir, missing))
+                   "ファイルではなくフォルダかと、user に入る権限があるかを確かめてください。" % (s["host"], remote_dir))
     if missing:
         notes.append("送り先のフォルダ %s は、まだありません。run のときに作ります。" % remote_dir)
         message = "機器 %s に FTP でログインできました。" % s["host"]
