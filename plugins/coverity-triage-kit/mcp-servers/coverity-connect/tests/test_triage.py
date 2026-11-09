@@ -216,6 +216,51 @@ if not MISSING:
                 self.assertEqual(Path(self.update(token, entries=ENTRIES)["result_file"]).parent.name,
                                  "coverity-connect-mcp-bob")
 
+        def test_another_session_writing_at_the_same_time_is_kept(self) -> None:
+            """Each session has its own server process; they share the record of entries."""
+            token = entries_token(ENTRIES)
+            path, target = self.tools.entries_result_path(self.tools.config_of(str(self.repo)))
+            other = {"0123456789abcdef": {"id": "other", "cids": [20001], "triage_store": "Default Triage Store",
+                                          "at": "2026-11-09T10:00:00+09:00"}}
+
+            def other_session_writes():
+                # While this call sends 10001, another session writes G1 and an entry of its own.
+                saved = self.tools._load_result(path, target)
+                saved["written"].update(other)
+                saved["written"][self.tools.entry_key(self.tools.TriageEntry.model_validate(ENTRIES[1]))] = {
+                    "id": "G1", "cids": [10002, 10003], "at": "2026-11-09T10:00:00+09:00"}
+                saved["requests"].append({"by": "other"})
+                self.tools.write_json(path, saved)
+                return cov.httpx.Response(200)
+
+            self.cov.triage_responses[10001] = other_session_writes
+            out = self.update(token, entries=ENTRIES)
+            self.assertEqual((out["done"], out["written"], out["written_total"]), (True, ["10001"], 2))
+            self.assertEqual(self.puts(), 1)  # G1 is not sent again
+            result = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(sorted(v["id"] for v in result["written"].values()), ["10001", "G1", "other"])
+            self.assertIn({"by": "other"}, result["requests"])
+            self.assertTrue(any("PUT" in str(r) for r in result["requests"]))
+            self.assertFalse(path.with_name(path.name + ".lock").exists())
+
+        def test_busy_record_sends_nothing_and_asks_to_call_again(self) -> None:
+            token = entries_token(ENTRIES)
+            path, _ = self.tools.entries_result_path(self.tools.config_of(str(self.repo)))
+            lock = path.with_name(path.name + ".lock")
+            lock.write_text(f"{os.getpid()} now", encoding="ascii")
+            self.tools._held_files.add(str(lock))  # held by another call
+            with mock.patch.object(self.tools, "LOCK_WAIT", 0.2):
+                out = self.update(token, entries=ENTRIES)
+            self.assertEqual((out["done"], out["written"], out["remaining"]), (False, [], ["10001", "G1"]))
+            self.assertIn("もう一度呼んで", out["busy_note"])
+            self.assertEqual(self.puts(), 0)
+            self.assertTrue(lock.exists())  # never taken from a live holder
+            self.tools._held_files.discard(str(lock))
+            lock.unlink()
+            again = self.update(token, entries=ENTRIES)
+            self.assertEqual((again["done"], again["written"]), (True, ["10001", "G1"]))
+            self.assertNotIn("busy_note", again)
+
         @unittest.skipUnless(hasattr(os, "getuid"), "the owner of a folder is checked on Linux and macOS")
         def test_refuses_a_record_folder_of_another_user(self) -> None:
             (self.tmp / "systemp" / "coverity-connect-mcp-alice").mkdir()

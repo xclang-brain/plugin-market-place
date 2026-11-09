@@ -18,6 +18,7 @@ confirmation token, and ``coverity_update_triage`` writes only with that token.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import getpass
 import hashlib
@@ -25,12 +26,13 @@ import json
 import logging
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from pydantic import ValidationError
 
@@ -66,6 +68,10 @@ DETAILED_FIELDS = tuple(Issue.model_fields)
 
 class ToolFailure(Exception):
     """A failure the agent can act on; the message says what to fix."""
+
+
+class FileBusy(ToolFailure):
+    """Another process held a shared file for longer than a call waits."""
 
 
 # ---- common helpers ---------------------------------------------------------------------------
@@ -164,8 +170,16 @@ def size(data: Any) -> int:
 
 
 def read_json(path: Path) -> Any:
+    for attempt in range(10):
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+            break
+        except PermissionError:  # Windows: another process is replacing the file just now
+            if sys.platform != "win32" or attempt == 9:
+                raise
+            time.sleep(0.05 * (attempt + 1))
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        return json.loads(text)
     except ValueError as exc:
         raise ToolFailure(f"ファイルを JSON として読めません: {path}: {exc}") from exc
 
@@ -194,6 +208,160 @@ def lock_for(path: Path) -> threading.Lock:
     key = os.path.normcase(str(path.resolve()))
     with _locks_guard:
         return _locks.setdefault(key, threading.Lock())
+
+
+LOCK_WAIT = 10.0  # seconds a call waits for another process to finish with a file
+LOCK_STALE = 60.0  # a lock older than this was left by a process that died (a hold lasts well under a second)
+LOCK_GRACE = 5.0  # a younger lock may be just created (its pid not written yet): never taken as left behind
+DENIED_GRACE = 2.0  # Windows: access denied with no lock there is waited out this long, then reported as it is
+_held_files: set[str] = set()  # the lock files this process holds now
+
+
+def pid_alive(pid: Any) -> bool:
+    """Whether a process with this pid exists. When it cannot be told, True (the caller then waits)."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)  # os.kill(pid, 0) would end the process on Windows
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True  # it exists but belongs to someone else
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(0x1000, 0, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # type: ignore[attr-defined]  # ERROR_ACCESS_DENIED: it exists
+        try:
+            code = ctypes.c_ulong(0)
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError, ValueError):
+        return True
+
+
+def _lock_seen(lock: Path) -> tuple[os.stat_result, bytes] | None:
+    try:
+        info = lock.stat()
+        with open(lock, "rb") as f:
+            return info, f.read(64)
+    except OSError:
+        return None
+
+
+def _lock_is_stale(lock: Path, info: os.stat_result, data: bytes) -> bool:
+    """A lock left by a process that is gone: older than LOCK_STALE; or older than LOCK_GRACE and empty or
+    with the pid of a process that has ended (or of this process, which does not hold it)."""
+    age = time.time() - info.st_mtime
+    if age > LOCK_STALE:
+        return True
+    if age <= LOCK_GRACE:
+        return False
+    try:
+        pid = int(data.decode("ascii").split()[0])
+    except (UnicodeDecodeError, ValueError, IndexError):
+        return True
+    if pid == os.getpid():
+        return str(lock) not in _held_files
+    return not pid_alive(pid)
+
+
+def _remove_if_same(lock: Path, info: os.stat_result, data: bytes) -> bool:
+    """Delete a stale lock only when it is still the one looked at (never a fresh lock another waiter took)."""
+    again = _lock_seen(lock)
+    if again is None:
+        return False
+    now_info, now_data = again
+    if (now_info.st_ino, now_info.st_mtime_ns, now_info.st_size) != (info.st_ino, info.st_mtime_ns, info.st_size) \
+            or now_data != data:
+        return False
+    try:
+        lock.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def _release(lock: Path) -> None:
+    """Delete the lock; on Windows retried for a while (a waiter may be reading the pid in it)."""
+    for attempt in range(100):
+        try:
+            lock.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 99:
+                return  # left behind: the pid in it tells the next process that nobody holds it
+            time.sleep(0.03)
+        except OSError:
+            return
+
+
+@contextlib.contextmanager
+def file_lock(path: Path, wait: float | None = None) -> Iterator[None]:
+    """An exclusive lock between processes on ``path`` (``<path>.lock``, holding the pid): every session
+    starts its own server process, and some files are shared by them. Hold it only for a short read and
+    write. Not re-entrant."""
+    lock = path.with_name(path.name + ".lock")
+    wait = LOCK_WAIT if wait is None else wait
+    give_up = time.monotonic() + wait
+    denied_since: float | None = None
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except FileExistsError:
+            denied_since = None
+            seen = _lock_seen(lock)
+            if seen is not None and _lock_is_stale(lock, *seen) and _remove_if_same(lock, *seen):
+                continue
+        except PermissionError:
+            # Windows: while another process deletes the lock (delete pending), creating it is refused with
+            # "access denied" instead of "exists". With no lock to see (after a short grace), it is a real
+            # "access denied" (a folder we may not write to): raise it.
+            if sys.platform != "win32":
+                raise
+            if os.path.lexists(lock):
+                denied_since = None
+            elif denied_since is None:
+                denied_since = time.monotonic()
+            elif time.monotonic() - denied_since > DENIED_GRACE:
+                raise
+        if time.monotonic() > give_up:
+            raise FileBusy(f"ほかのセッションがこのファイルを使っています。少し待ってから、同じ引数でもう一度呼んで"
+                              f"ください: {path}（{wait:.0f} 秒たっても空かないときは {lock.name} を消してください）")
+        time.sleep(0.05)
+    _held_files.add(str(lock))
+    try:
+        try:
+            os.write(fd, f"{os.getpid()} {now()}".encode("ascii"))
+        finally:
+            os.close(fd)
+        yield
+    finally:
+        _held_files.discard(str(lock))
+        _release(lock)
 
 
 def one_of(name_a: str, a: Any, name_b: str, b: Any) -> None:
@@ -763,6 +931,41 @@ def entries_result_path(config: CoverityConfig) -> tuple[Path, dict[str, str]]:
     return base / f"triage-{name}.result.json", target
 
 
+def _load_result(path: Path, target: dict[str, str] | None) -> dict[str, Any]:
+    """The record of write-backs as saved now, in its full form (empty when there is none yet)."""
+    try:
+        result = read_json(path)
+    except FileNotFoundError:
+        result = {}
+    if not isinstance(result, dict) or (target is not None and {k: result.get(k) for k in target} != target):
+        result = dict(target or {})
+    for key in ("written", "failed"):
+        if not isinstance(result.get(key), dict):
+            result[key] = {}
+    if not isinstance(result.get("requests"), list):
+        result["requests"] = []
+    return result
+
+
+def _merge_result(saved: dict[str, Any], written: dict[str, Any], failed: dict[str, Any],
+                  requests: list[Any]) -> dict[str, Any]:
+    """The saved record with what this call wrote, what Coverity refused in it, and its requests added."""
+    out = {**saved, "written": dict(saved["written"]), "failed": dict(saved["failed"])}
+    for key, value in written.items():
+        out["written"][key] = value
+        out["failed"].pop(key, None)
+    for key, value in failed.items():
+        if key not in out["written"]:
+            out["failed"][key] = value
+    out["requests"] = (saved["requests"] + list(requests))[-MAX_RECORDS:]
+    return out
+
+
+def _done_before(result: dict[str, Any], key: str, token: str) -> bool:
+    """Written already, or refused by Coverity with this confirmation token."""
+    return key in result["written"] or (result["failed"].get(key) or {}).get("token") == token
+
+
 @guarded
 def update_triage(confirmation_token: str, repo_root: str | None = None, plan_file: str | None = None,
                   entries: list[TriageEntry] | list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -783,27 +986,46 @@ def update_triage(confirmation_token: str, repo_root: str | None = None, plan_fi
         result_path, target = plan_path.with_name(plan_path.stem + ".result.json"), None
     else:
         result_path, target = entries_result_path(config)
+    # The record of entries is shared by the server processes of every session: each save is a short
+    # merge under a lock between processes, and an entry is looked up again just before it is sent.
+    written_mine: dict[str, Any] = {}
+    failed_mine: dict[str, Any] = {}
+
+    def fresh(requests: list[Any] | None = None) -> dict[str, Any]:
+        return _merge_result(_load_result(result_path, target), written_mine, failed_mine, requests or [])
+
+    def fresh_locked() -> dict[str, Any]:
+        with file_lock(result_path):
+            return fresh()
+
+    def save(requests: list[Any] | None = None) -> dict[str, Any]:
+        with file_lock(result_path):
+            merged = fresh(requests)
+            write_json(result_path, merged)
+        return merged
+
     with lock_for(result_path):
-        result = read_json(result_path) if result_path.is_file() else {}
-        if not isinstance(result, dict) or (target is not None and {k: result.get(k) for k in target} != target):
-            result = dict(target or {})
-        for key in ("written", "failed"):
-            if not isinstance(result.get(key), dict):
-                result[key] = {}
-        if not isinstance(result.get("requests"), list):
-            result["requests"] = []
+        result = fresh()
         written_now: list[str] = []
         remaining: list[str] = []
         client = make_client(config)
+        finished = busy = False
         try:
             for entry in items:
                 key = entry_key(entry)  # by content: an entry changed after writing is written again
-                failure = result["failed"].get(key) or {}
-                if key in result["written"] or failure.get("token") == token:
+                if _done_before(result, key, token):
                     continue
                 # An entry with a stream also asks which triage store the stream uses: two requests.
-                if not deadline.allows(client, 2 if entry.stream else 1):
+                if busy or not deadline.allows(client, 2 if entry.stream else 1):
                     remaining.append(entry.id)
+                    continue
+                try:
+                    result = fresh_locked()  # another session may have written it since
+                except FileBusy:
+                    busy = True  # nothing is sent while the record cannot be saved: calling again sends it
+                    remaining.append(entry.id)
+                    continue
+                if _done_before(result, key, token):
                     continue
                 attributes = TriageAttributes(classification=entry.classification, action=entry.action,
                                               severity=entry.severity)
@@ -813,18 +1035,25 @@ def update_triage(confirmation_token: str, repo_root: str | None = None, plan_fi
                     if exc.fatal:
                         raise  # nothing is recorded for this entry: calling again writes it
                     # A value Coverity refused is not sent again with this token: correct and confirm again.
-                    result["failed"][key] = {"id": entry.id, "cids": entry.cids, "error": masker.text(str(exc)),
-                                             "token": token, "at": now()}
+                    failed_mine[key] = {"id": entry.id, "cids": entry.cids, "error": masker.text(str(exc)),
+                                        "token": token, "at": now()}
+                    result = _merge_result(result, {}, {key: failed_mine[key]}, [])
                     continue
-                result["written"][key] = compact({"id": entry.id, "cids": entry.cids, "stream": entry.stream,
-                                                  "triage_store": store, "at": now()})
-                result["failed"].pop(key, None)
+                written_mine[key] = compact({"id": entry.id, "cids": entry.cids, "stream": entry.stream,
+                                             "triage_store": store, "at": now()})
                 written_now.append(entry.id)
-                write_json(result_path, result)
+                result = save()
+            finished = True
         finally:
-            result["requests"] = (result["requests"] + masker.data(client.requests))[-MAX_RECORDS:]
+            requests = masker.data(client.requests)
             client.close()
-            write_json(result_path, result)
+            try:
+                result = save(requests)
+            except (ToolFailure, OSError) as exc:
+                # Written entries are saved already; only the request records (and refusals) are lost here.
+                if finished and not isinstance(exc, FileBusy):
+                    raise
+                log.warning("書き戻しの記録を保存できませんでした: %s: %s", result_path, exc)
     keys = {entry_key(e) for e in items}
     failed = [{"id": v["id"], "cids": v["cids"], "error": v["error"]} for k, v in result["failed"].items() if k in keys]
     done = not remaining
@@ -832,6 +1061,9 @@ def update_triage(confirmation_token: str, repo_root: str | None = None, plan_fi
         "done": done, "written": written_now, "written_total": sum(1 for k in result["written"] if k in keys),
         "entries": len(items), "failed": failed, "remaining": remaining, "result_file": str(result_path),
         "seconds": round(deadline.elapsed(), 1), "next": None if done else CALL_AGAIN}
+    if busy:
+        out["busy_note"] = ("ほかのセッションが同じ Coverity に書き戻していて、記録のファイルが空きませんでした。"
+                            "少し待ってから、同じ引数でもう一度呼んでください")
     if failed:
         out["failed_note"] = ("failed の項目は Coverity に断られました。同じ確認の文字列では送り直しません。値を直して"
                               "coverity_preview_triage からやり直してください")

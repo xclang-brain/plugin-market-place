@@ -208,7 +208,7 @@ class FileDrivenCompletionTest(RunCase):
         out = self.tick(run_dir)  # the issues file is found without a report
         self.assertEqual(out["stage"], "details")
         self.do_fetch(out["actions"][0], ISSUES[:1])
-        out = self.tick(run_dir)
+        out = self.tick_until(run_dir)  # the work copy is made by a detached job first
         launch = out["actions"][0]
         self.assertEqual(launch["type"], "launch")
         self.assertEqual(set(launch), {"type", "task", "role", "item", "description", "prompt", "background"})
@@ -216,8 +216,8 @@ class FileDrivenCompletionTest(RunCase):
         self.assertEqual(launch["task"], "worker:20001@1")
         self.assertTrue(launch["prompt"].startswith("指示ファイル "))
         self.work_as_worker(launch)
-        time.sleep(2.3)  # the file must be settled
-        out = self.tick(run_dir, wait=15)
+        # no report: the file counts once it has settled, then the save job runs
+        out = self.tick_until(run_dir, until=lambda o: o["done"])
         self.assertTrue(out["done"], out)
         # a late report of the same task is ignored
         late = self.tick(run_dir, "--finished", launch["task"])
@@ -229,8 +229,8 @@ class FileDrivenCompletionTest(RunCase):
         self.do_fetch(out["actions"][0], ISSUES[:1])
         out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
         self.do_fetch(out["actions"][0], ISSUES[:1])
-        out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
-        self.assertEqual(out["actions"][0]["task"], "worker:20001@1")
+        out = self.tick_until(run_dir, "--finished", out["actions"][0]["task"])
+        self.assertEqual(out["actions"][0]["task"], "worker:20001@1", out)
 
         def age(state):
             for task in state["tasks"].values():
@@ -239,7 +239,7 @@ class FileDrivenCompletionTest(RunCase):
         old = time.time() - 3600
         for path in (Path(run_dir) / "items" / "20001").glob("*"):
             os.utime(path, (old, old))
-        out = self.tick(run_dir)
+        out = self.tick_until(run_dir)
         self.assertEqual(out["actions"][0]["task"], "worker:20001@2", out)
         self.edit_state(run_dir, age)
         for path in (Path(run_dir) / "items" / "20001").glob("*"):
@@ -288,8 +288,9 @@ class FetchFailureTest(RunCase):
         self.assertEqual(out["actions"][0]["type"], "fetch_details")
         self.assertEqual(sorted(out["actions"][0]["cids"]), [20001, 20002])
         self.assertTrue(out["actions"][0]["task"].endswith("@2"))
-        out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
-        self.assertTrue(all(a["type"] == "launch" for a in out["actions"]), out)
+        out = self.tick_until(run_dir, "--finished", out["actions"][0]["task"],
+                              until=lambda o: any(a["type"] == "launch" for a in o["actions"]))
+        self.assertTrue(out["actions"] and all(a["type"] == "launch" for a in out["actions"]), out)
         status = self.run_json("status", "--run", run_dir)
         self.assertTrue(any(e["kind"] == "取得" for e in status["errors"]))
         brief = self.brief_path(out["actions"][0]).read_text(encoding="utf-8")

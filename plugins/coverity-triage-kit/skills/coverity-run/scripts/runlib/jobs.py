@@ -4,6 +4,9 @@ A job record: ``name``, ``kind``, ``status`` (running / done / failed / stopped)
 (ISO), ``started_ts``, ``finished``, ``args``, ``result``, ``error``, ``children`` (pids of process
 groups the job started, for ``stop``). The tick reads the records and moves the run on; the job never
 changes run.json itself.
+
+A ``stopped`` job whose process is still alive (the kill failed, or ``stop`` itself was ended before it
+killed it) counts as running until the process ends: ``gone`` marks a stopped job whose process has ended.
 """
 
 from __future__ import annotations
@@ -15,8 +18,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from .common import (RUN_SCRIPT, RunError, file_lock, kill_how, kill_tree, now_iso, pid_alive, read_json,
-                     spawn_detached, write_json)
+from .common import (RUN_SCRIPT, RunError, clear_dead_lock, file_lock, kill_how, kill_tree, now_iso, pid_alive,
+                     read_json, remove_file, spawn_detached, try_json, write_json)
 
 JOBS_DIR = "jobs"
 START_GRACE = 30  # seconds a job may take to write its pid
@@ -38,8 +41,12 @@ def log_file(run_dir: Path, name: str) -> Path:
     return Path(run_dir) / JOBS_DIR / f"{name}.log"
 
 
+DEAD = "処理のプロセスが途中で止まりました"
+
+
 def read(run_dir: Path, name: str) -> dict[str, Any] | None:
-    """The job record, with a job whose process is gone shown as failed (nothing is written)."""
+    """The job record, with a job whose process is gone shown as failed, and a stopped job whose process is
+    still alive shown as running (nothing is written: ``settle`` writes the first)."""
     path = _file(run_dir, name)
     try:
         data = read_json(path)
@@ -47,6 +54,8 @@ def read(run_dir: Path, name: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict):
         return None
+    if data.get("status") == "stopped" and not data.get("gone") and pid_alive(data.get("pid")):
+        return {**data, "status": "running", "stop_failed": True}
     if data.get("status") == "running":
         age = time.time() - float(data.get("started_ts") or 0)
         pid = data.get("pid")
@@ -54,8 +63,21 @@ def read(run_dir: Path, name: str) -> dict[str, Any] | None:
             fresh = read_json(path, {})  # it may have ended while we looked
             if isinstance(fresh, dict) and fresh.get("status") != "running":
                 return fresh
-            data = {**data, "status": "failed", "error": "処理のプロセスが途中で止まりました"}
+            data = {**data, "status": "failed", "error": DEAD}
     return data
+
+
+def settle(run_dir: Path, job: dict[str, Any]) -> None:
+    """Write down that a job whose record still says running has ended (its process is gone), so that
+    nothing asks about its pid again (Windows soon gives the number to another process)."""
+    if job.get("status") != "failed" or job.get("error") != DEAD:
+        return
+    path = _file(run_dir, job["name"])
+    with file_lock(path):
+        data = read_json(path, {}) if path.is_file() else {}
+        if data.get("status") == "running" and data.get("pid") == job.get("pid"):
+            data.update(status="failed", error=DEAD, finished=now_iso())
+            write_json(path, data)
 
 
 def update(run_dir: Path, name: str, **fields: Any) -> dict[str, Any]:
@@ -82,13 +104,21 @@ def running(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def start(run_dir: Path, name: str, kind: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Start a job (a running job of the same name is kept)."""
+    """Start a job (a running job of the same name is kept, a stopped one whose process is alive too)."""
     current = read(run_dir, name)
     if current and current.get("status") == "running":
         return current
     path = _file(run_dir, name)
     log = log_file(run_dir, name)
-    log.unlink(missing_ok=True)
+    try:
+        remove_file(log)
+    except PermissionError:  # Windows: an earlier process still writes it; empty it, or write after it
+        if sys.platform != "win32":
+            raise
+        try:
+            open(log, "wb").close()
+        except OSError:
+            pass
     write_json(path, {"name": name, "kind": kind, "status": "running", "pid": None, "started": now_iso(),
                       "started_ts": time.time(), "finished": None, "args": args, "result": None, "error": None,
                       "children": []})
@@ -132,6 +162,13 @@ def execute(run_dir: str, name: str) -> dict[str, Any]:
     folder = Path(run_dir)
     job = read_json(_file(folder, name))
     update(folder, name, pid=os.getpid())
+    # stop writes "stopped" before it looks for pids, and this job wrote its pid before it looks here: either
+    # stop sees the pid and kills the job, or the job sees "stopped" and does nothing.
+    current = read_json(_file(folder, name), {})
+    run_state = try_json(folder / "run.json")
+    if current.get("status") == "stopped" or (isinstance(run_state, dict) and run_state.get("stopped")):
+        return update(folder, name, status="stopped", gone=True, finished=current.get("finished") or now_iso(),
+                      error=current.get("error") or "止めました")
     fn = KINDS.get(job.get("kind"))
     try:
         if fn is None:
@@ -145,7 +182,7 @@ def execute(run_dir: str, name: str) -> dict[str, Any]:
         result, status, error = {}, "failed", f"{type(exc).__name__}: {exc}"
     current = read_json(_file(folder, name), {})
     if current.get("status") == "stopped":  # stop came first: keep its word
-        return current
+        return update(folder, name, gone=True)
     return update(folder, name, status=status, result=result, error=error, finished=now_iso())
 
 
@@ -158,8 +195,22 @@ def stop_all(run_dir: Path) -> tuple[list[str], list[dict[str, Any]]]:
         update(run_dir, job["name"], status="stopped", finished=now_iso(), error="止めました")
         pids = [p for p in [job.get("pid"), *(job.get("children") or [])] if p]
         left = [p for p in pids if not kill_tree(p)]
-        if left:
+        if left:  # the record stays "stopped" without "gone": while its process lives, it counts as running
             unstopped += [{"name": job["name"], "pid": p, "how": kill_how(p)} for p in left]
         else:
+            if pids:
+                update(run_dir, job["name"], gone=True)
             stopped.append(job["name"])
+    clear_dead_locks(run_dir)
     return stopped, unstopped
+
+
+def clear_dead_locks(run_dir: Path) -> list[str]:
+    """Delete the locks a killed job held (a killed process never runs its ``finally``)."""
+    run_dir = Path(run_dir)
+    cleared = []
+    folder = run_dir / JOBS_DIR
+    for path in [run_dir / "work" / "vcs", *(p.with_suffix("") for p in folder.glob("*.json.lock"))]:
+        if clear_dead_lock(path):
+            cleared.append(path.name + ".lock")
+    return cleared

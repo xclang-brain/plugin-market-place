@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import jobs
-from .common import RunError, file_lock, read_json, write_json, write_text
+from .common import RunError, file_lock, read_json, remove_file, remove_tree, write_json, write_text
 from .state import Run, is_group
 from .vcs import make_vcs
 
@@ -44,7 +44,7 @@ def prepare_copy(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> di
     marker = run.item_dir(item["id"]) / REWORK_FRESH
     with vcs_lock(run):
         vcs.reset_copy(fix_dir, latest)
-        marker.unlink(missing_ok=True)
+        remove_file(marker)
         previous = run.patch_file(item["id"])
         if item.get("rework") and previous.is_file():
             if vcs.apply_to_copy(fix_dir, previous):
@@ -67,8 +67,7 @@ def prepare_copy(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> di
 
 
 def _copy_changed(src: Path, files: list[str], dest: Path) -> None:
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
+    remove_tree(dest)
     for rel in files:
         if (src / rel).is_file():
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -87,8 +86,14 @@ def _branch(run: Run, item_id: str, kept: list[int], kind: str) -> str | None:
 def save_item(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict[str, Any]:
     """Check the work copy, then save the fix: commit and branch (git), patch, the changed files in fixed/.
 
-    ``problems`` in the result are for the worker to fix (nothing is saved then)."""
+    ``problems`` in the result are for the worker to fix (nothing is saved then). The work copy lock is held
+    from the check to the save, so that no other job comes in between."""
     run = Run(run_dir)
+    with vcs_lock(run):
+        return _save_locked(run, args)
+
+
+def _save_locked(run: Run, args: dict[str, Any]) -> dict[str, Any]:
     item_id = args["item"]
     item = run.item(item_id)
     settings = run.settings
@@ -98,11 +103,10 @@ def save_item(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict[
     slot = args["slot"]
     fix_dir, note_dir = run.work(f"w{slot}"), run.work(f"n{slot}")
     annotation = settings["options"]["annotation"]
-    with vcs_lock(run):
-        changed = vcs.changed_files(fix_dir)
-        annotated = vcs.changed_files(note_dir) if annotation else []
-        analyzed_dirty = bool(run.state.get("analyzed_revision")) and has_copy(run.work("a")) and \
-            bool(vcs.changed_files(run.work("a")))
+    changed = vcs.changed_files(fix_dir)
+    annotated = vcs.changed_files(note_dir) if annotation else []
+    analyzed_dirty = bool(run.state.get("analyzed_revision")) and has_copy(run.work("a")) and \
+        bool(vcs.changed_files(run.work("a")))
     problems = []
     if not changed and not fix.get("already_fixed_on_latest"):
         problems.append(f"修正するフォルダ {fix_dir} に変更がありません。そのフォルダのファイルを直してください"
@@ -116,8 +120,14 @@ def save_item(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict[
         warnings.append("「最新のリビジョンで直っている」とありますが、修正するフォルダに変更があります（変更を差分にしました）")
     if analyzed_dirty:
         warnings.append("調べるコード（解析したリビジョンのコピー）が変わっていました。次の作業の前に元に戻します")
-    if item.get("repo_fingerprint") and vcs.fingerprint() != item["repo_fingerprint"]:
-        warnings.append("調べている間に、利用者のリポジトリのファイルが変わりました。誤って変えていないか確かめてください")
+    if item.get("repo_fingerprint"):
+        try:
+            now = vcs.fingerprint()
+        except RunError:  # could not look (only a warning hangs on it): the fix is saved all the same
+            now = None
+            warnings.append("利用者のリポジトリのファイルが変わっていないかは、確かめられませんでした")
+        if now is not None and now != item["repo_fingerprint"]:
+            warnings.append("調べている間に、利用者のリポジトリのファイルが変わりました。誤って変えていないか確かめてください")
 
     excluded = [c for c in result.get("group_excluded_cids") or [] if c in item["cids"]]
     kept = [c for c in item["cids"] if c not in excluded]
@@ -130,23 +140,22 @@ def save_item(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict[
     earlier = read_json(run.item_dir(item_id) / "saved.json", {})
     saved: dict[str, Any] = {}
     latest = run.state.get("latest_revision") or ""
-    with vcs_lock(run):
-        for kind in ("fix", "annotation"):  # a fix made again takes the place (and branch) of the earlier one
-            branch = (earlier.get(kind) or {}).get("branch")
-            if branch:
-                vcs.delete_branch(branch)
-        for kind, folder, files in (("fix", fix_dir, changed), ("annotation", note_dir, annotated)):
-            patch = run.patch_file(item_id, kind)
-            if not files:
-                patch.unlink(missing_ok=True)
-                shutil.rmtree(run.dir / "fixed" / item_id / kind, ignore_errors=True)
-                continue
-            label = "修正" if kind == "fix" else "逸脱の注釈"
-            body = fix.get("summary", "") if kind == "fix" else (result.get("deviation") or {}).get("classification", "")
-            message = f"Coverity CID {', '.join(map(str, kept))}: {label}\n\n{body}\n"
-            saved[kind] = vcs.save(folder, latest, message, _branch(run, item_id, kept, kind),
-                                   f"refs/triage/{run.state['run_id']}/{item_id}-{kind}", patch)
-            _copy_changed(folder, files, run.dir / "fixed" / item_id / kind)
+    for kind in ("fix", "annotation"):  # a fix made again takes the place (and branch) of the earlier one
+        branch = (earlier.get(kind) or {}).get("branch")
+        if branch:
+            vcs.delete_branch(branch)
+    for kind, folder, files in (("fix", fix_dir, changed), ("annotation", note_dir, annotated)):
+        patch = run.patch_file(item_id, kind)
+        if not files:
+            remove_file(patch)
+            remove_tree(run.dir / "fixed" / item_id / kind)
+            continue
+        label = "修正" if kind == "fix" else "逸脱の注釈"
+        body = fix.get("summary", "") if kind == "fix" else (result.get("deviation") or {}).get("classification", "")
+        message = f"Coverity CID {', '.join(map(str, kept))}: {label}\n\n{body}\n"
+        saved[kind] = vcs.save(folder, latest, message, _branch(run, item_id, kept, kind),
+                               f"refs/triage/{run.state['run_id']}/{item_id}-{kind}", patch)
+        _copy_changed(folder, files, run.dir / "fixed" / item_id / kind)
     write_json(run.item_dir(item_id) / "saved.json", saved)
     return {"saved": saved, "warnings": warnings, "excluded": excluded, "kept": kept,
             "analyzed_dirty": analyzed_dirty, "files": changed}

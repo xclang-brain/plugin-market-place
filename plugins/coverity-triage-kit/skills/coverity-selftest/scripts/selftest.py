@@ -189,10 +189,21 @@ def write_json(path: Path, data: Any) -> None:
     write_text(path, json.dumps(data, ensure_ascii=False, indent=1) + "\n")
 
 
-def remove_tree(path: Path) -> None:
+def remove_tree(path: Path, attempts: int = 10, pause: float = 0.3) -> None:
+    """Remove a folder. Read-only files (git objects on Windows) are made writable; a file that another
+    process still holds (a sharing violation on Windows) is tried again a few times with a pause."""
     def on_error(func: Any, name: str, _exc: Any) -> None:
-        os.chmod(name, stat.S_IWRITE)  # git objects are read-only on Windows
-        func(name)
+        for attempt in range(attempts):
+            try:
+                os.chmod(name, stat.S_IWRITE)
+                func(name)
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(pause)
 
     if path.exists():
         if sys.version_info >= (3, 12):
@@ -363,6 +374,12 @@ class Results:
                  "at": datetime.now().isoformat(timespec="seconds")}
         self.state["checks"][check_id] = entry
         return {"id": check_id, "status": status, "actual": entry["actual"], **({"detail": entry["detail"]} if entry["detail"] else {})}
+
+    def add_detail(self, check_id: str, text: str) -> dict[str, Any]:
+        """Add a line to the detail of a check already recorded (masked like the rest)."""
+        entry = self.state["checks"][check_id]
+        entry["detail"] = "\n".join(part for part in (entry.get("detail", ""), self.mask(text).strip()) if part)
+        return {"detail": entry["detail"]}
 
     def save(self) -> None:
         write_json(self.dir / STATE_FILE, self.state)
@@ -756,6 +773,7 @@ def cmd_check_build(folder: str) -> dict[str, Any]:
     timeout = int(verify.get("timeout_minutes") or 180) * 60
     work = Path(tempfile.mkdtemp(prefix="cst"))
     recs = []
+    leftover = ""
     try:
         root = work / "r"
         progress("リポジトリのコピーを作っています")
@@ -797,7 +815,17 @@ def cmd_check_build(folder: str) -> dict[str, Any]:
     except CliError as exc:
         recs.append(results.record("4-1", "fail", f"リポジトリのコピーを作れませんでした: {exc}"))
     finally:
-        remove_tree(work)
+        results.save()  # the build's result is kept even if the cleanup below cannot finish
+        try:
+            remove_tree(work)
+        except OSError as exc:
+            # A process the build left behind (for example mspdbsrv.exe) may still hold files in the copy.
+            leftover = (f"一時フォルダを消せませんでした（ビルドが残したプロセスが使っているかもしれません）。"
+                        f"あとで手で消します: {work} ({exc})")
+    if leftover:
+        for rec in recs:
+            if rec["id"] == "4-1":
+                rec.update(results.add_detail("4-1", leftover))
     initial = bool(verify.get("initial"))
     needs_analysis = initial or str(verify.get("default") or "none") != "none"
     lacking = "review" if setup else "fail"  # the setup command may add the tools to PATH

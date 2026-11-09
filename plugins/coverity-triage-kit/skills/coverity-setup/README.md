@@ -57,7 +57,7 @@ Coverity Connect の警告をトリアージする前の準備を、チャット
 
 - `check`：項目ごとに `ok` / `ng` / `warning`。`ng` のものを上から直します。環境変数は「あり」「なし」だけを示し、値は出しません。
 - `set --check`：変わる項目（`changes`）と、注釈が残るか（`comments`: `kept` / `lost`）。`lost` のときは、保存の前に「このファイルでは、注釈は動いたり消えたりします」から始まる知らせ（`notice`）が返ります。
-- `trial-build`：ビルドできたか（`build_ok`）と、失敗したときのログの最後（`log_tail`）。ログは結果を置くフォルダの `_trial-build/trial-build.log` にあります。
+- `trial-build`：ビルドできたか（`build_ok`）と、失敗したときのログの最後（`log_tail`）。ログは結果を置くフォルダの `_trial-build/trial-build.log` にあります（前のフォルダを消せなかったときは `_trial-build-<日時>` を使い、そのことを `note` に書きます。場所は `log` に出ます）。
 
 ## うまくいかないとき
 

@@ -33,6 +33,7 @@ import re  # noqa: E402
 import shlex  # noqa: E402
 import shutil  # noqa: E402
 import signal  # noqa: E402
+import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tarfile  # noqa: E402
 import time  # noqa: E402
@@ -1105,6 +1106,59 @@ def _extract(data: bytes, dest: Path) -> None:
             tar.extract(member, dest)
 
 
+def remove_tree(path: Path, attempts: int = 5, pause: float = 0.5) -> None:
+    """Remove a folder. Read-only files (git objects on Windows) are made writable; a file that another
+    process still holds (a sharing violation on Windows) is tried again a few times with a pause."""
+    def on_error(func: Any, name: str, _exc: Any) -> None:
+        for attempt in range(attempts):
+            try:
+                os.chmod(name, stat.S_IWRITE)
+                func(name)
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(pause)
+
+    if path.is_dir():
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=on_error)
+        else:
+            shutil.rmtree(path, onerror=on_error)
+
+
+TRIAL_SPARE = re.compile(re.escape(TRIAL_DIR) + r"-[0-9]{8}-[0-9]{6}(-[0-9]+)?")
+
+
+def fresh_trial_dir(out_dir: Path) -> tuple[Path, str]:
+    """An empty folder for the trial build: ``_trial-build``, or a new ``_trial-build-<time>`` when the old one
+    cannot be removed (a process the last build left behind may still hold it). Older spare folders are
+    removed when they can be."""
+    work = out_dir / TRIAL_DIR
+    note = ""
+    try:
+        remove_tree(work)
+    except OSError as exc:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        spare, n = out_dir / f"{TRIAL_DIR}-{stamp}", 1
+        while spare.exists():
+            n += 1
+            spare = out_dir / f"{TRIAL_DIR}-{stamp}-{n}"
+        note = (f"前の試しのビルドのフォルダ {work} を消せなかったので（{exc.strerror or exc}）、{spare.name} でビルドしました。"
+                "前のビルドのプロセスが残っていないか確かめます。")
+        work = spare
+    if out_dir.is_dir():
+        for old in out_dir.iterdir():
+            if old != work and TRIAL_SPARE.fullmatch(old.name) and old.is_dir():
+                try:
+                    remove_tree(old, attempts=1)
+                except OSError:
+                    pass  # still held; tried again next time
+    return work, note
+
+
 def cmd_trial_build(args: argparse.Namespace) -> dict[str, Any]:
     root, vcs = need_root(args.repo)
     path = root / CONFIG_DIR / CONFIG_FILE
@@ -1124,11 +1178,9 @@ def cmd_trial_build(args: argparse.Namespace) -> dict[str, Any]:
     out_dir = resolve_output(root, out_value)
     if inside(out_dir, root):
         raise SetupError(f"結果を置くフォルダがリポジトリの中です: {out_dir}（set で output_dir をリポジトリの外にします）")
-    work = out_dir / TRIAL_DIR
+    work, cleanup_note = fresh_trial_dir(out_dir)
     src = work / "src"
     log = work / "trial-build.log"
-    if work.exists():
-        shutil.rmtree(work)
     note = ""
     if vcs == "git":
         base = vcs_conf.get("base_branch") if isinstance(vcs_conf.get("base_branch"), str) else base_branch(root)
@@ -1177,7 +1229,8 @@ def cmd_trial_build(args: argparse.Namespace) -> dict[str, Any]:
             code = -1
     ok = code == 0 and not timed_out
     return {"ok": True, "build_ok": ok, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1),
-            "revision": revision, "note": note, "built_in": str(src), "log": str(log),
+            "revision": revision, "note": " ".join(n for n in (cleanup_note, note) if n), "built_in": str(src),
+            "log": str(log),
             "log_tail": "" if ok else _tail(log),
             "next": ("ビルドできました。保存する値を表で見せ、set-verify --check の後に同意を得て保存する" if ok else
                      "log_tail を見て、コマンドの誤りか環境の問題かを人に伝え、直してもう一度試す")}

@@ -984,13 +984,29 @@ def metrics_records(run: RunFolder, plan: dict[str, Any]) -> dict[str, dict[str,
     return out
 
 
+def read_plan_bytes(path: Path) -> bytes | None:
+    """The plan file's bytes, or None when it is not there (waits a little on Windows while preview replaces it)."""
+    for attempt in range(40):
+        try:
+            return path.read_bytes() if path.is_file() else None
+        except FileNotFoundError:
+            return None
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 39:
+                raise
+            time.sleep(0.05)
+    return None
+
+
 def cmd_apply_code(args: argparse.Namespace) -> dict[str, Any]:
     run = RunFolder(args.run)
     path = run.dir / PLAN_FILE
     token = (args.token or "").strip()
-    if not path.is_file() or plantoken.token_for_bytes(path.read_bytes()) != token:
+    # Read the plan once: the confirmed bytes are the ones checked, parsed, pushed and recorded.
+    raw = read_plan_bytes(path)
+    if raw is None or plantoken.token_for_bytes(raw) != token:
         raise ApplyError("確認の文字列が、反映の内容（apply-plan.json）と合いません。何もしていません。preview からやり直してください")
-    plan = json.loads(path.read_bytes().decode("utf-8"))
+    plan = json.loads(raw.decode("utf-8"))
     settings = load_settings(run.repo)
     record = load_record(run.dir)
     written, write_back = written_ids(run.dir)

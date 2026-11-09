@@ -16,9 +16,11 @@ import xml.etree.ElementTree as ET  # noqa: N817 - the usual name
 from pathlib import Path
 from typing import Any
 
-from .common import RunError, out_text, run_cmd, sha256
+from .common import RunError, out_text, remove_file, remove_tree, run_cmd, sha256
 
 QUIET_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "GCM_INTERACTIVE": "never"}
+# Looking at the person's repository never takes .git/index.lock (their own git add or commit must not fail).
+READ_ONLY_ENV = {"GIT_OPTIONAL_LOCKS": "0"}
 FETCH_TIMEOUT = 120
 
 
@@ -64,11 +66,17 @@ class GitVcs(Vcs):
             return out_text(self.git("rev-parse", f"{base}^{{commit}}")), note
         raise RunError(f"取り込み先のブランチ {base} が見つかりません（設定 vcs.base_branch を確かめてください）")
 
+    def usable(self, dest: Path) -> bool:
+        """Whether ``dest`` is a work copy git can use (not only a folder with a .git file in it)."""
+        if not (dest / ".git").is_file():
+            return False
+        return self.git("rev-parse", "--git-dir", cwd=dest, check=False).returncode == 0
+
     def ensure_copy(self, dest: Path, revision: str) -> None:
-        if (dest / ".git").is_file():
+        if self.usable(dest):
             return
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
+        if os.path.lexists(dest):
+            self.remove_copy(dest)
         self.git("worktree", "prune")
         dest.parent.mkdir(parents=True, exist_ok=True)
         self.git("worktree", "add", "--detach", "--force", str(dest), revision)
@@ -134,8 +142,7 @@ class GitVcs(Vcs):
     def remove_copy(self, dest: Path) -> None:
         if (dest / ".git").is_file():
             self.git("worktree", "remove", "--force", str(dest), check=False)
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
+        remove_tree(dest)
         self.git("worktree", "prune", check=False)
 
     def export(self, revision: str, dest: Path) -> None:
@@ -151,11 +158,11 @@ class GitVcs(Vcs):
         return out_text(self.git("rev-parse", "HEAD"))
 
     def has_local_changes(self) -> bool:
-        return bool(out_text(self.git("status", "--porcelain", "--untracked-files=no")))
+        return bool(out_text(self.git("status", "--porcelain", "--untracked-files=no", env=READ_ONLY_ENV)))
 
     def fingerprint(self) -> str:
-        status = self.git("status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
-        diff = self.git("diff", "HEAD", "--binary", check=False).stdout
+        status = self.git("status", "--porcelain=v1", "-z", "--untracked-files=all", env=READ_ONLY_ENV).stdout
+        diff = self.git("diff", "HEAD", "--binary", check=False, env=READ_ONLY_ENV).stdout
         return sha256(status + b"\0" + diff)
 
 
@@ -176,21 +183,26 @@ class SvnVcs(Vcs):
     def resolve_latest(self) -> tuple[str, str]:
         return out_text(self.svn("info", "-r", "HEAD", "--show-item", "revision", self.url())), ""
 
+    @staticmethod
+    def usable(dest: Path) -> bool:
+        """Whether ``dest`` is a working copy (its database is there: a half-removed folder keeps only
+        .svn/pristine, whose files svn makes read-only)."""
+        return (dest / ".svn" / "wc.db").is_file()
+
     def ensure_copy(self, dest: Path, revision: str) -> None:
-        if (dest / ".svn").is_dir():
+        if self.usable(dest):
             return
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
+        remove_tree(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         # A checkout of a large repository takes many minutes; a copy of another work copy of the run is
         # much faster, and reset_copy then reverts and updates it.
-        source = next((p for p in sorted(dest.parent.iterdir()) if p != dest and (p / ".svn").is_dir()), None)
+        source = next((p for p in sorted(dest.parent.iterdir()) if p != dest and self.usable(p)), None)
         if source is not None:
             try:
                 shutil.copytree(source, dest, symlinks=True)
                 return
             except (OSError, shutil.Error):
-                shutil.rmtree(dest, ignore_errors=True)
+                remove_tree(dest)
         self.svn("checkout", "--quiet", "-r", str(revision), self.url(), str(dest))
 
     # svn status --xml: always UTF-8 (the text form uses the console or ANSI code page on Windows, which
@@ -220,10 +232,10 @@ class SvnVcs(Vcs):
         for code, rel in self._status(dest, "--no-ignore"):
             if code in ("?", "I"):
                 target = dest / rel
-                if target.is_dir():
-                    shutil.rmtree(target, ignore_errors=True)
+                if target.is_dir() and not target.is_symlink():
+                    remove_tree(target)
                 else:
-                    target.unlink(missing_ok=True)
+                    remove_file(target)
         self.svn("update", "--quiet", "-r", str(revision), cwd=dest)
 
     def changed_files(self, dest: Path) -> list[str]:
@@ -251,7 +263,7 @@ class SvnVcs(Vcs):
         return None
 
     def remove_copy(self, dest: Path) -> None:
-        shutil.rmtree(dest, ignore_errors=True)
+        remove_tree(dest)
 
     def export(self, revision: str, dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)

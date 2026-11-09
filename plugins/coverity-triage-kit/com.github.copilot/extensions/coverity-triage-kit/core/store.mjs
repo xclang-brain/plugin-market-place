@@ -49,7 +49,24 @@ export function createStore({ dataRoot, clock }) {
   function writeAtomic(path, content) {
     const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
     writeFileSync(tmp, content, { mode: 0o600 });
-    renameRetry(tmp, path);
+    try {
+      renameRetry(tmp, path);
+    } catch (e) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // a temp file that cannot be removed is left behind
+      }
+      throw e;
+    }
+  }
+
+  // The alive mark as a time (epoch ms), or null when it is missing, empty or not a positive number
+  function parseAlive(text) {
+    const trimmed = text.trim();
+    if (trimmed === '') return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n > 0 ? n : null;
   }
 
   return {
@@ -62,24 +79,30 @@ export function createStore({ dataRoot, clock }) {
 
     createRun(runId, header) {
       mkdirSync(issuesDir(runId), { recursive: true, mode: 0o700 });
+      // The alive mark first: another session that sees log.jsonl always sees a fresh mark too
+      writeAtomic(alivePath(runId), String(clock.now()));
       appendFileSync(logPath(runId), `${JSON.stringify(header)}\n`, { mode: 0o600 });
-      writeFileSync(alivePath(runId), String(clock.now()), { mode: 0o600 });
     },
 
     append(runId, entry) {
       appendFileSync(logPath(runId), `${JSON.stringify(entry)}\n`);
     },
 
+    // Atomic (temp file, then rename): a reader in another session never sees an empty mark
     writeAlive(runId) {
-      writeFileSync(alivePath(runId), String(clock.now()));
+      writeAtomic(alivePath(runId), String(clock.now()));
     },
 
     readAlive(runId) {
-      try {
-        const n = Number(readFileSync(alivePath(runId), 'utf8').trim());
-        return Number.isFinite(n) ? n : null;
-      } catch {
-        return null;
+      for (let i = 0; ; i += 1) {
+        let n = null;
+        try {
+          n = parseAlive(readFileSync(alivePath(runId), 'utf8'));
+        } catch {
+          return null;
+        }
+        if (n !== null || i >= 1) return n;
+        sleepSync(20); // a writer may be in the middle of rewriting it: read once more
       }
     },
 

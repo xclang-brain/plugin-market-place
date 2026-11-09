@@ -13,9 +13,12 @@ import { callWithTimeout, sleep } from './util.mjs';
 //   'cancel_and_end' this session's run (only the extension restarted; the agents may still run): cancel them, end it
 //   'cut_off'        another session's run whose alive mark is old: end it now
 //   'check_later'    another session's run whose alive mark is fresh: look again after the stale time
+//   With no readable alive mark, the run's begin time stands in for it (a run that was just created is not cut off).
 export function classifyUnfinishedRun({ begin, aliveAt, now, sessionId }) {
   if (begin && begin.sessionId === sessionId) return 'cancel_and_end';
-  if (aliveAt === null || aliveAt === undefined || now - aliveAt > LIMITS.ALIVE_STALE_MS) return 'cut_off';
+  const valid = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  const last = valid(aliveAt) ? aliveAt : valid(begin?.at) ? begin.at : null;
+  if (last === null || now - last > LIMITS.ALIVE_STALE_MS) return 'cut_off';
   return 'check_later';
 }
 

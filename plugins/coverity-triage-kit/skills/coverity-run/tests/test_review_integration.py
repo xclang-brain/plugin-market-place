@@ -168,8 +168,10 @@ class IntegrationTest(RunCase):
         run_dir = self.new_run()["run_dir"]
         out = self.drive(run_dir, [issue(20001, line=6), issue(20002, checker="RESOURCE_LEAK", function="open_file", line=12)],
                          integrator=self.plan_writer(run_dir, "item:20001"))
-        self.assertTrue(out["done"], out)
+        self.assertTrue(out["done"], f"{out}\n{self.explain(run_dir)}")
         items = {i["id"]: i for i in self.state(run_dir)["items"]}
+        if items["20001"]["status"] != "merged" or "G1" not in items:
+            self.fail(self.explain(run_dir))  # why (the item's error, the alerts, the jobs and their logs)
         self.assertEqual(items["20001"]["status"], "merged")
         self.assertEqual(items["20001"]["merged_into"], "G1")
         self.assertEqual(items["G1"]["status"], "done")

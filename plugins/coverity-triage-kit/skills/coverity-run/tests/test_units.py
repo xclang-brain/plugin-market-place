@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -410,6 +411,259 @@ class LockTest(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 with common.file_lock(tmp / "vcs", timeout=1):
                     pass
+
+
+class LockHolderTest(unittest.TestCase):
+    """A lock whose process has ended is taken over; a lock of a living process, or a fresh one, is not."""
+
+    HOLDER = ("import sys, time\nfrom pathlib import Path\nsys.path.insert(0, sys.argv[1])\n"
+              "from runlib.common import file_lock\n"
+              "with file_lock(Path(sys.argv[2]), timeout=5, stale=7200):\n    print('held', flush=True)\n    time.sleep(60)\n")
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.lock = self.tmp / "vcs.lock"
+
+    def age(self, path: Path, seconds: float) -> None:
+        t = time.time() - seconds
+        os.utime(path, (t, t))
+
+    @staticmethod
+    def dead_pid() -> int:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def live(self) -> subprocess.Popen:
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        return proc
+
+    def take(self, timeout: float = 10.0, stale: float = 7200) -> float:
+        started = time.monotonic()
+        with common.file_lock(self.tmp / "vcs", timeout=timeout, stale=stale):
+            self.assertEqual(self.lock.read_text(), str(os.getpid()))
+        self.assertFalse(self.lock.exists())
+        return time.monotonic() - started
+
+    def test_lock_of_an_ended_process_is_taken_over(self) -> None:
+        self.lock.write_text(str(self.dead_pid()))
+        self.age(self.lock, 10)
+        self.assertLess(self.take(), 2)
+
+    def test_fresh_lock_waits_for_the_grace(self) -> None:
+        self.lock.write_text(str(self.dead_pid()))
+        self.age(self.lock, common.LOCK_GRACE - 2)
+        self.assertGreater(self.take(), 1)
+
+    def test_empty_lock_after_the_grace_is_taken_over(self) -> None:
+        self.lock.write_bytes(b"")
+        self.age(self.lock, 10)
+        self.assertLess(self.take(), 2)
+
+    def test_lock_of_a_living_process_is_kept(self) -> None:
+        proc = self.live()
+        self.lock.write_text(str(proc.pid))
+        self.age(self.lock, 10)
+        with self.assertRaises(common.RunError):
+            self.take(timeout=1)
+        self.assertTrue(self.lock.exists())
+        self.age(self.lock, 7300)  # older than the stale limit: taken all the same
+        self.take()
+
+    def test_own_lock_left_by_a_failed_release_is_free_but_a_held_one_is_not(self) -> None:
+        self.lock.write_text(str(os.getpid()))
+        self.age(self.lock, 10)
+        self.take()
+        with common.file_lock(self.tmp / "vcs", timeout=5):
+            self.age(self.lock, 10)
+            with self.assertRaises(common.RunError):  # not re-entrant
+                with common.file_lock(self.tmp / "vcs", timeout=0.5, stale=7200):
+                    pass
+            self.assertTrue(self.lock.exists())
+        self.assertFalse(self.lock.exists())
+
+    def test_a_lock_taken_again_in_between_is_not_removed(self) -> None:
+        self.lock.write_text(str(self.dead_pid()))
+        seen = common._lock_seen(self.lock)
+        self.lock.unlink()
+        self.lock.write_text(str(os.getpid()))  # another waiter removed it and took it
+        self.assertFalse(common._remove_if_same(self.lock, *seen))
+        self.assertTrue(self.lock.exists())
+
+    def test_holder_killed_by_stop(self) -> None:
+        proc = subprocess.Popen([sys.executable, "-c", self.HOLDER, str(SKILL / "scripts"), str(self.tmp / "vcs")],
+                                stdout=subprocess.PIPE, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertEqual(proc.stdout.readline().strip(), b"held")
+        self.assertTrue(common.kill_tree(proc.pid, group=False))
+        proc.wait()
+        self.assertEqual(self.lock.read_text(), str(proc.pid))  # a killed process never runs its finally
+        self.assertTrue(common.clear_dead_lock(self.tmp / "vcs"))
+        self.assertFalse(self.lock.exists())
+
+    def test_clear_dead_lock_keeps_a_living_holder(self) -> None:
+        proc = self.live()
+        self.lock.write_text(str(proc.pid))
+        self.assertFalse(common.clear_dead_lock(self.tmp / "vcs"))
+        self.assertTrue(self.lock.exists())
+
+
+class WindowsLockTest(unittest.TestCase):
+    """"Access denied" on Windows: wait only while a lock is there (being deleted); else it is a real error."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.lock = self.tmp / "vcs.lock"
+
+    def test_access_denied_with_no_lock_is_raised_soon(self) -> None:
+        from unittest import mock
+
+        def denied(path, flags, *args):
+            raise PermissionError(13, "Access is denied", str(path))
+        started = time.monotonic()
+        with mock.patch.object(common.os, "open", denied), mock.patch.object(common.sys, "platform", "win32"):
+            with self.assertRaises(PermissionError):
+                with common.file_lock(self.tmp / "vcs", timeout=30):
+                    pass
+        self.assertLess(time.monotonic() - started, common.DENIED_GRACE + 2)
+
+    def test_access_denied_while_the_lock_is_there_waits(self) -> None:
+        import threading
+        from unittest import mock
+
+        real_open = os.open
+        self.lock.write_text("1")
+
+        def pending(path, flags, *args):  # a lock being deleted: refused while its name is there
+            if os.path.lexists(path):
+                raise PermissionError(13, "Access is denied", str(path))
+            return real_open(path, flags, *args)
+        timer = threading.Timer(common.DENIED_GRACE + 1, self.lock.unlink)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        started = time.monotonic()
+        with mock.patch.object(common.os, "open", pending), mock.patch.object(common.sys, "platform", "win32"):
+            with common.file_lock(self.tmp / "vcs", timeout=30):
+                pass
+        self.assertGreater(time.monotonic() - started, common.DENIED_GRACE)
+
+    def test_release_is_tried_again(self) -> None:
+        from unittest import mock
+
+        real_unlink = Path.unlink
+        calls = []
+
+        def busy(path, *args, **kwargs):  # a waiter reads the pid in the lock
+            if path.name == "vcs.lock":
+                calls.append(path)
+                if len(calls) <= 2:
+                    raise PermissionError(32, "The process cannot access the file", str(path))
+            return real_unlink(path, *args, **kwargs)
+        with mock.patch.object(Path, "unlink", busy), mock.patch.object(common.sys, "platform", "win32"):
+            with common.file_lock(self.tmp / "vcs", timeout=5):
+                pass
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(self.lock.exists())
+
+
+class RemoveTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+
+    def test_read_only_files_are_removed(self) -> None:
+        import stat
+        from unittest import mock
+
+        from support import windows_unlink
+
+        tree = self.tmp / "w1"
+        pristine = tree / ".svn" / "pristine" / "55"
+        pristine.mkdir(parents=True)
+        (tree / ".svn" / "wc.db").write_text("db")
+        base = pristine / "5512.svn-base"
+        base.write_text("x")
+        base.chmod(stat.S_IREAD)
+        with mock.patch.object(os, "unlink", windows_unlink()):
+            __import__("shutil").rmtree(tree, ignore_errors=True)
+            self.assertTrue(base.exists(), "the plain rmtree leaves the read-only file (as on Windows)")
+            self.assertTrue(common.remove_tree(tree))
+        self.assertFalse(tree.exists())
+        self.assertTrue(common.remove_tree(tree))  # nothing there: fine
+
+    def test_a_folder_that_stays_is_an_error(self) -> None:
+        from unittest import mock
+
+        tree = self.tmp / "held"
+        tree.mkdir()
+        (tree / "busy.obj").write_text("x")
+
+        def held(path, *args, **kwargs):
+            raise PermissionError(32, "The process cannot access the file", str(path))
+        with mock.patch.object(os, "unlink", held):
+            with self.assertRaises(common.RunError):
+                common.remove_tree(tree)
+            self.assertFalse(common.remove_tree(tree, check=False))
+
+    def test_remove_file_is_tried_again_on_windows(self) -> None:
+        from unittest import mock
+
+        target = self.tmp / "progress.json"
+        target.write_text("{}")
+        real = os.unlink
+        calls = []
+
+        def busy(path, *args, **kwargs):
+            calls.append(path)
+            if len(calls) <= 2:
+                raise PermissionError(32, "The process cannot access the file", str(path))
+            return real(path, *args, **kwargs)
+        with mock.patch.object(common.os, "unlink", busy), mock.patch.object(common.sys, "platform", "win32"):
+            common.remove_file(target)
+            common.remove_file(target)  # missing: nothing to do
+        self.assertFalse(target.exists())
+        target.write_text("{}")
+        calls.clear()
+        with mock.patch.object(common.os, "unlink", busy), mock.patch.object(common.sys, "platform", "linux"):
+            with self.assertRaises(PermissionError):
+                common.remove_file(target)
+
+
+@unittest.skipUnless(__import__("shutil").which("git"), "git がないため飛ばします")
+class GitCopyTest(unittest.TestCase):
+    def test_broken_work_copy_is_made_again(self) -> None:
+        from support import base_env, git
+
+        from runlib.vcs import GitVcs
+
+        tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        env = base_env(tmp)
+        repo = tmp / "repo"
+        repo.mkdir()
+        (repo / "a.c").write_text("int a;\n", encoding="utf-8")
+        git(repo, "init", "-q", "-b", "main", env=env)
+        git(repo, "add", "-A", env=env)
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init", env=env)
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, env):
+            vcs = GitVcs(repo, {"type": "git", "base_branch": "main"})
+            rev = vcs.current_revision()
+            dest = tmp / "work" / "w1"
+            vcs.reset_copy(dest, rev)
+            self.assertTrue(vcs.usable(dest))
+            (dest / ".git").write_text("gitdir: " + str(tmp / "gone") + "\n", encoding="utf-8")
+            self.assertFalse(vcs.usable(dest))
+            vcs.reset_copy(dest, rev)
+            self.assertTrue(vcs.usable(dest))
+            self.assertTrue((dest / "a.c").is_file())
 
 
 if __name__ == "__main__":

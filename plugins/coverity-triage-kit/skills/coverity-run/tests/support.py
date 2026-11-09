@@ -191,6 +191,43 @@ class RunCase(unittest.TestCase):
     def tick(self, run_dir: str, *extra: str, wait: int = 10) -> dict[str, Any]:
         return self.run_json("tick", "--run", run_dir, "--wait", str(wait), *extra)
 
+    def tick_until(self, run_dir: str, *report: str, until=None, timeout: float = 180.0, wait: int = 25) -> dict[str, Any]:
+        """tick (giving the report once), then plain ticks until ``until(out)`` (default: an action came), done
+        or stop. Work copies and saves are detached jobs: on a slow PC one can outlast a tick's wait, and an
+        answer without actions only says "call tick again"."""
+        until = until or (lambda o: bool(o["actions"]))
+        out = self.tick(run_dir, *report, wait=wait)
+        deadline = time.monotonic() + timeout
+        while not (until(out) or out["done"] or out["stop"]):
+            self.assertFalse(out["actions"], f"an action came before the one waited for: {out}")
+            self.assertLess(time.monotonic(), deadline, f"nothing came in {timeout:.0f} s: {out}\n{self.explain(run_dir)}")
+            out = self.tick(run_dir, wait=wait)
+        return out
+
+    def explain(self, run_dir: str) -> str:
+        """What a failed check needs to say why: each item's status and error, the alerts, and each job's
+        status, error and the end of its log (a job that died early has its traceback only there)."""
+        run = Path(run_dir)
+        try:
+            st = self.state(run_dir)
+        except (OSError, ValueError) as exc:
+            return f"run.json unreadable: {exc!r}"
+        found = {}
+        for path in sorted((run / "jobs").glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                data = {"unreadable": repr(exc)}
+            log = path.with_suffix(".log")
+            try:
+                tail = log.read_bytes()[-2000:].decode("utf-8", "replace") if log.is_file() else ""
+            except OSError as exc:
+                tail = repr(exc)
+            found[path.stem] = {"status": data.get("status"), "error": data.get("error"),
+                                "reap_error": data.get("reap_error"), "log": tail}
+        return json.dumps({"items": {i["id"]: [i["status"], i.get("stage"), i.get("error")] for i in st.get("items") or []},
+                           "alerts": st.get("alerts"), "jobs": found}, ensure_ascii=False, indent=1)
+
     def state(self, run_dir: str) -> dict[str, Any]:
         return json.loads((Path(run_dir) / "run.json").read_text(encoding="utf-8"))
 
@@ -362,3 +399,17 @@ def wait_for(predicate, timeout: float = 30.0, step: float = 0.1) -> bool:
             return True
         time.sleep(step)
     return predicate()
+
+
+def windows_unlink():
+    """os.unlink as Windows does it: a read-only file cannot be deleted (for unittest.mock.patch)."""
+    import stat
+
+    real = os.unlink
+
+    def unlink(path, *, dir_fd=None):
+        mode = os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode
+        if not stat.S_ISLNK(mode) and not mode & stat.S_IWRITE:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real(path, dir_fd=dir_fd)
+    return unlink

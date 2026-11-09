@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from . import approvals, briefs, initial, integrate, issues, jobs, report, rules
-from .common import RunError, file_lock, file_sha, mtime, now_iso, now_ts, read_json, try_json, write_json
+from .common import (RunError, _replace, file_lock, file_sha, mtime, now_iso, now_ts, read_json, remove_file, try_json,
+                     write_json)
 from .config import load_no_grouping
 from .grouping import build_work_items
 from .pathmap import PathMapper
@@ -37,6 +38,8 @@ DETAILS_BATCH = 50  # CIDs per fetch of warning paths
 STALE_SECONDS = 1800  # a task with no output and no progress for this long failed
 SETTLE_SECONDS = 2  # an output file found without a report counts once it has not changed for this long
 POLL_SECONDS = 0.5  # the longest pause between two looks at the jobs
+REAP_TRIES = 3  # taking in how a job ended may fail this many times before its item fails
+SCRIPT_JOBS = {"copy": "copy-w{slot}", "save": "save-{id}", "merge": "merge"}  # an item's stage → its job
 STAGE_JA = {"initial": "初回解析", "fetch": "警告の取得", "details": "警告経路の取得", "items": "警告ごとの作業",
             "integrate": "同じ原因の統合", "review": "結果の確かめ", "verify": "ビルドでの検証", "done": "終わった",
             "stopped": "止めた"}
@@ -88,8 +91,10 @@ def tick(run_dir: str, finished: str | None = None, failed: str | None = None, r
             if result.actions or result.stop or result.done or time.monotonic() >= deadline:
                 break
             # Wait for the jobs; for the agents only when nothing was reported (their output files may appear).
-            # After a report, the agent has other reports to give: answer at once.
-            if not jobs.running(run.dir) and (reported or not run.state.get("tasks")):
+            # After a report, the agent has other reports to give: answer at once. A job that ended while the
+            # step ran is not taken in yet: one more step takes it in (a worker to launch may follow).
+            unsettled = [j for j in jobs.all_jobs(run.dir) if j.get("status") == "running" or not j.get("reaped")]
+            if not unsettled and (reported or not run.state.get("tasks")):
                 break
             time.sleep(poll)
             poll = min(POLL_SECONDS, poll * 1.5)
@@ -187,6 +192,7 @@ def _alert(st: dict[str, Any], item: str | None, kind: str, detail: str, level: 
 def _step(run: Run, say: list[str], carried: list[dict[str, Any]]) -> Step:
     actions: list[dict[str, Any]] = list(carried)
     _reap_jobs(run, say, actions)
+    _heal_orphans(run, say)
     _collect_outputs(run, say, actions)
     _expire_stale(run, say, actions)
     st = run.state
@@ -486,19 +492,95 @@ def _details(run: Run, say: list[str], actions: list[dict[str, Any]]) -> Step | 
 
 
 def _reap_jobs(run: Run, say: list[str], actions: list[dict[str, Any]]) -> None:
+    """Take in the jobs that ended. A job counts as taken in only after its handler went through: a handler
+    that failed (a file another process held, on Windows) is tried again on the next step, a few times."""
     for job in jobs.all_jobs(run.dir):
         if job.get("status") == "running" or job.get("reaped"):
             continue
         name = job["name"]
+        try:
+            jobs.settle(run.dir, job)
+            if job.get("status") == "stopped":
+                pass  # stopped by stop: its item is put back by resume, or by _heal_orphans
+            elif job.get("kind") == "copy":
+                _copy_reaped(run, job, say)
+            elif job.get("kind") == "save":
+                _save_reaped(run, job, say, actions)
+            elif job.get("kind") == "merge":
+                _merge_reaped(run, job, say)
+            elif job.get("kind") == "verify":
+                _verify_reaped(run, job, say)
+        except Exception as exc:  # noqa: BLE001 - one job's trouble must not stop the others
+            tries = int(job.get("reap_errors") or 0) + 1
+            why = f"{type(exc).__name__}: {exc}" if not isinstance(exc, (RunError, OSError)) else str(exc)
+            jobs.update(run.dir, name, reap_errors=tries, reap_error=why[:1000])
+            run.log("reap-failed", f"{name} の終わりを取り込めなかった（{tries} 回目）: {why[:300]}", level="warning")
+            if tries < REAP_TRIES:
+                say.append(f"{name} の終わりを取り込めませんでした（{why[:200]}）。もう一度試します。")
+                continue
+            jobs.update(run.dir, name, reaped=True)
+            _reap_gave_up(run, job, f"{name} の終わりを取り込めませんでした: {why[:500]}", say)
+            continue
         jobs.update(run.dir, name, reaped=True)
-        if job.get("kind") == "copy":
-            _copy_reaped(run, job, say)
-        elif job.get("kind") == "save":
-            _save_reaped(run, job, say, actions)
-        elif job.get("kind") == "merge":
-            _merge_reaped(run, job, say)
-        elif job.get("kind") == "verify":
-            _verify_reaped(run, job, say)
+
+
+def _job_items(job: dict[str, Any]) -> list[str]:
+    args = job.get("args") or {}
+    if job.get("kind") == "merge":
+        return [m.get("item") for m in args.get("merges") or [] if m.get("item")]
+    return [args["item"]] if args.get("item") else []
+
+
+def _reap_gave_up(run: Run, job: dict[str, Any], reason: str, say: list[str]) -> None:
+    if job.get("kind") == "verify":
+        with run.update() as st:
+            if not st.get("verified"):
+                st["verified"] = True
+                _alert(st, None, "ビルドでの検証", reason)
+        say.append(reason)
+        return
+    for item_id in _job_items(job):
+        item = run.find(item_id)
+        stage = SCRIPT_JOBS.get(item.get("stage") or "") if item else None
+        if item and item["status"] == "in_progress" and stage and stage.format(slot=item.get("slot"), id=item_id) == job["name"]:
+            _fail_item(run, item_id, reason, say)
+
+
+def _heal_orphans(run: Run, say: list[str]) -> None:
+    """An item at a script stage (copy, save, merge) whose job is not there, has ended for another item, or
+    has ended and was taken in without moving the item, would wait for ever: nothing else looks at it.
+    (A tick ended between the stage change and the job's start, or a handler failed.) Put it back."""
+    for item in list(run.state["items"]):
+        stage = item.get("stage") or ""
+        if item["status"] != "in_progress" or stage not in SCRIPT_JOBS:
+            continue
+        name = SCRIPT_JOBS[stage].format(slot=item.get("slot"), id=item["id"])
+        job = jobs.read(run.dir, name)
+        if job is not None and item["id"] in _job_items(job) and \
+                (job.get("status") == "running" or not job.get("reaped")):
+            continue  # still working, or ended and not taken in yet (the next step does)
+        why = "作業用のコピーを用意する処理が見つかりません" if stage == "copy" else \
+            ("修正を保存する処理が見つかりません" if stage == "save" else "修正を合わせる処理が見つかりません")
+        _back_or_fail(run, item["id"], stage, why, say)
+
+
+def _back_or_fail(run: Run, item_id: str, stage: str, why: str, say: list[str]) -> None:
+    """An item whose job never ran (or whose end was lost): back to pending; a save lost twice fails."""
+    if stage == "save" and (run.item(item_id).get("orphan_retries") or 0) >= 1:
+        _fail_item(run, item_id, f"{why}（2 回目）", say)
+        return
+    with run.update() as st:
+        current = run.item(item_id, st)
+        if current["status"] != "in_progress" or current.get("stage") != stage:
+            return
+        if stage == "copy":
+            current["attempts"] = max(0, (current.get("attempts") or 1) - 1)
+        if stage == "save":
+            current["orphan_retries"] = (current.get("orphan_retries") or 0) + 1
+        current.update(status="pending", stage=None, slot=None)
+        _alert(st, item_id, "作業", f"{why}。もう一度始めます")
+    run.log("orphan", f"{item_id}: {why}（もう一度始める）", level="warning", item=item_id, stage=stage)
+    say.append(f"{item_id}: {why}。もう一度始めます。")
 
 
 def _copy_reaped(run: Run, job: dict[str, Any], say: list[str]) -> None:
@@ -554,13 +636,17 @@ def _save_reaped(run: Run, job: dict[str, Any], say: list[str], actions: list[di
         current["warnings"] = list(dict.fromkeys([*(current.get("warnings") or []), *(result.get("warnings") or [])]))
         if result.get("analyzed_dirty"):
             st["analyzed_dirty"] = True
-        if current.get("rework"):
-            (run.item_dir(item_id) / PREVIOUS_RESULT).unlink(missing_ok=True)
-            (run.item_dir(item_id) / REWORK_FRESH).unlink(missing_ok=True)
+        reworked = bool(current.get("rework"))
         current["rework"] = []
         current["review"] = None
         current["result_sha"] = file_sha(run.result_file(item_id))
         finish_item(current, "done")
+    if reworked:  # after the commit: a file another process holds must not undo it
+        for leftover in (PREVIOUS_RESULT, REWORK_FRESH):
+            try:
+                remove_file(run.item_dir(item_id) / leftover)
+            except OSError:
+                pass
     data = read_json(run.result_file(item_id), {})
     run.log("finish", f"{item_id} を終えた（推奨 {report.PLAN_JA.get(data.get('recommendation'), '-')}、確信度 "
             f"{report.CONFIDENCE_JA.get(data.get('confidence'), '-')}）", item=item_id,
@@ -603,6 +689,8 @@ def _merge_reaped(run: Run, job: dict[str, Any], say: list[str]) -> None:
 
 
 def _verify_reaped(run: Run, job: dict[str, Any], say: list[str]) -> None:
+    if run.state.get("verified"):
+        return  # taken in already (a later part of this handler failed once)
     with run.update() as st:
         st["verified"] = True
         if job.get("status") != "done":
@@ -641,8 +729,20 @@ def _fill_slots(run: Run, say: list[str]) -> list[dict[str, Any]]:
         return []
     fingerprint = _fingerprint(run)
     for item_id, slot in zip(pending, free):
+        # The earlier attempt's files go first (while the item is still pending: a failure here changes nothing).
+        folder = run.item_dir(item_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        result = run.result_file(item_id)
+        if run.item(item_id).get("rework") and result.is_file() and not (folder / PREVIOUS_RESULT).is_file():
+            _replace(result, folder / PREVIOUS_RESULT)
+        remove_file(result)
+        remove_file(folder / "progress.json")
         with run.update() as s:
+            if s.get("stopped"):  # stop came while this step ran: start nothing
+                return []
             item = run.item(item_id, s)
+            if item["status"] != "pending":
+                continue
             others = [i for i in s["items"] if i["status"] == "in_progress" and i["id"] != item_id]
             reset_analyzed = bool(s.get("analyzed_dirty")) and not others
             if reset_analyzed:
@@ -652,14 +752,17 @@ def _fill_slots(run: Run, say: list[str]) -> list[dict[str, Any]]:
             item["attempts"] = item.get("attempts", 0) + 1
             if not item.get("rework"):
                 item["warnings"] = []
-        folder = run.item_dir(item_id)
-        folder.mkdir(parents=True, exist_ok=True)
-        result = run.result_file(item_id)
-        if run.item(item_id).get("rework") and result.is_file() and not (folder / PREVIOUS_RESULT).is_file():
-            result.replace(folder / PREVIOUS_RESULT)
-        result.unlink(missing_ok=True)
-        (folder / "progress.json").unlink(missing_ok=True)
-        jobs.start(run.dir, f"copy-w{slot}", "copy", {"item": item_id, "slot": slot, "reset_analyzed": reset_analyzed})
+        try:
+            jobs.start(run.dir, f"copy-w{slot}", "copy", {"item": item_id, "slot": slot, "reset_analyzed": reset_analyzed})
+        except BaseException:
+            with run.update() as s:  # the job did not start: the item is pending again
+                item = run.item(item_id, s)
+                if item["status"] == "in_progress" and item.get("stage") == "copy":
+                    item.update(status="pending", slot=None, stage=None)
+                    item["attempts"] = max(0, (item.get("attempts") or 1) - 1)
+                if reset_analyzed:
+                    s["analyzed_dirty"] = True
+            raise
         run.log("next", f"{item_id} の作業を始めた（枠 {slot}、作業用のコピーを用意する）", item=item_id, slot=slot)
     return []
 
@@ -723,10 +826,16 @@ def _worker_ended(run: Run, item_id: str, failed: bool, reason: str, say: list[s
         _fix_request(run, item_id, checked["problems"], say, actions)
         return
     with run.update() as st:
+        if st.get("stopped"):  # stop came while this step ran: resume puts the item back
+            return
         current = run.item(item_id, st)
         current["stage"] = "save"
         current["warnings"] = list(dict.fromkeys([*(current.get("warnings") or []), *checked["warnings"]]))
-    jobs.start(run.dir, f"save-{item_id}", "save", {"item": item_id, "slot": item["slot"]})
+    try:
+        jobs.start(run.dir, f"save-{item_id}", "save", {"item": item_id, "slot": item["slot"]})
+    except BaseException as exc:
+        _back_or_fail(run, item_id, "save", f"修正を保存する処理を始められませんでした（{exc}）", say)
+        raise
 
 
 def _fail_item(run: Run, item_id: str, reason: str, say: list[str]) -> None:
@@ -752,8 +861,8 @@ def _start_review(run: Run, say: list[str]) -> dict[str, Any] | None:
     if target is None:
         return None
     item_id = target["id"]
-    run.review_file(item_id).unlink(missing_ok=True)
-    (run.dir / "agents" / "reviewer" / "progress.json").unlink(missing_ok=True)
+    remove_file(run.review_file(item_id))
+    remove_file(run.dir / "agents" / "reviewer" / "progress.json")
     with run.update() as st:
         current = run.item(item_id, st)
         current["review_gen"] = (current.get("review_gen") or 0) + 1
@@ -854,8 +963,8 @@ def _start_integration(run: Run, say: list[str]) -> dict[str, Any] | None:
     with run.update() as st:
         st["integration_gen"] = (st.get("integration_gen") or 0) + 1
         st["integration_fix_rounds"] = 0
-    (run.dir / "integration" / "plan.json").unlink(missing_ok=True)
-    (run.dir / "agents" / "integrator" / "progress.json").unlink(missing_ok=True)
+    remove_file(run.dir / "integration" / "plan.json")
+    remove_file(run.dir / "agents" / "integrator" / "progress.json")
     return _launch_integrator(run, found, None)
 
 
@@ -903,12 +1012,20 @@ def _integrator_ended(run: Run, failed: bool, reason: str, say: list[str], actio
         to_build = []
         for entry in made:
             current = run.item(entry["item"], st)
-            if entry["source"] == "rework" or st["settings"]["options"]["annotation"]:
+            if entry["source"] == "rework" or st["settings"]["options"]["annotation"] or st.get("stopped"):
                 continue  # a worker writes the fix (and the annotation, which must carry the merged comment)
             current.update(status="in_progress", stage="merge", started=time.time())
             to_build.append(entry)
     if to_build:
-        jobs.start(run.dir, "merge", "merge", {"merges": to_build})
+        try:
+            jobs.start(run.dir, "merge", "merge", {"merges": to_build})
+        except BaseException:
+            with run.update() as st:  # the job did not start: a worker makes these fixes
+                for entry in to_build:
+                    current = run.item(entry["item"], st)
+                    if current["status"] == "in_progress" and current.get("stage") == "merge":
+                        current.update(status="pending", stage=None, slot=None)
+            raise
     names = ", ".join(e["item"] for e in made)
     run.log("integrate", f"同じ原因の作業を {len(made)} つにまとめた" + (f"（{names}）" if made else ""),
             merges=[e["item"] for e in made], conflicts=len(plan.get("conflicts") or []))

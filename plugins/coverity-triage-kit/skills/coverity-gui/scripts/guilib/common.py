@@ -122,35 +122,147 @@ def write_json(path: Path, data: Any) -> None:
     write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
+LOCK_GRACE = 5.0  # a younger lock may be just created (its pid not written yet): never taken as left behind
+DENIED_GRACE = 2.0  # Windows: access denied with no lock there is waited out this long, then reported as it is
+
+
+def pid_alive(pid: Any) -> bool:
+    """Whether a process with this pid exists. When it cannot be told, True (the caller then waits)."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True  # it exists but belongs to someone else
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(0x1000, 0, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists; anything else: it does not
+        try:
+            code = ctypes.c_ulong(0)
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError, ValueError):
+        return True
+
+
+def _remove_stale_lock(lock: Path, stale: float) -> bool:
+    """Remove a lock left by a process that is gone. True when the lock is gone now (try again at once)."""
+    try:
+        first = lock.stat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    age = time.time() - first.st_mtime
+    if age <= stale and age <= LOCK_GRACE:
+        return False  # not read: on Windows a reader keeps the holder from removing it for a moment
+    try:
+        content = lock.read_bytes()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if age <= stale:
+        text = content.strip()
+        if text:
+            try:
+                pid = int(text)
+            except ValueError:
+                return False  # not a pid: only the age decides
+            if pid_alive(pid):
+                return False
+    try:  # the same lock still? another waiter may have taken a new one meanwhile
+        again = lock.stat()
+        if (again.st_ino, again.st_mtime_ns) != (first.st_ino, first.st_mtime_ns) or lock.read_bytes() != content:
+            return False
+        lock.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _release_lock(lock: Path) -> None:
+    """Remove the lock; on Windows a waiter reading the pid can hold it open for a moment, so try again."""
+    for attempt in range(40):
+        try:
+            os.unlink(lock)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 39:
+                return
+            time.sleep(0.05)
+        except OSError:
+            return
+
+
 @contextlib.contextmanager
-def file_lock(path: Path, timeout: float = 30.0) -> Iterator[None]:
-    """An exclusive ``<name>.lock`` next to ``path`` (the same convention as the other writers of a run)."""
+def file_lock(path: Path, timeout: float = 30.0, stale: float | None = None) -> Iterator[None]:
+    """An exclusive ``<name>.lock`` next to ``path`` (the same convention as the other writers of a run).
+
+    The holder writes its pid. A lock is taken as left behind when it is older than ``stale`` (default:
+    ``timeout``), or when it is older than a few seconds and empty or its pid is no longer running.
+    """
     lock = path.with_name(path.name + ".lock")
+    stale = timeout if stale is None else stale
     deadline = time.monotonic() + timeout
+    denied_since: float | None = None
     while True:
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
-            with contextlib.suppress(OSError):  # left by a process that died
-                if time.time() - lock.stat().st_mtime > timeout:
-                    lock.unlink()
-                    continue
+            denied_since = None
+            if _remove_stale_lock(lock, stale):
+                continue
         except PermissionError:
             # Windows: while another process deletes the lock (delete pending), creating it is refused with
-            # "access denied" instead of "exists". The lock is still taken: wait like for an existing one.
+            # "access denied" instead of "exists"; the name is still there then. With no lock there, it is a
+            # real access problem (a read-only folder, for example): report it after a short grace.
             if sys.platform != "win32":
+                raise
+            if os.path.lexists(lock):
+                denied_since = None
+            elif denied_since is None:
+                denied_since = time.monotonic()
+            elif time.monotonic() - denied_since > DENIED_GRACE:
                 raise
         if time.monotonic() > deadline:
             raise GuiError(f"ほかの処理がファイルを使っています。少し待ってから、もう一度保存してください: {lock}") from None
         time.sleep(0.05)
     try:
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
+        try:
+            os.write(fd, str(os.getpid()).encode())
+        finally:
+            os.close(fd)
         yield
     finally:
-        with contextlib.suppress(OSError):
-            lock.unlink()
+        _release_lock(lock)
 
 
 def display_text(data: bytes) -> str:

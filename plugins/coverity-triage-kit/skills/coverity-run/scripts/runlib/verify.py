@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import jobs
-from .common import RunError, build_env, display_text, kill_tree, read_json, write_json
+from .common import RunError, build_env, display_text, kill_tree, read_json, remove_tree, write_json
 from .state import Run
 from .vcs import make_vcs
 
@@ -179,7 +179,7 @@ def run_verify(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict
     env = build_env(drop=drop)
     started = time.time()
     latest = run.work("vl")
-    shutil.rmtree(latest, ignore_errors=True)
+    remove_tree(latest)  # a folder left behind (a file a build server still holds) would mix into the export
     vcs.export(run.state.get("latest_revision") or "", latest)
     logs = run.dir / "jobs"
     results: dict[str, dict[str, Any]] = {}
@@ -187,7 +187,7 @@ def run_verify(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict
     baseline: list[dict[str, Any]] = []
     if mode == "build+analyze":
         before = run.work("vb")
-        shutil.rmtree(before, ignore_errors=True)
+        remove_tree(before)
         shutil.copytree(latest, before)
         before_log, before_json = logs / "verify-before.log", run.work("vb.json")
         before_log.unlink(missing_ok=True)
@@ -200,12 +200,12 @@ def run_verify(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict
                                       "note": error + "。修正案は確かめられませんでした", "log": str(before_log),
                                       "log_tail": tail(before_log)}
             write_json(run.dir / "verify.json", results)
-            shutil.rmtree(latest, ignore_errors=True)
+            remove_tree(latest, check=False)
             return {"build_ok": None, "items": sorted(results), "error": error, "log": str(before_log),
                     "seconds": round(time.time() - started)}
         baseline = load_analysis(before_json)
     after = run.work("va")
-    shutil.rmtree(after, ignore_errors=True)
+    remove_tree(after)
     shutil.copytree(latest, after)
     applied = []
     for b in batch:
@@ -235,7 +235,7 @@ def run_verify(run_dir: Path, args: dict[str, Any], handle: jobs.Handle) -> dict
     else:
         _assign(results, applied, baseline, load_analysis(after_json), log, mode)
     write_json(run.dir / "verify.json", results)
-    shutil.rmtree(latest, ignore_errors=True)
+    remove_tree(latest, check=False)
     return {"build_ok": build_ok, "items": sorted(results), "error": error, "log": str(log),
             "seconds": round(time.time() - started)}
 

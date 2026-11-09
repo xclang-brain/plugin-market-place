@@ -158,5 +158,131 @@ class VerifyTest(RunCase):
         self.assertTrue({c["id"]: c for c in summary["run_checks"]}["C-19"]["ok"])
 
 
+class JobRecordTest(unittest.TestCase):
+    """How a job record reads when its process is gone, or still alive after stop."""
+
+    def setUp(self) -> None:
+        import shutil
+        import tempfile
+
+        import_runlib()
+        from runlib import jobs
+
+        self.jobs = jobs
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        (self.dir / "jobs").mkdir()
+        self.run_state({"stopped": False})
+
+    def run_state(self, data: dict) -> None:
+        (self.dir / "run.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def record(self, name: str, **fields) -> Path:
+        import time
+
+        data = {"name": name, "kind": "copy", "status": "running", "pid": None, "started": "x",
+                "started_ts": time.time() - 60, "finished": None, "args": {}, "result": None, "error": None,
+                "children": [], **fields}
+        path = self.dir / "jobs" / f"{name}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def on_disk(self, name: str) -> dict:
+        return json.loads((self.dir / "jobs" / f"{name}.json").read_text(encoding="utf-8"))
+
+    @staticmethod
+    def dead_pid() -> int:
+        import subprocess
+
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def live(self):
+        import subprocess
+
+        # a session of its own, as spawn_detached starts jobs (stop ends the whole group)
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                **({} if sys.platform == "win32" else {"start_new_session": True}))
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        return proc
+
+    def test_dead_job_is_written_as_failed(self) -> None:
+        self.record("copy-w1", pid=self.dead_pid())
+        job = self.jobs.read(self.dir, "copy-w1")
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(self.on_disk("copy-w1")["status"], "running")  # read writes nothing
+        self.jobs.settle(self.dir, job)
+        self.assertEqual(self.on_disk("copy-w1")["status"], "failed")
+        self.assertEqual(self.on_disk("copy-w1")["error"], self.jobs.DEAD)
+
+    def test_stopped_job_whose_process_lives_counts_as_running(self) -> None:
+        proc = self.live()
+        self.record("copy-w1", pid=proc.pid, status="stopped")
+        self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "running")
+        self.assertEqual([j["name"] for j in self.jobs.running(self.dir)], ["copy-w1"])
+        self.record("copy-w1", pid=proc.pid, status="stopped", gone=True)
+        self.assertEqual(self.jobs.read(self.dir, "copy-w1")["status"], "stopped")
+
+    def test_a_failed_kill_leaves_the_job_busy(self) -> None:
+        from unittest import mock
+
+        proc = self.live()
+        self.record("copy-w1", pid=proc.pid)
+        with mock.patch.object(self.jobs, "kill_tree", return_value=False):
+            stopped, unstopped = self.jobs.stop_all(self.dir)
+        self.assertEqual((stopped, [u["name"] for u in unstopped]), ([], ["copy-w1"]))
+        self.assertEqual(self.on_disk("copy-w1")["status"], "stopped")
+        self.assertEqual([j["name"] for j in self.jobs.running(self.dir)], ["copy-w1"])  # its process still works
+        stopped, unstopped = self.jobs.stop_all(self.dir)  # stop again: killed now
+        self.assertEqual((stopped, unstopped), (["copy-w1"], []))
+        self.assertTrue(self.on_disk("copy-w1")["gone"])
+        self.assertEqual(self.jobs.running(self.dir), [])
+
+    def test_job_started_after_stop_does_nothing(self) -> None:
+        called = []
+        self.jobs.KINDS["probe"] = lambda run_dir, args, handle: called.append(1) or {"x": 1}
+        self.addCleanup(self.jobs.KINDS.pop, "probe", None)
+        self.record("probe", kind="probe")
+        self.run_state({"stopped": True})
+        self.assertEqual(self.jobs.execute(str(self.dir), "probe")["status"], "stopped")
+        self.record("probe", kind="probe", status="stopped")
+        self.run_state({"stopped": False})
+        self.assertEqual(self.jobs.execute(str(self.dir), "probe")["status"], "stopped")
+        self.assertEqual(called, [])
+        self.assertTrue(self.on_disk("probe")["gone"])
+        self.record("probe", kind="probe")
+        self.assertEqual(self.jobs.execute(str(self.dir), "probe")["status"], "done")
+        self.assertEqual(called, [1])
+
+    def test_stop_clears_the_lock_of_a_killed_holder(self) -> None:
+        lock = self.dir / "work" / "vcs.lock"
+        lock.parent.mkdir()
+        lock.write_text(str(self.dead_pid()))
+        job_lock = self.dir / "jobs" / "save-20001.json.lock"
+        job_lock.write_text(str(self.dead_pid()))
+        self.jobs.stop_all(self.dir)
+        self.assertFalse(lock.exists())
+        self.assertFalse(job_lock.exists())
+        lock.write_text(str(self.live().pid))
+        self.jobs.stop_all(self.dir)
+        self.assertTrue(lock.exists())
+
+    def test_start_goes_on_when_the_old_log_is_held_on_windows(self) -> None:
+        from unittest import mock
+
+        log = self.dir / "jobs" / "copy-w1.log"
+        log.write_text("the earlier job", encoding="utf-8")
+
+        def held(path):
+            raise PermissionError(32, "The process cannot access the file", str(path))
+        with mock.patch.object(self.jobs, "remove_file", held), mock.patch.object(self.jobs, "spawn_detached", return_value=4242), \
+                mock.patch.object(self.jobs, "pid_alive", return_value=True), mock.patch.object(self.jobs.sys, "platform", "win32"):
+            job = self.jobs.start(self.dir, "copy-w1", "copy", {"item": "20001", "slot": 1})
+        self.assertEqual((job["status"], job["pid"]), ("running", 4242))
+        self.assertEqual(log.read_bytes(), b"")
+
+
 if __name__ == "__main__":
     unittest.main()

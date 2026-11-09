@@ -15,14 +15,16 @@ from typing import Any
 
 from . import approvals, briefs, checks, initial, issues, jobs, metrics, oplog, report, schema
 from .envvars import KEY_ENVS
-from .common import (RunError, append_line, file_lock, inside, mtime, now_iso, read_json, resolve_path, run_cmd,
-                     try_json, write_json)
+from .common import (RunError, append_line, file_lock, inside, mtime, now_iso, read_json, remove_file, remove_tree,
+                     resolve_path, run_cmd, try_json, write_json)
 from .config import (DEFAULT_FILTER, PREPARE_HINT, config_path, filter_names, load_config, load_filter, output_dir,
                      parse_filter, read_yaml)
 from .flow import STAGE_JA, STALE_SECONDS
 from .state import FORMAT, Run, counts, create_run, list_runs, tool_version, unfinished
 from .vcs import make_vcs
-from .work import VCS_LOCK_STALE, VCS_LOCK_WAIT
+from .work import VCS_LOCK_STALE
+
+CLEANUP_LOCK_WAIT = 60  # summary waits this long for the work copy lock, else it leaves the copies (the screen ends it at 120 s)
 
 STALL_SECONDS = 600
 INITIAL_STALL_SECONDS = 1800
@@ -268,7 +270,10 @@ def resume(run_dir: str, mcp_tools: list[str] | None = None) -> dict[str, Any]:
     running = {j["name"] for j in jobs.running(run.dir)}
     for job in jobs.all_jobs(run.dir):  # what ended in the earlier session is not this session's to finish
         if job["name"] not in running and not job.get("reaped"):
+            jobs.settle(run.dir, job)
             jobs.update(run.dir, job["name"], reaped=True)
+    if not running:  # a lock whose holder was killed (stop, a closed terminal) never goes away by itself
+        jobs.clear_dead_locks(run.dir)
     back = {"in_progress": 0, "error": 0}
     with run.update() as st:
         st["settings"] = values
@@ -279,7 +284,7 @@ def resume(run_dir: str, mcp_tools: list[str] | None = None) -> dict[str, Any]:
                 item.update(status="pending", stage=None, slot=None)
             elif item["status"] == "error":
                 back["error"] += 1
-                item.update(status="pending", stage=None, slot=None, error="", stale_retries=0)
+                item.update(status="pending", stage=None, slot=None, error="", stale_retries=0, orphan_retries=0)
         st["tasks"] = {}
         st["stopped"] = False
         st["stopped_at"] = None
@@ -294,7 +299,7 @@ def resume(run_dir: str, mcp_tools: list[str] | None = None) -> dict[str, Any]:
         if st.get("verify_started") and not st.get("verified") and "verify" not in running:
             st["verify_started"] = False
         if st.get("initial") and initial.status(run).get("status") == "failed":
-            (initial.folder(run.dir) / initial.STATUS_FILE).unlink(missing_ok=True)
+            remove_file(initial.folder(run.dir) / initial.STATUS_FILE)
             st["initial_failed_logged"] = False
     run.log("resume", f"実行を再開した（戻した作業 {back['in_progress'] + back['error']} 件）", reset=back)
     output = run.dir.parent
@@ -505,16 +510,23 @@ def _cleanup(run: Run) -> list[str]:
     if not work.is_dir():
         return removed
     vcs = make_vcs(run.repo, run.settings)
-    with file_lock(work / "vcs", timeout=VCS_LOCK_WAIT, stale=VCS_LOCK_STALE):
-        for folder in sorted(work.iterdir()):
-            if folder.is_dir():
-                try:
-                    vcs.remove_copy(folder)
-                except RunError:
-                    shutil.rmtree(folder, ignore_errors=True)
-                removed.append(folder.name)
-            elif folder.suffix in (".rev", ".json"):
-                folder.unlink(missing_ok=True)
+    try:
+        with file_lock(work / "vcs", timeout=CLEANUP_LOCK_WAIT, stale=VCS_LOCK_STALE):
+            for folder in sorted(work.iterdir()):
+                if folder.is_dir():
+                    try:
+                        vcs.remove_copy(folder)
+                    except RunError:
+                        remove_tree(folder, check=False)
+                    if not folder.exists():  # only what is really gone (a file a program holds keeps its folder)
+                        removed.append(folder.name)
+                elif folder.suffix in (".rev", ".json"):
+                    try:
+                        remove_file(folder)
+                    except OSError:
+                        pass
+    except RunError:  # another process still works on the copies (the lock wait ended): left for a later summary
+        pass
     return removed
 
 

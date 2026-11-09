@@ -48,6 +48,36 @@ class SvnRunTest(RunCase):
         status = subprocess.run(["svn", "status"], cwd=self.repo, capture_output=True, env=self.env).stdout.decode()
         self.assertEqual(status.strip(), "")
 
+    def test_half_removed_copy_is_made_again(self) -> None:
+        """svn keeps .svn/pristine read-only; Windows cannot delete read-only files, so a plain rmtree leaves
+        a folder that looks like a working copy but is not one."""
+        import os
+        import stat
+        from unittest import mock
+
+        from support import import_runlib, windows_unlink
+
+        import_runlib()
+        from runlib.vcs import SvnVcs
+
+        vcs = SvnVcs(self.repo, {"type": "svn"})
+        revision = vcs.current_revision()
+        dest = self.tmp / "work" / "w1"
+        vcs.reset_copy(dest, revision)
+        pristine = [p for p in (dest / ".svn" / "pristine").rglob("*") if p.is_file()]
+        self.assertTrue(pristine)
+        for path in pristine:  # as svn makes them on Windows
+            path.chmod(stat.S_IREAD)
+        with mock.patch.object(os, "unlink", windows_unlink()):
+            vcs.remove_copy(dest)
+        self.assertFalse(dest.exists())
+        vcs.reset_copy(dest, revision)
+        (dest / ".svn" / "wc.db").unlink()  # only part of a working copy left
+        self.assertFalse(vcs.usable(dest))
+        vcs.reset_copy(dest, revision)
+        self.assertTrue(vcs.usable(dest))
+        self.assertIn("read_header", (dest / "src" / "reader.c").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

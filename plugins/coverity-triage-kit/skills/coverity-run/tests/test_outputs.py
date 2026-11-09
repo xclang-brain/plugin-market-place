@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shutil
-import time
 import unittest
 from pathlib import Path
 
@@ -272,8 +271,8 @@ class CommandsTest(RunCase):
         self.write_details(given, ISSUES[0])
         out = self.new_run("--issues-file", str(given / "issues.json"))
         run_dir = out["run_dir"]
-        first = self.tick(run_dir)
-        self.assertEqual(first["actions"][0]["type"], "launch")  # no fetch: the warnings were given
+        first = self.tick_until(run_dir)  # the work copy is made by a detached job first
+        self.assertEqual(first["actions"][0]["type"], "launch", first)  # no fetch: the warnings were given
         self.assertTrue(self.drive(run_dir, ISSUES[:2], out=first)["done"])
         self.assertIn("ここで問題", (Path(run_dir) / "items" / "20001" / "brief.md").read_text(encoding="utf-8"))
         self.assertIn("取ってある警告経路のファイルがありません",
@@ -289,10 +288,8 @@ class CommandsTest(RunCase):
         self.do_fetch(out["actions"][0], ISSUES[:1])
         out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
         self.do_fetch(out["actions"][0], ISSUES[:1])
-        out = self.tick(run_dir, "--finished", out["actions"][0]["task"])
-        deadline = time.monotonic() + 90  # the work copy is made by a detached job: a slow PC needs more ticks
-        while not any(a["type"] == "launch" for a in out["actions"]) and time.monotonic() < deadline:
-            out = self.tick(run_dir)
+        out = self.tick_until(run_dir, "--finished", out["actions"][0]["task"],
+                              until=lambda o: any(a["type"] == "launch" for a in o["actions"]))
         launch = next(a for a in out["actions"] if a["type"] == "launch")
         brief = self.brief_path(launch).read_text(encoding="utf-8")
         for section in ("## フォルダとファイル", "## 守ること", "## 警告", "## 返す形", "★"):

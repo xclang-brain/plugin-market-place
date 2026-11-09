@@ -444,5 +444,90 @@ class UserEnvTest(unittest.TestCase):
         self.assertIn("make: *** [all] Error 1", tail)
 
 
+class CleanupTest(unittest.TestCase):
+    """The temporary copy of check-build is removed best-effort: Windows keeps files that another process
+    still holds (a build helper left running), and the results of the build are never lost for that."""
+
+    def setUp(self):
+        self.selftest = load_module()
+        self.tmp = Path(tempfile.mkdtemp(prefix="selftest-cleanup-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def fake_rmtree(self, busy_times):
+        """rmtree that hands one entry to the error handler, whose retry fails ``busy_times`` times."""
+        calls = []
+
+        def unlink(name):
+            calls.append(name)
+            if len(calls) <= busy_times:
+                raise PermissionError(13, "別のプロセスが使用中です", name)
+
+        def rmtree(path, onexc=None, onerror=None):
+            held = Path(path) / "build.log"
+            held.write_bytes(b"")
+            (onexc or onerror)(unlink, str(held), PermissionError(13, "busy"))
+
+        return rmtree, calls
+
+    def test_a_busy_file_is_tried_again(self):
+        folder = self.tmp / "work"
+        folder.mkdir()
+        rmtree, calls = self.fake_rmtree(busy_times=3)
+        with mock.patch.object(self.selftest.shutil, "rmtree", rmtree), mock.patch.object(self.selftest.time, "sleep"):
+            self.selftest.remove_tree(folder)
+        self.assertEqual(len(calls), 4)
+
+    def test_gives_up_after_the_retries(self):
+        folder = self.tmp / "work"
+        folder.mkdir()
+        rmtree, calls = self.fake_rmtree(busy_times=100)
+        with mock.patch.object(self.selftest.shutil, "rmtree", rmtree), mock.patch.object(self.selftest.time, "sleep"):
+            with self.assertRaises(PermissionError):
+                self.selftest.remove_tree(folder)
+        self.assertEqual(len(calls), 10)
+
+    def test_a_file_already_gone_is_fine(self):
+        folder = self.tmp / "work"
+        folder.mkdir()
+
+        def rmtree(path, onexc=None, onerror=None):
+            (onexc or onerror)(os.unlink, str(Path(path) / "gone"), FileNotFoundError())
+
+        with mock.patch.object(self.selftest.shutil, "rmtree", rmtree):
+            self.selftest.remove_tree(folder)
+
+    def test_check_build_keeps_the_results_when_the_copy_cannot_be_removed(self):
+        repo = self.tmp / "repo"
+        write(repo / "main.c", "int main(void) { return 0; }\n")
+        build = f'"{sys.executable}" -c "import sys; sys.exit(0)"'
+        write(repo / ".coverity-triage" / "config.yaml",
+              "coverity:\n  url: https://h.example\nverify:\n  build_command: " + json.dumps(build) + "\n")
+        results_dir = self.tmp / "results"
+        with mock.patch.object(self.selftest, "progress", lambda *a, **k: None):
+            self.selftest.cmd_start(str(results_dir), "4", str(repo), "test")
+        left = []
+
+        def still_held(path):
+            left.append(path)
+            raise PermissionError(32, "プロセスはファイルにアクセスできません", str(Path(path) / "build.log"))
+
+        with mock.patch.object(self.selftest, "remove_tree", still_held), \
+                mock.patch.object(self.selftest, "progress", lambda *a, **k: None):
+            result = self.selftest.cmd_check_build(str(results_dir))
+        for path in left:
+            shutil.rmtree(path, ignore_errors=True)
+        got = {c["id"]: c for c in result["checks"]}
+        self.assertTrue(result["ok"])
+        self.assertEqual(got["4-1"]["status"], "pass", result)
+        self.assertIn("一時フォルダを消せませんでした", got["4-1"]["detail"])
+        saved = json.loads((results_dir / "selftest.json").read_text(encoding="utf-8"))["checks"]
+        self.assertEqual(saved["4-1"]["status"], "pass")
+        self.assertIn("一時フォルダを消せませんでした", saved["4-1"]["detail"])
+        self.assertIn("4-2", saved)
+        self.assertIn("4-3", saved)
+
+
 if __name__ == "__main__":
     unittest.main()
