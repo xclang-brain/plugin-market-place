@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web管理画面</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>Web管理画面</h1>
+  <p class="sub">作業フォルダ：<span id="workdir">―</span></p>
+  <p id="notice" class="notice" role="alert" hidden></p>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button type="button" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="true">設定</button>
+  <button type="button" role="tab" id="tab-progress" aria-controls="panel-progress" aria-selected="false">進み具合</button>
+  <button type="button" role="tab" id="tab-results" aria-controls="panel-results" aria-selected="false">結果</button>
+</nav>
+
+<main>
+  <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings">
+    <label for="goal">直したいこと</label>
+    <textarea id="goal" rows="4" placeholder="例：起動すると平均値が 3 と出る。正しくは 25。"></textarea>
+
+    <label for="criteria">合格の条件（1行に1つ）</label>
+    <textarea id="criteria" rows="4" placeholder="例：ログに「平均値=25」と出る"></textarea>
+
+    <label for="trials">試行の上限（回）</label>
+    <input id="trials" type="number" min="1" max="20" value="5">
+    <p id="settings-result" class="hint" aria-live="polite"></p>
+
+    <h2>依頼文</h2>
+    <p id="request-hint" class="hint">直したいことを書くと、依頼文ができます。</p>
+    <textarea id="request" rows="10" readonly hidden></textarea>
+    <p class="actions">
+      <button type="button" id="copy" disabled>コピー</button>
+      <span id="copy-result" class="hint" aria-live="polite"></span>
+    </p>
+    <p class="hint">
+      依頼文は、統括エージェントを動かす別のチャットに貼り付けて送ります。
+      Claude Code では、同じ作業フォルダで <code>claude --agent embedded-debug-kit:debug-orchestrator</code>
+      （プラグインなしで入れたときは <code>claude --agent debug-orchestrator</code>）を起動します。
+      GitHub Copilot CLI では、<code>copilot --agent embedded-debug-kit:debug-orchestrator</code> を起動します。
+    </p>
+  </section>
+
+  <section id="panel-progress" role="tabpanel" aria-labelledby="tab-progress" hidden>
+    <p class="sub">実行：<span id="progress-title">まだ記録がありません</span></p>
+    <ol class="stages" aria-label="今の段">
+      <li data-stage="plan">計画</li>
+      <li data-stage="work">作業</li>
+      <li data-stage="review">評価</li>
+    </ol>
+    <p id="running" class="hint"></p>
+    <p class="actions">
+      <button type="button" id="stop" class="danger" disabled>実行を止める</button>
+      <span id="stop-result" class="hint" aria-live="polite"></span>
+    </p>
+
+    <h2>依頼と報告（届いた順）</h2>
+    <ol id="messages" class="messages"></ol>
+
+    <h2>使われたツール（新しい順）</h2>
+    <ol id="tools" class="tools"></ol>
+  </section>
+
+  <section id="panel-results" role="tabpanel" aria-labelledby="tab-results" hidden>
+    <p class="sub">実行：<span id="results-title">まだ記録がありません</span></p>
+    <h2>統括エージェントの最後の報告</h2>
+    <pre id="last-report" class="text"></pre>
+
+    <h2>検証エージェントの最後の判定</h2>
+    <pre id="last-verdict" class="text"></pre>
+
+    <h2>前の実行</h2>
+    <ol id="sessions" class="sessions"></ol>
+  </section>
+</main>
+</body>
+</html>
