@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -24,6 +25,7 @@ SKILL_DIR = os.path.dirname(TESTS)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "config_tool.py")
 TARGET = "sample-tool"
 PASSWORD = "Pw%x-secret"
+POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 
 sys.dont_write_bytecode = True  # スキルの scripts/ に __pycache__ を作らない
 _spec = importlib.util.spec_from_file_location("config_tool_script", SCRIPT)
@@ -96,10 +98,11 @@ class Project(object):
         return dict(parser.items("settings"))
 
     def run(self, *args, stdin=None):
-        """スクリプトを動かし、(終了コード, 結果の JSON) を返す。標準出力は ASCII だけで、JSON 1つ。"""
+        """スクリプトを動かし、(終了コード, 結果の JSON) を返す。標準出力は ASCII だけで、JSON 1つ。
+        stdin がなければ、AI の CLI のコマンドと同じく /dev/null（NUL）につなぐ。"""
+        feed = {"stdin": subprocess.DEVNULL} if stdin is None else {"input": stdin}
         r = subprocess.run([sys.executable, self.script] + list(args) + ["--workdir", self.dir],
-                           input=stdin if stdin is not None else b"", stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, timeout=60)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, **feed)
         self.test.assertTrue(all(b < 128 for b in r.stdout), "標準出力が ASCII だけではありません")
         data = json.loads(r.stdout.decode("ascii"))
         for key in ("ok", "message", "problems", "config", "log"):
@@ -112,6 +115,17 @@ class Project(object):
     def set(self, key, value):
         data = value if isinstance(value, bytes) else value.encode("utf-8")
         return self.run("set", TARGET, key, "--stdin", stdin=data)
+
+    def empty(self, key):
+        return self.run("set", TARGET, key, "--empty")
+
+    def log(self):
+        logs = os.path.join(self.dir, ".skill-config", "logs")
+        text = ""
+        for name in os.listdir(logs) if os.path.isdir(logs) else []:
+            with open(os.path.join(logs, name), encoding="utf-8") as fh:
+                text += fh.read()
+        return text
 
     def item(self, key):
         return next(i for i in self.show()[1]["items"] if i["key"] == key)
@@ -139,13 +153,14 @@ class ShowTest(unittest.TestCase):
         self.assertEqual(items["password"]["env_key"], "password_env")
         self.assertIsNone(items["host"]["env_key"])
         self.assertEqual(data["missing"], ["host"])
-        self.assertEqual(data["file"], data["config"])
+        self.assertEqual(data["config"], p_config(data))
+        self.assertNotIn("file", data)
 
     def test_secret_is_masked(self):
         p = Project(self)
         code, data = p.show()
         self.assertNotIn(PASSWORD, json.dumps(data))
-        self.assertEqual(p.item("password")["value"], "＊＊＊")
+        self.assertEqual(p.item("password")["value"], "***")
         self.assertTrue(p.item("password")["secret"])
 
     def test_empty_secret_shows_empty(self):
@@ -156,7 +171,7 @@ class ShowTest(unittest.TestCase):
         p = Project(self, "[settings]\n# 鍵。\napi_token = abc\n# （秘密）の値を入れる環境変数の名前。\ntoken_env = X\n")
         code, data = p.show()
         items = {i["key"]: i for i in data["items"]}
-        self.assertEqual(items["api_token"]["value"], "＊＊＊")
+        self.assertEqual(items["api_token"]["value"], "***")
         self.assertFalse(items["token_env"]["secret"])
 
     def test_required_secret_with_env_name_is_not_missing(self):
@@ -236,16 +251,26 @@ class SetTest(unittest.TestCase):
 
     def test_empty_value(self):
         p = Project(self)
-        self.assertEqual(p.set("files", "")[0], 0)
+        self.assertEqual(p.empty("files")[0], 0)
         self.assertIn("files =\n\n", p.text())
         self.assertEqual(p.show()[1]["missing"], ["host", "files"])
+
+    def test_missing_stdin_does_not_clear(self):
+        # heredoc を付け忘れると、標準入力は空になる。空にする頼みと取り違えない
+        p = Project(self, CONFIG.replace("host =", "host = 10.0.0.1"))
+        before = p.raw()
+        for args, stdin in ((("--stdin",), None), (("--stdin",), b""), (("--stdin",), b"\n  \r\n"),
+                            (("--stdin", "--empty"), b"a"), ((), b"a")):
+            code, data = p.run("set", TARGET, "host", *args, stdin=stdin)
+            self.assertEqual((code, data["ok"]), (2, False), args)
+            self.assertIn("--empty", data["message"])
+            self.assertEqual(p.raw(), before)
 
     def test_choices_are_checked(self):
         p = Project(self)
         before = p.raw()
-        for bad in ("maybe", "no\nyes", ""):
-            code, data = p.set("tls", bad)
-            self.assertEqual(code, 2, bad)
+        for code, data in (p.set("tls", "maybe"), p.set("tls", "no\nyes"), p.empty("tls")):
+            self.assertEqual(code, 2)
             self.assertIn("no / yes", data["message"])
         self.assertEqual(p.raw(), before)
         self.assertEqual(p.set("tls", "YES")[1]["value"], "yes")
@@ -267,21 +292,34 @@ class SetTest(unittest.TestCase):
         self.assertNotIn("new-secret", json.dumps(data))
         self.assertIn("password_env", data["message"])
         self.assertEqual(p.raw(), before)
-        code, data = p.set("password", "")
+        code, data = p.empty("password")
         self.assertEqual((code, data["value"]), (0, ""))
         self.assertIn("password =\n", p.text())
-        logs = os.path.join(p.dir, ".skill-config", "logs")
-        for name in os.listdir(logs):
-            with open(os.path.join(logs, name), encoding="utf-8") as fh:
-                log = fh.read()
-            self.assertNotIn(PASSWORD, log)
-            self.assertNotIn("new-secret", log)
-            self.assertIn("＊＊＊", log)
+        log = p.log()
+        self.assertNotIn(PASSWORD, log)
+        self.assertNotIn("new-secret", log)
+        self.assertIn("***", log)
 
     def test_env_name_is_written(self):
         p = Project(self)
         self.assertEqual(p.set("password_env", "DEVICE_PASSWORD")[0], 0)
         self.assertEqual(p.values()["password_env"], "DEVICE_PASSWORD")
+
+    def test_password_in_env_name_item_is_refused(self):
+        p = Project(self)
+        before = p.raw()
+        for bad in ("S3cr3t!x", "1ABC", "A\nB"):
+            code, data = p.set("password_env", bad)
+            self.assertEqual(code, 2, bad)
+            self.assertIn("環境変数の名前", data["message"])
+            self.assertNotIn("S3cr3t", json.dumps(data))
+        self.assertNotIn("S3cr3t", p.log())
+        self.assertEqual(p.raw(), before)
+
+    def test_env_item_without_secret_pair_takes_any_value(self):
+        # cross-build の sdk_env のように、（秘密）の項目と対でない _env はふつうの項目
+        p = Project(self, "[settings]\n# SDK の環境を整えるスクリプト。\nsdk_env =\n")
+        self.assertEqual(p.set("sdk_env", "/opt/sdk/environment-setup-armv7")[0], 0)
 
     def test_bom_and_crlf_are_kept(self):
         p = Project(self, newline="\r\n", bom=True)
@@ -315,11 +353,40 @@ class SetTest(unittest.TestCase):
         self.assertIn("元のまま", data["message"])
         self.assertEqual(p.raw(), before)
 
-    def test_value_needs_stdin(self):
+    def test_refusals_leave_the_file_and_do_not_echo(self):
+        leak = "Pw-LEAK"
+        cases = [  # (設定ファイル, 引数, 標準入力, 終了コード, message の一部)
+            (CONFIG, ("set", TARGET, "host", "--stdin"), "a\x07b", 2, "制御文字"),
+            (CONFIG, ("set", TARGET, "files", "--stdin"), "a\n# b", 2, "コメント"),
+            ("[settings]\nhost = 台所\n".encode("cp932"), ("show", TARGET), None, 2, "UTF-8"),
+            ("[settings]\nhost = a\npassword " + leak + "\n", ("set", TARGET, "host", "--stdin"), "b", 2,
+             "3 行目"),
+            ("[settings]\n  host = a\n", ("show", TARGET), None, 2, "行頭に空白を入れずに"),
+            ("[other]\nx = 1\n", ("show", TARGET), None, 2, "[settings] の行がありません"),
+            ("host = a\n", ("show", TARGET), None, 2, "[settings] の行がありません"),
+        ]
+        for text, args, stdin, want, phrase in cases:
+            p = Project(self, text if isinstance(text, str) else None)
+            if not isinstance(text, str):
+                os.makedirs(p.folder)
+                p.write(text)
+            before = p.raw()
+            code, data = p.run(*args, stdin=None if stdin is None else stdin.encode("utf-8"))
+            self.assertEqual(code, want, phrase)
+            self.assertIn(phrase, data["message"])
+            self.assertEqual(data["problems"], [data["message"]])
+            self.assertEqual(p.raw(), before, phrase)
+            self.assertNotIn(leak, json.dumps(data, ensure_ascii=False) + p.log())
+
+    def test_log_folder_that_cannot_be_made(self):
         p = Project(self)
-        code, data = p.run("set", TARGET, "host")
-        self.assertEqual(code, 2)
-        self.assertIn("--stdin", data["message"])
+        before = p.raw()
+        with open(os.path.join(p.dir, ".skill-config"), "w") as fh:
+            fh.write("ファイル")
+        code, data = p.set("host", "a")
+        self.assertEqual(code, 1)
+        self.assertIn("ログ", data["message"])
+        self.assertEqual(p.raw(), before)
 
     def test_gitignore_is_placed_before_writing(self):
         p = Project(self)
@@ -342,16 +409,21 @@ class SetTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(p.dir, ".skill-config")))
 
 
+def run_in_process(p, key, value=None, tty=False):
+    """このプロセスの中でスクリプトの main を動かす（os.replace などを差し替えるため）。"""
+    out = io.StringIO()
+    stdin = mock.Mock()
+    stdin.buffer = io.BytesIO((value or "").encode("utf-8"))
+    stdin.buffer.isatty = lambda: tty
+    with mock.patch.object(sys, "stdin", stdin), mock.patch.object(sys, "stdout", out):
+        code = tool.main(["set", TARGET, key, "--stdin", "--workdir", p.dir])
+    return code, json.loads(out.getvalue())
+
+
 class AtomicWriteTest(unittest.TestCase):
     """書き込みの途中で失敗しても、元のファイルが残り、一時ファイルも残らないこと。"""
 
-    def run_in_process(self, p, key, value):
-        out = io.StringIO()
-        stdin = mock.Mock()
-        stdin.buffer = io.BytesIO(value.encode("utf-8"))
-        with mock.patch.object(sys, "stdin", stdin), mock.patch.object(sys, "stdout", out):
-            code = tool.main(["set", TARGET, key, "--stdin", "--workdir", p.dir])
-        return code, json.loads(out.getvalue())
+    run_in_process = staticmethod(run_in_process)
 
     def test_failed_replace_keeps_the_file(self):
         p = Project(self)
@@ -384,6 +456,23 @@ class AtomicWriteTest(unittest.TestCase):
 
 
 class InputTest(unittest.TestCase):
+    def test_terminal_stdin_is_not_waited_for(self):
+        p = Project(self)
+        before = p.raw()
+        code, data = run_in_process(p, "host", "a", tty=True)
+        self.assertEqual(code, 2)
+        self.assertIn("標準入力で渡されていません", data["message"])
+        self.assertEqual(p.raw(), before)
+
+    def test_unexpected_error_points_to_the_log(self):
+        p = Project(self)
+        with mock.patch.object(tool, "load", side_effect=RuntimeError("boom")):
+            code, data = run_in_process(p, "host", "a")
+        self.assertEqual(code, 1)
+        self.assertIn("思わぬエラー", data["message"])
+        self.assertIn(data["log"], data["message"])
+        self.assertIn("RuntimeError", p.log())
+
     def test_decode_input(self):
         self.assertEqual(tool.decode_input("﻿台所\r\n".encode("utf-8"), []), "台所\r\n")
         self.assertEqual(tool.decode_input("台所".encode("cp932"), ["cp932"]), "台所")

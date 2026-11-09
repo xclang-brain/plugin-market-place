@@ -298,7 +298,7 @@ def checked_values(doc, item, values):
     if item.secret and values:
         hint = "%s_env に環境変数の名前を書くか、" % item.key if item.key + "_env" in doc.values else ""
         raise Stop("%s は（秘密）の項目なので、値はここでは書けません。%s利用者がファイルを開いて書いてください。"
-                   "空にすることはできます。" % (item.key, hint))
+                   "空にするだけなら、--empty でできます。" % (item.key, hint))
     pair = doc.get(item.key[:-4]) if item.key.endswith("_env") else None  # （秘密）の項目と対の <項目>_env
     if pair is not None and pair.secret and values and not (len(values) == 1 and ENV_NAME_RE.match(values[0])):
         # パスワードそのものを書かれたかもしれないので、値は出さない
@@ -408,8 +408,7 @@ def parse_args(argv):
     if (args.command == "show") == bool(args.key):
         raise Stop("コマンドの書き方が違います。" + USAGE)
     if args.command == "set" and args.stdin == args.empty:
-        raise Stop("set には、--stdin か --empty のどちらか1つを付けてください。値は、--stdin を付けて"
-                   "標準入力で渡します。" + HOW_TO_PASS)
+        raise Stop("set には、--stdin か --empty のどちらか1つだけを付けてください。" + HOW_TO_PASS)
     if not SKILL_NAME_RE.match(args.skill):
         raise Stop("スキルの名前 %s は使えません。スキルのフォルダの名前（英数字とハイフンなど）で指定してください。"
                    % args.skill)
