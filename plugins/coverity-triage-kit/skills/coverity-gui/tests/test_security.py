@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -85,6 +86,25 @@ class SecurityTest(unittest.TestCase):
         self.assertEqual(self.srv.request("POST", path, raw="{\"a\": \"\udcff\"}".encode("utf-8", "surrogatepass"))[0], 400)
         self.assertEqual(self.srv.request("POST", path, raw=b"{}", headers={"Content-Length": "abc"})[0], 400)
         self.assertEqual(self.srv.request("POST", path, raw=b"{}", headers={"Content-Length": "-1"})[0], 400)
+        self.assertEqual(self.srv.get("/api/ping")[0], 200)
+
+    def test_a_refused_body_of_unknown_length_still_gets_its_answer(self) -> None:
+        """The server cannot read a body whose length it does not know, and closes the connection. The client must
+        still get the 400 when it reads late: closing with unread data would reset the connection (seen on Windows)."""
+        with socket.create_connection(("127.0.0.1", self.srv.port), timeout=10) as sock:
+            sock.sendall((f"POST /api/save-check HTTP/1.1\r\nHost: {self.srv.host}\r\nX-Token: {self.srv.token}\r\n"
+                          f"Origin: {self.srv.origin}\r\nContent-Type: application/json\r\nContent-Length: abc\r\n\r\n"
+                          ).encode("ascii"))
+            time.sleep(0.2)  # the server has read the head and answered; the body comes after (as with two packets)
+            sock.sendall(b'{"a": 1}' * 64)
+            time.sleep(0.3)
+            answer = b""
+            while True:
+                part = sock.recv(65536)
+                if not part:
+                    break
+                answer += part
+        self.assertTrue(answer.startswith(b"HTTP/1.1 400"), answer[:80])
         self.assertEqual(self.srv.get("/api/ping")[0], 200)
 
     def test_a_refused_post_does_not_break_the_next_request_on_the_connection(self) -> None:

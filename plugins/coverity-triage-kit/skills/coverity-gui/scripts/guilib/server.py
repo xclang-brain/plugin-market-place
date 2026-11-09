@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import secrets
+import socket
 import threading
 import time
 from http import HTTPStatus
@@ -55,6 +56,9 @@ def code_version() -> str:
     return digest.hexdigest()[:16]
 
 
+DRAIN_SECONDS = 1.0  # how long a closing connection reads what the client still sends
+
+
 class GuiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -73,6 +77,20 @@ class GuiServer(ThreadingHTTPServer):
     @property
     def port(self) -> int:
         return self.server_address[1]
+
+    def shutdown_request(self, request: Any) -> None:
+        """Close a connection gently: end our side first, then read what the client still sends, for a moment.
+        A refused request can leave its body unread (its length was not known), and closing a socket with unread
+        data resets the connection, so the client can lose the answer that was already sent (seen on Windows)."""
+        try:
+            request.shutdown(socket.SHUT_WR)
+            request.settimeout(0.2)
+            deadline = time.monotonic() + DRAIN_SECONDS
+            while time.monotonic() < deadline and request.recv(65536):
+                pass
+        except OSError:
+            pass
+        self.close_request(request)
 
     @property
     def url(self) -> str:
