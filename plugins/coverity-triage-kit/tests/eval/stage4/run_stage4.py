@@ -14,8 +14,10 @@ extension's core/messages.mjs with node when it is there.
 For each case of cases.json, ``claude -p "<words>"`` runs with Read, Glob, Grep, Skill and Bash; only
 Skill and the open tool are allowed, so commands are refused (an attempt is recorded, nothing runs).
 Checks: the open tool called once with requestText equal to the words (expect open), not called
-(expect not_open), or absent with the three causes explained and no work started (expect no_tool);
-the skills loaded; no agents, commands or edits.
+(expect not_open), absent with the three Copilot CLI causes explained and no work started (expect
+no_tool: the request says the user is on Copilot CLI), or absent with the Claude Code ways shown
+(expect no_tool_claude: the screen is a Copilot CLI feature, ``claude --agent`` and ``/<batch run>``;
+none of the three causes; no work started); the skills loaded; no agents, commands or edits.
 
 Claude Code shows the tool as mcp__<server>__<tool>, Copilot CLI by its own name: the report says so.
 
@@ -56,6 +58,9 @@ CAUSES = {
     "読み込みの確認を断った": ["断った", "断る", "断ると", "elevated", "読み込みの確認", "確認を許可", "declin", "拒否"],
     "/extensions mode が Disabled": ["/extensions mode", "extensions mode", "Disabled"],
 }
+# What the Claude Code answer for a missing tool must say (skill: "Claude Code で動いているとき").
+CLAUDE_WAY_WORDS = {"Copilot CLI の機能": ["Copilot CLI"], "claude --agent": ["claude --agent"]}
+NO_TOOL_EXPECTS = ("no_tool", "no_tool_claude")
 NOTICE_WORDS = {"開始": ["開始"], "/clear": ["/clear"], "チャットで答える": ["チャットで答", "このチャットで"],
                 "前もって許可（README）": ["README"]}
 JAPANESE = re.compile(r"[ぁ-んァ-ン一-龥]")
@@ -182,7 +187,21 @@ def analyze(case: dict, run: dict, summary: dict, calls: list[dict], tool: str, 
         if want_skill:
             checks.append(ek.check("expected_skill", want_skill in summary["skills_loaded"],
                                    f"読んだスキル: {summary['skills_loaded'] or 'なし'}（想定 {want_skill}）", "should"))
-    if expect in ("open", "no_tool"):
+    elif expect == "no_tool_claude":
+        ways = words_found(text, CLAUDE_WAY_WORDS)
+        run_name = names.get("run", "")
+        ways[f"/{run_name}"] = bool(run_name) and (f"/{run_name}" in text or f":{run_name}" in text)
+        checks.append(ek.check("claude_code_ways", all(ways.values()),
+                               "示していないこと: " + "、".join(k for k, v in ways.items() if not v) if not all(ways.values())
+                               else "Copilot CLI の機能であることと、Claude Code での2つのしかたを示した"))
+        causes = words_found(text, CAUSES)
+        checks.append(ek.check("no_copilot_causes", not any(causes.values()),
+                               "示した Copilot CLI の原因: " + "、".join(k for k, v in causes.items() if v) if any(causes.values())
+                               else "Copilot CLI の3つの原因を示していない"))
+        if want_skill:
+            checks.append(ek.check("expected_skill", want_skill in summary["skills_loaded"],
+                                   f"読んだスキル: {summary['skills_loaded'] or 'なし'}（想定 {want_skill}）", "should"))
+    if expect in ("open",) + NO_TOOL_EXPECTS:
         checks.append(ek.check("no_work", not work and not commands,
                                ("動かしたもの: " + "、".join(work + commands)) if work or commands
                                else "作業を始めていない（エージェント・コマンド・書き込みなし）"))

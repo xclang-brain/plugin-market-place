@@ -114,7 +114,7 @@
 
 - `/add-dir "<output_dir>"` の後、最初の確認で「このセッションでは許可」を選ぶ。
 - `copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<登録名>(<読むツール>)' …` で起動し直す（`<登録名>` は Coverity との通信の部品の名前。読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ）ごとに `--allow-tool '<登録名>(<そのツールの名前>)'` を並べます（ツールの名前は、一括実行が示す許可の案内か、Coverity との通信の部品の README にあります）。書き戻すツールは前もって許可しません。反映のときに確認が出ます。）。
-- Claude Code では、`/add-dir` と `/permissions` での `Bash(uv run *)` の許可か、`claude --add-dir … --allowedTools …` での起動（usage.md の「Claude Code で使う」の「許可」）。
+- Claude Code では、`/add-dir` だけでは足りない。`/add-dir` に加えて `/permissions` で `Bash(uv run *)`・`Write`・`Edit`・Coverity から読む4つのツールを許可するか、`claude --add-dir … --allowedTools …` で起動し直す（夜通しの実行には、起動し直すほうが確実。usage.md の「Claude Code で使う」の「許可」）。書き戻すツールは許可しない。
 
 ## 反映のエラー
 

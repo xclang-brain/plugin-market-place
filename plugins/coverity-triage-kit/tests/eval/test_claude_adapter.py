@@ -185,7 +185,8 @@ class Args:
         defaults = dict(workspace=None, parts_from_table=None, agent=None, skill=None, mcp=None,
                         plugin_root=None, main=None, output_dir=None, fake_data=None, mcp_env=None,
                         model=None, agent_model=None, prompt=None, extra_arg=None, claude_bin=None,
-                        allow_missing=False, run=False, inspect=False, timeout=30.0)
+                        allow_missing=False, run=False, inspect=False, timeout=30.0,
+                        tools_from_definitions=False, main_model=None)
         defaults.update(kw)
         self.__dict__.update(defaults)
 
@@ -563,8 +564,11 @@ class ClaudePluginFormatTest(unittest.TestCase):
         allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
         self.assertEqual(allowed, ["Bash(uv run *)", "Skill", "mcp__plugin_fake-kit_fake-server__*"])
         self.assertEqual(argv[argv.index("--add-dir") + 1], str(out.resolve()))
-        self.assertEqual(argv[argv.index("--tools") + 1].split(","), ca.BASE_TOOLS,
-                         "the lead has no tools line: the base set (the union keeps the helper's tools)")
+        self.assertNotIn("--tools", argv, "by default the plugin runs with Claude Code's own tools, like a user's session")
+        self.assertIsNone(res["tools"])
+        self.assertEqual(sorted(p.name for p in self.dest.iterdir()),
+                         sorted([".claude-eval-plugin", ".claude-plugin", ".mcp.json", "agents", "mcp-servers", "skills"]))
+        self.assertEqual(json.loads((self.dest / ca.PLUGIN_MARKER).read_text(encoding="utf-8")), {"made_by": "claude_adapter"})
 
         self.assertEqual(sorted(p.name for p in (self.ws / ".claude").iterdir()), ["eval"],
                          "no agents or skills in the workspace: they come from the plugin")
@@ -572,6 +576,14 @@ class ClaudePluginFormatTest(unittest.TestCase):
         self.assertEqual(saved["format"], ca.FORMAT_PLUGIN)
         self.assertEqual(saved["argv"][saved["prompt_index"]], ca.PROMPT_PLACEHOLDER)
         self.assertEqual(saved["expect"]["main"], "fake-kit:lead")
+        self.assertEqual(saved["expect"]["tools"], [],
+                         "a main agent without a tools line takes Claude Code's default set: nothing is expected")
+        self.assertEqual(saved["expect"]["mcp_servers"], ["plugin:fake-kit:fake-server"])
+        listed = self.build(parts_from_table=str(self.agents / "lead.md"), tools_from_definitions=True)
+        argv = listed["command"]
+        self.assertEqual(argv[argv.index("--tools") + 1].split(","), ca.BASE_TOOLS,
+                         "--tools-from-definitions: the lead has no tools line, the base set (the union keeps the helper's)")
+        saved = json.loads((self.ws / ".claude" / "eval" / "command.json").read_text(encoding="utf-8"))
         self.assertNotIn("Edit", saved["expect"]["tools"], "disallowedTools of the main agent are not expected")
         self.assertIn("Agent", saved["expect"]["tools"])
         self.assertEqual(saved["expect"]["skills"], ["notes-skill", "probe-skill", "run-steps"])
@@ -583,17 +595,22 @@ class ClaudePluginFormatTest(unittest.TestCase):
         self.assertIn("'Bash(uv run *)'", res["command_line_bash"])
 
     def test_build_stage2_shape_and_options(self):
-        res = self.build(parts_from_table=str(self.agents / "helper-a.md"), model="claude-haiku-5-5", default_tools=True)
+        res = self.build(parts_from_table=str(self.agents / "helper-a.md"), model="claude-haiku-5-5")
         self.assertTrue(res["ok"], res)
         self.assertEqual([a["name"] for a in res["agents"]], ["helper-a"])
         self.assertEqual(sorted(res["skills"]), ["notes-skill", "probe-skill"])
         argv = res["command"]
         self.assertEqual(argv[argv.index("--agent") + 1], "fake-kit:helper-a")
-        self.assertNotIn("--tools", argv, "--default-tools leaves Claude Code's own set")
+        self.assertNotIn("--tools", argv, "the default leaves Claude Code's own set")
         self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-5-5")
         self.assertEqual((self.dest / "agents" / "helper-a.md").read_bytes(), (self.agents / "helper-a.md").read_bytes(),
                          "--model is for the session; the definition stays as it is")
-        with_tools = self.build(parts_from_table=str(self.agents / "helper-a.md"))
+        saved = json.loads((self.ws / ".claude" / "eval" / "command.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["expect"]["tools"], ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill",
+                                                    "AskUserQuestion", "mcp__plugin_fake-kit_fake-server__fake_read",
+                                                    "mcp__fake-server__fake_read"],
+                         "a tools line is still expected without --tools: a tool missing from the default set shows")
+        with_tools = self.build(parts_from_table=str(self.agents / "helper-a.md"), tools_from_definitions=True)
         tools = with_tools["command"][with_tools["command"].index("--tools") + 1].split(",")
         self.assertEqual(tools, ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "AskUserQuestion"],
                          "the built-in tools of the helper's tools line, no MCP names")
@@ -610,6 +627,26 @@ class ClaudePluginFormatTest(unittest.TestCase):
             self.assertTrue(changed[0][0].startswith("model: "))
             self.assertEqual(changed[0][1], "model: inherit")
         self.assertEqual({r["model"] for r in res["agents"]}, {"inherit"})
+
+    def test_main_model_changes_only_the_main_agent(self):
+        res = self.build(parts_from_table=str(self.agents / "lead.md"), model="claude-opus-5-5", main_model="claude-opus-5-5")
+        self.assertTrue(res["ok"], res)
+        self.assertIn("model: claude-opus-5-5", (self.dest / "agents" / "lead.md").read_text(encoding="utf-8").split("\n"))
+        self.assertEqual((self.dest / "agents" / "helper-a.md").read_bytes(), (self.agents / "helper-a.md").read_bytes(),
+                         "the other agents keep their own model line")
+        rows = {r["name"]: r for r in res["agents"]}
+        self.assertEqual((rows["lead"]["model"], rows["helper-a"]["model"]), ("claude-opus-5-5", "haiku"))
+        both = self.build(parts_from_table=str(self.agents / "lead.md"), main_model="opus", agent_model="inherit")
+        rows = {r["name"]: r for r in both["agents"]}
+        self.assertEqual((rows["lead"]["model"], rows["helper-a"]["model"]), ("opus", "inherit"),
+                         "--main-model wins over --agent-model for the main agent")
+        proc = subprocess.run([sys.executable, str(SCRIPT), "build", "--format", "claude-plugin", "--workspace", str(self.ws),
+                               "--plugin-dir", str(self.dest), "--parts-from-table", str(self.agents / "lead.md"),
+                               "--main-model", "sonnet", "--tools-from-definitions"], capture_output=True, env=ENV, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace"))
+        data = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual({r["name"]: r["model"] for r in data["agents"]}, {"lead": "sonnet", "helper-a": "haiku"})
+        self.assertIn("--tools", data["command"])
 
     def test_with_model(self):
         self.assertEqual(ca.with_model("---\nname: a\nmodel: haiku\n---\nbody model: x\n", "sonnet"),
@@ -636,6 +673,27 @@ class ClaudePluginFormatTest(unittest.TestCase):
         with self.assertRaises(ca.AdapterError):
             self.build(parts_from_table=table, plugin_dir=str(busy))
         self.assertTrue((busy / "keep.txt").is_file(), "a folder that is not a made plugin is never emptied")
+        real = self.base / "real-plugin"
+        write(real / ".claude-plugin" / "plugin.json", json.dumps({"name": "someone-else", "version": "1.0.0"}))
+        write(real / "src" / "code.py", "print('人のコード')\n")
+        with self.assertRaises(ca.AdapterError) as err:
+            self.build(parts_from_table=table, plugin_dir=str(real))
+        self.assertIn(ca.PLUGIN_MARKER, str(err.exception))
+        self.assertTrue((real / "src" / "code.py").is_file(), "a real plugin (manifest, no marker) is never emptied")
+        self.assertTrue((real / ".claude-plugin" / "plugin.json").is_file())
+        write(real / ca.PLUGIN_MARKER, json.dumps({"made_by": "someone"}))
+        with self.assertRaises(ca.AdapterError):
+            self.build(parts_from_table=table, plugin_dir=str(real))
+        self.assertTrue((real / "src" / "code.py").is_file(), "a marker of someone else does not count")
+        proc = subprocess.run([sys.executable, str(SCRIPT), "build", "--format", "claude-plugin", "--workspace", str(self.ws),
+                               "--plugin-dir", str(real), "--parts-from-table", table], capture_output=True, env=ENV, timeout=60)
+        self.assertEqual(proc.returncode, 1)
+        self.assertFalse(json.loads(proc.stdout.decode("utf-8"))["ok"])
+        self.assertTrue((real / "src" / "code.py").is_file())
+        empty = self.base / "empty"
+        empty.mkdir()
+        self.assertTrue(self.build(parts_from_table=table, plugin_dir=str(empty))["ok"], "an empty folder is used")
+        self.assertTrue((empty / ca.PLUGIN_MARKER).is_file())
         self.assertTrue(self.build(parts_from_table=table)["ok"])
         write(self.dest / "skills" / "stale" / "SKILL.md", "---\nname: stale\ndescription: x\n---\n")
         self.assertTrue(self.build(parts_from_table=table)["ok"])
@@ -701,6 +759,33 @@ class ClaudePluginFormatTest(unittest.TestCase):
         joined = "\n".join(lacking["checks"])
         for word in ("Grep", "probe-skill", "fake-kit:helper-a"):
             self.assertIn(word, joined)
+
+    def test_inspect_needs_the_plugin_server(self):
+        expect = {"tools": [], "skills": [], "mcp_servers": ["plugin:fake-kit:fake-server"]}
+
+        def init(servers):
+            return json.dumps({"type": "system", "subtype": "init", "tools": ["Read"], "skills": [],
+                               "agents": ["fake-kit:helper-a"], "mcp_servers": servers})
+
+        none = ca.inspect_stream(init([]), self.ws, "fake-kit:helper-a", expect)
+        self.assertEqual(len(none["checks"]), 1, none["checks"])
+        self.assertIn("plugin:fake-kit:fake-server", none["checks"][0])
+        failed = ca.inspect_stream(init([{"name": "plugin:fake-kit:fake-server", "status": "failed"}]),
+                                   self.ws, "fake-kit:helper-a", expect)
+        self.assertEqual(len(failed["checks"]), 1, failed["checks"])
+        self.assertIn("failed", failed["checks"][0])
+        other = ca.inspect_stream(init([{"name": "plugin:fake-kit:fake-server", "status": "connected"},
+                                        {"name": "users-broken", "status": "failed"}]), self.ws, "fake-kit:helper-a", expect)
+        self.assertEqual(other["checks"], [], "a server that is not the plugin's is not checked")
+        self.assertEqual(other["init"]["extra_mcp_servers"], [{"name": "users-broken", "status": "failed"}])
+        hand = ca.inspect_stream(init([{"name": "fake-server", "status": "connected"}]), self.ws, "fake-kit:helper-a", expect)
+        self.assertEqual(len(hand["checks"]), 1, "a hand-registered server of the same name does not stand in for the plugin's")
+        self.assertEqual(hand["init"]["extra_mcp_servers"], [{"name": "fake-server", "status": "connected"}])
+        other = ca.inspect_stream(init([{"name": "plugin:fake-kit-copy:fake-server", "status": "connected"}]),
+                                  self.ws, "fake-kit:helper-a", expect)
+        self.assertEqual(other["checks"], [], "a plugin-provided server of the same last ':' part counts")
+        no_expect = ca.inspect_stream(init([]), self.ws, "fake-kit:helper-a", {"tools": [], "skills": []})
+        self.assertEqual(no_expect["checks"], [], "no server expected (no MCP server in the tables): nothing to check")
 
 
 class RealClaudePluginTest(unittest.TestCase):

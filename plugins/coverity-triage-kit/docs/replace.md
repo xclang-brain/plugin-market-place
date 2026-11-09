@@ -43,7 +43,7 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 | --- | --- |
 | `agents/<名前>.md` と `com.github.copilot/agents/<名前>.agent.md` の「## 使う部品」の表 | そのエージェントが使う部品（役割・部品・使うとき）。2つの定義で同じ表 |
 | `agents/<名前>.md` の frontmatter の `name` | エージェントの名前（ファイル名と同じ） |
-| `agents/<名前>.md` の frontmatter の `tools`・`disallowedTools` | 表にある MCP サーバーのツール（`mcp__plugin_coverity-triage-kit_<登録名>__<ツール>` と `mcp__<登録名>__<ツール>` の両方） |
+| `agents/<名前>.md` の frontmatter の `tools`・`disallowedTools` | 表にある MCP サーバーのツール（`mcp__plugin_coverity-triage-kit_<登録名>__<ツール>` と `mcp__<登録名>__<ツール>` の両方）。統括エージェントの `disallowedTools` は、Edit・Write・NotebookEdit と、反映の確かめと書き戻しのツール（それぞれ両方の名前） |
 | `com.github.copilot/agents/<名前>.agent.md` の frontmatter の `tools` | 表にある MCP サーバーのツール（`<登録名>/<ツール>`） |
 | `skills/<プラグイン全体のスキル>/SKILL.md` の「## 使う部品」の表 | 画面の入口・困ったとき・自己診断が使う部品 |
 | `com.github.copilot/extensions/coverity-triage-kit/defaults.json` | エージェントの id、一括実行と画面のコマンドの場所、反映と準備のスキル、プラグイン全体のスキル |
@@ -142,7 +142,7 @@ coverity-triage-kit の部品（スキル、MCP サーバー、エージェン�
 ## ほかのエージェントを置き換える
 
 - 検証役・統合役：作業役と同じ手順です（2つの形の定義を一緒に替えます）。`defaults.json` の `roles.reviewer`・`roles.integrator` と、統括エージェントの2つの定義の表の行を替えます。`description` には「検証役」「統合役」を入れます。
-- 統括エージェント：2つの形の定義と README を置き換え、`defaults.json` の `orchestrator` を替えます。Copilot CLI の定義には `tools` を書きません。Claude Code の定義にも `tools` を書かず、`disallowedTools` に Edit・Write・NotebookEdit と、書き戻しのツールの2つの名前を書きます（設計書の 3.3）。表には、役割ごとのエージェント（`roles`）と、`defaults.json` のスキル（一括実行・結果と設定の画面・反映・準備）を入れます。手順は一括実行のスキルの SKILL.md にあるので、定義に写しません。
+- 統括エージェント：2つの形の定義と README を置き換え、`defaults.json` の `orchestrator` を替えます。Copilot CLI の定義には `tools` を書きません。Claude Code の定義にも `tools` を書かず、`disallowedTools` に Edit・Write・NotebookEdit と、反映の確かめと書き戻しのツール（それぞれ `mcp__plugin_coverity-triage-kit_coverity-connect__…` と `mcp__coverity-connect__…` の両方）を書きます（設計書の 3.3）。表には、役割ごとのエージェント（`roles`）と、`defaults.json` のスキル（一括実行・結果と設定の画面・反映・準備）を入れます。手順は一括実行のスキルの SKILL.md にあるので、定義に写しません。
 
 ## プラグイン全体のスキルを足す・置き換える
 

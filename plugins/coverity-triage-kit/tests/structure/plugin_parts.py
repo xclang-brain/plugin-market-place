@@ -269,8 +269,45 @@ def all_mcp_tool_names():
     return names
 
 
-def _destructive_tools(tree):
-    """destructiveHint=True を付けて登録したツールの名前（Coverity に書き込むツール）"""
+def _is_true(node) -> bool:
+    return isinstance(node, ast.Constant) and node.value is True
+
+
+def _flags_destructive(node, assigned, seen=()) -> bool:
+    """node（とその中）に destructiveHint=True があるか。形は3つ：
+    - 名前付きの引数：ToolAnnotations(destructiveHint=True)
+    - 辞書：annotations={"destructiveHint": True}
+    - 変数：ANN = ToolAnnotations(...) / ANN = {...} を、あとで annotations=ANN と渡す（assigned で辿る）"""
+    for n in ast.walk(node):
+        if isinstance(n, ast.keyword) and n.arg == "destructiveHint" and _is_true(n.value):
+            return True
+        if isinstance(n, ast.Dict):
+            for key, value in zip(n.keys, n.values):
+                if isinstance(key, ast.Constant) and key.value == "destructiveHint" and _is_true(value):
+                    return True
+        if isinstance(n, ast.Name) and n.id in assigned and n.id not in seen:
+            if any(_flags_destructive(v, assigned, seen + (n.id,)) for v in assigned[n.id]):
+                return True
+    return False
+
+
+def _assignments(tree):
+    """変数の名前 → 代入した値（ToolAnnotations を変数に作ってから渡す書き方のため）"""
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    out.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            out.setdefault(node.target.id, []).append(node.value)
+    return out
+
+
+def _destructive_tools(tree, assigned=None):
+    """destructiveHint=True を付けて登録したツールの名前（Coverity に書き込むツール）。
+    assigned は変数の名前 → 値（ほかのファイルで作った ToolAnnotations も辿れるように、渡せる）"""
+    assigned = _assignments(tree) if assigned is None else assigned
     names = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -278,9 +315,7 @@ def _destructive_tools(tree):
         for deco in node.decorator_list:
             if not isinstance(deco, ast.Call):
                 continue
-            flagged = any(isinstance(n, ast.keyword) and n.arg == "destructiveHint"
-                          and isinstance(n.value, ast.Constant) and n.value.value is True for n in ast.walk(deco))
-            if flagged:
+            if _flags_destructive(deco, assigned):
                 names |= _decorated_tools(ast.Module(body=[node], type_ignores=[]))
     return names
 
@@ -290,15 +325,22 @@ def write_back_tools():
     """登録名 → 書き戻しのツール（destructiveHint=True のツール）の名前の集まり"""
     out = {}
     for name, folder in mcp_registrations().items():
-        tools = set()
+        trees = []
         if folder and folder.is_dir():
             for path in sorted(folder.rglob("*.py")):
                 if skipped(path, folder) or "tests" in path.relative_to(folder).parts:
                     continue
                 try:
-                    tools |= _destructive_tools(ast.parse(read(path)))
+                    trees.append(ast.parse(read(path)))
                 except SyntaxError:
                     continue
+        assigned = {}
+        for tree in trees:
+            for key, values in _assignments(tree).items():
+                assigned.setdefault(key, []).extend(values)
+        tools = set()
+        for tree in trees:
+            tools |= _destructive_tools(tree, assigned)
         out[name] = tools
     return out
 

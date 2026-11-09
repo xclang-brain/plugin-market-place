@@ -218,6 +218,23 @@ class ClaudeCodeTest(unittest.TestCase):
             self.assertRegex(name, r"__<[^>*]+>$")
         self.assertIn("書き戻すツールは前もって許可しません", body)
 
+    def test_permissions_apply_and_worker_as_subagent(self):
+        body = self.section()
+        # /add-dir alone allows no writes and no tools: the in-session way also allows Write, Edit and the read tools
+        self.assertIn("`/add-dir` だけでは足りません", body)
+        step1 = body[body.index("\n1. チャットで `/add-dir"):body.index("\n2. Claude Code を")]
+        for word in ["`/permissions`", "`Bash(uv run *)`", "`Write`", "`Edit`", "読む4つのツール", "書き戻すツールは許可しない"]:
+            self.assertIn(word, step1)
+        self.assertIn("2 の起動のしかたが確実", body)
+        self.assertIn("このセッションのどのファイルにも効きます", body)
+        self.assertIn("エージェントの決まり", body)
+        # apply runs in a session started without --agent
+        self.assertIn("反映（反映のスキル）は、`--agent` を付けずに起動した", body)
+        # the worker as a subagent cannot ask: the diff is a proposal; diff -> consent -> edit needs claude --agent
+        self.assertIn("サブエージェント", body)
+        self.assertIn("差分を案として返すだけ", body)
+        self.assertIn("`claude --agent <プラグインの名前>:<作業エージェント>` で起動したときだけ", body)
+
     def test_skill_points_to_it(self):
         text = read(SKILL_MD)
         self.assertIn("Claude Code で使う", text)

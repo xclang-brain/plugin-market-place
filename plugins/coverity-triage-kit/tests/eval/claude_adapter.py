@@ -13,8 +13,11 @@ converts them (below). ``--format claude-plugin`` reads the Claude Code definiti
 the parts of its table (followed through the agents of the table) and the MCP server, as
 they are, into a temporary plugin folder outside the workspace, with its own
 ``.claude-plugin/plugin.json`` and ``.mcp.json``. It is run as a real plugin:
-``claude -p ... --plugin-dir <folder> --agent <plugin>:<agent>``. Only ``--agent-model``
-changes a copy (the ``model`` line of the agents).
+``claude -p ... --plugin-dir <folder> --agent <plugin>:<agent>``, without ``--tools`` (the way a
+user runs it; ``--tools-from-definitions`` adds the union of the definitions' built-in tools).
+Only ``--agent-model`` (every agent) and ``--main-model`` (the main agent) change a copy (the
+``model`` line). The folder gets a marker file (``.claude-eval-plugin``); a later build empties
+only a folder with that marker and refuses any other non-empty folder.
 
 The copilot-converted format:
 
@@ -35,9 +38,9 @@ Commands (one JSON object on stdout, progress on stderr):
 
   collect AGENT_FILE [--plugin-root DIR] [--format F]
   build --workspace WS [--format copilot-converted|claude-plugin] [--plugin-dir DIR]
-        [--default-tools] [--parts-from-table FILE] [--agent FILE]... [--skill DIR]...
+        [--tools-from-definitions] [--parts-from-table FILE] [--agent FILE]... [--skill DIR]...
         [--mcp [NAME=]DIR]... [--main NAME] [--output-dir DIR] [--fake-data FILE]
-        [--mcp-env KEY=VALUE]... [--model M] [--agent-model M] [--prompt TEXT]
+        [--mcp-env KEY=VALUE]... [--model M] [--agent-model M] [--main-model M] [--prompt TEXT]
         [--extra-arg ARG]... [--allow-missing] [--run] [--inspect] [--timeout S]
   run --workspace WS --prompt TEXT [--timeout S] [--inspect] [--claude-bin EXE [ARG...]]
 """
@@ -74,6 +77,9 @@ PLUGIN_ROOT_VARS = ("${CLAUDE_PLUGIN_ROOT}", "${PLUGIN_ROOT}")
 MANIFEST_PATH_KEYS = {"skills", "agents", "commands", "hooks", "mcpServers", "outputStyles", "lspServers"}
 # The Claude Code form of the uv permission (design 9.3); the converted format keeps its old form.
 PLUGIN_BASH_ALLOW = "Bash(uv run *)"
+# The file a claude-plugin build writes into the folder it makes (only such a folder is emptied).
+PLUGIN_MARKER = ".claude-eval-plugin"
+PLUGIN_MARKER_DATA = {"made_by": "claude_adapter"}
 TABLE_HEADING = "使う部品"
 TABLE_HEADER = ["役割", "部品", "使うとき"]
 
@@ -914,15 +920,34 @@ def read_manifest(root: Path) -> dict:
     return data
 
 
+def _made_by_adapter(dest: Path) -> bool:
+    """True when ``dest`` holds the marker a claude-plugin build writes (and nothing else claims it)."""
+    marker = dest / PLUGIN_MARKER
+    if not marker.is_file():
+        return False
+    try:
+        data = json.loads(read_text(marker))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("made_by") == PLUGIN_MARKER_DATA["made_by"]
+
+
 def _fresh_plugin_dir(dest: Path) -> None:
-    """Empty ``dest`` for a new copy. Refuses a non-empty folder that is not a plugin made before."""
+    """Empty ``dest`` for a new copy.
+
+    Only a folder this tool made (it has the marker file) is emptied. Any other non-empty
+    folder is refused and left as it is, also a real plugin with ``.claude-plugin/plugin.json``.
+    """
     if dest.exists():
         if not dest.is_dir():
             raise AdapterError(f"プラグインを作る場所がファイルです: {dest}")
-        if any(dest.iterdir()) and not (dest / CLAUDE_MANIFEST_REL).is_file():
-            raise AdapterError(f"プラグインを作るフォルダが空ではありません。別の場所にしてください: {dest}")
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True)
+        if any(dest.iterdir()):
+            if not _made_by_adapter(dest):
+                raise AdapterError(f"プラグインを作るフォルダが空ではありません（この道具が作ったフォルダの印 {PLUGIN_MARKER} が"
+                                   f"ありません）。別の場所にしてください: {dest}")
+            shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / PLUGIN_MARKER).write_text(json.dumps(PLUGIN_MARKER_DATA) + "\n", encoding="utf-8")
 
 
 def plugin_argv(claude_bin: list[str], prompt: str, plugin_dir: Path, agent_ref: str, plugin: str,
@@ -968,14 +993,16 @@ def build_plugin(args: argparse.Namespace) -> dict:
                                             encoding="utf-8")
 
     (dest / CLAUDE_AGENTS_REL).mkdir()
+    main_model = getattr(args, "main_model", None)
     agent_rows = []
     defs: dict[str, dict] = {}
     for agent in agents:
         target = dest / CLAUDE_AGENTS_REL / f"{agent['name']}{CLAUDE_AGENT_SUFFIX}"
         progress(f"agent {agent['name']} <- {agent['path']}")
-        if args.agent_model:
+        new_model = (main_model if agent["name"] == main and main_model else None) or args.agent_model
+        if new_model:
             raw = agent["path"].read_bytes().decode("utf-8")
-            target.write_bytes(with_model(raw, args.agent_model).encode("utf-8"))
+            target.write_bytes(with_model(raw, new_model).encode("utf-8"))
         else:
             shutil.copyfile(agent["path"], target)
         fields = agent["fields"]
@@ -984,7 +1011,7 @@ def build_plugin(args: argparse.Namespace) -> dict:
         agent_rows.append({"name": agent["name"], "ref": f"{plugin}:{agent['name']}", "source": str(agent["path"]),
                            "file": str(target), "skills": list(agent["skills"]), "tools": definition.get("tools"),
                            "disallowed_tools": tool_list(fields.get("disallowedTools")) or None,
-                           "model": args.agent_model or (str(fields["model"]) if fields.get("model") else "inherit")})
+                           "model": new_model or (str(fields["model"]) if fields.get("model") else "inherit")})
 
     copied_skills: dict[str, str] = {}
     for name, folder in skills.items():
@@ -1026,13 +1053,18 @@ def build_plugin(args: argparse.Namespace) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     claude_bin = args.claude_bin or ["claude"]
     agent_ref = f"{plugin}:{main}"
-    tools = None if getattr(args, "default_tools", False) else builtin_tools(defs)
+    # Default: no --tools, like a user's session. Opt-in: the union of the definitions' built-in tools.
+    tools = builtin_tools(defs) if getattr(args, "tools_from_definitions", False) else None
     argv = plugin_argv(claude_bin, PROMPT_PLACEHOLDER, dest, agent_ref, plugin, sorted(servers), output_dir,
                        args.model, args.extra_arg or [], tools)
     main_row = next(r for r in agent_rows if r["name"] == main)
     denied = set(main_row["disallowed_tools"] or [])
-    expect = {"main": agent_ref, "tools": [t for t in defs[main].get("tools", BASE_TOOLS) if t not in denied],
-              "skills": sorted(copied_skills), "agents": [r["ref"] for r in agent_rows]}
+    # A main agent without a tools line takes the session's tools: with --tools that is the base
+    # set; without it, whatever Claude Code offers by default (nothing is expected then).
+    wanted = defs[main].get("tools", BASE_TOOLS if tools else [])
+    expect = {"main": agent_ref, "tools": [t for t in wanted if t not in denied],
+              "skills": sorted(copied_skills), "agents": [r["ref"] for r in agent_rows],
+              "mcp_servers": [f"plugin:{plugin}:{n}" for n in sorted(servers)]}
     command_file = eval_dir / "command.json"
     command_file.write_text(json.dumps(
         {"format": FORMAT_PLUGIN, "cwd": str(ws), "argv": argv, "prompt_index": argv.index(PROMPT_PLACEHOLDER),
@@ -1045,6 +1077,7 @@ def build_plugin(args: argparse.Namespace) -> dict:
         "plugin_root": str(root),
         "plugin_name": plugin,
         "plugin_dir": str(dest),
+        "tools": tools,
         "main_agent": main,
         "agent_ref": agent_ref,
         "agents": agent_rows,
@@ -1122,7 +1155,9 @@ def _stem(name) -> str:
 def inspect_stream(stdout: str, ws: Path, main: str, expect: dict | None = None) -> dict:
     """Read the init and result events of a stream-json run and check the main agent's setup.
 
-    ``expect`` (claude-plugin format: tools, skills of the copied plugin) replaces agents.json.
+    ``expect`` (claude-plugin format: tools, skills and MCP servers of the copied plugin) replaces
+    agents.json. Then each expected server must appear in init.mcp_servers as connected; other
+    servers (not the plugin's) are listed as ``extra_mcp_servers`` and not checked.
     Plugin names may carry the plugin name and ":" in front (compared without it).
     """
     init, final = None, None
@@ -1150,7 +1185,8 @@ def inspect_stream(stdout: str, ws: Path, main: str, expect: dict | None = None)
         agents_file = Path(ws) / ".claude" / "eval" / "agents.json"
         definition = {}
         if expect is not None:
-            definition = {"tools": list(expect.get("tools") or BASE_TOOLS), "skills": list(expect.get("skills") or [])}
+            definition = {"tools": list(expect["tools"] if expect.get("tools") is not None else BASE_TOOLS),
+                          "skills": list(expect.get("skills") or [])}
         elif agents_file.is_file():
             definition = json.loads(read_text(agents_file)).get(main, {})
         for tool in definition.get("tools", BASE_TOOLS):
@@ -1161,9 +1197,28 @@ def inspect_stream(stdout: str, ws: Path, main: str, expect: dict | None = None)
             if tool.startswith("mcp__"):
                 continue  # checked through the server status below
             checks.append(f"ツールがありません: {tool}")
-        for server in summary["mcp_servers"]:
-            if server.get("status") != "connected":
-                checks.append(f"MCP サーバーにつながっていません: {server.get('name')}（{server.get('status')}）")
+        expected_servers = list(expect.get("mcp_servers") or []) if expect is not None else None
+        if expected_servers is None:
+            for server in summary["mcp_servers"]:
+                if server.get("status") != "connected":
+                    checks.append(f"MCP サーバーにつながっていません: {server.get('name')}（{server.get('status')}）")
+        else:
+            # Only the plugin's own servers count; others (e.g. the user's) are listed apart.
+            seen = [s for s in summary["mcp_servers"] if isinstance(s, dict)]
+            matched: set[int] = set()
+            for want in expected_servers:
+                # the exact plugin name first; else another plugin-provided server of the same stem
+                # (never a hand-registered server: that would hide a plugin that did not load)
+                hits = [i for i, s in enumerate(seen) if s.get("name") == want] or \
+                       [i for i, s in enumerate(seen) if str(s.get("name") or "").startswith("plugin:")
+                        and _stem(s.get("name")) == _stem(want)]
+                matched.update(hits)
+                if not hits:
+                    checks.append(f"MCP サーバーが読み込まれていません: {want}")
+                elif not any(seen[i].get("status") == "connected" for i in hits):
+                    states = "、".join(str(seen[i].get("status")) for i in hits)
+                    checks.append(f"MCP サーバーにつながっていません: {want}（{states}）")
+            summary["extra_mcp_servers"] = [s for i, s in enumerate(seen) if i not in matched]
         loaded_skills = {_stem(s) for s in summary["skills"]}
         for skill in definition.get("skills", []):
             if skill not in summary["skills"] and _stem(skill) not in loaded_skills:
@@ -1211,8 +1266,9 @@ def make_parser() -> argparse.ArgumentParser:
                    help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin（Claude Code の定義を"
                         "一時のプラグインに写し、--plugin-dir で動かす）")
     b.add_argument("--plugin-dir", help="claude-plugin で、プラグインを作るフォルダ（既定は作業フォルダの隣の claude-plugin）")
-    b.add_argument("--default-tools", action="store_true",
-                   help="claude-plugin で、--tools を付けない（Claude Code の既定のツールのまま）")
+    b.add_argument("--tools-from-definitions", action="store_true",
+                   help="claude-plugin で、写した定義の組み込みのツールを合わせた --tools を付ける"
+                        "（既定は付けない。利用者と同じ Claude Code の既定のツール）")
     b.add_argument("--parts-from-table", help="このエージェントと、その表の部品をたどって集める")
     b.add_argument("--agent", action="append", help="置き換える（写す）エージェントの定義（何度でも）")
     b.add_argument("--skill", action="append", help="足すスキルのフォルダ（何度でも）")
@@ -1224,6 +1280,8 @@ def make_parser() -> argparse.ArgumentParser:
     b.add_argument("--mcp-env", action="append", help="MCP サーバーの環境変数 KEY=VALUE（何度でも）")
     b.add_argument("--model", help="claude -p の --model")
     b.add_argument("--agent-model", help="エージェントの model を、これに替える（inherit など。claude-plugin では写しの model の行）")
+    b.add_argument("--main-model", help="claude-plugin で、メインのエージェントの写しの model の行だけを、これに替える"
+                                        "（--agent-model より先）")
     b.add_argument("--prompt", help="示すコマンドに入れる頼みの文")
     b.add_argument("--extra-arg", action="append", help="claude に足す引数（何度でも）")
     b.add_argument("--claude-bin", nargs="+", help="claude の代わりに動かすコマンド")

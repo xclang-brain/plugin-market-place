@@ -604,6 +604,29 @@ class SchemaToolTest(unittest.TestCase):
                          '@mcp.tool(annotations=Ann(destructiveHint=True))\ndef d(): pass\n')
         self.assertEqual(pp._destructive_tools(tree), {"w", "d"})
 
+    def test_write_back_detection_forms(self):
+        """書き戻しのツールの見つけ方：名前付きの引数、辞書（annotations={"destructiveHint": True}）、
+        変数に作ってから渡すもの（ほかのファイルで作ったものも）。False のものは拾わない"""
+        import ast
+        tree = ast.parse('WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)\n'
+                         'READ = {"readOnlyHint": True, "destructiveHint": False}\n'
+                         '@mcp.tool(annotations={"destructiveHint": True})\ndef a(): pass\n'
+                         '@mcp.tool(annotations=WRITE)\ndef b(): pass\n'
+                         '@mcp.tool(annotations=READ)\ndef c(): pass\n'
+                         '@mcp.tool(annotations={"destructiveHint": False})\ndef d(): pass\n'
+                         '@mcp.tool(name="e_tool", annotations=SHARED)\ndef e(): pass\n'
+                         'LOOP = LOOP\n@mcp.tool(annotations=LOOP)\ndef f(): pass\n')
+        self.assertEqual(pp._destructive_tools(tree), {"a", "b"})
+        shared = pp._assignments(ast.parse('SHARED = {"destructiveHint": True}\n'))
+        self.assertEqual(pp._destructive_tools(tree, dict(pp._assignments(tree), **shared)), {"a", "b", "e_tool"})
+
+    def test_write_back_tool_is_found(self):
+        """この MCP サーバーの書き戻しのツールが、今の見つけ方で見つかる（見つからないと、書き戻しの守りの試験が黙って外れる）"""
+        if not pp.mcp_registrations():
+            self.skipTest("MCP サーバーがありません")
+        self.assertTrue(any(pp.write_back_tools().values()),
+                        "書き戻しのツール（destructiveHint=True）が MCP サーバーに見つかりません")
+
 
 if __name__ == "__main__":
     unittest.main()

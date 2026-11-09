@@ -86,16 +86,25 @@ def permission_steps(output: Path, mcp_tools: list[str] | None = None, client: s
 
 
 def _claude_steps(output: Path, tools: list[str]) -> list[str]:
+    """Claude Code's two ways. /add-dir only adds the folder: it allows neither Write/Edit nor the Coverity tools,
+    and an agent that runs in the background cannot show a confirmation, so the in-session way also allows them
+    through /permissions. Starting Claude Code again with --allowedTools is the reliable way for a night run."""
+    read = (f"Coverity から読むツール（{'、'.join(tools)}）" if tools else
+            "Coverity から読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ。/mcp で見える名前）")
     first = (f"チャットで /add-dir \"{output}\" と入力し、確認で、このセッションのあいだの許可を選びます。"
-             "uv のコマンドは、/permissions で Bash(uv run *) を許可します。Coverity から読むツールは、最初の確認で許可を選びます。"
-             "Coverity に書き戻すツールの確認には、許可を与えません。")
+             "/add-dir だけでは足りません（フォルダが加わるだけで、ファイルの書き込みもツールも許可されません）。"
+             f"続けて /permissions で Bash(uv run *)、ファイルの書き込み（Write・Edit）、{read}を許可します。"
+             "Write と Edit の許可は、このセッションのどのファイルにも効きます（実行フォルダにだけ書くのは、エージェントの決まりです）。"
+             "Coverity に書き戻すツールは許可しません。")
     restart = f"または、Claude Code を claude --add-dir \"{output}\" --allowedTools \"Bash(uv run *)\" \"Write\" \"Edit\""
     agent = "エージェントを --agent で起動して始めたときは、同じ --agent も後ろに足します。"
+    sure = "夜通しの実行には、こちらが確実です。"
+    apply = "反映するときに確認が出ます。反映は、--agent を付けずに起動したセッションでします"
     if tools:
         names = " ".join(f'"{t}"' for t in tools)
-        return [first, f"{restart} {names} で起動し直します（{agent}Coverity に書き戻すツールは許可しません。反映するときに確認が出ます）。"]
-    return [first, f"{restart} で起動し直します（{agent}Coverity から読むツールは、最初の確認で許可を選びます。"
-                   "書き戻すツールは前もって許可しません）。"]
+        return [first, f"{restart} {names} で起動し直します（{sure}{agent}Coverity に書き戻すツールは許可しません。{apply}）。"]
+    return [first, f"{restart} で起動し直します（{sure}{agent}Coverity から読むツール（接続の確かめ・警告の検索・"
+                   f"警告の詳細・反映の確かめ）も、/mcp で見える名前を後ろに 1 つずつ足します。書き戻すツールは前もって許可しません。{apply}）。"]
 
 
 # ---- settings ---------------------------------------------------------------------------------

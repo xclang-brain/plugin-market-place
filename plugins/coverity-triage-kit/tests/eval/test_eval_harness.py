@@ -547,6 +547,7 @@ class Stage2Test(unittest.TestCase):
         self.assertEqual(argv[argv.index("--agent") + 1], f"{plugin_name}:{worker}", "the worker is the main agent")
         self.assertNotIn("--agents", argv)
         self.assertNotIn("--model", argv, "the definition's model line is used")
+        self.assertNotIn("--tools", argv, "the plugin runs with Claude Code's own tools, like a user's session")
         self.assertIn("指示ファイル", argv[2])
         self.assertEqual(sorted(p.name for p in (plugin_dir / "agents").iterdir()), [f"{worker}.md"],
                          "stage 2: the worker alone")
@@ -808,11 +809,12 @@ class Stage3Test(unittest.TestCase):
         out = self.base / "out"
         proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage3" / "run_stage3.py"),
                                "--format", PLUGIN, "--build-only", "--no-sync", "--variant", "default", "--limit", "1",
-                               "--agent-model", "inherit", "--out", str(out)],
+                               "--agent-model", "inherit", "--model", "claude-haiku-5-5", "--out", str(out)],
                               capture_output=True, env=ENV, timeout=600)
         self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")[-2000:])
         data = json.loads(proc.stdout.decode("utf-8"))
         self.assertEqual(data["meta"]["format"], PLUGIN)
+        self.assertIn("claude-haiku-5-5", data["meta"]["model"])
         variant = data["variants"][0]
         argv = variant["command"]
         plugin_name = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
@@ -823,13 +825,17 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual(argv[argv.index("--agent") + 1], f"{plugin_name}:{orchestrator}")
         self.assertIn("1 件だけ", argv[2])
         self.assertIn("Bash(uv run *)", argv)
+        self.assertNotIn("--tools", argv, "the plugin runs with Claude Code's own tools, like a user's session")
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-5-5")
         self.assertIn(f"mcp__plugin_{plugin_name}_{ek.part('Coverity との通信', ROOT)['name']}__*", argv)
         roles = {ek.part(word, ROOT)["name"] for word in ("統括", "作業役", "検証役", "統合役")}
         self.assertEqual({p.stem for p in (plugin_dir / "agents").iterdir()}, roles)
         for path in (plugin_dir / "agents").iterdir():
             old = (ROOT / "agents" / path.name).read_text(encoding="utf-8").split("\n")
             new = path.read_text(encoding="utf-8").split("\n")
-            self.assertEqual([b for a, b in zip(old, new) if a != b], ["model: inherit"], "--agent-model: only the model line")
+            want = "model: claude-haiku-5-5" if path.stem == orchestrator else "model: inherit"
+            self.assertEqual([b for a, b in zip(old, new) if a != b], [want],
+                             "--model goes into the main agent's model line, --agent-model into the others'")
         self.assertIn(ek.part("一括実行", ROOT)["name"], {p.name for p in (plugin_dir / "skills").iterdir()})
         self.assertNotIn(ek.part("画面の入口", ROOT)["name"], {p.name for p in (plugin_dir / "skills").iterdir()},
                          "a skill named in no table is not copied")
@@ -841,7 +847,8 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual(ek.working_changes(repo), [])
         record = json.loads((out / "default" / "variant.json").read_text(encoding="utf-8"))
         self.assertEqual(record["format"], PLUGIN)
-        self.assertEqual({a["model"] for a in record["agents"]}, {"inherit"})
+        self.assertEqual({a["name"]: a["model"] for a in record["agents"]},
+                         {n: ("claude-haiku-5-5" if n == orchestrator else "inherit") for n in roles})
 
 
 class Stage4Test(unittest.TestCase):
@@ -934,13 +941,51 @@ class Stage4Test(unittest.TestCase):
                              self.summary_for([event_final("--experimental で起動してください")]), [], tool, names)
         self.assertFalse({c["id"]: c for c in two}["three_causes"]["ok"])
 
+    def test_analyze_no_tool_in_claude_code(self):
+        names = {"screen": "entry", "run": "batch", "help": "helper"}
+        tool = "kit_open"
+        good = ("Claude Code には Web管理画面がありません。Web管理画面は GitHub Copilot CLI の機能です。"
+                "claude --agent kit:lead で起動して「High だけトリアージして」と頼むか、/kit:batch で呼んでください。")
+        ok = stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude", "expect_skill": "{screen}"}, fake_run([]),
+                            self.summary_for([event_tool("s", "Skill", {"skill": "entry"}), event_final(good)]),
+                            [], tool, names)
+        self.assertTrue(all(c["ok"] for c in ok), ok)
+        self.assertEqual({c["id"] for c in ok} >= {"claude_code_ways", "no_copilot_causes", "no_work", "expected_skill"}, True)
+        plain_slash = stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
+                                     self.summary_for([event_final(good.replace("/kit:batch", "/batch"))]), [], tool, names)
+        self.assertTrue({c["id"]: c for c in plain_slash}["claude_code_ways"]["ok"], "/<名前> without the plugin name counts")
+        causes = good + " または copilot --experimental で起動し、/extensions mode を確かめてください。"
+        listed = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
+                                                     self.summary_for([event_final(causes)]), [], tool, names)}
+        self.assertFalse(listed["no_copilot_causes"]["ok"])
+        self.assertIn("試験的な機能", listed["no_copilot_causes"]["detail"])
+        for missing, word in (("claude --agent kit:lead で起動して", "claude --agent"), ("GitHub Copilot CLI の機能です。", "Copilot CLI"),
+                              ("/kit:batch で呼んでください", "/batch")):
+            with self.subTest(word=word):
+                got = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
+                                                          self.summary_for([event_final(good.replace(missing, ""))]),
+                                                          [], tool, names)}
+                self.assertFalse(got["claude_code_ways"]["ok"])
+                self.assertIn(word, got["claude_code_ways"]["detail"])
+        worked = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
+                                                     self.summary_for([event_tool("a", "Agent", {"subagent_type": "kit:lead"}),
+                                                                       event_final(good)]), [], tool, names)}
+        self.assertFalse(worked["no_work"]["ok"])
+
     def test_cases_file(self):
         data = json.loads((HERE / "stage4" / "cases.json").read_text(encoding="utf-8"))
         expects = [c["expect"] for c in data["cases"]]
         self.assertGreaterEqual(len(expects), 6)
-        self.assertEqual(set(expects), {"open", "not_open", "no_tool"})
+        self.assertEqual(set(expects), {"open", "not_open", "no_tool", "no_tool_claude"})
         self.assertTrue(any(c["prompt"].startswith("/{run}") for c in data["cases"]))
-        self.assertTrue(all(c.get("mcp", True) is False for c in data["cases"] if c["expect"] == "no_tool"))
+        self.assertTrue(all(c.get("mcp", True) is False for c in data["cases"] if c["expect"] in stage4.NO_TOOL_EXPECTS))
+        # stage 4 runs in Claude Code: the three Copilot CLI causes are expected only when the user says Copilot CLI
+        for case in data["cases"]:
+            if case["expect"] == "no_tool":
+                self.assertIn("Copilot CLI", case["prompt"], case["name"])
+            if case["expect"] == "no_tool_claude":
+                self.assertIn("Claude Code", case["prompt"], case["name"])
+                self.assertNotIn("Copilot", case["prompt"], case["name"])
 
     @unittest.skipUnless(HAS_PARTS and HAS_GIT, "プラグインの部品か git がない")
     def test_build_only(self):

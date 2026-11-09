@@ -5,8 +5,11 @@ EVAL は、部品を Claude Code で `claude -p` で動かします（設計書 
 
 | `--format` | 使う定義 | 動かし方 |
 | --- | --- | --- |
+| `claude-plugin` | Claude Code の定義（`agents/<名前>.md`）と表のスキルと MCP サーバーを、そのまま一時のプラグインに写す | 本物のプラグインとして `--plugin-dir <一時のプラグイン> --agent <プラグイン>:<エージェント>` で動かす。利用者と同じく `--tools` は付けない |
 | `copilot-converted`（既定） | Copilot CLI の定義（`com.github.copilot/agents/<名前>.agent.md`）を、Claude Code の形に置き換える | 作業フォルダの `.claude/` に置き、`--agents` と `--mcp-config` で渡す |
-| `claude-plugin` | Claude Code の定義（`agents/<名前>.md`）と表のスキルと MCP サーバーを、そのまま一時のプラグインに写す | 本物のプラグインとして `--plugin-dir <一時のプラグイン> --agent <プラグイン>:<エージェント>` で動かす |
+
+- **Claude Code のエージェント（`agents/<名前>.md`）を EVAL するときは、`--format claude-plugin` を使います。** 利用者が Claude Code でプラグインを動かすときと同じ形（プラグインとして読み込み、Claude Code の既定のツールのまま）で動かします。
+- `copilot-converted` は、Copilot CLI の定義（`com.github.copilot/agents/`）を確かめるための形です。`--format` を付けないときは、こちらになります。
 
 | 段階 | 道具 | 確かめること |
 | --- | --- | --- |
@@ -73,7 +76,7 @@ uv run --native-tls --quiet tests/eval/stage2/run_stage2.py --format claude-plug
 
 - 確かめは、`must`（落ちたら不合格）と `should`（記録だけ）に分けてあります。表の「毎回」のスキルを読んだかも `should` で記録します。
 - `--judge` を付けると、モデル（既定 `claude-sonnet-5-5`、ツールなし）が中身（見立て・根拠・修正・逸脱コメント）を1〜5で採点し、その JSON を記録します。合否には入れません。
-- 主なオプション：`--format F`、`--only <名前か番号>`、`--model M`（既定は作業エージェントの定義の claude のモデル。`claude-plugin` では定義の `model`）、`--agent-model M`、`--timeout S`（既定 900 秒）、`--max-budget-usd X`、`--build-only`（作るだけ）。
+- 主なオプション：`--format F`、`--only <名前か番号>`、`--model M`（既定は作業エージェントの定義の claude のモデル。`claude-plugin` では定義の `model`）、`--agent-model M`、`--tools-from-definitions`（`claude-plugin` で、定義の組み込みのツールを合わせた `--tools` を付ける。既定は付けない）、`--timeout S`（既定 900 秒）、`--max-budget-usd X`、`--build-only`（作るだけ）。
 
 ### 3段階目：一括のトリアージ
 
@@ -86,9 +89,10 @@ uv run --native-tls --quiet tests/eval/stage3/run_stage3.py --format claude-plug
 - 自己診断のスキルの一時コピーで、見本のリポジトリ（git、push 先、偽の Coverity）を作ります（`selftest.py start --sections 2` と `sample`）。
 - 統括エージェントの表を（表のエージェントの表まで）たどって、エージェント・スキル・MCP サーバーをすべて取り出し、統括エージェントをメインにして動かします（`claude -p "Coverity の警告を、条件ファイル all.yaml で、すべてトリアージしてください。途中で質問せず、最後まで進めてください。" --agent <統括> --max-turns 500`）。実行フォルダの置き場所（リポジトリの外）は `--add-dir` で渡します。
 - `claude-plugin` では、統括エージェントと、表でたどれるエージェント（`agents/<名前>.md`）・スキル・MCP サーバーを、そのまま `<out>/<変種>/claude-plugin/` に写し、`--plugin-dir <out>/<変種>/claude-plugin --agent <プラグイン>:<統括>` で動かします。どの表にもないスキルは写しません（Claude Code は、プラグインの `skills/` のスキルをすべて読むため）。
+- `claude-plugin` で `--model` を付けたときは、`claude` の `--model` に渡すだけでなく、写した統括エージェントの定義の `model` の行もそれに替えます（`--agent` で動かすメインのエージェントに、`--model` と定義の `model` のどちらが効くかによらず、そのモデルで動くようにするため）。ほかのエージェントの `model` の行は、`--agent-model` のときだけ替えます。
 - 変種：`default`（確かめと統合なし。設定の既定）と `full`（両方あり）。`--variant` で選びます（既定は両方）。
 - 確かめ：自己診断の `check-run`（2-2〜2-6：最後まで進む、すべての作業が終わる、推奨が想定と合う、グループ、成果物と作業中のファイル）、`summary.html` と `approvals.json`、すべての作業の `result.json`、確かめありなら `review.json`、利用者のリポジトリが変わらない、役のエージェントだけを呼んだ、統括エージェントがファイルを書いていない、実行フォルダが1つ。件数・推奨の一致・時間・ターン・費用も記録します。
-- 主なオプション：`--format F`、`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル。`claude-plugin` では定義の `model`）、`--agent-model M`（ほかのエージェント。既定は各定義のモデル。`claude-plugin` では、写したすべての定義の `model` の行を替える）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
+- 主なオプション：`--format F`、`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル。`claude-plugin` では定義の `model`。付けたときは、写した統括の `model` の行も替える）、`--agent-model M`（ほかのエージェント。既定は各定義のモデル。`claude-plugin` では、写した定義の `model` の行を替える。統括は `--model` が先）、`--tools-from-definitions`（`claude-plugin` で `--tools` を付ける。既定は付けない）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
 
 ### 4段階目：画面の入口
 
@@ -101,7 +105,8 @@ python3 tests/eval/stage4/run_stage4.py
 
 - 作業フォルダ（見本のリポジトリ）の `.claude/skills/` に、画面の入口・一括実行・困ったときのスキルをコピーします。画面を開くツールは、`fake_open_server.py`（stdio の MCP サーバー）が代わりをします。呼ばれるたびに記録（`calls.jsonl`）に書き、偽の URL と注意の文を返します。ツールの説明と注意の文は、エクステンションの `core/messages.mjs` から読みます。
 - 使えるツールは Read・Glob・Grep・Skill・Bash で、許可するのは Skill と画面のツールだけです。コマンドは断られます（試みたことは記録に残ります）。
-- 課題（`stage4/cases.json`）：「Coverity の警告をトリアージして」「未処理の Coverity 警告を調べて修正案と逸脱コメントを作って」「Coverity の警告を画面で見ながらトリアージしたい」（画面を開く。`requestText` が頼みの文と同じ）、「/<一括実行のスキル> High だけ」「CID 12345 が本物か調べて」（画面を開かない）、画面のツールがないときの「Coverity の警告をトリアージして」（3つの原因を示し、作業を始めない）。
+- 課題（`stage4/cases.json`）：「Coverity の警告をトリアージして」「未処理の Coverity 警告を調べて修正案と逸脱コメントを作って」「Coverity の警告を画面で見ながらトリアージしたい」（画面を開く。`requestText` が頼みの文と同じ）、「/<一括実行のスキル> High だけ」「CID 12345 が本物か調べて」（画面を開かない）、画面のツールがないときの2つ：「GitHub Copilot CLI でプラグインを入れて使っています。Coverity の警告をトリアージして」（`no_tool`。Copilot CLI の3つの原因を示し、作業を始めない）と「Claude Code にプラグインを入れました。Coverity の警告をトリアージして」（`no_tool_claude`。Web管理画面は Copilot CLI の機能であること、`claude --agent` と `/<一括実行のスキル>` の呼び方を示し、3つの原因は示さず、作業を始めない）。
+- 4段階目は `claude -p`（Claude Code）で動くので、画面の入口のスキルは「Claude Code で動いているとき」の答え方をします。Copilot CLI の3つの原因を確かめる課題は、利用者が Copilot CLI で使っていると頼みの文で言います（スキルは、利用者が言ったツールに従います）。
 - **名前の読み替え**：Claude Code では、このツールは `mcp__extension__coverity-triage-kit_open` に見えます。Copilot CLI では、エクステンションのツールは `coverity-triage-kit_open` のままです。回数と `requestText` は、サーバーの記録で数えます。
 - 読んだスキルは、Skill のツールの呼び出しと、ツールの引数に出るスキルのフォルダ（`.claude/skills/<名前>/`）から数えます。`/<スキル>` で始まる頼みは、`claude -p` の記録に展開が出ないので、始まりの知らせのスラッシュコマンドにその名前があれば、読んだものとします。
 - 主なオプション：`--only`、`--model M`（既定 `claude-sonnet-5-5`）、`--timeout S`（既定 240 秒）、`--build-only`。
@@ -128,6 +133,7 @@ python3 tests/eval/stage4/run_stage4.py
 次は Claude Code では確かめられません。設計書 9.4 の表のとおり、Copilot CLI で手で確かめ、版と日付を書きます。
 
 - ask_user（AskUserQuestion）：`claude -p` には、メインのエージェントにもありません。そのため、2段階目の「足りない情報を聞く」「直す前に同意を得る」道筋は、ここでは動きません（頼みの文を、質問の要らない形にしてあります）。作業エージェントは「ほかのエージェントからの依頼」として動きます。
+- Claude Code では、サブエージェントとして始めた作業エージェントにも AskUserQuestion がないので、差分を「案」として返すだけです。差分を示し、同意を得てから直す道筋は、`claude --agent coverity-triage-kit:triage-worker` で起動した会話（`-p` なし）で、手で確かめます。
 - 3段階目の始め方：ここでは、統括エージェントをメイン（`--agent`）にします（Copilot CLI では、エクステンションが `startAgent` で始めます）。
 - Copilot CLI での、`com.github.copilot/agents/` の `.md` の読み込み、プラグインの名前の付いたエージェントとスキルの呼び方、`mcp.json` の `${…}` の展開。Claude Code での同じこと（`agents/`、`<プラグイン>:<名前>`、`.mcp.json` の `${CLAUDE_PLUGIN_ROOT}`）は、`--format claude-plugin` で確かめられます。
 - エクステンション（Web管理画面）。4段階目は、画面を開くツールの代わりのサーバーで、入口の選ばれ方だけを確かめます。画面の流れは `tests/extension/`（偽の SDK）と手での確認です。
@@ -163,7 +169,8 @@ python3 tests/eval/claude_adapter.py build --workspace "<作業フォルダ>" --
 | --- | --- |
 | `--format F` | `copilot-converted`（既定）か `claude-plugin`（下の「claude-plugin」） |
 | `--plugin-dir <フォルダ>` | `claude-plugin` で、一時のプラグインを作る場所（既定は作業フォルダの隣の `claude-plugin`） |
-| `--default-tools` | `claude-plugin` で、`--tools` を付けない |
+| `--tools-from-definitions` | `claude-plugin` で、写した定義の組み込みのツールを合わせた `--tools` を付ける（既定は付けない） |
+| `--main-model M` | `claude-plugin` で、メインのエージェントの写しの `model` の行だけを替える（`--agent-model` より先） |
 | `--agent <定義>` | 表をたどらずに、このエージェントだけを置き換える（何度でも） |
 | `--skill <フォルダ>` | スキルを足す。表の名前と同じなら、その行のスキルとして使う |
 | `--mcp [名前=]<フォルダ>` | MCP サーバーを足す |
@@ -185,10 +192,11 @@ python3 tests/eval/claude_adapter.py build --workspace "<作業フォルダ>" --
 
 Claude Code の定義（`agents/<名前>.md`）から、表の部品をたどって集め、一時のプラグインに写します。
 
-- 写すもの：エージェントの定義（変えずに。`--agent-model` のときだけ `model` の行を替える）、表のスキル（`skills/<名前>/`）、表の MCP サーバー（元と同じ場所。`mcp-servers/<名前>/`）。どの表にもないスキルは写しません。
+- 写すもの：エージェントの定義（変えずに。`--agent-model` と `--main-model` のときだけ `model` の行を替える）、表のスキル（`skills/<名前>/`）、表の MCP サーバー（元と同じ場所。`mcp-servers/<名前>/`）。どの表にもないスキルは写しません。
 - `.claude-plugin/plugin.json`：元のマニフェストの写し（名前と版は同じ。場所を指すキー `skills` などは外す）。
 - `.mcp.json`：元の `.mcp.json` の登録（`${CLAUDE_PLUGIN_ROOT}` のまま）に、偽の Coverity の環境変数と `--mcp-env` を足したもの。表に MCP サーバーがなければ作りません。
-- 一時のプラグインの場所は `--plugin-dir`（既定は作業フォルダの隣の `claude-plugin`）。元のプラグインのフォルダの中、作業フォルダの中と上は断ります。作ったことのあるプラグインのフォルダは空にしてから作り直し、ほかのファイルのあるフォルダは断ります。
+- 一時のプラグインの場所は `--plugin-dir`（既定は作業フォルダの隣の `claude-plugin`）。元のプラグインのフォルダの中、作業フォルダの中と上は断ります。
+- 作ったフォルダには、印のファイル `.claude-eval-plugin`（中身は `{"made_by": "claude_adapter"}`）を置きます。次に作るときは、この印のあるフォルダだけを空にしてから作り直します。印のないフォルダは、空でなければ断り、何も消しません（`.claude-plugin/plugin.json` のある本物のプラグインのフォルダも同じです）。
 - 作業フォルダには、コマンド（`.claude/eval/command.json`）だけを書きます（エージェントとスキルは、プラグインから読まれる）。
 
 ```text
@@ -200,11 +208,12 @@ python3 tests/eval/claude_adapter.py collect --format claude-plugin agents/triag
 python3 tests/eval/claude_adapter.py build --format claude-plugin --workspace "<作業フォルダ>" --plugin-dir "<一時のプラグイン>" --parts-from-table agents/triage-worker.md --fake-data "<偽の警告のファイル>" --prompt "List the tools and skills you have, one per line" --run --inspect
 ```
 
-作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --permission-mode acceptEdits --tools <使うツール> --allowedTools "Bash(uv run *)" Skill "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
+作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run *)" Skill "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
 
-- `--tools` は copilot-converted と同じ決まりで、写した定義の `tools` の組み込みのツールを合わせたものです（`tools` のない定義は基本のツールすべて）。`--default-tools` で外せます（Claude Code の既定のツールのまま）。
+- 既定では `--tools` を付けません。利用者がプラグインを動かすときと同じ、Claude Code の既定のツールのままです（既定のツールに足りないものがあれば、利用者にも足りないので、EVAL でもそれが出るようにするため）。`--tools-from-definitions` を付けたときだけ、copilot-converted と同じ決まりで、写した定義の `tools` の組み込みのツールを合わせたものを `--tools` に渡します（`tools` のない定義は基本のツールすべて）。
 - `--mcp-config` と `--strict-mcp-config` は付けません（プラグインの MCP サーバーは、`.mcp.json` から読まれます）。
-- `--inspect` は、始まりの知らせに、写したスキルすべて、メインのエージェント、その定義のツール（`disallowedTools` を除く）があるかを確かめます。名前の前の `<プラグイン>:` は除いて比べます。MCP サーバーの名前は `plugin:<プラグイン>:<登録名>` と出ます。
+- `--inspect` は、始まりの知らせに、写したスキルすべて、メインのエージェント、その定義の `tools` の行のツール（`disallowedTools` を除く。`tools` の行のない定義は、`--tools` を付けたときだけ基本のツール）、写した MCP サーバーがあるかを確かめます。名前の前の `<プラグイン>:` は除いて比べます。
+- MCP サーバーは、`plugin:<プラグイン>:<登録名>` の名前（または最後の `:` の後が同じ名前）で、状態が `connected` であることを確かめます。始まりの知らせにないとき（`.mcp.json` が読まれなかったとき）も、つながっていないときも、確かめに出ます。プラグインのものでないサーバー（利用者の設定のものなど）は確かめず、`extra_mcp_servers` に分けて示します。
 
 ## 試験
 

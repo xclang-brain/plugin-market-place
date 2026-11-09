@@ -189,6 +189,28 @@ def agent_info(name, kind="copilot"):
             "error": problem or table_error}
 
 
+def mcp_tool_problems(name, kind, fm, table, known):
+    """frontmatter の tools・disallowedTools の MCP のツールで、表にない MCP サーバーのものと、サーバーにないツール。
+    Claude Code は mcp__… の名前（2つの形）、Copilot CLI は <登録名>/<ツール>"""
+    problems = []
+    for key in ("tools", "disallowedTools"):
+        for tool in pp.tool_list(fm.get(key)):
+            if kind == "claude":
+                parsed = pp.parse_claude_mcp_tool(tool)
+                if parsed is None:
+                    continue
+                server, tool_name, _ = parsed
+            elif isinstance(tool, str) and "/" in tool:
+                server, tool_name = tool.split("/", 1)
+            else:
+                continue
+            if server not in table:
+                problems.append(f"{name}: {key} の {tool} の MCP サーバーが「使う部品」の表にありません")
+            elif known and tool_name != "*" and tool_name not in known:
+                problems.append(f"{name}: {key} の {tool} は、MCP サーバーにないツールです")
+    return problems
+
+
 def resolve(name, kind="copilot"):
     """表の名前が指す部品の種類（skill / agent / mcp）。なければ None。kind はエージェントの形（copilot / claude）"""
     if (pp.SKILLS_DIR / name / "SKILL.md").is_file():
@@ -342,24 +364,25 @@ class AgentIndependence(unittest.TestCase):
                 self.assertEqual(found, [], f"{name}: 自分の名前を書いています")
 
     def test_mcp_tools_only_for_servers_in_the_table(self):
+        """tools でも disallowedTools でも、MCP のツールは「使う部品」の表の MCP サーバーのもの（設計書 9.1）"""
         known = pp.all_mcp_tool_names()
         for kind, name in self.agents:
             info = agent_info(name, kind)
             table = {row[1] for row in info["rows"]}
-            for tool in pp.tool_list(info["fm"].get("tools")):
-                if kind == "claude":
-                    parsed = pp.parse_claude_mcp_tool(tool)
-                    if parsed is None:
-                        continue
-                    server, tool_name, _ = parsed
-                elif isinstance(tool, str) and "/" in tool:
-                    server, tool_name = tool.split("/", 1)
-                else:
-                    continue
-                with self.subTest(agent=pp.rel(info["path"]), tool=tool):
-                    self.assertIn(server, table, f"{name}: tools の {tool} の MCP サーバーが「使う部品」の表にありません")
-                    if known and tool_name != "*":
-                        self.assertIn(tool_name, known, f"{name}: {tool} は、MCP サーバーにないツールです")
+            with self.subTest(agent=pp.rel(info["path"])):
+                self.assertEqual(mcp_tool_problems(name, kind, info["fm"], table, known), [])
+
+    def test_the_mcp_tool_check_reads_disallowed_tools(self):
+        """表に MCP サーバーがないエージェントの disallowedTools に、そのサーバーのツールを書くと、見つける（両方の形）"""
+        servers = sorted(pp.mcp_registrations())
+        if not servers:
+            self.skipTest("MCP サーバーがありません")
+        server = servers[0]
+        claude = {"disallowedTools": ", ".join(pp.claude_mcp_tool_names(server, "any_tool"))}
+        self.assertEqual(len(mcp_tool_problems("x", "claude", claude, set(), set())), 2)
+        copilot = {"disallowedTools": [f"{server}/any_tool"]}
+        self.assertEqual(len(mcp_tool_problems("x", "copilot", copilot, set(), set())), 1)
+        self.assertEqual(mcp_tool_problems("x", "claude", claude, {server}, set()), [])
 
     def test_no_stage4_words(self):
         """エージェントは、4段階目（エクステンション）を知らない"""

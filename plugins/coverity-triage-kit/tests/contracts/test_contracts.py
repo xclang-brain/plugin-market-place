@@ -740,10 +740,14 @@ class ClaudeCopilotParityTest(unittest.TestCase):
                                  f"{name}: Claude Code の tools が、Copilot CLI の tools を読み替えたものと違います")
 
     def write_back(self):
+        """書き戻しのツールの、Claude Code の2つの名前の形。見つからなければ失敗にする
+        （見つけ方が古くなったまま、守りが黙って外れないように）"""
         tools = set()
         for server, names in pp.write_back_tools().items():
             for tool in names:
                 tools |= set(pp.claude_mcp_tool_names(server, tool))
+        self.assertTrue(tools, "書き戻しのツール（destructiveHint=True）が MCP サーバーに見つかりません。"
+                               "ツールの登録の書き方を変えたなら、plugin_parts._destructive_tools も直してください")
         return tools
 
     def test_orchestrator_cannot_edit_or_write_back(self):
@@ -760,32 +764,31 @@ class ClaudeCopilotParityTest(unittest.TestCase):
         disallowed = set(pp.tool_list(fm.get("disallowedTools")))
         must = {"Edit", "Write"} | self.write_back()
         self.assertEqual(sorted(must - disallowed), [], "統括エージェントの disallowedTools に足りないものがあります")
-        if not self.write_back():
-            self.skipTest("書き戻しのツール（destructiveHint=True）が MCP サーバーに見つかりません")
 
     def test_mcp_tools_follow_the_table(self):
-        """Claude Code のエージェントの MCP のツールは、表の MCP サーバーのものだけ。2つの名前の形をどちらも書く。
-        書き戻しのツールは、どのエージェントの tools にも入れない（Copilot CLI の形も）"""
+        """Claude Code のエージェントの MCP のツールは、tools でも disallowedTools でも、表の MCP サーバーのものだけ
+        （設計書 9.1）。2つの名前の形をどちらも書く。書き戻しのツールは、どのエージェントの tools にも入れない（Copilot CLI の形も）"""
         write_back = self.write_back()
         plain = {t for names in pp.write_back_tools().values() for t in names}
         for name in self.names:
             (fa, a, _), (fb, _, _) = self.pair(name)
             rows, _ = pp.parts_table(a)
             table = {row[1] for row in rows or []}
-            tools = pp.tool_list(fa.get("tools"))
-            forms = {}
-            for tool in tools:
-                parsed = pp.parse_claude_mcp_tool(tool)
-                if parsed is None:
-                    continue
-                server, tool_name, form = parsed
-                forms.setdefault((server, tool_name), set()).add(form)
-                with self.subTest(agent=name, tool=tool):
-                    self.assertIn(server, table, f"{name}: tools の {tool} の MCP サーバーが「使う部品」の表にありません")
-                    self.assertNotIn(tool, write_back, f"{name}: tools に書き戻しのツール {tool} があります")
-            for (server, tool_name), seen in sorted(forms.items()):
-                with self.subTest(agent=name, tool=f"{server}/{tool_name}"):
-                    self.assertEqual(seen, {"plugin", "hand"}, f"{name}: {tool_name} を2つの名前の形で書いていません")
+            for key in ("tools", "disallowedTools"):
+                forms = {}
+                for tool in pp.tool_list(fa.get(key)):
+                    parsed = pp.parse_claude_mcp_tool(tool)
+                    if parsed is None:
+                        continue
+                    server, tool_name, form = parsed
+                    forms.setdefault((server, tool_name), set()).add(form)
+                    with self.subTest(agent=name, key=key, tool=tool):
+                        self.assertIn(server, table, f"{name}: {key} の {tool} の MCP サーバーが「使う部品」の表にありません")
+                        if key == "tools":
+                            self.assertNotIn(tool, write_back, f"{name}: tools に書き戻しのツール {tool} があります")
+                for (server, tool_name), seen in sorted(forms.items()):
+                    with self.subTest(agent=name, key=key, tool=f"{server}/{tool_name}"):
+                        self.assertEqual(seen, {"plugin", "hand"}, f"{name}: {key} の {tool_name} を2つの名前の形で書いていません")
             for tool in pp.tool_list(fb.get("tools")):
                 with self.subTest(agent=name, copilot_tool=tool):
                     self.assertNotIn(str(tool).split("/", 1)[-1] if "/" in str(tool) else None, plain,

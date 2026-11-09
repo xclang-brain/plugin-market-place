@@ -167,25 +167,43 @@ Claude Code の中では、`/plugin marketplace add xclang-brain/plugin-market-p
 | 段階 | 呼び方 |
 | --- | --- |
 | 1段階目 | `/coverity-triage-kit:<スキル>`（ほかに同じ名前のスキルがなければ `/<スキル>` でも）。頼みの文に合うスキルを、AI が選ぶこともあります。MCP サーバーのツールは、チャットで頼むと使われます |
-| 2段階目 | 「triage-worker エージェントで CID 12345 をトリアージして」のように、作業エージェントの名前を挙げて頼みます（`@` で選んでもかまいません）。または `claude --agent coverity-triage-kit:triage-worker` で起動して、「CID 12345 をトリアージして」と頼みます |
-| 3段階目 | `claude --agent coverity-triage-kit:triage-orchestrator` で起動して、「High だけトリアージして」のように頼みます。または `/coverity-triage-kit:coverity-run High だけ` と入力します（会話の主役が一括実行のスキルに従い、プラグインの作業・検証・統合のエージェントを呼びます） |
+| 2段階目 | `claude --agent coverity-triage-kit:triage-worker` で起動して、「CID 12345 をトリアージして」と頼みます。差分を見せて、同意したときに作業中のファイルを直す流れは、この起動のしかたのときだけです。「triage-worker エージェントで CID 12345 をトリアージして」のように名前を挙げて頼む（`@` で選ぶ）こともできますが、そのときは、修正の差分を案として返すだけで、ファイルは直しません |
+| 3段階目 | `claude --agent coverity-triage-kit:triage-orchestrator` で起動して、「High だけトリアージして」のように頼みます。または `/coverity-triage-kit:coverity-run High だけ` と入力します（会話の主役が一括実行のスキルに従い、プラグインの作業・検証・統合のエージェントを呼びます）。反映は、下の4の終わりのとおり、`--agent` を付けずに起動した Claude Code で行います |
 | 4段階目 | 使えません（Copilot CLI だけ）。「Coverity の警告をトリアージして」と頼んでも、画面は開きません |
 
-- 作業エージェントが質問したいのに、質問の道具がないときは、聞くことを返事に書いて止まります。チャットで答えると続きをします。
+- 名前を挙げて頼んだ（`@` で選んだ）作業エージェントは、会話の主役から呼ばれるエージェントとして動きます。Claude Code は、そのエージェントに質問の道具を渡しません。足りない情報があるときは、聞くことを返事に書いて止まります。チャットで答えると、続きを頼めます。作業中のファイルを直す同意も受け取れないので、修正は差分の案のまま返します。
+- `claude --agent coverity-triage-kit:triage-worker` で起動したときは、作業エージェントが会話の主役なので、質問し、差分を見せて、同意したときだけファイルを直します。
 - 統括エージェントが呼んだエージェントは、裏で動くことがあります。終わると、結果が知らせとして届きます。
 
 ### 4. 前もって許可する
 
-一括のトリアージは、始めたら終わるまで質問しません。途中で許可の確認で止まらないよう、始める前に、次のどちらかをします。
+一括のトリアージは、始めたら終わるまで質問しません。統括エージェントが呼んだエージェントは裏で動くことがあり、そのときは許可の確認を出せないので、前もって許可していないツールは使えずに止まります。始める前に、次のどちらかをします。夜通し動かすときは、確実な「起動のときに指定する」を使います。
 
-- チャットで `/add-dir "<output_dir>"` を打ち、出た確認でこのセッションのあいだの許可を選びます。`uv` のコマンドは、`/permissions` で `Bash(uv run *)` を許可します（プラグインのスキルは、Copilot CLI の書き方で許可を持っているので、Claude Code では前もって許可しないと毎回確認が出ます）。
-- または、Claude Code を次のように起動します。
+**起動のときに指定する**：Claude Code を次のように起動します。
 
 ```shell
 claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage"
 ```
 
-3段階目を `--agent` で始めるときは、この後ろに `--agent coverity-triage-kit:triage-orchestrator` を足します。Coverity に書き戻すツール（`coverity_update_triage`）は許可しません。サーバーの名前だけの `mcp__plugin_coverity-triage-kit_coverity-connect` も、書き戻すツールまで許可するので使いません。反映（`/coverity-apply`）のときに確認が出ます。
+3段階目を `--agent` で始めるときは、この後ろに `--agent coverity-triage-kit:triage-orchestrator` を足します。
+
+**起動した後のチャットで指定する**：`/add-dir "<output_dir>"` を打ち、出た確認でこのセッションのあいだの許可を選びます。`/add-dir` は、フォルダを使えるようにするだけで、ツールを許可しません。続けて `/permissions` で、次の7つを許可します（起動のときの指定と同じものです）。
+
+```text
+Bash(uv run *)
+Write
+Edit
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details
+mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage
+```
+
+- `<output_dir>` は実行フォルダの置き場所です（既定は、リポジトリの隣の `coverity-triage-out`）。
+- `Bash(uv run *)` を許可するのは、プラグインのスキルが Copilot CLI の書き方で許可を持っているためです。Claude Code では、前もって許可しないと毎回確認が出ます。
+- `Write` と `Edit` の許可は、実行フォルダだけでなく、このセッションのすべてのファイル（調べているリポジトリも）に効きます。書く場所を実行フォルダに限っているのは、エージェントの決まり（実行フォルダの中の、作業用のコピーと結果のファイルにだけ書く）です。許可の指定で場所を絞ることはしていません。
+- Coverity に書き戻すツール（`coverity_update_triage`）は許可しません。サーバーの名前だけの `mcp__plugin_coverity-triage-kit_coverity-connect` も、書き戻すツールまで許可するので使いません。
+- 反映（`/coverity-triage-kit:coverity-apply`）は、`--agent` を付けずに起動した Claude Code で行います（統括エージェントの会話には、ファイルを書く道具と、反映の確かめ・書き戻しのツールがありません）。書き戻すツールの確認は、そのときに出ます。
 
 ### 5. 気をつけること
 

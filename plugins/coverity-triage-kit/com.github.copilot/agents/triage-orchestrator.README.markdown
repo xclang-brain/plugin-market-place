@@ -85,17 +85,22 @@ Claude Code 用の定義は、プラグインの `agents/triage-orchestrator.md`
    起動のときに `--agent` を付けずに、`/coverity-triage-kit:coverity-run High だけ` と入力しても、同じ流れで始まります（会話の主役が一括実行のスキルに従い、プラグインの作業・検証・統合のエージェントを呼びます）。
 
 - 統括エージェントが呼んだエージェントは、裏で動くことがあります。終わると、結果が知らせとして届きます。
-- 統括エージェントは、ファイルを直す道具と Coverity に書き戻すツールを持ちません。
+- 統括エージェントは、ファイルを直す道具と、反映の確かめと Coverity に書き戻すツールを持ちません。
+- 反映（`/coverity-triage-kit:coverity-apply`）は、`--agent` を付けずに起動した Claude Code で行います（統括エージェントの会話には、ファイルを書く道具と、反映の確かめ・書き戻しのツールがありません）。書き戻すツールの確認は、そのときに出ます。
 
 ### 前もって許可する
 
-チャットで `/add-dir "<output_dir>"` を打ち、`/permissions` で `Bash(uv run *)` を許可します。または、次のように起動します。
+統括エージェントが呼んだエージェントは裏で動くことがあり、そのときは許可の確認を出せないので、前もって許可していないツールは使えずに止まります。夜通し動かすときは、確実な、起動のときの指定を使います。
 
 ```text
 claude --add-dir "<output_dir>" --allowedTools "Bash(uv run *)" "Write" "Edit" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_check_connection" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_search_issues" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_get_issue_details" "mcp__plugin_coverity-triage-kit_coverity-connect__coverity_preview_triage" --agent coverity-triage-kit:triage-orchestrator
 ```
 
-書き戻すツール（`coverity_update_triage`）は前もって許可しません。部品を取り出して MCP サーバーを自分で登録したときは、ツールの名前が `mcp__coverity-connect__<ツール>` になります。
+起動した後のチャットでするときは、`/add-dir "<output_dir>"` を打ってこのセッションのあいだの許可を選び、続けて `/permissions` で、上の指定と同じ7つ（`Bash(uv run *)`、`Write`、`Edit`、Coverity から読む4つのツール）を許可します。`/add-dir` だけでは、ツールは許可されません。
+
+- `Write` と `Edit` の許可は、このセッションのすべてのファイル（調べているリポジトリも）に効きます。書く場所を実行フォルダに限っているのは、エージェントの決まりです。
+- 書き戻すツール（`coverity_update_triage`）は前もって許可しません。
+- 部品を取り出して MCP サーバーを自分で登録したときは、ツールの名前が `mcp__coverity-connect__<ツール>` になります。
 
 ### 取り出して使う
 

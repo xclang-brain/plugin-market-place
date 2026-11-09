@@ -29,7 +29,7 @@ Variants: ``default`` (review and integration off, the design defaults) and ``fu
 
   uv run --native-tls --quiet tests/eval/stage3/run_stage3.py [--format copilot-converted|claude-plugin]
         [--variant default|full]... [--limit N]
-        [--model M] [--agent-model M] [--timeout S] [--max-turns N] [--max-budget-usd X]
+        [--model M] [--agent-model M] [--tools-from-definitions] [--timeout S] [--max-turns N] [--max-budget-usd X]
         [--out DIR] [--build-only] [--no-sync]
 
 Writes <out>/<variant>/ (selftest/, transcript.jsonl, variant.json), <out>/results.json, <out>/report.md.
@@ -208,7 +208,8 @@ def adapter_args(**kw) -> argparse.Namespace:
     base = dict(workspace=None, parts_from_table=None, agent=None, skill=None, mcp=None, plugin_root=None, main=None,
                 output_dir=None, fake_data=None, mcp_env=None, model=None, agent_model=None, prompt=None, extra_arg=None,
                 claude_bin=None, allow_missing=False, run=False, inspect=False, timeout=120.0,
-                format=ek.ADAPTER.FORMAT_CONVERTED, plugin_dir=None, default_tools=False)
+                format=ek.ADAPTER.FORMAT_CONVERTED, plugin_dir=None, tools_from_definitions=False,
+                main_model=None)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -230,7 +231,11 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
         workspace=str(repo), parts_from_table=str(ctx["definition"]), plugin_root=str(ctx["root"]),
         output_dir=str(output_dir), fake_data=str(repo / ".coverity-triage" / "fake-issues.yaml"),
         mcp_env=[f"UV_PROJECT_ENVIRONMENT={venv}"], model=ctx["model"], agent_model=args.agent_model,
-        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin")))
+        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin"),
+        # claude-plugin: --model also goes into the copied orchestrator's model line, so the run does not
+        # depend on whether claude's --model or the main agent's own model wins.
+        main_model=ctx["model"] if args.format == ek.ADAPTER.FORMAT_PLUGIN else None,
+        tools_from_definitions=getattr(args, "tools_from_definitions", False)))
     ek.exclude_in_git(repo, ".claude/")
     head = ek.head(repo)
     prompt = prompt_for(sample["filter"], args.limit)
@@ -354,9 +359,11 @@ def make_parser() -> argparse.ArgumentParser:
                    help="default（確かめと統合なし）か full（両方あり）。何度でも。既定は両方")
     p.add_argument("--limit", type=int, help="調べる件数の上限（頼みの文を「N 件だけ」にする。試しは 1）")
     p.add_argument("--model", help="統括エージェント（メイン）のモデル（既定はその定義の claude-* のモデル。"
-                                   "claude-plugin では定義の model のまま）")
+                                   "claude-plugin では定義の model のまま。付けたときは、写した統括の model の行もこれに替える）")
     p.add_argument("--agent-model", help="エージェントの定義の model を替える（既定は各定義のモデル。"
                                          "claude-plugin では写した定義すべての model の行）")
+    p.add_argument("--tools-from-definitions", action="store_true",
+                   help="claude-plugin で、写した定義の組み込みのツールを合わせた --tools を付ける（既定は付けない）")
     p.add_argument("--timeout", type=float, default=2700.0, help="1つの変種の時間の上限（秒。既定 45 分）")
     p.add_argument("--max-turns", type=int, default=500)
     p.add_argument("--max-budget-usd", type=float, help="1つの変種の費用の上限（claude の --max-budget-usd）")
@@ -386,7 +393,8 @@ def run(args: argparse.Namespace) -> dict:
     agent = ek.ADAPTER.load_agent(definition)
     if plugin:
         model = args.model  # the agent's own model line unless --model is given
-        shown_model = model or f"（定義の model: {agent['fields'].get('model') or 'inherit'}）"
+        shown_model = (f"{model}（写した統括の model の行も {model}）" if model
+                       else f"（定義の model: {agent['fields'].get('model') or 'inherit'}）")
     else:
         model = args.model or ek.ADAPTER.claude_model(agent["fields"].get("model"))
         model = None if model == "inherit" else model

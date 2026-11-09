@@ -11,6 +11,10 @@ Claude Code でも使えるようにしました。GitHub Copilot CLI での使�
 - 同じプラグインを、Claude Code にも入れられます（`claude plugin install coverity-triage-kit@plugin-market-place`）。リポジトリの一番上に、Claude Code 用のマーケットプレイスの一覧を足しました。
 - 1〜3段階目（スキル、MCP サーバー、作業エージェント、統括エージェントでの一括のトリアージ）が使えます。4段階目の Web管理画面は、Copilot CLI だけです。
 - 呼び方、前もって許可するしかた、認証情報の渡し方は、README の「Claude Code で使う」にあります。部品だけを `.claude/agents/` と `.claude/skills/` に取り出す手順は、各エージェントの README にあります。
+- 困ったとき・自己診断・一括実行の許可の案内・画面の入口のスキルが、Claude Code で動いているときは Claude Code の言葉で答えます（Copilot CLI での振る舞いは同じ）。自己診断は、Claude Code では Web管理画面の確かめを skip にします。画面の入口のスキルは、Claude Code では画面を開かず、統括エージェントでの始め方を伝えます。
+- 夜通し動かすときは、起動のときに `claude --add-dir … --allowedTools …` で許可しておくのが確実です。チャットでするときは、`/add-dir` に加えて、`/permissions` で `uv` のコマンド・`Write`・`Edit`・Coverity から読む4つのツールを許可します。`Write` と `Edit` の許可は、セッションのすべてのファイルに効きます。
+- 作業エージェントは、`claude --agent coverity-triage-kit:triage-worker` で起動したときに、差分を見せて、同意したときだけファイルを直します。名前を挙げて頼んだときは、差分を案として返すだけです。
+- 反映（`/coverity-triage-kit:coverity-apply`）は、`--agent` を付けずに起動した Claude Code で行います。
 
 ### エージェントを作り直した
 

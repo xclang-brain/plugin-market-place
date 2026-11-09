@@ -35,6 +35,14 @@ class BasicFlowTest(RunCase):
         out = Path(created["run_dir"]).parent
         self.assertIn(f'/add-dir "{out}"', first)
         self.assertIn("/permissions で Bash(uv run *)", first)
+        # /add-dir allows neither the file writes nor the Coverity tools: the first way allows them too
+        self.assertIn("/add-dir だけでは足りません", first)
+        self.assertIn("ファイルの書き込み（Write・Edit）", first)
+        self.assertIn("Coverity から読むツール（mcp__srv-x__read_a、mcp__plugin_kit-x_srv-x__get_b_details）", first)
+        self.assertIn("このセッションのどのファイルにも効きます", first)
+        self.assertIn("書き戻すツールは許可しません", first)
+        self.assertIn("夜通しの実行には、こちらが確実です", restart)
+        self.assertIn("反映は、--agent を付けずに起動したセッションでします", restart)
         self.assertIn(f'claude --add-dir "{out}" --allowedTools "Bash(uv run *)" "Write" "Edit" '
                       '"mcp__srv-x__read_a" "mcp__plugin_kit-x_srv-x__get_b_details" で起動し直します', restart)
         self.assertIn("--agent", restart)
@@ -51,15 +59,21 @@ class BasicFlowTest(RunCase):
                "mcp__srv-x__read__a", "mcp__srv x__read_a", "Bash(rm *)", "mcp__srv-x__update_c",
                "mcp__plugin_kit-x_srv-x__srv_write_d", "mcp__srv-x__delete-e", "mcp__srv-x__" + "a" * 65]
         args = [a for t in bad + ["mcp__srv-x__read_a"] for a in ("--mcp-tool", t)]
-        restart = self.new_run("--client", "claude-code", *args)["permission_steps"][1]
+        first, restart = self.new_run("--client", "claude-code", *args)["permission_steps"]
         self.assertIn('"Edit" "mcp__srv-x__read_a" で起動し直します', restart)
-        self.assertEqual(restart.count('"mcp__'), 1, restart)
-        for word in ("skip-permissions", "update", "write", "delete", "rm ", "*\"", "srv-x(read_a)"):
-            self.assertNotIn(word, restart)
-        # without a tool that reads, the read tools are allowed at the first confirmation
-        plain = self.new_run("--client", "claude-code", "--mcp-tool", "mcp__srv-x__update_c")["permission_steps"][1]
+        for step in (first, restart):
+            self.assertEqual(step.count('mcp__'), 1, step)
+            for word in ("skip-permissions", "update", "write", "delete", "rm ", "*\"", "srv-x(read_a)"):
+                self.assertNotIn(word, step)
+        # without a tool that reads, both ways still say to allow the read tools (never at a later confirmation:
+        # an agent in the background cannot show one)
+        plain_first, plain = self.new_run("--client", "claude-code", "--mcp-tool", "mcp__srv-x__update_c")["permission_steps"]
         self.assertIn('"Write" "Edit" で起動し直します', plain)
-        self.assertIn("最初の確認で許可を選びます", plain)
+        self.assertIn("/mcp で見える名前を後ろに 1 つずつ足します", plain)
+        self.assertIn("ファイルの書き込み（Write・Edit）、Coverity から読むツール（接続の確かめ", plain_first)
+        for step in (plain_first, plain):
+            self.assertNotIn("最初の確認", step)
+            self.assertNotIn("mcp__srv-x__update_c", step)
 
     def test_copilot_is_the_default_and_unchanged(self) -> None:
         default = self.new_run("--mcp-tool", "srv-x(read_a)")["permission_steps"]

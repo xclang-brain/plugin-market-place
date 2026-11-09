@@ -28,7 +28,7 @@ and asks not to change files) and ``brief`` (another agent: an instruction file 
 style asks to write result.json and to edit only a given work copy).
 
   uv run --native-tls --quiet tests/eval/stage2/run_stage2.py [--format copilot-converted|claude-plugin]
-        [--only NAME|N]... [--model M] [--agent-model M] [--judge] [--judge-model M] [--timeout S]
+        [--only NAME|N]... [--model M] [--agent-model M] [--tools-from-definitions] [--judge] [--judge-model M] [--timeout S]
         [--max-turns N] [--out DIR] [--build-only] [--no-sync]
 
 Writes <out>/<case>/ (repo, run, transcript, case.json), <out>/results.json and <out>/report.md.
@@ -520,7 +520,8 @@ def adapter_args(**kw) -> argparse.Namespace:
     base = dict(workspace=None, parts_from_table=None, agent=None, skill=None, mcp=None, plugin_root=None, main=None,
                 output_dir=None, fake_data=None, mcp_env=None, model=None, agent_model=None, prompt=None, extra_arg=None,
                 claude_bin=None, allow_missing=False, run=False, inspect=False, timeout=120.0,
-                format=ek.ADAPTER.FORMAT_CONVERTED, plugin_dir=None, default_tools=False)
+                format=ek.ADAPTER.FORMAT_CONVERTED, plugin_dir=None, tools_from_definitions=False,
+                main_model=None)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -565,7 +566,8 @@ def prepare_case(case: dict, args: argparse.Namespace, data: dict, root: Path, o
         workspace=str(repo), parts_from_table=str(worker), plugin_root=str(root), output_dir=str(run_dir),
         fake_data=str(repo / ".coverity-triage" / "fake-issues.yaml"), mcp_env=[f"UV_PROJECT_ENVIRONMENT={venv}"],
         model=model, agent_model=args.agent_model or model, claude_bin=args.claude_bin,
-        format=args.format, plugin_dir=str(case_dir / "claude-plugin")))
+        format=args.format, plugin_dir=str(case_dir / "claude-plugin"),
+        tools_from_definitions=getattr(args, "tools_from_definitions", False)))
     ek.exclude_in_git(repo, ".claude/")
     skills = build["skills"]
     comment_name, report_name = role_name(ROLE_COMMENT, root), role_name(ROLE_REPORT, root)
@@ -696,6 +698,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--sample", help="見本のフォルダ（assets/sample-target と assets/expected.yaml のあるフォルダ）")
     p.add_argument("--model", help="モデル（既定は作業エージェントの定義の claude-* のモデル。claude-plugin では定義の model のまま）")
     p.add_argument("--agent-model", help="エージェントの定義の model を替える（既定は --model）")
+    p.add_argument("--tools-from-definitions", action="store_true",
+                   help="claude-plugin で、写した定義の組み込みのツールを合わせた --tools を付ける（既定は付けない）")
     p.add_argument("--judge", action="store_true", help="モデルに中身を採点させる（ツールなし）")
     p.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
     p.add_argument("--timeout", type=float, default=900.0, help="1課題の時間の上限（秒）")

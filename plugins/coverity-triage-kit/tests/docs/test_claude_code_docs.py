@@ -3,7 +3,12 @@
 - 名前：Claude Code のマニフェスト（.claude-plugin/plugin.json）が plugin.json と同じ名前、リポジトリの2つの一覧の
   マーケットプレイスの名前が同じ（版は test_docs.py が確かめる）。
 - プラグインの README に「Claude Code で使う」があり、入れ方・段階ごとの呼び方・4段階目は Copilot CLI だけ・
-  前もって許可するしかた・認証情報の環境変数がある。前もって許可する指定に、書き戻すツールがない。
+  前もって許可するしかた・認証情報の環境変数がある。
+- 前もって許可する指定（--allowedTools の行と、``` で囲んだ写して使う行）に、書き戻すツールも、サーバーの名前だけの許可も、
+  * もない。対象は、プラグインの README、エージェントの README（すべて）、使い方の案内（スキルの references/usage.md）。
+  そこに書いた mcp__plugin_<プラグイン>_<登録名>__<ツール>（と手で登録したときの mcp__<登録名>__<ツール>）は、
+  プラグインの名前・.mcp.json の登録名・MCP サーバーのツール（ソースと、サーバーの README の「## ツール」の見出し）と合う。
+  --allowedTools の行は、書き戻すツールのほかのツール（読むツール）をすべて並べる。
 - エージェントの README に「Claude Code で使う」があり、Claude Code の定義（agents/<名前>.md）と、
   .claude/agents/ への取り出し方を書いている。書いた `--agent <プラグイン>:<名前>` と定義のファイルが、あるものを指す。
 - 仕様書に Claude Code の要求があり、設計書に「2つの形の同居」の節がある。リポジトリの README の行が Claude Code に触れる。
@@ -31,7 +36,16 @@ CLAUDE_MARKET = MARKET_ROOT / ".claude-plugin" / "marketplace.json"
 COPILOT_MARKET = MARKET_ROOT / ".github" / "plugin" / "marketplace.json"
 MARKET_README = MARKET_ROOT / "README.md"
 HEADING = "Claude Code で使う"
-WRITE_BACK_TOOL = "coverity_update_triage"  # MCP サーバーのツールの名前（取り決めの名前。設計書 5章）
+# 使い方の案内（スキルの references/usage.md。前もって許可するしかたも書く）
+USAGE_NAME = Path("references") / "usage.md"
+# 文の中の MCP のツールの名前（<…> の置き換える形は、あとで飛ばす）
+MCP_NAME = re.compile(r"mcp__[^\s\"'`)（）、。，,]+")
+FENCE_LINE = re.compile(r"^\s*```")
+
+
+def mcp_names(line):
+    """行の中の MCP のツールの名前（文の終わりの . : ; は名前に入れない）"""
+    return [n.rstrip(".:;") for n in MCP_NAME.findall(line)]
 
 
 def section(text, heading, level=2):
@@ -98,11 +112,164 @@ class ReadmeClaudeSectionTest(unittest.TestCase):
         for name in re.findall(rf"--agent {re.escape(pp.PLUGIN_NAME)}:([a-z0-9-]+)", self.body):
             self.assertIn(name, names, f"README の --agent {pp.PLUGIN_NAME}:{name} の定義が agents/ にありません")
 
-    def test_write_back_is_not_pre_approved(self):
-        for line in self.body.splitlines():
-            if "--allowedTools" in line:
-                self.assertNotIn(WRITE_BACK_TOOL, line, "前もって許可する指定に、書き戻すツールがあります")
-                self.assertNotRegex(line, r'"mcp__[^"]*coverity-connect"', "サーバーの名前だけの許可は、書き戻すツールまで許します")
+    def test_permission_lines_are_in_the_section(self):
+        self.assertIn("--allowedTools", self.body, f"README の「{HEADING}」に、起動のときに許可する指定がありません")
+
+
+def permission_docs():
+    """前もって許可するしかたを書く文書：プラグインの README、エージェントの README（すべて）、使い方の案内"""
+    docs = [README] + sorted(pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX))
+    docs += [d / USAGE_NAME for d in pp.skill_dirs() if (d / USAGE_NAME).is_file()]
+    return docs
+
+
+def claude_servers():
+    """.mcp.json（Claude Code）の登録名"""
+    data = pp.load_json(pp.CLAUDE_MCP) if pp.CLAUDE_MCP.is_file() else None
+    return set((data or {}).get("mcpServers") or {}) if isinstance(data, dict) else set()
+
+
+def readme_tools(folder):
+    """MCP サーバーの README の「## ツール」の「### `<ツール>(…)`」の名前。README か節がなければ None"""
+    path = folder / "README.md" if folder else None
+    if not (path and path.is_file()):
+        return None
+    body = pp.section(pp.read(path), "ツール")
+    if body is None:
+        return None
+    return set(re.findall(r"(?m)^### `([A-Za-z0-9_]+)\(", body))
+
+
+def split_mcp_name(name):
+    """Claude Code の MCP の名前を (プラグイン, 登録名, ツール)。手で登録した形はプラグインが None、
+    サーバーの名前だけならツールが None"""
+    if name.startswith("mcp__plugin_"):
+        rest = name[len("mcp__plugin_"):]
+        prefix = pp.PLUGIN_NAME + "_"
+        if not rest.startswith(prefix):
+            return rest, None, None
+        server, sep, tool = rest[len(prefix):].partition("__")
+        return pp.PLUGIN_NAME, server, (tool if sep else None)
+    server, sep, tool = name[len("mcp__"):].partition("__")
+    return None, server, (tool if sep else None)
+
+
+def approve_lines(text):
+    """前もって許可する行：--allowedTools のある行と、``` で囲んだ中の行。(行の番号, 行, --allowedTools の行か)"""
+    out, fenced, pending = [], False, None
+    for number, line in enumerate(text.splitlines(), 1):
+        if FENCE_LINE.match(line):
+            fenced = not fenced
+            continue
+        if pending is not None:  # a command continued with \ : one logical line
+            pending = (pending[0], pending[1] + " " + line.rstrip("\\ "))
+        elif "--allowedTools" in line or fenced:
+            pending = (number, line.rstrip("\\ ") if line.rstrip().endswith("\\") else line)
+        if pending is not None and not line.rstrip().endswith("\\"):
+            out.append((pending[0], pending[1], "--allowedTools" in pending[1]))
+            pending = None
+    if pending is not None:
+        out.append((pending[0], pending[1], "--allowedTools" in pending[1]))
+    return out
+
+
+DENY_ARGS = re.compile(r"""--(?:disallowedTools|deny-tool)(?:\s+(?:"[^"]*"|'[^']*'|[^\s-][^\s]*))+""")
+
+
+def allowed_part(line):
+    """前もって許可する指定だけ（--disallowedTools と --deny-tool の引数は、禁じる指定なので除く）"""
+    return DENY_ARGS.sub(" ", line)
+
+
+def mcp_name_problems(label, text, servers, tools_of, write_back):
+    """文の中の MCP の名前と、前もって許可する行の問題。servers は .mcp.json の登録名、
+    tools_of は登録名 → ツールの名前の集まり（ソースと README の両方にあるもの）、write_back は書き戻すツールの名前"""
+    problems = []
+    for number, line in enumerate(text.splitlines(), 1):
+        for name in mcp_names(line):
+            if "<" in name or name.endswith("*"):
+                continue
+            plugin, server, tool = split_mcp_name(name)
+            where = f"{label}:{number}: {name}"
+            if name.startswith("mcp__plugin_") and plugin != pp.PLUGIN_NAME:
+                problems.append(f"{where}：プラグインの名前が {pp.PLUGIN_NAME} ではありません")
+            elif server not in servers:
+                problems.append(f"{where}：登録名 {server} が .mcp.json にありません")
+            elif tool is not None and tool not in tools_of.get(server, set()):
+                problems.append(f"{where}：{tool} は、MCP サーバーのツール（ソースと README の「## ツール」）にありません")
+    for number, line, allowed in approve_lines(text):
+        where = f"{label}:{number}"
+        line = allowed_part(line)
+        names = mcp_names(line)
+        for name in names:
+            plugin, server, tool = split_mcp_name(name)
+            if name.endswith("*"):
+                problems.append(f"{where}：{name} は、書き戻すツールまで前もって許可します")
+            elif "<" not in name and tool is None and server in servers:
+                problems.append(f"{where}：サーバーの名前だけの {name} は、書き戻すツールまで前もって許可します")
+        for tool in write_back:
+            if re.search(rf"(?:(?<![A-Za-z0-9_])|(?<=__)){re.escape(tool)}(?![A-Za-z0-9_])", line):
+                problems.append(f"{where}：前もって許可する指定に、書き戻すツール {tool} があります")
+        if allowed:
+            concrete = {split_mcp_name(n)[1] for n in names if "<" not in n and split_mcp_name(n)[2]}
+            for server in sorted(concrete & servers):
+                listed = {split_mcp_name(n)[2] for n in names if "<" not in n and split_mcp_name(n)[1] == server}
+                missing = sorted(tools_of.get(server, set()) - set(write_back) - listed)
+                if missing:
+                    problems.append(f"{where}：--allowedTools に、読むツール {', '.join(missing)} がありません")
+    return problems
+
+
+class PermissionDocsTest(unittest.TestCase):
+    """前もって許可するしかた（--allowedTools と /permissions）の名前が、本物と合い、書き戻すツールを許可しない"""
+
+    def setUp(self):
+        if not pp.CLAUDE_MCP.is_file():
+            self.skipTest("Claude Code の .mcp.json がまだありません")
+        self.servers = claude_servers()
+        entries = pp.mcp_names()
+        self.tools_of = {}
+        for server in self.servers:
+            entry = entries.get(server) or {}
+            tools = set(entry.get("tools") or set())
+            listed = readme_tools(entry.get("folder"))
+            self.tools_of[server] = tools & listed if listed is not None else tools
+        self.write_back = sorted({t for names in pp.write_back_tools().values() for t in names})
+        self.assertTrue(self.write_back, "書き戻しのツール（destructiveHint=True）が MCP サーバーに見つかりません")
+
+    def test_docs_name_real_tools_and_never_pre_approve_write_back(self):
+        for path in permission_docs():
+            with self.subTest(doc=pp.rel(path)):
+                self.assertEqual(mcp_name_problems(pp.rel(path), pp.read(path), self.servers, self.tools_of, self.write_back), [])
+
+    def test_the_check_finds_mistakes(self):
+        """確かめる道具が、間違いを見つけられること（書き戻すツール、サーバーの名前だけ、*、違う名前、足りない読むツール）"""
+        server = sorted(self.servers)[0]
+        tools = sorted(self.tools_of[server])
+        reads = [t for t in tools if t not in self.write_back]
+        ok = [f'"{pp.claude_mcp_tool_names(server, t)[0]}"' for t in reads]
+        good = "claude --allowedTools \"Write\" " + " ".join(ok)
+        check = lambda text: mcp_name_problems("x", text, self.servers, self.tools_of, self.write_back)  # noqa: E731
+        self.assertEqual(check(good), [])
+        self.assertEqual(check("```text\n" + "\n".join(n.strip('"') for n in ok) + "\n```\n"), [])
+        self.assertEqual(check(f"説明：サーバーの名前だけの `mcp__plugin_{pp.PLUGIN_NAME}_{server}` は使わない。"), [])
+        self.assertEqual(check("`mcp__plugin_<プラグイン>_<登録名>__<ツール>` を並べる"), [])
+        wb = pp.claude_mcp_tool_names(server, self.write_back[0])[0]
+        self.assertTrue(check(good + f' "{wb}"'))
+        self.assertTrue(check(f"```text\n{wb}\n```\n"))
+        self.assertTrue(check(good + f' "mcp__plugin_{pp.PLUGIN_NAME}_{server}"'))
+        self.assertTrue(check(good + f' "mcp__plugin_{pp.PLUGIN_NAME}_{server}__*"'))
+        self.assertTrue(check(good.replace(reads[0], reads[0] + "s")))
+        self.assertTrue(check(good.replace(f"_{server}__", "_other-server__")))
+        self.assertTrue(check(good.replace(f"plugin_{pp.PLUGIN_NAME}_", "plugin_other-plugin_")))
+        if len(ok) > 1:
+            self.assertTrue(check("claude --allowedTools " + " ".join(ok[1:])))
+            # a command continued with \ is read as one line: a missing read tool is still found
+            self.assertTrue(check("```text\nclaude --allowedTools \"Write\" \\\n  " + " ".join(ok[1:]) + "\n```\n"))
+        # denying the write-back tool is not pre-approving it
+        self.assertEqual(check(good + f' --disallowedTools "{wb}"'), [])
+        # a name at the end of a sentence
+        self.assertEqual(check(f"手で登録したときは {pp.claude_mcp_tool_names(server, reads[0])[-1]}."), [])
 
 
 class AgentReadmeClaudeSectionTest(unittest.TestCase):
