@@ -16,8 +16,8 @@
 |---|---|
 | `settings --repo R` | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）、条件ファイルの名前の一覧 `filters`、設定の問題 `problems`。読むだけ |
 | `runs --repo R [--limit N]` | 実行の一覧（新しい順）。`runs[{run_id, run_dir, created_at, filter_name, counts, unfinished, has_summary, foreign, same_tool}]` |
-| `new-run --repo R [条件の引数]` | 実行フォルダを作る。`run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps` |
-| `resume --run D` | 途中の実行を続きからにする（処理中・失敗の作業を「まだ」に戻す）。`run_dir, counts, permission_steps` |
+| `new-run --repo R [条件の引数] [--client copilot\|claude-code] [--mcp-tool T]…` | 実行フォルダを作る。`run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps`。`--client`（既定 copilot）は許可の案内の形。`--mcp-tool` は、案内で前もって許可する読むツール（copilot は `<登録名>(<ツール>)`、claude-code は `mcp__<サーバー>__<ツール>` か `mcp__plugin_<プラグイン>_<サーバー>__<ツール>`。形の違う名前と、claude-code で書き込みの言葉（update など）を含む名前は入れない） |
+| `resume --run D [--client …] [--mcp-tool T]…` | 途中の実行を続きからにする（処理中・失敗の作業を「まだ」に戻す）。`run_dir, counts, permission_steps` |
 | `tick --run D [--finished T] [--failed T --reason R] [--wait S]` | 次にすること（下の「tick の出力」）。`--wait` は待つ最長の秒数（既定 20、上限 25） |
 | `status --run D` | 実行の様子（下の「status の主な項目」）。読むだけ |
 | `summary --run D` | 一覧と承認の案を作る（下の「summary の主な項目」） |

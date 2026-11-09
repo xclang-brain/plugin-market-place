@@ -402,13 +402,26 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
-def summarize(events: list[dict], prompt: str | None = None) -> dict:
+def skill_root_patterns(skill_roots: list[Path] | None) -> list[re.Pattern]:
+    """Patterns for "<root>/<name>/" in a tool input, for each skills folder (either slash)."""
+    out = []
+    for root in skill_roots or []:
+        text = str(root).replace("\\", "/").rstrip("/")
+        if text:
+            out.append(re.compile(re.escape(text).replace("/", r"[/\\]") + r"[/\\]([A-Za-z0-9_.-]+)[/\\]"))
+    return out
+
+
+def summarize(events: list[dict], prompt: str | None = None, skill_roots: list[Path] | None = None) -> dict:
     """What a stream-json run did: init, tool calls (main and in subagents), skills, agents, result.
 
     A skill counts as loaded when the Skill tool was called with it, when a tool input points into
-    its folder (.claude/skills/<name>/), or when the prompt starts with /<name> and <name> is one of
+    its folder (.claude/skills/<name>/, or <root>/<name>/ for each of ``skill_roots``, such as the
+    skills folder of a copied plugin), or when the prompt starts with /<name> and <name> is one of
     the init event's slash commands (claude -p does not show the expansion of a slash command).
+    Names with the plugin name and ":" in front count without it.
     """
+    root_patterns = skill_root_patterns(skill_roots)
     init: dict = {}
     final: dict = {}
     tool_uses: list[dict] = []
@@ -467,6 +480,8 @@ def summarize(events: list[dict], prompt: str | None = None) -> dict:
                 skills_loaded.append(name.split(":")[-1])
         for value in _strings(use["input"]):
             skills_loaded += [m.group(1) for m in SKILL_PATH_RE.finditer(value)]
+            for pattern in root_patterns:
+                skills_loaded += [m.group(1) for m in pattern.finditer(value)]
     main = [u for u in tool_uses if u["parent"] is None]
     counts: dict[str, int] = {}
     for u in main:

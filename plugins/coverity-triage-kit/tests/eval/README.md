@@ -1,7 +1,12 @@
 # EVAL の道具（Claude Code で試す）
 
 実際のモデルで課題を解かせて採点する試験（EVAL）の道具です。AI クレジットを使うので、CI では動かしません（設計書 9.2）。
-このプラグインの部品は GitHub Copilot CLI 向けに書いてあります。EVAL では、部品を Claude Code の形に置き換えて、`claude -p` で動かします（設計書 9.3）。
+EVAL は、部品を Claude Code で `claude -p` で動かします（設計書 9.3）。2段階目と3段階目は、部品の形を2つから選べます（`--format`）。
+
+| `--format` | 使う定義 | 動かし方 |
+| --- | --- | --- |
+| `copilot-converted`（既定） | Copilot CLI の定義（`com.github.copilot/agents/<名前>.agent.md`）を、Claude Code の形に置き換える | 作業フォルダの `.claude/` に置き、`--agents` と `--mcp-config` で渡す |
+| `claude-plugin` | Claude Code の定義（`agents/<名前>.md`）と表のスキルと MCP サーバーを、そのまま一時のプラグインに写す | 本物のプラグインとして `--plugin-dir <一時のプラグイン> --agent <プラグイン>:<エージェント>` で動かす |
 
 | 段階 | 道具 | 確かめること |
 | --- | --- | --- |
@@ -9,7 +14,7 @@
 | 2（作業エージェント） | `stage2/run_stage2.py`、`stage2/cases.json` | 作業エージェントと、その表の部品だけで、1件（1グループ）のトリアージを最後までできるか |
 | 3（一括のトリアージ） | `stage3/run_stage3.py` | 統括エージェントが、偽の Coverity の見本の警告をすべてトリアージできるか |
 | 4（画面の入口） | `stage4/run_stage4.py`、`stage4/cases.json`、`stage4/fake_open_server.py` | 頼みの言い方ごとに、画面の入口が選ばれるか（選ばれるべきでないときは選ばれないか） |
-| 共通 | `claude_adapter.py`、`evalkit.py` | 部品の置き換え、`claude -p` の起動と記録の読み取り |
+| 共通 | `claude_adapter.py`、`evalkit.py` | 部品の置き換えと写し、`claude -p` の起動と記録の読み取り |
 
 1段階目のスキルの EVAL は、各スキルの `evals/`（skill-creator の形）です。ここにはありません。
 
@@ -50,7 +55,15 @@ python3 tests/eval/run_mcp_eval.py
 uv run --native-tls --quiet tests/eval/stage2/run_stage2.py
 ```
 
-課題ごとに、自己診断のスキルの見本（`assets/sample-target`）から git のリポジトリを作り、`claude_adapter.py --parts-from-table` で作業エージェントとその表の部品だけを、そのリポジトリの `.claude/` に取り出します（`.git/info/exclude` で git の状態から外します）。MCP サーバーは偽の Coverity で動きます。
+```text
+# Claude Code の定義を、本物のプラグインとして動かす
+uv run --native-tls --quiet tests/eval/stage2/run_stage2.py --format claude-plugin
+```
+
+課題ごとに、自己診断のスキルの見本（`assets/sample-target`）から git のリポジトリを作り、`claude_adapter.py --parts-from-table` で作業エージェントとその表の部品だけを取り出します。MCP サーバーは偽の Coverity で動きます。
+
+- `copilot-converted`（既定）：置き換えた定義を、そのリポジトリの `.claude/` に置きます（`.git/info/exclude` で git の状態から外します）。
+- `claude-plugin`：作業エージェントの定義（`agents/<名前>.md`）・表のスキル・MCP サーバーを、そのまま `<out>/<課題>/claude-plugin/` に写します（`.claude-plugin/plugin.json` と `.mcp.json` つき。リポジトリの外）。作業エージェントをメインにして、`claude -p "<頼みの文>" --plugin-dir <out>/<課題>/claude-plugin --agent <プラグイン>:<作業エージェント> ...` で動かします。モデルは、定義の `model` のままです（`--model` を付けたときは、それを使い、写しの `model` の行もそれに替えます）。
 
 | 課題（`stage2/cases.json`） | 形 | 主な確かめ |
 | --- | --- | --- |
@@ -60,19 +73,22 @@ uv run --native-tls --quiet tests/eval/stage2/run_stage2.py
 
 - 確かめは、`must`（落ちたら不合格）と `should`（記録だけ）に分けてあります。表の「毎回」のスキルを読んだかも `should` で記録します。
 - `--judge` を付けると、モデル（既定 `claude-sonnet-5-5`、ツールなし）が中身（見立て・根拠・修正・逸脱コメント）を1〜5で採点し、その JSON を記録します。合否には入れません。
-- 主なオプション：`--only <名前か番号>`、`--model M`（既定は作業エージェントの定義の claude のモデル）、`--timeout S`（既定 900 秒）、`--max-budget-usd X`、`--build-only`（作るだけ）。
+- 主なオプション：`--format F`、`--only <名前か番号>`、`--model M`（既定は作業エージェントの定義の claude のモデル。`claude-plugin` では定義の `model`）、`--agent-model M`、`--timeout S`（既定 900 秒）、`--max-budget-usd X`、`--build-only`（作るだけ）。
 
 ### 3段階目：一括のトリアージ
 
 ```text
 uv run --native-tls --quiet tests/eval/stage3/run_stage3.py
+# Claude Code の定義を、本物のプラグインとして動かす
+uv run --native-tls --quiet tests/eval/stage3/run_stage3.py --format claude-plugin
 ```
 
 - 自己診断のスキルの一時コピーで、見本のリポジトリ（git、push 先、偽の Coverity）を作ります（`selftest.py start --sections 2` と `sample`）。
 - 統括エージェントの表を（表のエージェントの表まで）たどって、エージェント・スキル・MCP サーバーをすべて取り出し、統括エージェントをメインにして動かします（`claude -p "Coverity の警告を、条件ファイル all.yaml で、すべてトリアージしてください。途中で質問せず、最後まで進めてください。" --agent <統括> --max-turns 500`）。実行フォルダの置き場所（リポジトリの外）は `--add-dir` で渡します。
+- `claude-plugin` では、統括エージェントと、表でたどれるエージェント（`agents/<名前>.md`）・スキル・MCP サーバーを、そのまま `<out>/<変種>/claude-plugin/` に写し、`--plugin-dir <out>/<変種>/claude-plugin --agent <プラグイン>:<統括>` で動かします。どの表にもないスキルは写しません（Claude Code は、プラグインの `skills/` のスキルをすべて読むため）。
 - 変種：`default`（確かめと統合なし。設定の既定）と `full`（両方あり）。`--variant` で選びます（既定は両方）。
 - 確かめ：自己診断の `check-run`（2-2〜2-6：最後まで進む、すべての作業が終わる、推奨が想定と合う、グループ、成果物と作業中のファイル）、`summary.html` と `approvals.json`、すべての作業の `result.json`、確かめありなら `review.json`、利用者のリポジトリが変わらない、役のエージェントだけを呼んだ、統括エージェントがファイルを書いていない、実行フォルダが1つ。件数・推奨の一致・時間・ターン・費用も記録します。
-- 主なオプション：`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル）、`--agent-model M`（ほかのエージェント。既定は各定義の claude のモデル）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
+- 主なオプション：`--format F`、`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル。`claude-plugin` では定義の `model`）、`--agent-model M`（ほかのエージェント。既定は各定義のモデル。`claude-plugin` では、写したすべての定義の `model` の行を替える）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
 
 ### 4段階目：画面の入口
 
@@ -112,16 +128,18 @@ python3 tests/eval/stage4/run_stage4.py
 次は Claude Code では確かめられません。設計書 9.4 の表のとおり、Copilot CLI で手で確かめ、版と日付を書きます。
 
 - ask_user（AskUserQuestion）：`claude -p` には、メインのエージェントにもありません。そのため、2段階目の「足りない情報を聞く」「直す前に同意を得る」道筋は、ここでは動きません（頼みの文を、質問の要らない形にしてあります）。作業エージェントは「ほかのエージェントからの依頼」として動きます。
-- サブエージェントの入れ子：Claude Code のサブエージェントは、さらにサブエージェントを呼べません。3段階目は、統括エージェントをメインにします（Copilot CLI では、エクステンションが `startAgent` で始めます）。
-- `agents/` の `.md` の読み込み、プラグインの名前の付いたエージェントとスキルの呼び方、`mcp.json` の `${…}` の展開。
+- 3段階目の始め方：ここでは、統括エージェントをメイン（`--agent`）にします（Copilot CLI では、エクステンションが `startAgent` で始めます）。
+- Copilot CLI での、`com.github.copilot/agents/` の `.md` の読み込み、プラグインの名前の付いたエージェントとスキルの呼び方、`mcp.json` の `${…}` の展開。Claude Code での同じこと（`agents/`、`<プラグイン>:<名前>`、`.mcp.json` の `${CLAUDE_PLUGIN_ROOT}`）は、`--format claude-plugin` で確かめられます。
 - エクステンション（Web管理画面）。4段階目は、画面を開くツールの代わりのサーバーで、入口の選ばれ方だけを確かめます。画面の流れは `tests/extension/`（偽の SDK）と手での確認です。
 - モデルの名前（`gpt-6-luna` などは使えないので、定義の候補のうち claude のものを使う）と、Auto のときのモデルの選ばれ方。
 - Copilot CLI の許可の確認（`/add-dir`、「このセッションでは許可」）。ここでは `--permission-mode acceptEdits`、`--allowedTools`、`--add-dir` で代えます。
-- 作業フォルダ：Claude Code は `.claude/` を作業フォルダ（＝調べるリポジトリ）に置くので、エージェントの検索に部品のファイルも出ます（Copilot CLI では、プラグインの部品はリポジトリの外にあります）。
+- 作業フォルダ：`copilot-converted` では、`.claude/` を作業フォルダ（＝調べるリポジトリ）に置くので、エージェントの検索に部品のファイルも出ます。`claude-plugin` では、部品はリポジトリの外の一時のプラグインにあります（Copilot CLI と同じ）。
 
 ## claude_adapter.py
 
-エージェントの定義を Claude Code の形に置き換え、作業フォルダを作ります。
+エージェントの定義を Claude Code の形に置き換え（`--format copilot-converted`、既定）、または Claude Code の定義を一時のプラグインに写して（`--format claude-plugin`）、作業フォルダとコマンドを作ります。
+
+### copilot-converted（既定）
 
 - エージェントの定義（`<名前>.agent.md`）を Claude Code のエージェントに置き換える。
   - ツールの読み替え：read → Read・Glob・Grep、search → Grep・Glob、edit → Edit・Write、execute → Bash、agent → Agent、skill → Skill、ask_user → AskUserQuestion、`<登録名>/<ツール>` → `mcp__<登録名>__<ツール>`。
@@ -143,6 +161,9 @@ python3 tests/eval/claude_adapter.py build --workspace "<作業フォルダ>" --
 
 | オプション | 意味 |
 | --- | --- |
+| `--format F` | `copilot-converted`（既定）か `claude-plugin`（下の「claude-plugin」） |
+| `--plugin-dir <フォルダ>` | `claude-plugin` で、一時のプラグインを作る場所（既定は作業フォルダの隣の `claude-plugin`） |
+| `--default-tools` | `claude-plugin` で、`--tools` を付けない |
 | `--agent <定義>` | 表をたどらずに、このエージェントだけを置き換える（何度でも） |
 | `--skill <フォルダ>` | スキルを足す。表の名前と同じなら、その行のスキルとして使う |
 | `--mcp [名前=]<フォルダ>` | MCP サーバーを足す |
@@ -153,12 +174,37 @@ python3 tests/eval/claude_adapter.py build --workspace "<作業フォルダ>" --
 | `--allow-missing` | 表の部品がなくても作る |
 | `--inspect` | `stream-json` の始まりの知らせから、ツール・スキル・MCP サーバー・エージェントがそろったかを確かめる |
 
-作るコマンド：`claude -p "<頼みの文>" --agent <名前> --agents <agents.json> --mcp-config <mcp.json> --strict-mcp-config --setting-sources project --permission-mode acceptEdits --tools <使うツール> --allowedTools "Bash(uv run:*)" Skill "mcp__<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
+作るコマンド（copilot-converted）：`claude -p "<頼みの文>" --agent <名前> --agents <agents.json> --mcp-config <mcp.json> --strict-mcp-config --setting-sources project --permission-mode acceptEdits --tools <使うツール> --allowedTools "Bash(uv run:*)" Skill "mcp__<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
 
 - 頼みの文は `-p` のすぐ後に置きます（`--allowedTools` などは値をいくつも取るので、後ろの文を飲み込むため）。
 - `--tools` には、置き換えたエージェントの組み込みのツールを合わせたものを渡します（Claude Code の既定のツールに Glob と Grep がないため）。エージェントの `tools` は、会話にあるツールを絞るだけです。
 - `--allowedTools` の `Skill`：Claude Code は、frontmatter に `allowed-tools` のあるスキル（スクリプトを動かすスキル）を読む前に許可を求め、`claude -p` はそれを断ります。`Skill` を許可しないと、そのスキルを読めません。
 - Claude Code の始まりの知らせでは、Agent のツールは `Task` と出ます。Claude Code に組み込みのスキル（`claude-api` など）も、スキルの一覧に出ます。
+
+### claude-plugin
+
+Claude Code の定義（`agents/<名前>.md`）から、表の部品をたどって集め、一時のプラグインに写します。
+
+- 写すもの：エージェントの定義（変えずに。`--agent-model` のときだけ `model` の行を替える）、表のスキル（`skills/<名前>/`）、表の MCP サーバー（元と同じ場所。`mcp-servers/<名前>/`）。どの表にもないスキルは写しません。
+- `.claude-plugin/plugin.json`：元のマニフェストの写し（名前と版は同じ。場所を指すキー `skills` などは外す）。
+- `.mcp.json`：元の `.mcp.json` の登録（`${CLAUDE_PLUGIN_ROOT}` のまま）に、偽の Coverity の環境変数と `--mcp-env` を足したもの。表に MCP サーバーがなければ作りません。
+- 一時のプラグインの場所は `--plugin-dir`（既定は作業フォルダの隣の `claude-plugin`）。元のプラグインのフォルダの中、作業フォルダの中と上は断ります。作ったことのあるプラグインのフォルダは空にしてから作り直し、ほかのファイルのあるフォルダは断ります。
+- 作業フォルダには、コマンド（`.claude/eval/command.json`）だけを書きます（エージェントとスキルは、プラグインから読まれる）。
+
+```text
+# Windows（PowerShell）
+py -3 tests/eval/claude_adapter.py collect --format claude-plugin agents/triage-orchestrator.md
+py -3 tests/eval/claude_adapter.py build --format claude-plugin --workspace "<作業フォルダ>" --plugin-dir "<一時のプラグイン>" --parts-from-table agents/triage-worker.md --fake-data "<偽の警告のファイル>" --prompt "List the tools and skills you have, one per line" --run --inspect
+# Linux（bash）
+python3 tests/eval/claude_adapter.py collect --format claude-plugin agents/triage-orchestrator.md
+python3 tests/eval/claude_adapter.py build --format claude-plugin --workspace "<作業フォルダ>" --plugin-dir "<一時のプラグイン>" --parts-from-table agents/triage-worker.md --fake-data "<偽の警告のファイル>" --prompt "List the tools and skills you have, one per line" --run --inspect
+```
+
+作るコマンド（claude-plugin）：`claude -p "<頼みの文>" --plugin-dir <一時のプラグイン> --agent <プラグイン>:<名前> --setting-sources project --permission-mode acceptEdits --tools <使うツール> --allowedTools "Bash(uv run *)" Skill "mcp__plugin_<プラグイン>_<登録名>__*" --add-dir <output_dir>`（作業フォルダで動かす）。
+
+- `--tools` は copilot-converted と同じ決まりで、写した定義の `tools` の組み込みのツールを合わせたものです（`tools` のない定義は基本のツールすべて）。`--default-tools` で外せます（Claude Code の既定のツールのまま）。
+- `--mcp-config` と `--strict-mcp-config` は付けません（プラグインの MCP サーバーは、`.mcp.json` から読まれます）。
+- `--inspect` は、始まりの知らせに、写したスキルすべて、メインのエージェント、その定義のツール（`disallowedTools` を除く）があるかを確かめます。名前の前の `<プラグイン>:` は除いて比べます。MCP サーバーの名前は `plugin:<プラグイン>:<登録名>` と出ます。
 
 ## 試験
 

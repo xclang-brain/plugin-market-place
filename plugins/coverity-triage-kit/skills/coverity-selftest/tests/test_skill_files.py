@@ -182,6 +182,20 @@ class SelftestRulesTest(unittest.TestCase):
         self.assertIn("社内の Coverity に書き込まない", text)
         self.assertIn("report.md", text)
 
+    def test_section_one_is_client_neutral(self):
+        # the agent list, the agent picker and the screen tool are named for both clients
+        text = read(SKILL_MD)
+        m = re.search(r"^## ① .*?$(.*?)^## ", text, re.M | re.S)
+        self.assertIsNotNone(m)
+        section = m.group(1)
+        for word in ["エージェントを始めるツール", "Copilot CLI では `task`", "Claude Code では Agent",
+                     "`/agents`", "前にプラグインの名前と `:` が付く"]:
+            self.assertIn(word, section)
+        line = next(x for x in section.splitlines() if "1-8" in x)
+        self.assertRegex(line, r"Claude Code では.*skip")
+        self.assertIn("Copilot CLI だけ", line)
+        self.assertIn('--client "<Copilot CLI か Claude Code>"', text)
+
     def test_script_commands(self):
         for path in [SKILL_MD, README]:
             for line in read(path).splitlines():

@@ -169,6 +169,25 @@ class CopiedRulesTest(unittest.TestCase):
         self.assertEqual(len(rules.item_criteria()), 20)
 
 
+class ClientDocsTest(unittest.TestCase):
+    """SKILL.md tells the agent to pass --client claude-code in Claude Code, with the read tools' names as it sees them."""
+
+    def test_step_four_names_both_clients(self) -> None:
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        step = text[text.index("\n4. "):text.index("\n5. ")]
+        self.assertIn("Claude Code で動いているときは、`--client claude-code` を付け", step)
+        self.assertIn("見えている名前のまま", step)
+        self.assertIn("`mcp__<サーバー>__<ツール>`", step)
+        self.assertEqual(step.count("書き戻すツールは渡しません"), 2)
+        self.assertIn("`--client` と `--mcp-tool`", text)
+        actions = (SKILL / "references" / "actions.md").read_text(encoding="utf-8")
+        self.assertIn("--client copilot\\|claude-code", actions)
+
+    def test_cli_accepts_the_client(self) -> None:
+        text = (SKILL / "scripts" / "run.py").read_text(encoding="utf-8")
+        self.assertEqual(text.count('cmd.add_argument("--client", **client)'), 2)  # new-run and resume
+
+
 class ContractCasesTest(unittest.TestCase):
     """Every case of the shared test data (design 4.17) through the code the run uses: scripts/runlib/rules.py with
     the copied scripts. They run in a separate process started like run.py (uv reads the libraries it needs)."""

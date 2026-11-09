@@ -46,6 +46,7 @@ cp -r "<このフォルダ>" ~/.copilot/skills/<名前>
 スラッシュなしの「Coverity の警告をトリアージして」だけでは、新しい実行を始めません（コマンドとして呼んだときだけ始めます）。すでにある実行の「進み具合は？」「一覧を作り直して」は、チャットで頼めます。
 
 AI は、始める前に 1 回だけ、実行フォルダの読み書きと `uv` のコマンドを、このセッションのあいだ許可するしかたを示します。
+Copilot CLI では `/add-dir` と `copilot --add-dir … --allow-tool …` を、Claude Code では `/add-dir` と `/permissions`（`Bash(uv run *)`）と `claude --add-dir … --allowedTools …` を示します。どちらでも、Coverity に書き戻すツールは前もって許可しません。
 始めたら、終わるまで質問しません。
 
 ## スクリプトを直接動かす

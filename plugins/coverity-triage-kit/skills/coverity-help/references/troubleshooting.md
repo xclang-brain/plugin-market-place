@@ -67,6 +67,7 @@
 | URL が開けない | Copilot CLI を動かしているマシンのブラウザーで開く。Copilot CLI を終えると画面も終わる |
 | 画面の更新が止まった | `/clear` をすると止まる。もう一度頼むと、前の実行が途中で切れたことが示される |
 | 開始に失敗し、準備の画面に戻った | 画面に理由が出る。設定がないときは、準備のスキルで準備する |
+| Claude Code で頼んだら、画面がないと言われた | Web管理画面は Copilot CLI だけの機能。Claude Code では、統括エージェントを `claude --agent` で起動して頼むか、一括実行のスキルを `/` で呼ぶ（usage.md の「Claude Code で使う」） |
 
 ## 結果と設定の画面
 
@@ -113,6 +114,7 @@
 
 - `/add-dir "<output_dir>"` の後、最初の確認で「このセッションでは許可」を選ぶ。
 - `copilot --add-dir "<output_dir>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool '<登録名>(<読むツール>)' …` で起動し直す（`<登録名>` は Coverity との通信の部品の名前。読むツール（接続の確かめ・警告の検索・警告の詳細・反映の確かめ）ごとに `--allow-tool '<登録名>(<そのツールの名前>)'` を並べます（ツールの名前は、一括実行が示す許可の案内か、Coverity との通信の部品の README にあります）。書き戻すツールは前もって許可しません。反映のときに確認が出ます。）。
+- Claude Code では、`/add-dir` と `/permissions` での `Bash(uv run *)` の許可か、`claude --add-dir … --allowedTools …` での起動（usage.md の「Claude Code で使う」の「許可」）。
 
 ## 反映のエラー
 

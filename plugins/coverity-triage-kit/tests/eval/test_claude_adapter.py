@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PLUGIN_ROOT = HERE.parents[1] if len(HERE.parents) > 1 else HERE
 REAL_AGENTS = PLUGIN_ROOT / "com.github.copilot" / "agents"
+REAL_CLAUDE_AGENTS = PLUGIN_ROOT / "agents"
 SCRIPT = HERE / "claude_adapter.py"
+HAS_CLAUDE = shutil.which("claude") is not None
 
 _spec = importlib.util.spec_from_file_location("claude_adapter_under_test", SCRIPT)
 ca = importlib.util.module_from_spec(_spec)
@@ -105,6 +108,73 @@ def make_fake_plugin(root: Path) -> Path:
         "args": ["run", "--native-tls", "--frozen", "--quiet", "--directory",
                  "${PLUGIN_ROOT}/mcp-servers/fake-server", "fake-server-mcp"],
         "env": {"COV_USER": "${COV_USER}", "UNSET_FOR_TEST": "${CLAUDE_ADAPTER_SURELY_UNSET_VAR}"}}}}))
+    return agents
+
+
+def make_fake_claude_plugin(root: Path) -> Path:
+    """The Claude Code form of the fake plugin (agents/<name>.md, manifest, .mcp.json) next to the Copilot one."""
+    make_fake_plugin(root)
+    agents = root / "agents"
+    write(agents / "lead.md", """
+        ---
+        name: lead
+        description: "Use this agent when 試しのまとめ役が要るとき。"
+        model: sonnet
+        color: blue
+        disallowedTools: Edit, Write, mcp__plugin_fake-kit_fake-server__fake_write
+        ---
+
+        あなたはまとめ役です。
+
+        ## 使う部品
+
+        | 役割 | 部品 | 使うとき |
+        | --- | --- | --- |
+        | 手順 | `run-steps` | 毎回 |
+        | 通信 | `fake-server` | 取得のとき |
+        | 作業役 | `helper-a` | 頼むとき |
+
+        ## 守ること
+
+        - ファイルを直しません。
+        """)
+    write(agents / "helper-a.md", """
+        ---
+        name: helper-a
+        description: 'Use this agent when 試しの作業役が要るとき（''引用''）。'
+        model: haiku
+        color: green
+        tools: Read, Grep, Glob, Edit, Write, Bash, Skill, AskUserQuestion, mcp__plugin_fake-kit_fake-server__fake_read, mcp__fake-server__fake_read
+        ---
+
+        あなたは作業役です。
+
+        ## 使う部品
+
+        | 役割 | 部品 | 使うとき |
+        | --- | --- | --- |
+        | 見方 | `notes-skill` | 調べ始めるとき |
+        | 調べ | `probe-skill` | 毎回 |
+        | 通信 | `fake-server` | 足りないとき |
+
+        本文の終わり。
+        """)
+    write(root / "skills" / "unused-skill" / "SKILL.md", """
+        ---
+        name: unused-skill
+        description: どの表にもないスキル。
+        ---
+
+        # unused-skill
+        """)
+    write(root / ".claude-plugin" / "plugin.json", json.dumps({
+        "name": "fake-kit", "version": "9.8.7", "description": "試しのプラグイン", "license": "MIT",
+        "skills": "./more-skills/"}, ensure_ascii=False))
+    write(root / ".mcp.json", json.dumps({"mcpServers": {"fake-server": {
+        "type": "stdio", "command": "uv",
+        "args": ["run", "--native-tls", "--frozen", "--quiet", "--directory",
+                 "${CLAUDE_PLUGIN_ROOT}/mcp-servers/fake-server", "fake-server-mcp"],
+        "env": {"COV_USER": "${COV_USER:-}", "HTTPS_PROXY": "${HTTPS_PROXY:-}"}}}}))
     return agents
 
 
@@ -409,6 +479,317 @@ class RealAgentsTest(unittest.TestCase):
                     found = (name in {a["name"] for a in got["agents"]} or name in got["skills"]
                              or name in got["mcp"] or name in {m["name"] for m in got["missing"]})
                     self.assertTrue(found, name)
+
+
+class ClaudePluginFormatTest(unittest.TestCase):
+    """--format claude-plugin: the Claude Code parts are copied as they are into a temporary plugin."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name).resolve()
+        self.root = self.base / "plugin"
+        self.agents = make_fake_claude_plugin(self.root)
+        self.ws = self.base / "ws"
+        self.ws.mkdir()
+        self.dest = self.base / "made-plugin"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build(self, **kw) -> dict:
+        kw.setdefault("workspace", str(self.ws))
+        kw.setdefault("plugin_dir", str(self.dest))
+        return ca.build(Args(format=ca.FORMAT_PLUGIN, **kw))
+
+    def test_layout_reads_the_claude_form(self):
+        layout = ca.Layout(self.root, flavor="claude")
+        self.assertEqual(layout.agent_file("helper-a"), self.agents / "helper-a.md")
+        self.assertIsNone(layout.agent_file("lead.agent"))
+        self.assertEqual(layout.mcp_folder("fake-server"), (self.root / "mcp-servers" / "fake-server").resolve(),
+                         "${CLAUDE_PLUGIN_ROOT} in .mcp.json points at the plugin folder")
+        got = ca.collect_parts(self.agents / "lead.md", layout)
+        self.assertEqual([a["name"] for a in got["agents"]], ["lead", "helper-a"])
+        self.assertEqual(sorted(got["skills"]), ["notes-skill", "probe-skill", "run-steps"])
+        self.assertEqual(got["missing"], [])
+        self.assertEqual(ca.load_agent(self.agents / "helper-a.md")["name"], "helper-a")
+        self.assertEqual(ca.guess_plugin_root(self.agents / "lead.md"), self.root.resolve())
+        with self.assertRaises(ca.AdapterError):
+            ca.Layout(self.root, flavor="other")
+
+    def test_build_copies_the_parts_as_they_are(self):
+        fake = write(self.base / "fake-issues.yaml", "issues: []\n")
+        out = self.base / "out"
+        res = self.build(parts_from_table=str(self.agents / "lead.md"), fake_data=str(fake), output_dir=str(out),
+                         mcp_env=["UV_PROJECT_ENVIRONMENT=/tmp/venv"], prompt="List the tools")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["format"], ca.FORMAT_PLUGIN)
+        self.assertEqual(Path(res["plugin_dir"]), self.dest.resolve())
+        self.assertEqual(res["plugin_name"], "fake-kit")
+        self.assertEqual(res["agent_ref"], "fake-kit:lead")
+
+        manifest = json.loads((self.dest / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual((manifest["name"], manifest["version"]), ("fake-kit", "9.8.7"))
+        self.assertNotIn("skills", manifest, "path keys are dropped: the copy uses the default places")
+        for name in ("lead", "helper-a"):
+            self.assertEqual((self.dest / "agents" / f"{name}.md").read_bytes(), (self.agents / f"{name}.md").read_bytes(),
+                             "the Claude Code definition is copied byte for byte")
+        self.assertEqual(sorted(p.name for p in (self.dest / "agents").iterdir()), ["helper-a.md", "lead.md"])
+        self.assertEqual(sorted(p.name for p in (self.dest / "skills").iterdir()),
+                         ["notes-skill", "probe-skill", "run-steps"], "only the skills of the tables")
+        self.assertFalse((self.dest / "skills" / "run-steps" / "__pycache__").exists())
+        self.assertTrue((self.dest / "mcp-servers" / "fake-server" / "uv.lock").is_file())
+        self.assertFalse((self.dest / "mcp.json").exists(), "Claude Code reads .mcp.json only")
+        self.assertFalse((self.dest / "com.github.copilot").exists())
+
+        server = json.loads((self.dest / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["fake-server"]
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/mcp-servers/fake-server", server["args"])
+        self.assertEqual(server["args"][-1], "fake-server-mcp")
+        self.assertEqual(server["env"]["COVERITY_API"], "fake")
+        self.assertEqual(server["env"]["COVERITY_FAKE_DATA"], str(fake.resolve()))
+        self.assertEqual(server["env"]["COV_USER"], "eval-user")
+        self.assertEqual(server["env"]["HTTPS_PROXY"], "${HTTPS_PROXY:-}", "the other variables stay as written")
+        self.assertEqual(server["env"]["UV_PROJECT_ENVIRONMENT"], "/tmp/venv")
+        self.assertEqual(res["mcp_servers"], {"fake-server": str(self.dest / "mcp-servers" / "fake-server")})
+        self.assertEqual(res["skills"]["probe-skill"], str(self.dest / "skills" / "probe-skill"))
+
+        argv = res["command"]
+        self.assertEqual(argv[:3], ["claude", "-p", "List the tools"])
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(self.dest.resolve()))
+        self.assertEqual(argv[argv.index("--agent") + 1], "fake-kit:lead")
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "project")
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
+        for flag in ("--agents", "--mcp-config", "--strict-mcp-config", "--model"):
+            self.assertNotIn(flag, argv)
+        allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
+        self.assertEqual(allowed, ["Bash(uv run *)", "Skill", "mcp__plugin_fake-kit_fake-server__*"])
+        self.assertEqual(argv[argv.index("--add-dir") + 1], str(out.resolve()))
+        self.assertEqual(argv[argv.index("--tools") + 1].split(","), ca.BASE_TOOLS,
+                         "the lead has no tools line: the base set (the union keeps the helper's tools)")
+
+        self.assertEqual(sorted(p.name for p in (self.ws / ".claude").iterdir()), ["eval"],
+                         "no agents or skills in the workspace: they come from the plugin")
+        saved = json.loads((self.ws / ".claude" / "eval" / "command.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["format"], ca.FORMAT_PLUGIN)
+        self.assertEqual(saved["argv"][saved["prompt_index"]], ca.PROMPT_PLACEHOLDER)
+        self.assertEqual(saved["expect"]["main"], "fake-kit:lead")
+        self.assertNotIn("Edit", saved["expect"]["tools"], "disallowedTools of the main agent are not expected")
+        self.assertIn("Agent", saved["expect"]["tools"])
+        self.assertEqual(saved["expect"]["skills"], ["notes-skill", "probe-skill", "run-steps"])
+        rows = {r["name"]: r for r in res["agents"]}
+        self.assertEqual(rows["helper-a"]["skills"], ["notes-skill", "probe-skill"])
+        self.assertEqual(rows["helper-a"]["model"], "haiku")
+        self.assertIsNone(rows["lead"]["tools"])
+        self.assertIn("Edit", rows["lead"]["disallowed_tools"])
+        self.assertIn("'Bash(uv run *)'", res["command_line_bash"])
+
+    def test_build_stage2_shape_and_options(self):
+        res = self.build(parts_from_table=str(self.agents / "helper-a.md"), model="claude-haiku-5-5", default_tools=True)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual([a["name"] for a in res["agents"]], ["helper-a"])
+        self.assertEqual(sorted(res["skills"]), ["notes-skill", "probe-skill"])
+        argv = res["command"]
+        self.assertEqual(argv[argv.index("--agent") + 1], "fake-kit:helper-a")
+        self.assertNotIn("--tools", argv, "--default-tools leaves Claude Code's own set")
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-5-5")
+        self.assertEqual((self.dest / "agents" / "helper-a.md").read_bytes(), (self.agents / "helper-a.md").read_bytes(),
+                         "--model is for the session; the definition stays as it is")
+        with_tools = self.build(parts_from_table=str(self.agents / "helper-a.md"))
+        tools = with_tools["command"][with_tools["command"].index("--tools") + 1].split(",")
+        self.assertEqual(tools, ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "AskUserQuestion"],
+                         "the built-in tools of the helper's tools line, no MCP names")
+
+    def test_agent_model_changes_only_the_model_line(self):
+        res = self.build(parts_from_table=str(self.agents / "lead.md"), agent_model="inherit")
+        self.assertTrue(res["ok"], res)
+        for name in ("lead", "helper-a"):
+            old = (self.agents / f"{name}.md").read_text(encoding="utf-8").split("\n")
+            new = (self.dest / "agents" / f"{name}.md").read_text(encoding="utf-8").split("\n")
+            self.assertEqual(len(old), len(new))
+            changed = [(a, b) for a, b in zip(old, new) if a != b]
+            self.assertEqual(len(changed), 1, changed)
+            self.assertTrue(changed[0][0].startswith("model: "))
+            self.assertEqual(changed[0][1], "model: inherit")
+        self.assertEqual({r["model"] for r in res["agents"]}, {"inherit"})
+
+    def test_with_model(self):
+        self.assertEqual(ca.with_model("---\nname: a\nmodel: haiku\n---\nbody model: x\n", "sonnet"),
+                         "---\nname: a\nmodel: sonnet\n---\nbody model: x\n")
+        self.assertEqual(ca.with_model("---\nname: a\n---\nbody\n", "opus"), "---\nname: a\nmodel: opus\n---\nbody\n")
+        self.assertEqual(ca.with_model("---\r\nmodel: haiku\r\n---\r\nb\r\n", "x"), "---\r\nmodel: x\r\n---\r\nb\r\n")
+        for bad in ("no frontmatter\n", "---\nmodel: a\n"):
+            with self.subTest(bad=bad), self.assertRaises(ca.AdapterError):
+                ca.with_model(bad, "x")
+
+    def test_tool_list(self):
+        self.assertEqual(ca.tool_list("Read, Grep ,mcp__a__b"), ["Read", "Grep", "mcp__a__b"])
+        self.assertEqual(ca.tool_list(["Read", " Edit "]), ["Read", "Edit"])
+        self.assertEqual(ca.tool_list(None), [])
+
+    def test_plugin_folder_rules(self):
+        table = str(self.agents / "helper-a.md")
+        for bad in (self.root / "inside", self.ws / "inside", self.base):
+            with self.subTest(dest=bad), self.assertRaises(ca.AdapterError):
+                self.build(parts_from_table=table, plugin_dir=str(bad))
+        self.assertFalse((self.root / "inside").exists())
+        busy = self.base / "busy"
+        write(busy / "keep.txt", "人のファイル\n")
+        with self.assertRaises(ca.AdapterError):
+            self.build(parts_from_table=table, plugin_dir=str(busy))
+        self.assertTrue((busy / "keep.txt").is_file(), "a folder that is not a made plugin is never emptied")
+        self.assertTrue(self.build(parts_from_table=table)["ok"])
+        write(self.dest / "skills" / "stale" / "SKILL.md", "---\nname: stale\ndescription: x\n---\n")
+        self.assertTrue(self.build(parts_from_table=table)["ok"])
+        self.assertFalse((self.dest / "skills" / "stale").exists(), "a new build starts from an empty folder")
+        default = ca.build(Args(format=ca.FORMAT_PLUGIN, workspace=str(self.ws), parts_from_table=table))
+        self.assertEqual(Path(default["plugin_dir"]), (self.base / "claude-plugin").resolve(),
+                         "default: next to the workspace")
+
+    def test_needs_the_claude_definitions(self):
+        with self.assertRaises(ca.AdapterError) as err:
+            self.build(parts_from_table=str(self.root / "com.github.copilot" / "agents" / "helper-a.agent.md"))
+        self.assertIn("agents/<名前>.md", str(err.exception))
+        (self.root / ".claude-plugin" / "plugin.json").unlink()
+        with self.assertRaises(ca.AdapterError):
+            self.build(parts_from_table=str(self.agents / "helper-a.md"))
+        with self.assertRaises(ca.AdapterError):
+            ca.build(Args(format="other", workspace=str(self.ws), parts_from_table=str(self.agents / "helper-a.md")))
+
+    def test_leftover_workspace_parts_are_reported(self):
+        (self.ws / ".claude" / "agents").mkdir(parents=True)
+        res = self.build(parts_from_table=str(self.agents / "helper-a.md"))
+        self.assertTrue(any(".claude/agents/" in p for p in res["problems"]), res["problems"])
+
+    def test_cli_build_and_collect(self):
+        proc = subprocess.run([sys.executable, str(SCRIPT), "collect", "--format", "claude-plugin",
+                               str(self.agents / "lead.md")], capture_output=True, env=ENV, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace"))
+        data = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual((data["format"], [a["name"] for a in data["agents"]]), ("claude-plugin", ["lead", "helper-a"]))
+        proc = subprocess.run([sys.executable, str(SCRIPT), "build", "--format", "claude-plugin", "--workspace", str(self.ws),
+                               "--plugin-dir", str(self.dest), "--parts-from-table", str(self.agents / "helper-a.md")],
+                              capture_output=True, env=ENV, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace"))
+        self.assertEqual(json.loads(proc.stdout.decode("utf-8"))["agent_ref"], "fake-kit:helper-a")
+        proc = subprocess.run([sys.executable, str(SCRIPT), "build", "--format", "nope", "--workspace", str(self.ws),
+                               "--parts-from-table", str(self.agents / "helper-a.md")],
+                              capture_output=True, env=ENV, timeout=60)
+        self.assertEqual(proc.returncode, 1)
+        self.assertFalse(json.loads(proc.stdout.decode("utf-8"))["ok"])
+
+    def test_run_and_inspect_with_a_stand_in(self):
+        fake_claude = write(self.base / "fake_plugin_stream.py", """
+            import json, sys
+            argv = sys.argv[1:]
+            plugin = argv[argv.index("--plugin-dir") + 1]
+            agent = argv[argv.index("--agent") + 1]
+            init = {"type": "system", "subtype": "init", "model": "m", "permissionMode": "acceptEdits",
+                    "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill",
+                              "mcp__plugin_fake-kit_fake-server__fake_read"],
+                    "skills": ["fake-kit:notes-skill", "fake-kit:probe-skill"], "agents": [agent],
+                    "mcp_servers": [{"name": "plugin:fake-kit:fake-server", "status": "connected"}]}
+            print(json.dumps(init))
+            print(json.dumps({"type": "result", "result": plugin, "total_cost_usd": 0.0, "num_turns": 1}))
+            """)
+        res = self.build(parts_from_table=str(self.agents / "helper-a.md"), claude_bin=[sys.executable, str(fake_claude)],
+                         prompt="x", run=True, inspect=True)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["run"]["checks"], [], "plugin names with the plugin name in front count")
+        self.assertEqual(res["run"]["result"], str(self.dest.resolve()))
+        lacking = ca.inspect_stream(json.dumps({"type": "system", "subtype": "init", "tools": ["Read"], "skills": [],
+                                                "agents": [], "mcp_servers": []}),
+                                    self.ws, "fake-kit:helper-a", {"tools": ["Read", "Grep"], "skills": ["probe-skill"]})
+        joined = "\n".join(lacking["checks"])
+        for word in ("Grep", "probe-skill", "fake-kit:helper-a"):
+            self.assertIn(word, joined)
+
+
+class RealClaudePluginTest(unittest.TestCase):
+    """The real Claude Code definitions (agents/<name>.md) build a temporary plugin of their parts only."""
+
+    def setUp(self):
+        if not (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").is_file() or not REAL_CLAUDE_AGENTS.is_dir():
+            self.skipTest("Claude Code の形（.claude-plugin/plugin.json と agents/）がない")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name).resolve()
+        self.ws = self.base / "ws"
+        self.ws.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_each_claude_definition_collects(self):
+        layout = ca.Layout(PLUGIN_ROOT, flavor="claude")
+        for path in sorted(REAL_CLAUDE_AGENTS.glob("*.md")):
+            with self.subTest(agent=path.name):
+                got = ca.collect_parts(path, layout)
+                self.assertEqual(got["agents"][0]["name"], path.stem)
+                self.assertEqual(got["missing"], [], "every part of the table is in the plugin")
+                copilot = REAL_AGENTS / f"{path.stem}{ca.AGENT_SUFFIX}"
+                if copilot.is_file():
+                    self.assertEqual(ca.load_agent(path)["table"], ca.load_agent(copilot)["table"],
+                                     "both definitions have the same table")
+
+    def build(self, agent: Path, dest: Path) -> dict:
+        return ca.build(Args(format=ca.FORMAT_PLUGIN, workspace=str(self.ws), parts_from_table=str(agent),
+                             plugin_dir=str(dest), fake_data=None))
+
+    def check_built(self, agent: Path, dest: Path) -> dict:
+        res = self.build(agent, dest)
+        self.assertTrue(res["ok"], res)
+        collected = ca.collect_parts(agent, ca.Layout(PLUGIN_ROOT, flavor="claude"))
+        self.assertEqual(sorted(p.stem for p in (dest / "agents").iterdir()), sorted(a["name"] for a in collected["agents"]))
+        self.assertEqual(sorted(p.name for p in (dest / "skills").iterdir()), sorted(collected["skills"]),
+                         "only the skills of the tables (Claude Code loads every skill in skills/)")
+        for a in collected["agents"]:
+            self.assertEqual((dest / "agents" / f"{a['name']}.md").read_bytes(), a["path"].read_bytes())
+        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        copied = json.loads((dest / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual((copied["name"], copied["version"]), (manifest["name"], manifest["version"]))
+        self.assertEqual(res["agent_ref"], f"{manifest['name']}:{agent.stem}")
+        if not collected["mcp"]:
+            self.assertFalse((dest / ".mcp.json").exists(), "no MCP server in the tables: no .mcp.json")
+        servers = json.loads((dest / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"] if collected["mcp"] else {}
+        self.assertEqual(sorted(servers), sorted(collected["mcp"]))
+        for name, server in servers.items():
+            self.assertTrue(any(a.startswith("${CLAUDE_PLUGIN_ROOT}/") for a in server["args"]), server)
+            self.assertTrue((dest / "mcp-servers" / name / "pyproject.toml").is_file())
+            self.assertFalse((dest / "mcp-servers" / name / ".venv").exists())
+        allowed = res["command"][res["command"].index("--allowedTools") + 1:]
+        for name in servers:
+            self.assertIn(f"mcp__plugin_{manifest['name']}_{name}__*", allowed)
+        return res
+
+    def validate(self, dest: Path) -> None:
+        if not HAS_CLAUDE:
+            return
+        proc = subprocess.run(["claude", "plugin", "validate", str(dest)], capture_output=True, env=ENV, timeout=120,
+                              cwd=str(self.base), stdin=subprocess.DEVNULL)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace"))
+
+    def test_stage2_and_stage3_plugins(self):
+        tables = {}
+        for path in sorted(REAL_CLAUDE_AGENTS.glob("*.md")):
+            tables[path.stem] = {r["part"] for r in ca.load_agent(path)["table"]}
+        agent_names = set(tables)
+        # stage 3 = the agent whose table names other agents; stage 2 = an agent it names whose table names none
+        leads = [n for n, parts in tables.items() if parts & agent_names]
+        self.assertEqual(len(leads), 1, leads)
+        workers = [n for n in tables[leads[0]] & agent_names if not tables[n] & agent_names]
+        self.assertTrue(workers)
+        for name in [leads[0]] + workers:
+            with self.subTest(agent=name):
+                dest = self.base / f"plugin-{name}"
+                res = self.check_built(REAL_CLAUDE_AGENTS / f"{name}.md", dest)
+                self.assertEqual(len(res["agents"]), 1 + len(tables[name] & agent_names))
+                self.validate(dest)
+
+    @unittest.skipUnless(HAS_CLAUDE, "claude（Claude Code）がない")
+    def test_claude_validates_the_copied_plugin(self):
+        dest = self.base / "plugin-all"
+        lead = next(p for p in sorted(REAL_CLAUDE_AGENTS.glob("*.md"))
+                    if {r["part"] for r in ca.load_agent(p)["table"]} & {q.stem for q in REAL_CLAUDE_AGENTS.glob("*.md")})
+        self.check_built(lead, dest)
+        self.validate(dest)
 
 
 if __name__ == "__main__":

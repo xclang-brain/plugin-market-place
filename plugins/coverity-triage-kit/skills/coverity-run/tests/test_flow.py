@@ -27,6 +27,52 @@ class BasicFlowTest(RunCase):
         self.assertNotIn("rm -rf", odd["permission_steps"][1])
         self.assertNotIn("'srv-x'", odd["permission_steps"][1])
 
+    def test_permission_steps_for_claude_code(self) -> None:
+        tools = ["mcp__srv-x__read_a", "mcp__plugin_kit-x_srv-x__get_b_details"]
+        args = [a for t in tools for a in ("--mcp-tool", t)]
+        created = self.new_run("--client", "claude-code", *args)
+        first, restart = created["permission_steps"]
+        out = Path(created["run_dir"]).parent
+        self.assertIn(f'/add-dir "{out}"', first)
+        self.assertIn("/permissions で Bash(uv run *)", first)
+        self.assertIn(f'claude --add-dir "{out}" --allowedTools "Bash(uv run *)" "Write" "Edit" '
+                      '"mcp__srv-x__read_a" "mcp__plugin_kit-x_srv-x__get_b_details" で起動し直します', restart)
+        self.assertIn("--agent", restart)
+        for step in (first, restart):
+            self.assertNotIn("copilot", step)
+            self.assertNotIn("--allow-tool", step)
+            self.assertNotIn("<", step, "no placeholder in the command to copy (REQ-306)")
+        again = self.run_json("resume", "--run", created["run_dir"], "--client", "claude-code", "--mcp-tool", tools[0])
+        self.assertIn('"Edit" "mcp__srv-x__read_a" で起動し直します', again["permission_steps"][1])
+
+    def test_claude_code_tool_names_are_strict_and_never_write(self) -> None:
+        bad = ["mcp__srv-x", "mcp__srv-x__*", "mcp__srv-x__", "mcp__plugin_kit-x_srv-x", "srv-x(read_a)",
+               'mcp__srv-x__read_a" --dangerously-skip-permissions "x', "mcp__srv-x__read a", "mcp__srv-x___read_a",
+               "mcp__srv-x__read__a", "mcp__srv x__read_a", "Bash(rm *)", "mcp__srv-x__update_c",
+               "mcp__plugin_kit-x_srv-x__srv_write_d", "mcp__srv-x__delete-e", "mcp__srv-x__" + "a" * 65]
+        args = [a for t in bad + ["mcp__srv-x__read_a"] for a in ("--mcp-tool", t)]
+        restart = self.new_run("--client", "claude-code", *args)["permission_steps"][1]
+        self.assertIn('"Edit" "mcp__srv-x__read_a" で起動し直します', restart)
+        self.assertEqual(restart.count('"mcp__'), 1, restart)
+        for word in ("skip-permissions", "update", "write", "delete", "rm ", "*\"", "srv-x(read_a)"):
+            self.assertNotIn(word, restart)
+        # without a tool that reads, the read tools are allowed at the first confirmation
+        plain = self.new_run("--client", "claude-code", "--mcp-tool", "mcp__srv-x__update_c")["permission_steps"][1]
+        self.assertIn('"Write" "Edit" で起動し直します', plain)
+        self.assertIn("最初の確認で許可を選びます", plain)
+
+    def test_copilot_is_the_default_and_unchanged(self) -> None:
+        default = self.new_run("--mcp-tool", "srv-x(read_a)")["permission_steps"]
+        named = self.new_run("--client", "copilot", "--mcp-tool", "srv-x(read_a)", "--mcp-tool", "mcp__srv-x__read_a")
+        out = Path(named["run_dir"]).parent
+        self.assertEqual(default, named["permission_steps"])
+        self.assertEqual(default[1], f"または、Copilot CLI を copilot --add-dir \"{out}\" --allow-tool 'shell(uv:*)' "
+                         "--allow-tool write --allow-tool 'srv-x(read_a)' で起動し直します"
+                         "（Coverity に書き戻すツールは許可しません。反映するときに確認が出ます）。")
+        self.assertNotIn("claude", " ".join(default))
+        wrong = self.run_json("new-run", "--repo", str(self.repo), "--client", "vscode", ok=False)
+        self.assertFalse(wrong["ok"])
+
     def test_whole_run_without_options(self) -> None:
         created = self.new_run()
         run_dir = created["run_dir"]

@@ -187,6 +187,43 @@ class HelpRulesTest(unittest.TestCase):
         self.assertIn("認証キーをチャットで聞かない", text)
 
 
+class ClaudeCodeTest(unittest.TestCase):
+    """「Claude Code で使うには？」に答えられる（入れ方、1〜3段階目、許可、認証情報、画面がないこと）。"""
+
+    def section(self):
+        text = read(SKILL_DIR / "references" / "usage.md")
+        self.assertRegex("\n".join(text.splitlines()[:30]), r"(?m)^- Claude Code で使う$")
+        m = re.search(r"^## Claude Code で使う\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        self.assertIsNotNone(m, "usage.md に「Claude Code で使う」の節がない")
+        return m.group(1)
+
+    def test_facts(self):
+        body = self.section()
+        for word in ["claude plugin marketplace add", "claude plugin install", "/plugin install", "/mcp",
+                     "claude --agent", "/add-dir", "/permissions", "Bash(uv run *)", "--allowedTools",
+                     "COV_USER", "COV_AUTH_KEY", "Copilot CLI だけ", "作業フォルダにして起動しない"]:
+            self.assertIn(word, body)
+        self.assertEqual(re.findall(r"^\| ([1-4]) \|", body, re.M), ["1", "2", "3", "4"])
+
+    def test_never_pre_approves_write_back(self):
+        body = self.section()
+        blocks = re.findall(r"```[a-z]*\n(.*?)```", body, re.S)
+        allowed = [b for b in blocks if "--allowedTools" in b]
+        self.assertEqual(len(allowed), 1)
+        self.assertNotRegex(allowed[0], r"update")
+        # each MCP tool is a full name: never the server name alone, never a wildcard
+        names = re.findall(r'"(mcp__[^"]*)"', allowed[0])
+        self.assertTrue(names)
+        for name in names:
+            self.assertRegex(name, r"__<[^>*]+>$")
+        self.assertIn("書き戻すツールは前もって許可しません", body)
+
+    def test_skill_points_to_it(self):
+        text = read(SKILL_MD)
+        self.assertIn("Claude Code で使う", text)
+        self.assertIn("「Claude Code で使うには？」", text)
+
+
 class CommandsTest(unittest.TestCase):
     """Commands in the documents work in PowerShell and in bash."""
 

@@ -12,10 +12,14 @@ For each variant:
    ``agents.review`` / ``agents.integration`` in its config and commits it; ``--limit N`` asks for
    「N 件だけ」 in the request (the batch-run skill turns it into --limit; 1 for a smoke test);
 2. claude_adapter extracts the orchestrator's table, followed through the agents of the table (all
-   agents, the skills and the MCP server), into ``<repo>/.claude/`` (hidden through .git/info/exclude);
-   the run folder's output_dir (outside the repository) is passed with ``--add-dir``;
+   agents, the skills and the MCP server). ``--format copilot-converted`` (the default) converts the
+   Copilot CLI definitions into ``<repo>/.claude/`` (hidden through .git/info/exclude);
+   ``--format claude-plugin`` copies the Claude Code definitions (``agents/<name>.md``), the skills and
+   the MCP server as they are into a temporary plugin ``<variant>/claude-plugin/`` (its own
+   ``.claude-plugin/plugin.json`` and ``.mcp.json``). The run folder's output_dir (outside the
+   repository) is passed with ``--add-dir``;
 3. ``claude -p "<request>" --agent <orchestrator> --max-turns N`` runs (the orchestrator is the main
-   agent: a Claude Code subagent cannot call subagents);
+   agent); with claude-plugin it is ``--plugin-dir <variant>/claude-plugin --agent <plugin>:<orchestrator>``;
 4. checks: the self-test's ``check-run`` (2-2〜2-6: run finished, all items done, conclusions against
    expected.yaml, the group, files and the user's working files), summary.html and approvals.json,
    result.json for every item, review.json when review is on, the user's repository unchanged,
@@ -23,7 +27,8 @@ For each variant:
 
 Variants: ``default`` (review and integration off, the design defaults) and ``full`` (both on).
 
-  uv run --native-tls --quiet tests/eval/stage3/run_stage3.py [--variant default|full]... [--limit N]
+  uv run --native-tls --quiet tests/eval/stage3/run_stage3.py [--format copilot-converted|claude-plugin]
+        [--variant default|full]... [--limit N]
         [--model M] [--agent-model M] [--timeout S] [--max-turns N] [--max-budget-usd X]
         [--out DIR] [--build-only] [--no-sync]
 
@@ -202,9 +207,17 @@ def run_status(run_script: Path | None, run_dir: Path) -> dict | None:
 def adapter_args(**kw) -> argparse.Namespace:
     base = dict(workspace=None, parts_from_table=None, agent=None, skill=None, mcp=None, plugin_root=None, main=None,
                 output_dir=None, fake_data=None, mcp_env=None, model=None, agent_model=None, prompt=None, extra_arg=None,
-                claude_bin=None, allow_missing=False, run=False, inspect=False, timeout=120.0)
+                claude_bin=None, allow_missing=False, run=False, inspect=False, timeout=120.0,
+                format=ek.ADAPTER.FORMAT_CONVERTED, plugin_dir=None, default_tools=False)
     base.update(kw)
     return argparse.Namespace(**base)
+
+
+def orchestrator_definition(fmt: str, orchestrator: dict, root: Path) -> Path:
+    """The orchestrator's definition for the format: Copilot CLI (the parts table) or Claude Code (agents/)."""
+    if fmt == ek.ADAPTER.FORMAT_PLUGIN:
+        return ek.ADAPTER.claude_agent_file(root, orchestrator["name"])
+    return orchestrator["path"]
 
 
 def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
@@ -214,10 +227,10 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     repo, output_dir = sample["repo"], sample["output_dir"]
     venv = vdir / "mcp-venv"
     build = ek.ADAPTER.build(adapter_args(
-        workspace=str(repo), parts_from_table=str(ctx["orchestrator"]["path"]), plugin_root=str(ctx["root"]),
+        workspace=str(repo), parts_from_table=str(ctx["definition"]), plugin_root=str(ctx["root"]),
         output_dir=str(output_dir), fake_data=str(repo / ".coverity-triage" / "fake-issues.yaml"),
         mcp_env=[f"UV_PROJECT_ENVIRONMENT={venv}"], model=ctx["model"], agent_model=args.agent_model,
-        claude_bin=args.claude_bin))
+        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin")))
     ek.exclude_in_git(repo, ".claude/")
     head = ek.head(repo)
     prompt = prompt_for(sample["filter"], args.limit)
@@ -227,8 +240,8 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     argv += ["--max-turns", str(args.max_turns), "--output-format", "stream-json", "--verbose"]
     if args.max_budget_usd:
         argv += ["--max-budget-usd", str(args.max_budget_usd)]
-    record = {"variant": variant, "options": VARIANTS[variant], "filter": sample["filter"], "limit": args.limit,
-              "prompt": prompt, "repo": str(repo), "output_dir": str(output_dir), "cwd": saved["cwd"], "command": argv,
+    record = {"variant": variant, "format": args.format, "plugin_dir": build.get("plugin_dir"),
+              "options": VARIANTS[variant], "filter": sample["filter"], "limit": args.limit, "prompt": prompt, "repo": str(repo), "output_dir": str(output_dir), "cwd": saved["cwd"], "command": argv,
               "agents": [{"name": a["name"], "model": a["model"], "skills": a["skills"]} for a in build["agents"]],
               "skills": sorted(build["skills"]), "mcp_servers": sorted(build["mcp_servers"]),
               "build_problems": build.get("problems")}
@@ -244,7 +257,8 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
 
     ek.progress(TAG, f"{variant}: claude -p --agent {ctx['orchestrator']['name']}（時間の上限 {args.timeout:g} 秒）")
     run = ek.run_claude(argv, Path(saved["cwd"]), args.timeout, vdir / "transcript.jsonl")
-    summary = ek.summarize(run["events"], prompt)
+    summary = ek.summarize(run["events"], prompt,
+                           [Path(build["plugin_dir"]) / "skills"] if build.get("plugin_dir") else None)
     checks = [ek.check("finished", not run["timed_out"] and summary["has_result"] and not summary.get("is_error"),
                        ("時間切れ" if run["timed_out"] else "")
                        + ("" if summary["has_result"] else " result の知らせなし")
@@ -300,8 +314,9 @@ def counts_text(counts: dict | None) -> str:
 
 def render_report(meta: dict, records: list[dict]) -> str:
     lines = ["# 3段階目（一括のトリアージ）の EVAL の結果", "",
-             f"- 日時: {meta['started_at']}", f"- 統括エージェント: `{meta['orchestrator']}`（モデル `{meta['model']}`）",
-             f"- エージェントのモデル: {meta['agent_model'] or '各定義の claude-* のモデル'}",
+             f"- 日時: {meta['started_at']}", f"- 形: `{meta.get('format', ek.ADAPTER.FORMAT_CONVERTED)}`",
+             f"- 統括エージェント: `{meta['orchestrator']}`（モデル `{meta['model']}`）",
+             f"- エージェントのモデル: {meta['agent_model'] or meta.get('agent_model_default') or '各定義の claude-* のモデル'}",
              f"- 部品: {', '.join(meta['parts'])}", f"- 見本: 自己診断の sample-target（期待は expected.yaml）", "",
              "## まとめ", ""]
     lines += ek.md_table(["変種", "合否", "落ちた確かめ", "件数", "推奨の一致", "時間（秒）", "ターン", "費用"],
@@ -332,11 +347,16 @@ def render_report(meta: dict, records: list[dict]) -> str:
 def make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="3段階目（一括のトリアージ）の EVAL を claude -p で動かす")
     p.add_argument("--plugin-root")
+    p.add_argument("--format", choices=ek.ADAPTER.FORMATS, default=ek.ADAPTER.FORMAT_CONVERTED,
+                   help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin"
+                        "（Claude Code の定義を一時のプラグインに写し、--plugin-dir で動かす）")
     p.add_argument("--variant", action="append", choices=sorted(VARIANTS),
                    help="default（確かめと統合なし）か full（両方あり）。何度でも。既定は両方")
     p.add_argument("--limit", type=int, help="調べる件数の上限（頼みの文を「N 件だけ」にする。試しは 1）")
-    p.add_argument("--model", help="統括エージェント（メイン）のモデル（既定はその定義の claude-* のモデル）")
-    p.add_argument("--agent-model", help="作業・検証・統合のエージェントのモデル（既定は各定義の claude-* のモデル）")
+    p.add_argument("--model", help="統括エージェント（メイン）のモデル（既定はその定義の claude-* のモデル。"
+                                   "claude-plugin では定義の model のまま）")
+    p.add_argument("--agent-model", help="エージェントの定義の model を替える（既定は各定義のモデル。"
+                                         "claude-plugin では写した定義すべての model の行）")
     p.add_argument("--timeout", type=float, default=2700.0, help="1つの変種の時間の上限（秒。既定 45 分）")
     p.add_argument("--max-turns", type=int, default=500)
     p.add_argument("--max-budget-usd", type=float, help="1つの変種の費用の上限（claude の --max-budget-usd）")
@@ -361,15 +381,25 @@ def run(args: argparse.Namespace) -> dict:
     if not selftest_script.is_file():
         raise ek.EvalError(f"自己診断のスクリプトがありません: {selftest_script}")
     expected = ek.load_yaml(tools / "assets" / "expected.yaml") or {}
-    agent = ek.ADAPTER.load_agent(orchestrator["path"])
-    model = args.model or ek.ADAPTER.claude_model(agent["fields"].get("model"))
-    model = None if model == "inherit" else model
-    collected = ek.ADAPTER.collect_parts(orchestrator["path"], ek.ADAPTER.Layout(root))
-    ctx = {"root": root, "out": out, "orchestrator": orchestrator, "selftest_script": selftest_script,
+    plugin = args.format == ek.ADAPTER.FORMAT_PLUGIN
+    definition = orchestrator_definition(args.format, orchestrator, root)
+    agent = ek.ADAPTER.load_agent(definition)
+    if plugin:
+        model = args.model  # the agent's own model line unless --model is given
+        shown_model = model or f"（定義の model: {agent['fields'].get('model') or 'inherit'}）"
+    else:
+        model = args.model or ek.ADAPTER.claude_model(agent["fields"].get("model"))
+        model = None if model == "inherit" else model
+        shown_model = model or "（claude の既定）"
+    collected = ek.ADAPTER.collect_parts(definition, ek.ADAPTER.Layout(root, flavor="claude" if plugin else "copilot"))
+    ctx = {"root": root, "out": out, "orchestrator": orchestrator, "definition": definition,
+           "selftest_script": selftest_script,
            "expected": expected, "model": model, "role_names": role_names,
            "run_script": lambda build: (Path(build["skills"][run_skill]) / "scripts" / "run.py") if run_skill in build["skills"] else None}
-    meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "orchestrator": orchestrator["name"],
-            "model": model or "（claude の既定）", "agent_model": args.agent_model,
+    meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "format": args.format,
+            "orchestrator": orchestrator["name"], "orchestrator_definition": str(definition),
+            "model": shown_model, "agent_model": args.agent_model,
+            "agent_model_default": "各定義の model" if plugin else None,
             "parts": [a["name"] for a in collected["agents"]] + sorted(collected["skills"]) + sorted(collected["mcp"]),
             "out": str(out)}
     records = [run_variant(v, args, ctx) for v in (args.variant or list(VARIANTS))]
@@ -384,7 +414,8 @@ def run(args: argparse.Namespace) -> dict:
                           "failed": [c["id"] for c in r.get("checks", []) if c["ok"] is False],
                           "counts": r.get("counts"), "accuracy": (r.get("accuracy") or {}).get("matched"),
                           "seconds": r.get("seconds"), "cost_usd": r.get("cost_usd"),
-                          **({"cwd": r["cwd"], "command": r["command"]} if args.build_only else {})} for r in records]}
+                          **({"cwd": r["cwd"], "command": r["command"], "plugin_dir": r.get("plugin_dir")}
+                             if args.build_only else {})} for r in records]}
 
 
 def main(argv: list[str] | None = None) -> int:

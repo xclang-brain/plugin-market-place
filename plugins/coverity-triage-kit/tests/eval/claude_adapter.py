@@ -3,10 +3,20 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Build a Claude Code test workspace from GitHub Copilot CLI parts (design 9.3).
+"""Build a Claude Code test workspace from the parts of this plugin (design 9.3).
 
-The parts of this plugin are written for GitHub Copilot CLI. For model-based tests
-(EVAL stage 2 and 3) we run them with Claude Code instead. This tool:
+For model-based tests (EVAL stage 2 and 3) the parts run with Claude Code. Two formats:
+
+``--format copilot-converted`` (the default) reads the GitHub Copilot CLI definitions and
+converts them (below). ``--format claude-plugin`` reads the Claude Code definitions
+(``agents/<name>.md``, ``.claude-plugin/plugin.json``, ``.mcp.json``) and copies the agent,
+the parts of its table (followed through the agents of the table) and the MCP server, as
+they are, into a temporary plugin folder outside the workspace, with its own
+``.claude-plugin/plugin.json`` and ``.mcp.json``. It is run as a real plugin:
+``claude -p ... --plugin-dir <folder> --agent <plugin>:<agent>``. Only ``--agent-model``
+changes a copy (the ``model`` line of the agents).
+
+The copilot-converted format:
 
 - converts Copilot agent definitions (``<name>.agent.md``) into Claude Code agents:
   tool names are mapped, ``skills:`` lists the skills of the agent's
@@ -23,8 +33,9 @@ read from the tables only; nothing in this file names a part.
 
 Commands (one JSON object on stdout, progress on stderr):
 
-  collect AGENT_FILE [--plugin-root DIR]
-  build --workspace WS [--parts-from-table FILE] [--agent FILE]... [--skill DIR]...
+  collect AGENT_FILE [--plugin-root DIR] [--format F]
+  build --workspace WS [--format copilot-converted|claude-plugin] [--plugin-dir DIR]
+        [--default-tools] [--parts-from-table FILE] [--agent FILE]... [--skill DIR]...
         [--mcp [NAME=]DIR]... [--main NAME] [--output-dir DIR] [--fake-data FILE]
         [--mcp-env KEY=VALUE]... [--model M] [--agent-model M] [--prompt TEXT]
         [--extra-arg ARG]... [--allow-missing] [--run] [--inspect] [--timeout S]
@@ -49,6 +60,20 @@ DEFAULT_PLUGIN_ROOT = HERE.parents[1] if len(HERE.parents) > 1 else HERE
 
 AGENTS_REL = Path("com.github.copilot") / "agents"
 AGENT_SUFFIX = ".agent.md"
+# The Claude Code form of the same plugin (design 2.3).
+CLAUDE_AGENTS_REL = Path("agents")
+CLAUDE_AGENT_SUFFIX = ".md"
+CLAUDE_MANIFEST_REL = Path(".claude-plugin") / "plugin.json"
+CLAUDE_MCP_JSON = ".mcp.json"
+COPILOT_MCP_JSON = "mcp.json"
+FORMAT_CONVERTED = "copilot-converted"
+FORMAT_PLUGIN = "claude-plugin"
+FORMATS = (FORMAT_CONVERTED, FORMAT_PLUGIN)
+PLUGIN_ROOT_VARS = ("${CLAUDE_PLUGIN_ROOT}", "${PLUGIN_ROOT}")
+# Manifest keys that point at files; the copy keeps the default places instead.
+MANIFEST_PATH_KEYS = {"skills", "agents", "commands", "hooks", "mcpServers", "outputStyles", "lspServers"}
+# The Claude Code form of the uv permission (design 9.3); the converted format keeps its old form.
+PLUGIN_BASH_ALLOW = "Bash(uv run *)"
 TABLE_HEADING = "使う部品"
 TABLE_HEADER = ["役割", "部品", "使うとき"]
 
@@ -286,20 +311,23 @@ def parse_parts_table(body: str) -> list[dict]:
     return rows
 
 
-def agent_name(path: Path) -> str:
+def agent_name(path: Path, suffix: str = AGENT_SUFFIX) -> str:
     name = path.name
-    if not name.endswith(AGENT_SUFFIX):
-        raise AdapterError(f"エージェントの定義のファイル名は <名前>{AGENT_SUFFIX} です: {path}")
-    return name[: -len(AGENT_SUFFIX)]
+    if not name.endswith(suffix) or len(name) == len(suffix):
+        raise AdapterError(f"エージェントの定義のファイル名は <名前>{suffix} です: {path}")
+    return name[: -len(suffix)]
 
 
-def load_agent(path: Path) -> dict:
+def load_agent(path: Path, suffix: str | None = None) -> dict:
+    """Read an agent definition. Without ``suffix``: <name>.agent.md (Copilot CLI), else <name>.md."""
     path = Path(path).resolve()
     if not path.is_file():
         raise AdapterError(f"エージェントの定義がありません: {path}")
+    if suffix is None:
+        suffix = AGENT_SUFFIX if path.name.endswith(AGENT_SUFFIX) else CLAUDE_AGENT_SUFFIX
     fields, body = parse_frontmatter(read_text(path))
     return {
-        "name": agent_name(path),
+        "name": agent_name(path, suffix),
         "path": path,
         "fields": fields,
         "body": body,
@@ -359,29 +387,38 @@ def claude_model(models, override: str | None = None) -> str:
 
 
 class Layout:
-    """Where the parts of a plugin live: agents, skills, MCP servers."""
+    """Where the parts of a plugin live: agents, skills, MCP servers.
+
+    ``flavor`` "copilot" reads com.github.copilot/agents/<name>.agent.md and mcp.json;
+    "claude" reads agents/<name>.md and .mcp.json. Skills and MCP servers are the same folders.
+    """
 
     def __init__(self, root: Path, extra_skills: dict[str, Path] | None = None,
-                 extra_mcp: dict[str, Path] | None = None):
+                 extra_mcp: dict[str, Path] | None = None, flavor: str = "copilot"):
+        if flavor not in ("copilot", "claude"):
+            raise AdapterError(f"知らない形です: {flavor}")
         self.root = Path(root).resolve()
-        self.agents_dir = self.root / AGENTS_REL
+        self.flavor = flavor
+        claude = flavor == "claude"
+        self.agents_dir = self.root / (CLAUDE_AGENTS_REL if claude else AGENTS_REL)
+        self.suffix = CLAUDE_AGENT_SUFFIX if claude else AGENT_SUFFIX
+        self.mcp_json = self.root / (CLAUDE_MCP_JSON if claude else COPILOT_MCP_JSON)
         self.skills_dir = self.root / "skills"
         self.mcp_dir = self.root / "mcp-servers"
         self.extra_skills = dict(extra_skills or {})
         self.extra_mcp = dict(extra_mcp or {})
         self.mcp_entries: dict[str, dict] = {}
-        mcp_json = self.root / "mcp.json"
-        if mcp_json.is_file():
+        if self.mcp_json.is_file():
             try:
-                data = json.loads(read_text(mcp_json))
+                data = json.loads(read_text(self.mcp_json))
                 servers = data.get("mcpServers") or data.get("servers") or {}
                 if isinstance(servers, dict):
                     self.mcp_entries = {k: v for k, v in servers.items() if isinstance(v, dict)}
             except json.JSONDecodeError as exc:
-                raise AdapterError(f"mcp.json を読めません: {exc}") from exc
+                raise AdapterError(f"{self.mcp_json.name} を読めません: {exc}") from exc
 
     def agent_file(self, name: str) -> Path | None:
-        p = self.agents_dir / f"{name}{AGENT_SUFFIX}"
+        p = self.agents_dir / f"{name}{self.suffix}"
         return p if p.is_file() else None
 
     def skill_dir(self, name: str) -> Path | None:
@@ -397,7 +434,9 @@ class Layout:
         if entry:
             directory = _directory_arg(entry.get("args") or [])
             if directory:
-                p = Path(directory.replace("${PLUGIN_ROOT}", str(self.root)))
+                for var in PLUGIN_ROOT_VARS:
+                    directory = directory.replace(var, str(self.root))
+                p = Path(directory)
                 if not p.is_absolute():
                     p = self.root / p
                 if p.is_dir():
@@ -424,7 +463,17 @@ def guess_plugin_root(agent_file: Path) -> Path:
     parts = agent_file.parent
     if parts.name == "agents" and parts.parent.name == "com.github.copilot":
         return parts.parent.parent
+    if parts.name == "agents" and (parts.parent / CLAUDE_MANIFEST_REL).is_file():
+        return parts.parent
     return DEFAULT_PLUGIN_ROOT
+
+
+def claude_agent_file(root: Path, name: str) -> Path:
+    """The Claude Code definition of an agent: <root>/agents/<name>.md."""
+    path = Path(root).resolve() / CLAUDE_AGENTS_REL / f"{name}{CLAUDE_AGENT_SUFFIX}"
+    if not path.is_file():
+        raise AdapterError(f"Claude Code のエージェントの定義がありません: {path}")
+    return path
 
 
 def collect_parts(agent_file: Path, layout: Layout, recursive: bool = True) -> dict:
@@ -437,7 +486,7 @@ def collect_parts(agent_file: Path, layout: Layout, recursive: bool = True) -> d
     queue = [Path(agent_file).resolve()]
     while queue:
         path = queue.pop(0)
-        agent = load_agent(path)
+        agent = load_agent(path, layout.suffix)
         if agent["name"] in seen:
             continue
         seen.add(agent["name"])
@@ -513,27 +562,44 @@ def _pyproject_script(folder: Path) -> str | None:
     return None
 
 
+def _replace_directory(args: list[str], value: str) -> tuple[list[str], bool]:
+    """Put ``value`` in place of the --directory argument. Returns (args, replaced)."""
+    directory = _directory_arg(args)
+    new_args = []
+    replaced = False
+    for i, a in enumerate(args):
+        if directory is not None and a == directory and i > 0 and args[i - 1] == "--directory":
+            new_args.append(value)
+            replaced = True
+        elif a.startswith("--directory="):
+            new_args.append(f"--directory={value}")
+            replaced = True
+        else:
+            new_args.append(a)
+    return new_args, replaced
+
+
+def fake_env(fake_data: Path | None, env_overrides: dict[str, str]) -> dict[str, str]:
+    """The MCP server's variables for the fake Coverity (empty without fake data)."""
+    if fake_data is None:
+        return {}
+    return {
+        "COVERITY_API": "fake",
+        "COVERITY_FAKE_DATA": str(fake_data),
+        "COVERITY_URL": env_overrides.get("COVERITY_URL", "https://coverity.invalid"),
+        "COV_USER": "eval-user",
+        "COV_AUTH_KEY": "eval-key",
+    }
+
+
 def mcp_server_config(name: str, folder: Path, entry: dict | None, env_overrides: dict[str, str],
                       fake_data: Path | None) -> tuple[dict, list[str]]:
     problems: list[str] = []
     if entry and entry.get("command"):
         command = str(entry["command"])
-        args = [str(a) for a in entry.get("args") or []]
-        directory = _directory_arg(args)
-        new_args = []
-        replaced = False
-        for i, a in enumerate(args):
-            if directory is not None and a == directory and i > 0 and args[i - 1] == "--directory":
-                new_args.append(str(folder))
-                replaced = True
-            elif a.startswith("--directory="):
-                new_args.append(f"--directory={folder}")
-                replaced = True
-            else:
-                new_args.append(a)
+        args, replaced = _replace_directory([str(a) for a in entry.get("args") or []], str(folder))
         if not replaced:
             problems.append(f"{name}: mcp.json の args に --directory がありません。そのまま使います")
-        args = new_args
         base_env = {str(k): str(v) for k, v in (entry.get("env") or {}).items()}
     else:
         script = _pyproject_script(folder)
@@ -549,16 +615,35 @@ def mcp_server_config(name: str, folder: Path, entry: dict | None, env_overrides
             continue  # leave unset variables out instead of passing a literal ${...}
         env[k] = v
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    if fake_data is not None:
-        env.update({
-            "COVERITY_API": "fake",
-            "COVERITY_FAKE_DATA": str(fake_data),
-            "COVERITY_URL": env_overrides.get("COVERITY_URL", "https://coverity.invalid"),
-            "COV_USER": "eval-user",
-            "COV_AUTH_KEY": "eval-key",
-        })
+    env.update(fake_env(fake_data, env_overrides))
     env.update(env_overrides)
     return {"type": "stdio", "command": command, "args": args, "env": env}, problems
+
+
+def plugin_mcp_config(name: str, rel: str, folder: Path, entry: dict | None, env_overrides: dict[str, str],
+                      fake_data: Path | None) -> tuple[dict, list[str]]:
+    """The .mcp.json entry of a server copied to <plugin>/<rel> (paths through ${CLAUDE_PLUGIN_ROOT})."""
+    problems: list[str] = []
+    directory = "${CLAUDE_PLUGIN_ROOT}/" + rel
+    if entry and entry.get("command"):
+        command = str(entry["command"])
+        args, replaced = _replace_directory([str(a) for a in entry.get("args") or []], directory)
+        if not replaced:
+            problems.append(f"{name}: {CLAUDE_MCP_JSON} の args に --directory がありません。そのまま使います")
+        env = {str(k): str(v) for k, v in (entry.get("env") or {}).items()}
+        kind = str(entry.get("type") or "stdio")
+    else:
+        script = _pyproject_script(folder)
+        if not script:
+            raise AdapterError(f"MCP サーバー {name} の起動のしかたが分かりません（{CLAUDE_MCP_JSON} の登録も pyproject.toml の [project.scripts] もありません）")
+        command = "uv"
+        args = ["run", "--native-tls", "--frozen", "--quiet", "--directory", directory, script]
+        env = {}
+        kind = "stdio"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.update(fake_env(fake_data, env_overrides))
+    env.update(env_overrides)
+    return {"type": kind, "command": command, "args": args, "env": env}, problems
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -633,7 +718,15 @@ def _parse_kv(values: list[str] | None, what: str) -> dict[str, str]:
     return out
 
 
-def build(args: argparse.Namespace) -> dict:
+def _format_of(args: argparse.Namespace) -> str:
+    fmt = getattr(args, "format", None) or FORMAT_CONVERTED
+    if fmt not in FORMATS:
+        raise AdapterError(f"--format は {' か '.join(FORMATS)} です: {fmt}")
+    return fmt
+
+
+def gather(args: argparse.Namespace, flavor: str = "copilot") -> dict:
+    """Read the agents of --parts-from-table / --agent and the parts of their tables."""
     ws = Path(args.workspace).resolve()
     first_agent = Path(args.parts_from_table or (args.agent or [None])[0] or "")
     if not args.parts_from_table and not args.agent:
@@ -653,7 +746,7 @@ def build(args: argparse.Namespace) -> dict:
         if not folder.is_dir():
             raise AdapterError(f"MCP サーバーのフォルダがありません: {folder}")
         extra_mcp[name if sep else folder.name] = folder
-    layout = Layout(root, extra_skills, extra_mcp)
+    layout = Layout(root, extra_skills, extra_mcp, flavor)
 
     agents: list[dict] = []
     skills: dict[str, Path | None] = dict(extra_skills)
@@ -661,6 +754,11 @@ def build(args: argparse.Namespace) -> dict:
     missing: list[dict] = []
     files = [Path(args.parts_from_table)] if args.parts_from_table else []
     files += [Path(a) for a in args.agent or []]
+    if flavor == "claude":
+        wrong = [str(f) for f in files if f.name.endswith(AGENT_SUFFIX)]
+        if wrong:
+            raise AdapterError(f"claude-plugin では、Claude Code の定義（{CLAUDE_AGENTS_REL.as_posix()}/<名前>{CLAUDE_AGENT_SUFFIX}）を渡します",
+                               wrong)
     seen: set[str] = set()
     for i, f in enumerate(files):
         collected = collect_parts(f, layout, recursive=bool(args.parts_from_table) and i == 0)
@@ -681,6 +779,16 @@ def build(args: argparse.Namespace) -> dict:
     main = args.main or agents[0]["name"]
     if main not in {a["name"] for a in agents}:
         raise AdapterError(f"--main のエージェントがありません: {main}")
+    return {"ws": ws, "root": root, "layout": layout, "agents": agents, "skills": skills, "mcp": mcp,
+            "missing": missing, "main": main}
+
+
+def build(args: argparse.Namespace) -> dict:
+    if _format_of(args) == FORMAT_PLUGIN:
+        return build_plugin(args)
+    g = gather(args, "copilot")
+    ws, root, layout, agents, skills, mcp, missing, main = (
+        g["ws"], g["root"], g["layout"], g["agents"], g["skills"], g["mcp"], g["missing"], g["main"])
 
     claude_dir = ws / ".claude"
     eval_dir = claude_dir / "eval"
@@ -737,6 +845,7 @@ def build(args: argparse.Namespace) -> dict:
     shown = [args.prompt if (a == PROMPT_PLACEHOLDER and args.prompt) else a for a in argv]
     result = {
         "ok": True,
+        "format": FORMAT_CONVERTED,
         "workspace": str(ws),
         "plugin_root": str(root),
         "main_agent": main,
@@ -749,6 +858,202 @@ def build(args: argparse.Namespace) -> dict:
         "problems": problems,
         "files": {"agents_json": str(agents_file), "mcp_config": str(mcp_file),
                   "command": str(eval_dir / "command.json")},
+        "cwd": str(ws),
+        "command": shown,
+        "command_line_bash": bash_line(shown),
+        "command_line_powershell": powershell_line(shown),
+    }
+    if args.run:
+        if not args.prompt:
+            raise AdapterError("--run には --prompt が要ります")
+        result["run"] = run_saved(ws, args.prompt, args.timeout, inspect=args.inspect)
+        result["ok"] = result["run"]["ok"]
+    return result
+
+
+# --------------------------------------------------------------------------- the claude-plugin format
+
+
+def tool_list(value) -> list[str]:
+    """A tools / disallowedTools value of a Claude Code agent (comma list or YAML list)."""
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else str(value).split(",")
+    return [str(t).strip() for t in items if str(t).strip()]
+
+
+def with_model(text: str, model: str) -> str:
+    """The agent file with its frontmatter ``model`` line set to ``model`` (other lines unchanged)."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(newline)
+    if not lines or lines[0].lstrip("\ufeff") != "---":
+        raise AdapterError("frontmatter（先頭の --- の行）がありません")
+    end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    if end is None:
+        raise AdapterError("frontmatter の終わり（--- の行）がありません")
+    for i in range(1, end):
+        if re.match(r"^model:", lines[i]):
+            lines[i] = f"model: {model}"
+            break
+    else:
+        lines.insert(end, f"model: {model}")
+    return newline.join(lines)
+
+
+def read_manifest(root: Path) -> dict:
+    path = Path(root) / CLAUDE_MANIFEST_REL
+    if not path.is_file():
+        raise AdapterError(f"Claude Code のマニフェストがありません: {path}")
+    try:
+        data = json.loads(read_text(path))
+    except json.JSONDecodeError as exc:
+        raise AdapterError(f"Claude Code のマニフェストを読めません: {exc}") from exc
+    name = data.get("name") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+        raise AdapterError(f"Claude Code のマニフェストに name がありません: {path}")
+    return data
+
+
+def _fresh_plugin_dir(dest: Path) -> None:
+    """Empty ``dest`` for a new copy. Refuses a non-empty folder that is not a plugin made before."""
+    if dest.exists():
+        if not dest.is_dir():
+            raise AdapterError(f"プラグインを作る場所がファイルです: {dest}")
+        if any(dest.iterdir()) and not (dest / CLAUDE_MANIFEST_REL).is_file():
+            raise AdapterError(f"プラグインを作るフォルダが空ではありません。別の場所にしてください: {dest}")
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+
+
+def plugin_argv(claude_bin: list[str], prompt: str, plugin_dir: Path, agent_ref: str, plugin: str,
+                mcp_names: list[str], output_dir: Path | None, model: str | None, extra: list[str],
+                tools: list[str] | None = None) -> list[str]:
+    """claude -p with the copied plugin (design 9.3). The prompt goes right after -p."""
+    argv = list(claude_bin) + ["-p", prompt, "--plugin-dir", str(plugin_dir), "--agent", agent_ref,
+                               "--setting-sources", "project", "--permission-mode", "acceptEdits"]
+    if tools:
+        argv += ["--tools", ",".join(tools)]
+    argv += ["--allowedTools", PLUGIN_BASH_ALLOW, "Skill"]
+    argv += [f"mcp__plugin_{plugin}_{n}__*" for n in mcp_names]
+    if output_dir is not None:
+        argv += ["--add-dir", str(output_dir)]
+    if model:
+        argv += ["--model", model]
+    argv += list(extra)
+    return argv
+
+
+def build_plugin(args: argparse.Namespace) -> dict:
+    """Copy the Claude Code agent(s), the table's skills and MCP servers into a temporary plugin."""
+    g = gather(args, "claude")
+    ws, root, layout, agents, skills, mcp, missing, main = (
+        g["ws"], g["root"], g["layout"], g["agents"], g["skills"], g["mcp"], g["missing"], g["main"])
+    manifest = read_manifest(root)
+    plugin = manifest["name"]
+    dest = Path(args.plugin_dir).resolve() if getattr(args, "plugin_dir", None) else (ws.parent / "claude-plugin").resolve()
+    if _inside(dest, root):
+        raise AdapterError(f"プラグインを作る場所が、元のプラグインのフォルダの中です。外の場所にしてください: {dest}")
+    if _inside(dest, ws) or _inside(ws, dest):
+        raise AdapterError(f"プラグインを作る場所と作業フォルダは、別のところにしてください（作業フォルダの中や上は不可）: {dest}")
+    _fresh_plugin_dir(dest)
+
+    problems: list[str] = []
+    for leftover in ("agents", "skills"):
+        if (ws / ".claude" / leftover).is_dir():
+            problems.append(f"作業フォルダに .claude/{leftover}/ があります。プラグインの部品と一緒に読まれます")
+
+    (dest / CLAUDE_MANIFEST_REL).parent.mkdir(parents=True)
+    copied_manifest = {k: v for k, v in manifest.items() if k not in MANIFEST_PATH_KEYS}
+    (dest / CLAUDE_MANIFEST_REL).write_text(json.dumps(copied_manifest, ensure_ascii=False, indent=2) + "\n",
+                                            encoding="utf-8")
+
+    (dest / CLAUDE_AGENTS_REL).mkdir()
+    agent_rows = []
+    defs: dict[str, dict] = {}
+    for agent in agents:
+        target = dest / CLAUDE_AGENTS_REL / f"{agent['name']}{CLAUDE_AGENT_SUFFIX}"
+        progress(f"agent {agent['name']} <- {agent['path']}")
+        if args.agent_model:
+            raw = agent["path"].read_bytes().decode("utf-8")
+            target.write_bytes(with_model(raw, args.agent_model).encode("utf-8"))
+        else:
+            shutil.copyfile(agent["path"], target)
+        fields = agent["fields"]
+        definition = {"tools": tool_list(fields["tools"])} if "tools" in fields else {}
+        defs[agent["name"]] = definition
+        agent_rows.append({"name": agent["name"], "ref": f"{plugin}:{agent['name']}", "source": str(agent["path"]),
+                           "file": str(target), "skills": list(agent["skills"]), "tools": definition.get("tools"),
+                           "disallowed_tools": tool_list(fields.get("disallowedTools")) or None,
+                           "model": args.agent_model or (str(fields["model"]) if fields.get("model") else "inherit")})
+
+    copied_skills: dict[str, str] = {}
+    for name, folder in skills.items():
+        if folder is None:
+            continue
+        target = dest / "skills" / name
+        progress(f"skill {name} <- {folder}")
+        _copy_tree(folder, target)
+        copied_skills[name] = str(target)
+
+    fake_data = Path(args.fake_data).resolve() if args.fake_data else None
+    if fake_data is not None and not fake_data.is_file():
+        raise AdapterError(f"偽の警告のファイルがありません: {fake_data}")
+    env_overrides = _parse_kv(args.mcp_env, "--mcp-env")
+    servers: dict[str, dict] = {}
+    server_dirs: dict[str, str] = {}
+    for name, folder in mcp.items():
+        if folder is None:
+            continue
+        try:
+            rel = Path(folder).resolve().relative_to(root).as_posix()
+        except ValueError:
+            rel = f"mcp-servers/{name}"
+        target = dest / rel
+        progress(f"mcp {name} <- {folder}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _copy_tree(folder, target)
+        config, probs = plugin_mcp_config(name, rel, target, layout.mcp_entries.get(name), env_overrides, fake_data)
+        problems += probs
+        servers[name] = config
+        server_dirs[name] = str(target)
+    mcp_file = dest / CLAUDE_MCP_JSON
+    if servers:
+        mcp_file.write_text(json.dumps({"mcpServers": servers}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    eval_dir = ws / ".claude" / "eval"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else (ws.parent / "coverity-triage-out")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    claude_bin = args.claude_bin or ["claude"]
+    agent_ref = f"{plugin}:{main}"
+    tools = None if getattr(args, "default_tools", False) else builtin_tools(defs)
+    argv = plugin_argv(claude_bin, PROMPT_PLACEHOLDER, dest, agent_ref, plugin, sorted(servers), output_dir,
+                       args.model, args.extra_arg or [], tools)
+    main_row = next(r for r in agent_rows if r["name"] == main)
+    denied = set(main_row["disallowed_tools"] or [])
+    expect = {"main": agent_ref, "tools": [t for t in defs[main].get("tools", BASE_TOOLS) if t not in denied],
+              "skills": sorted(copied_skills), "agents": [r["ref"] for r in agent_rows]}
+    command_file = eval_dir / "command.json"
+    command_file.write_text(json.dumps(
+        {"format": FORMAT_PLUGIN, "cwd": str(ws), "argv": argv, "prompt_index": argv.index(PROMPT_PLACEHOLDER),
+         "expect": expect}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    shown = [args.prompt if (a == PROMPT_PLACEHOLDER and args.prompt) else a for a in argv]
+    result = {
+        "ok": True,
+        "format": FORMAT_PLUGIN,
+        "workspace": str(ws),
+        "plugin_root": str(root),
+        "plugin_name": plugin,
+        "plugin_dir": str(dest),
+        "main_agent": main,
+        "agent_ref": agent_ref,
+        "agents": agent_rows,
+        "skills": copied_skills,
+        "mcp_servers": server_dirs,
+        "missing": missing,
+        "problems": problems,
+        "files": {"manifest": str(dest / CLAUDE_MANIFEST_REL), "mcp_config": str(mcp_file) if servers else None,
+                  "command": str(command_file)},
         "cwd": str(ws),
         "command": shown,
         "command_line_bash": bash_line(shown),
@@ -805,13 +1110,21 @@ def run_saved(ws: Path, prompt: str, timeout: float, claude_bin: list[str] | Non
     result = {"ok": (not timed_out) and code == 0, "exit_code": code, "timed_out": timed_out,
               "seconds": seconds, "stdout": dec(out), "stderr": dec(err)[-4000:], "argv": argv}
     if inspect:
-        result.update(inspect_stream(dec(out), ws, argv[argv.index("--agent") + 1]))
+        result.update(inspect_stream(dec(out), ws, argv[argv.index("--agent") + 1], saved.get("expect")))
         result["stdout"] = result["stdout"][-4000:]
     return result
 
 
-def inspect_stream(stdout: str, ws: Path, main: str) -> dict:
-    """Read the init and result events of a stream-json run and check the main agent's setup."""
+def _stem(name) -> str:
+    return str(name).split(":")[-1]
+
+
+def inspect_stream(stdout: str, ws: Path, main: str, expect: dict | None = None) -> dict:
+    """Read the init and result events of a stream-json run and check the main agent's setup.
+
+    ``expect`` (claude-plugin format: tools, skills of the copied plugin) replaces agents.json.
+    Plugin names may carry the plugin name and ":" in front (compared without it).
+    """
     init, final = None, None
     for line in stdout.splitlines():
         line = line.strip()
@@ -836,7 +1149,9 @@ def inspect_stream(stdout: str, ws: Path, main: str) -> dict:
                    "permission_mode": init.get("permissionMode")}
         agents_file = Path(ws) / ".claude" / "eval" / "agents.json"
         definition = {}
-        if agents_file.is_file():
+        if expect is not None:
+            definition = {"tools": list(expect.get("tools") or BASE_TOOLS), "skills": list(expect.get("skills") or [])}
+        elif agents_file.is_file():
             definition = json.loads(read_text(agents_file)).get(main, {})
         for tool in definition.get("tools", BASE_TOOLS):
             if tool in NOT_IN_PRINT_MODE:
@@ -849,10 +1164,11 @@ def inspect_stream(stdout: str, ws: Path, main: str) -> dict:
         for server in summary["mcp_servers"]:
             if server.get("status") != "connected":
                 checks.append(f"MCP サーバーにつながっていません: {server.get('name')}（{server.get('status')}）")
+        loaded_skills = {_stem(s) for s in summary["skills"]}
         for skill in definition.get("skills", []):
-            if skill not in summary["skills"]:
+            if skill not in summary["skills"] and _stem(skill) not in loaded_skills:
                 checks.append(f"スキルが読み込まれていません: {skill}")
-        if main not in summary["agents"]:
+        if main not in summary["agents"] and _stem(main) not in {_stem(a) for a in summary["agents"]}:
             checks.append(f"エージェントが読み込まれていません: {main}")
     out = {"init": summary, "checks": checks}
     if final is not None:
@@ -864,11 +1180,13 @@ def inspect_stream(stdout: str, ws: Path, main: str) -> dict:
 
 def collect_command(args: argparse.Namespace) -> dict:
     agent_file = Path(args.agent_file)
+    fmt = _format_of(args)
     root = Path(args.plugin_root).resolve() if args.plugin_root else guess_plugin_root(agent_file)
-    layout = Layout(root)
+    layout = Layout(root, flavor="claude" if fmt == FORMAT_PLUGIN else "copilot")
     collected = collect_parts(agent_file, layout)
     return {
         "ok": True,
+        "format": fmt,
         "plugin_root": str(root),
         "agents": [{"name": a["name"], "path": str(a["path"]), "table": a["table"]} for a in collected["agents"]],
         "skills": {k: (str(v) if v else None) for k, v in collected["skills"].items()},
@@ -878,17 +1196,25 @@ def collect_command(args: argparse.Namespace) -> dict:
 
 
 def make_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Copilot CLI の部品から Claude Code の試験の作業フォルダを作る")
+    p = argparse.ArgumentParser(description="プラグインの部品から Claude Code の試験の作業フォルダを作る")
     sub = p.add_subparsers(dest="command", required=True)
 
     c = sub.add_parser("collect", help="エージェントと、その表の部品を（たどって）挙げる。何も書かない")
     c.add_argument("agent_file")
     c.add_argument("--plugin-root")
+    c.add_argument("--format", choices=FORMATS, default=FORMAT_CONVERTED,
+                   help="copilot-converted（Copilot CLI の定義）か claude-plugin（Claude Code の定義 agents/<名前>.md）")
 
     b = sub.add_parser("build", help="作業フォルダを作り、claude -p のコマンドを示す")
     b.add_argument("--workspace", required=True)
+    b.add_argument("--format", choices=FORMATS, default=FORMAT_CONVERTED,
+                   help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin（Claude Code の定義を"
+                        "一時のプラグインに写し、--plugin-dir で動かす）")
+    b.add_argument("--plugin-dir", help="claude-plugin で、プラグインを作るフォルダ（既定は作業フォルダの隣の claude-plugin）")
+    b.add_argument("--default-tools", action="store_true",
+                   help="claude-plugin で、--tools を付けない（Claude Code の既定のツールのまま）")
     b.add_argument("--parts-from-table", help="このエージェントと、その表の部品をたどって集める")
-    b.add_argument("--agent", action="append", help="変換するエージェントの定義（何度でも）")
+    b.add_argument("--agent", action="append", help="置き換える（写す）エージェントの定義（何度でも）")
     b.add_argument("--skill", action="append", help="足すスキルのフォルダ（何度でも）")
     b.add_argument("--mcp", action="append", help="足す MCP サーバーのフォルダ（[名前=]フォルダ）")
     b.add_argument("--plugin-root")
@@ -897,7 +1223,7 @@ def make_parser() -> argparse.ArgumentParser:
     b.add_argument("--fake-data", help="偽の Coverity の警告のファイル（MCP サーバーを偽の Coverity で動かす）")
     b.add_argument("--mcp-env", action="append", help="MCP サーバーの環境変数 KEY=VALUE（何度でも）")
     b.add_argument("--model", help="claude -p の --model")
-    b.add_argument("--agent-model", help="変換したエージェントの model を、これに替える（inherit など）")
+    b.add_argument("--agent-model", help="エージェントの model を、これに替える（inherit など。claude-plugin では写しの model の行）")
     b.add_argument("--prompt", help="示すコマンドに入れる頼みの文")
     b.add_argument("--extra-arg", action="append", help="claude に足す引数（何度でも）")
     b.add_argument("--claude-bin", nargs="+", help="claude の代わりに動かすコマンド")

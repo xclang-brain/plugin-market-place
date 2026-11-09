@@ -9,10 +9,14 @@ For each case of cases.json (next to this file):
 
 1. a fresh git repository is made from the self-test's sample (``assets/sample-target``: C code and a
    fake Coverity under ``.coverity-triage/``); the expected conclusions are its ``assets/expected.yaml``;
-2. claude_adapter extracts the worker agent and the parts of its table only (``--parts-from-table``)
-   into ``<repo>/.claude/`` (hidden from git status through .git/info/exclude), with the MCP server
-   on the fake Coverity;
+2. claude_adapter extracts the worker agent and the parts of its table only (``--parts-from-table``),
+   with the MCP server on the fake Coverity. ``--format copilot-converted`` (the default) converts the
+   Copilot CLI definition into ``<repo>/.claude/`` (hidden from git status through .git/info/exclude);
+   ``--format claude-plugin`` copies the Claude Code definition (``agents/<name>.md``), its table's
+   skills and the MCP server as they are into a temporary plugin ``<case>/claude-plugin/`` (its own
+   ``.claude-plugin/plugin.json`` and ``.mcp.json``);
 3. ``claude -p "<request>" --agent <worker>`` runs in the repository (stream-json transcript kept);
+   with claude-plugin it is ``--plugin-dir <case>/claude-plugin --agent <plugin>:<worker>``;
 4. programmatic checks: the conclusion against expected.yaml, both proposals, the deviation comment
    through the deviation-comment rules script and the result through the result-record script (both
    run from the workspace copies of the skills), evidence file:line, files changed only where allowed,
@@ -23,8 +27,9 @@ Modes: ``user`` (a person in the chat; claude -p has no AskUserQuestion, so the 
 and asks not to change files) and ``brief`` (another agent: an instruction file in the run-folder
 style asks to write result.json and to edit only a given work copy).
 
-  uv run --native-tls --quiet tests/eval/stage2/run_stage2.py [--only NAME|N]... [--model M]
-        [--judge] [--judge-model M] [--timeout S] [--max-turns N] [--out DIR] [--build-only] [--no-sync]
+  uv run --native-tls --quiet tests/eval/stage2/run_stage2.py [--format copilot-converted|claude-plugin]
+        [--only NAME|N]... [--model M] [--agent-model M] [--judge] [--judge-model M] [--timeout S]
+        [--max-turns N] [--out DIR] [--build-only] [--no-sync]
 
 Writes <out>/<case>/ (repo, run, transcript, case.json), <out>/results.json and <out>/report.md.
 Prints one JSON object on stdout.
@@ -514,18 +519,31 @@ def judge_prompt(case: dict, ctx: dict, found: dict, text: str) -> str:
 def adapter_args(**kw) -> argparse.Namespace:
     base = dict(workspace=None, parts_from_table=None, agent=None, skill=None, mcp=None, plugin_root=None, main=None,
                 output_dir=None, fake_data=None, mcp_env=None, model=None, agent_model=None, prompt=None, extra_arg=None,
-                claude_bin=None, allow_missing=False, run=False, inspect=False, timeout=120.0)
+                claude_bin=None, allow_missing=False, run=False, inspect=False, timeout=120.0,
+                format=ek.ADAPTER.FORMAT_CONVERTED, plugin_dir=None, default_tools=False)
     base.update(kw)
     return argparse.Namespace(**base)
 
 
-def skill_script(ws: Path, name: str | None, script: str) -> Path | None:
-    if name:
-        path = ws / ".claude" / "skills" / name / "scripts" / script
+def skill_script(skills: dict, name: str | None, script: str) -> Path | None:
+    """A script of a copied skill (``skills``: the build's name -> folder map)."""
+    if name and name in skills:
+        path = Path(skills[name]) / "scripts" / script
         if path.is_file():
             return path
-    found = sorted((ws / ".claude" / "skills").glob(f"*/scripts/{script}"))
+    found = sorted(p for folder in skills.values() for p in Path(folder).glob(f"scripts/{script}"))
     return found[0] if found else None
+
+
+def worker_definition(fmt: str, worker_part: dict, root: Path) -> Path:
+    """The worker's definition for the format: Copilot CLI (the parts table) or Claude Code (agents/)."""
+    if fmt == ek.ADAPTER.FORMAT_PLUGIN:
+        return ek.ADAPTER.claude_agent_file(root, worker_part["name"])
+    return worker_part["path"]
+
+
+def skill_roots(build: dict) -> list[Path]:
+    return [Path(build["plugin_dir"]) / "skills"] if build.get("plugin_dir") else []
 
 
 def role_name(role: str, root: Path) -> str | None:
@@ -546,15 +564,16 @@ def prepare_case(case: dict, args: argparse.Namespace, data: dict, root: Path, o
     build = ek.ADAPTER.build(adapter_args(
         workspace=str(repo), parts_from_table=str(worker), plugin_root=str(root), output_dir=str(run_dir),
         fake_data=str(repo / ".coverity-triage" / "fake-issues.yaml"), mcp_env=[f"UV_PROJECT_ENVIRONMENT={venv}"],
-        model=model, agent_model=args.agent_model or model, claude_bin=args.claude_bin))
+        model=model, agent_model=args.agent_model or model, claude_bin=args.claude_bin,
+        format=args.format, plugin_dir=str(case_dir / "claude-plugin")))
     ek.exclude_in_git(repo, ".claude/")
-    ws = Path(build["workspace"])
+    skills = build["skills"]
     comment_name, report_name = role_name(ROLE_COMMENT, root), role_name(ROLE_REPORT, root)
     ctx = {"case_dir": case_dir, "repo": repo, "head": head, "run_dir": run_dir, "build": build, "venv": venv,
            "issues": data["issues"], "expected": expected_for(case, data["expected"]),
            "expected_group": (data["expected"].get("group") or {}).get("cids"),
-           "check_comment": skill_script(ws, comment_name, "check_comment.py"),
-           "check_result": skill_script(ws, report_name, "check_result.py"),
+           "check_comment": skill_script(skills, comment_name, "check_comment.py"),
+           "check_result": skill_script(skills, report_name, "check_result.py"),
            "impact": str((data["issues"].get(case["cids"][0]) or {}).get("impact") or "Unspecified"),
            "every_time": [r["part"] for r in ek.ADAPTER.load_agent(worker)["table"]
                           if r["when"] == "毎回" and r["part"] in build["skills"]],
@@ -567,7 +586,7 @@ def prepare_case(case: dict, args: argparse.Namespace, data: dict, root: Path, o
         ek.git(repo, "worktree", "add", "-q", "--detach", str(work), "HEAD")
         item_dir = run_dir / "items" / case["item"]
         item_dir.mkdir(parents=True, exist_ok=True)
-        schema_src = (ws / ".claude" / "skills" / report_name / "assets" / "result.schema.json") if report_name else None
+        schema_src = (Path(skills[report_name]) / "assets" / "result.schema.json") if report_name in skills else None
         schema = run_dir / "schemas" / "result.schema.json"
         if schema_src and schema_src.is_file():
             ek.write_text(schema, schema_src.read_text(encoding="utf-8"))
@@ -576,7 +595,7 @@ def prepare_case(case: dict, args: argparse.Namespace, data: dict, root: Path, o
         prompt = prompt.replace("{brief}", str(brief))
         ctx.update({"work": work, "item_dir": item_dir, "result_file": item_dir / "result.json", "brief": brief})
     ctx["prompt"] = prompt
-    saved = ek.read_json(ws / ".claude" / "eval" / "command.json")
+    saved = ek.read_json(Path(build["files"]["command"]))
     argv = list(saved["argv"])
     argv[saved["prompt_index"]] = prompt
     argv += ["--max-turns", str(args.max_turns), "--output-format", "stream-json", "--verbose"]
@@ -592,8 +611,9 @@ def run_case(case: dict, args: argparse.Namespace, data: dict, root: Path, out: 
     ek.progress(TAG, f"{case['name']}: 用意")
     ctx = prepare_case(case, args, data, root, out, worker, model)
     record = {"name": case["name"], "mode": case["mode"], "cids": case["cids"], "item": case.get("item"),
-              "prompt": ctx["prompt"], "expected": ctx["expected"], "repo": str(ctx["repo"]),
-              "command": ctx["argv"], "cwd": str(ctx["cwd"]), "build_problems": ctx["build"].get("problems")}
+              "format": args.format, "prompt": ctx["prompt"], "expected": ctx["expected"], "repo": str(ctx["repo"]),
+              "command": ctx["argv"], "cwd": str(ctx["cwd"]), "plugin_dir": ctx["build"].get("plugin_dir"),
+              "build_problems": ctx["build"].get("problems")}
     if not args.no_sync:
         for name, folder in ctx["build"]["mcp_servers"].items():
             sync = ek.uv_sync(Path(folder), env=ek.claude_env({"UV_PROJECT_ENVIRONMENT": str(ctx["venv"])}))
@@ -604,7 +624,7 @@ def run_case(case: dict, args: argparse.Namespace, data: dict, root: Path, out: 
         return record
     ek.progress(TAG, f"{case['name']}: claude -p（{case['mode']}）")
     run = ek.run_claude(ctx["argv"], ctx["cwd"], args.timeout, ctx["case_dir"] / "transcript.jsonl")
-    summary = ek.summarize(run["events"], ctx["prompt"])
+    summary = ek.summarize(run["events"], ctx["prompt"], skill_roots(ctx["build"]))
     checks, found = (user_checks if case["mode"] == "user" else brief_checks)(case, ctx, run, summary)
     record.update({
         "checks": checks, "passed": ek.verdict_of(checks), "found": found,
@@ -641,7 +661,8 @@ def render_report(meta: dict, records: list[dict]) -> str:
     passed = sum(1 for r in done if r["passed"])
     cost = sum(r.get("cost_usd") or 0 for r in records) + sum((r.get("judge") or {}).get("cost_usd") or 0 for r in records)
     lines = ["# 2段階目（作業エージェント）の EVAL の結果", "",
-             f"- 日時: {meta['started_at']}", f"- モデル: `{meta['model']}`（採点: {meta['judge'] or 'しない'}）",
+             f"- 日時: {meta['started_at']}", f"- 形: `{meta.get('format', ek.ADAPTER.FORMAT_CONVERTED)}`",
+             f"- モデル: `{meta['model']}`（採点: {meta['judge'] or 'しない'}）",
              f"- 作業エージェント: `{meta['worker']}` と、その表の部品（{', '.join(meta['parts'])}）",
              f"- 見本: `{meta['sample']}`", "",
              "## まとめ", "", f"- **合格**: {passed}/{len(done)}（「must」の確かめがすべて通った課題）",
@@ -668,10 +689,13 @@ def make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="2段階目（作業エージェントだけ）の EVAL を claude -p で動かす")
     p.add_argument("--plugin-root")
     p.add_argument("--cases", default=str(CASES_FILE), help="課題のファイル（既定は隣の cases.json）")
+    p.add_argument("--format", choices=ek.ADAPTER.FORMATS, default=ek.ADAPTER.FORMAT_CONVERTED,
+                   help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin"
+                        "（Claude Code の定義を一時のプラグインに写し、--plugin-dir で動かす）")
     p.add_argument("--only", action="append", help="動かす課題の名前か番号（何度でも。カンマ区切りも可）")
     p.add_argument("--sample", help="見本のフォルダ（assets/sample-target と assets/expected.yaml のあるフォルダ）")
-    p.add_argument("--model", help="モデル（既定は作業エージェントの定義の claude-* のモデル）")
-    p.add_argument("--agent-model", help="変換したエージェントの model（既定は --model）")
+    p.add_argument("--model", help="モデル（既定は作業エージェントの定義の claude-* のモデル。claude-plugin では定義の model のまま）")
+    p.add_argument("--agent-model", help="エージェントの定義の model を替える（既定は --model）")
     p.add_argument("--judge", action="store_true", help="モデルに中身を採点させる（ツールなし）")
     p.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
     p.add_argument("--timeout", type=float, default=900.0, help="1課題の時間の上限（秒）")
@@ -693,14 +717,22 @@ def run(args: argparse.Namespace) -> dict:
         raise ek.EvalError(f"課題がありません: {args.cases}")
     data = sample_data(selftest)
     out = ek.prepare_out(args.out, "stage2", root)
-    agent = ek.ADAPTER.load_agent(worker_part["path"])
-    model = args.model or ek.ADAPTER.claude_model(agent["fields"].get("model"))
-    model = None if model == "inherit" else model
-    collected = ek.ADAPTER.collect_parts(worker_part["path"], ek.ADAPTER.Layout(root))
-    meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "model": model or "（claude の既定）",
+    plugin = args.format == ek.ADAPTER.FORMAT_PLUGIN
+    worker = worker_definition(args.format, worker_part, root)
+    agent = ek.ADAPTER.load_agent(worker)
+    if plugin:
+        model = args.model  # the agent's own model line (haiku, sonnet, ...) unless --model is given
+        shown_model = model or f"（定義の model: {agent['fields'].get('model') or 'inherit'}）"
+    else:
+        model = args.model or ek.ADAPTER.claude_model(agent["fields"].get("model"))
+        model = None if model == "inherit" else model
+        shown_model = model or "（claude の既定）"
+    collected = ek.ADAPTER.collect_parts(worker, ek.ADAPTER.Layout(root, flavor="claude" if plugin else "copilot"))
+    meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "format": args.format, "model": shown_model,
             "judge": args.judge_model if args.judge else None, "worker": worker_part["name"],
+            "worker_definition": str(worker),
             "parts": sorted(collected["skills"]) + sorted(collected["mcp"]), "sample": str(selftest), "out": str(out)}
-    records = [run_case(c, args, data, root, out, worker_part["path"], model) for c in cases]
+    records = [run_case(c, args, data, root, out, worker, model) for c in cases]
     report = ek.write_text(out / "report.md", render_report(meta, records))
     done = [r for r in records if r.get("passed") is not None]
     result = {"ok": True, "kind": "stage2", "out": str(out), "report": str(report), "meta": meta,
@@ -711,7 +743,8 @@ def run(args: argparse.Namespace) -> dict:
             "cases": [{"name": r["name"], "passed": r.get("passed"),
                        "failed": [c["id"] for c in r.get("checks", []) if c["ok"] is False],
                        "seconds": r.get("seconds"), "cost_usd": r.get("cost_usd"),
-                       **({"command": r["command"]} if args.build_only else {})} for r in records]}
+                       **({"cwd": r["cwd"], "command": r["command"], "plugin_dir": r.get("plugin_dir")}
+                          if args.build_only else {})} for r in records]}
 
 
 def main(argv: list[str] | None = None) -> int:

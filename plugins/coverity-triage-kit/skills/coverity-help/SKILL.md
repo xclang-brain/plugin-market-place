@@ -13,7 +13,7 @@ allowed-tools: ["shell(uv run:*)"]
 
 | 知りたいこと | 資料 |
 | --- | --- |
-| 使い方（4つの段階、頼み方、一括のトリアージの流れ、画面、一覧の読み方、承認と反映、統合と確かめ、初回解析、再開、知識、許可） | [references/usage.md](references/usage.md) |
+| 使い方（4つの段階、頼み方、一括のトリアージの流れ、画面、一覧の読み方、承認と反映、統合と確かめ、初回解析、再開、知識、許可、Claude Code で使う） | [references/usage.md](references/usage.md) |
 | 設定の項目と既定の値、条件ファイル、知識のファイル、環境変数 | [references/settings.md](references/settings.md) |
 | エラーの文と直し方、動かないとき、実行が止まったとき | [references/troubleshooting.md](references/troubleshooting.md) |
 
@@ -63,6 +63,7 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/doctor.py"
 - **知識を足したい**（例「fatal_error は戻らないと覚えて」）：[settings.md](references/settings.md) の「知識のファイル」の3つの見出しのどれに入るかを決め、上の「守ること」のとおりにする。
 - **画面を開いて・閉じてしまった**：「画面を開きます」と伝え、表の結果と設定の画面のスキルの手順で開く。結果を見たいなら結果、実行の様子なら監視、設定なら設定の区分で開く。止め方は [usage.md](references/usage.md) の「画面」。
 - **どれくらい役に立っているか**：設定 `options.metrics` が true なら、表の反映のスキルを skill ツールで読み、その集計のコマンド（`stats`。読むだけ）を動かして、推奨が採られた割合・確信度ごとの割合・逸脱コメントを直した割合・1件あたりの時間を伝える（記録がまだなければ、そう伝える）。反映はしない。false なら、オプションで記録できることを伝える。
+- **Claude Code で使いたい**（「Claude Code で使うには？」）：[usage.md](references/usage.md) の「Claude Code で使う」から、入れ方、段階ごとの呼び方、許可、認証情報を短く答える。Web管理画面は GitHub Copilot CLI だけの機能で、Claude Code にはないことも伝える。`<プラグインの名前>` は、このスキルの名前の前に付いている名前で埋め、部品の名前は下の表の名前で埋める。
 - **使い方を知りたい**：[usage.md](references/usage.md) から、聞かれたことだけを短く答える。
 
 ## 使う部品
@@ -74,5 +75,5 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/doctor.py"
 | 一括実行 | `coverity-run` | 実行の様子を詳しく見るとき（様子を見るコマンド `status`）。一括のトリアージや再開の呼び方を伝えるとき |
 | 準備 | `coverity-setup` | 設定や認証情報を直すとき。準備が足りないとき |
 | 反映 | `coverity-apply` | 反映の呼び方を伝えるとき。効果の集計（`stats`、読むだけ）を見るとき |
-| 作業エージェント | `triage-worker` | 1件の警告のトリアージの頼み方を伝えるとき（`/agent` で選ぶ） |
-| 統括エージェント | `triage-orchestrator` | 画面なしの一括のトリアージを `/agent` で頼む方法を伝えるとき |
+| 作業エージェント | `triage-worker` | 1件の警告のトリアージの頼み方を伝えるとき（`/agent` で選ぶ。Claude Code では、名前を挙げて頼むか `claude --agent` で起動する） |
+| 統括エージェント | `triage-orchestrator` | 画面なしの一括のトリアージを `/agent` で頼む方法を伝えるとき（Claude Code では `claude --agent` で起動する） |

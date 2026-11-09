@@ -58,7 +58,8 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/selftest.py" report --
 
 | 症状 | 直し方 |
 | --- | --- |
-| 1-1・1-3〜1-6 が失敗 | プラグインが入っているか、Copilot CLI を起動し直したか確かめる。`/mcp` と `/agent` の一覧を見る |
+| 1-1・1-3〜1-6 が失敗 | プラグインが入っているか、Copilot CLI（か Claude Code）を起動し直したか確かめる。`/mcp` と `/agent`（Claude Code では `/agents`）の一覧を見る |
+| 1-8 が未実施（Claude Code） | Web管理画面は Copilot CLI だけの機能なので、Claude Code では確かめません |
 | 1-7 が失敗 | uv か git を入れて PATH を通し、Copilot CLI を起動し直す |
 | 2-2〜2-8 が失敗 | 一括実行か反映が途中で止まった。`report.md` の詳しいことと、見本の実行フォルダ（`coverity-triage-out/`）を見る |
 | 2-4・2-5 が要確認 | AI の結論が想定と違った。結論は実行ごとに揺れるので、失敗ではない。詳細レポートで理由を見る |

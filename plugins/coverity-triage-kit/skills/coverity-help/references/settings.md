@@ -121,7 +121,7 @@ AI が調べる前に読む、プロジェクトの知識です。次の3つの�
 
 | 名前 | 意味 |
 | --- | --- |
-| `COV_USER` / `COV_AUTH_KEY` | Coverity のユーザー名と認証キー（名前は `coverity.user_env` / `coverity.key_env` で変えられる）。Windows ではユーザーの環境変数に保存する |
+| `COV_USER` / `COV_AUTH_KEY` | Coverity のユーザー名と認証キー（名前は `coverity.user_env` / `coverity.key_env` で変えられる）。Windows ではユーザーの環境変数に保存する。Claude Code でも同じ変数を使う（入れてから Claude Code を起動する） |
 | `COVERITY_PASSPHRASE` | 初回解析の登録のときだけ、スクリプトが認証キーを渡すのに使う。人が置く必要はない |
 | `HTTPS_PROXY` / `NO_PROXY` | 社内のプロキシを通すとき |
 | `COVERITY_URL` など | リポジトリなしで Coverity との通信の部品を使うときの設定（その部品の README） |

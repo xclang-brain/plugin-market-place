@@ -71,12 +71,17 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--max-rework", type=int, dest="max_rework")
     cmd.add_argument("--issues-file", dest="issues_file", help="取ってある警告の一覧（issues.json の形）で始める")
     mcp = {"dest": "mcp_tools", "action": "append",
-           "help": "許可の案内に書く、Coverity から読むツール（<登録名>(<ツール>)。書き戻すツールは渡さない）"}
+           "help": "許可の案内に書く、Coverity から読むツール（Copilot CLI は <登録名>(<ツール>)、Claude Code は "
+                   "mcp__<登録名>__<ツール> か mcp__plugin_<プラグイン>_<登録名>__<ツール>。書き戻すツールは渡さない）"}
+    client = {"choices": ["copilot", "claude-code"], "default": "copilot",
+              "help": "許可の案内の形（動かしている道具。既定 copilot）"}
     cmd.add_argument("--mcp-tool", **mcp)
+    cmd.add_argument("--client", **client)
 
     cmd = sub.add_parser("resume", help="途中の実行を続きからにする")
     cmd.add_argument("--run", **run)
     cmd.add_argument("--mcp-tool", **mcp)
+    cmd.add_argument("--client", **client)
     cmd = sub.add_parser("tick", help="次にすることを返す")
     cmd.add_argument("--run", **run)
     cmd.add_argument("--finished", help="終わった task")
@@ -116,9 +121,9 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return views.runs(args.repo, args.limit)
     if c == "new-run":
         return views.new_run(args.repo, args.filter, _overrides(args), args.limit, args.verify, args.initial,
-                             args.review, args.integration, args.max_rework, args.issues_file, args.mcp_tools)
+                             args.review, args.integration, args.max_rework, args.issues_file, args.mcp_tools, args.client)
     if c == "resume":
-        return views.resume(args.run, args.mcp_tools)
+        return views.resume(args.run, args.mcp_tools, args.client)
     if c == "tick":
         if args.finished and args.failed:
             raise RunError("--finished と --failed は一緒に使えません")

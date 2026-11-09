@@ -18,7 +18,7 @@
 
 ## 必要なもの
 
-- GitHub Copilot CLI と、このスキルを含むプラグイン
+- GitHub Copilot CLI と、このスキルを含むプラグイン（Web管理画面は Copilot CLI だけの機能です。Claude Code にもこのスキルは読み込まれますが、画面は開かず、Claude Code での一括のトリアージの始め方を返します）
 - プラグインのエクステンション（Web管理画面）が読み込まれていること。エクステンションは Copilot CLI の試験的な機能なので、`copilot --experimental` で一度起動し、読み込みの確認を許可します
 - トリアージの準備（調べたいリポジトリの `.coverity-triage/` の設定と、認証情報の環境変数）。準備がないと、画面がそのことと準備のしかたを示します
 
@@ -53,6 +53,7 @@
 | --- | --- |
 | 「エクステンションが読み込まれていません」と、3つの原因が示された | 試験的な機能が無効（`copilot --experimental` で起動するか、`/settings experimental on`）、読み込みの確認を断った（起動し直して許可する）、`/extensions mode` が Disabled（Load & Augment か Load Only に戻す）のどれか。詳しくは [references/when-tool-missing.md](references/when-tool-missing.md) |
 | 「いまの実行が終わるまで、新しい作業は始められません」と出た | 実行中です。今の画面で様子を見るか、画面で止めてから、もう一度頼みます |
+| Claude Code で頼んだら、「Web管理画面は GitHub Copilot CLI の機能です」と出た | Claude Code には画面のエクステンションがありません。一括のトリアージは、統括エージェントを `claude --agent` で起動して頼むか、一括実行のスキルをスラッシュコマンドで呼んで始めます（名前は [SKILL.md](SKILL.md) の「使う部品」の表） |
 | 画面の URL が開けない | Copilot CLI を動かしているマシンのブラウザーで開きます。Copilot CLI を終えると、画面も終わります |
 
 ## テストの動かし方

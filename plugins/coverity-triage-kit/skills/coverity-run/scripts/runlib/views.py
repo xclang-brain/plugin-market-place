@@ -41,13 +41,40 @@ def _repo(path: str) -> Path:
 
 
 MCP_TOOL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\([A-Za-z0-9_]{1,64}\)$")
+# Claude Code's names of MCP tools: mcp__<server>__<tool>, or mcp__plugin_<plugin>_<server>__<tool> for a server
+# that a plugin registers. A name part is letters, digits, "-" and single "_" (never "__", which separates the parts);
+# a wildcard or the server name alone (it would allow the tool that writes back too) does not match.
+_CLAUDE_PART = r"[A-Za-z0-9](?:[A-Za-z0-9-]|_(?!_)){0,63}"
+CLAUDE_MCP_TOOL = re.compile(r"^mcp__(?:plugin_" + _CLAUDE_PART + r"_)?" + _CLAUDE_PART + r"__" + _CLAUDE_PART + r"$")
+# Words of a tool name that changes something: such a tool is never pre-approved, whatever the caller passes.
+WRITE_WORDS = {"update", "write", "set", "put", "post", "patch", "delete", "remove", "create", "apply", "commit",
+               "push", "edit", "modify", "insert", "upload"}
+CLIENTS = ("copilot", "claude-code")
 
 
-def permission_steps(output: Path, mcp_tools: list[str] | None = None) -> list[str]:
-    """The two ways to pre-approve (REQ-306). The Coverity tools to allow come from the caller as
-    ``<registration name>(<tool>)`` (``--mcp-tool``): only the tools that read. The tool that writes triage
-    back to Coverity is never pre-approved, so writing back always asks (REQ-107)."""
-    tools = [t for t in dict.fromkeys(mcp_tools or []) if MCP_TOOL.match(t)]
+def _tool_words(tool: str, client: str) -> set[str]:
+    name = tool.rsplit("__", 1)[-1] if client == "claude-code" else tool[tool.index("(") + 1:-1]
+    return {w.lower() for w in re.split(r"[_-]", name) if w}
+
+
+def _read_tools(mcp_tools: list[str] | None, client: str) -> list[str]:
+    pattern = CLAUDE_MCP_TOOL if client == "claude-code" else MCP_TOOL
+    tools = [t for t in dict.fromkeys(mcp_tools or []) if pattern.match(t)]
+    if client == "claude-code":  # the Copilot CLI form is left as it was (the caller passes only the tools that read)
+        tools = [t for t in tools if not _tool_words(t, client) & WRITE_WORDS]
+    return tools
+
+
+def permission_steps(output: Path, mcp_tools: list[str] | None = None, client: str = "copilot") -> list[str]:
+    """The two ways to pre-approve (REQ-306). The Coverity tools to allow come from the caller (``--mcp-tool``):
+    only the tools that read, as ``<registration name>(<tool>)`` for Copilot CLI or as Claude Code's tool names
+    (``mcp__<server>__<tool>``) for Claude Code. The tool that writes triage back to Coverity is never pre-approved,
+    so writing back always asks (REQ-107)."""
+    if client not in CLIENTS:
+        raise RunError(f"--client は {' か '.join(CLIENTS)} です: {client}")
+    tools = _read_tools(mcp_tools, client)
+    if client == "claude-code":
+        return _claude_steps(output, tools)
     first = (f"チャットで /add-dir \"{output}\" と入力し、最初の確認で「このセッションでは許可」を選びます"
              "（uv のコマンド、ファイルの書き込み、Coverity から読むツール）。Coverity に書き戻すツールの確認には、許可を与えません。")
     restart = f"または、Copilot CLI を copilot --add-dir \"{output}\" --allow-tool 'shell(uv:*)' --allow-tool write"
@@ -55,6 +82,19 @@ def permission_steps(output: Path, mcp_tools: list[str] | None = None) -> list[s
         flags = " ".join(f"--allow-tool '{t}'" for t in tools)
         return [first, f"{restart} {flags} で起動し直します（Coverity に書き戻すツールは許可しません。反映するときに確認が出ます）。"]
     return [first, f"{restart} で起動し直します（Coverity から読むツールは、最初の確認で「このセッションでは許可」を選びます。"
+                   "書き戻すツールは前もって許可しません）。"]
+
+
+def _claude_steps(output: Path, tools: list[str]) -> list[str]:
+    first = (f"チャットで /add-dir \"{output}\" と入力し、確認で、このセッションのあいだの許可を選びます。"
+             "uv のコマンドは、/permissions で Bash(uv run *) を許可します。Coverity から読むツールは、最初の確認で許可を選びます。"
+             "Coverity に書き戻すツールの確認には、許可を与えません。")
+    restart = f"または、Claude Code を claude --add-dir \"{output}\" --allowedTools \"Bash(uv run *)\" \"Write\" \"Edit\""
+    agent = "エージェントを --agent で起動して始めたときは、同じ --agent も後ろに足します。"
+    if tools:
+        names = " ".join(f'"{t}"' for t in tools)
+        return [first, f"{restart} {names} で起動し直します（{agent}Coverity に書き戻すツールは許可しません。反映するときに確認が出ます）。"]
+    return [first, f"{restart} で起動し直します（{agent}Coverity から読むツールは、最初の確認で許可を選びます。"
                    "書き戻すツールは前もって許可しません）。"]
 
 
@@ -174,7 +214,9 @@ def long_path_problem(work_dir: Path, repo: Path, limit: int = LONG_PATH, vcs_ty
 
 def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], limit: int | None, verify: str | None,
             first: bool | None, review: bool | None, integration: bool | None, max_rework: int | None,
-            issues_file: str | None, mcp_tools: list[str] | None = None) -> dict[str, Any]:
+            issues_file: str | None, mcp_tools: list[str] | None = None, client: str = "copilot") -> dict[str, Any]:
+    if client not in CLIENTS:
+        raise RunError(f"--client は {' か '.join(CLIENTS)} です: {client}")
     repo = _repo(repo_root)
     values, problems = load_config(repo)
     if problems:
@@ -250,7 +292,7 @@ def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], 
            "work_dir": str(run.dir / "work"), "output_dir": str(output), "filter_name": spec["name"],
            "stream": spec["streams"][0], "limit": run_limit, "verify": mode, "initial": bool(first), "review": bool(review),
            "integration": bool(integration), "max_rework": int(max_rework), "parallel": values["parallel"],
-           "permission_steps": permission_steps(output, mcp_tools), "next": "tick で次にすることを聞く"}
+           "permission_steps": permission_steps(output, mcp_tools, client), "next": "tick で次にすることを聞く"}
     if requested > run_limit:
         out["note"] = f"1 回の上限（設定 max_items）が {max_items} 件のため、{run_limit} 件にしました"
     return out
@@ -259,7 +301,9 @@ def new_run(repo_root: str, filter_name: str | None, overrides: dict[str, Any], 
 # ---- resume / stop / note-issue -----------------------------------------------------------------
 
 
-def resume(run_dir: str, mcp_tools: list[str] | None = None) -> dict[str, Any]:
+def resume(run_dir: str, mcp_tools: list[str] | None = None, client: str = "copilot") -> dict[str, Any]:
+    if client not in CLIENTS:
+        raise RunError(f"--client は {' か '.join(CLIENTS)} です: {client}")
     run = Run(run_dir, write=True)
     try:
         values, problems = load_config(run.repo)
@@ -307,7 +351,7 @@ def resume(run_dir: str, mcp_tools: list[str] | None = None) -> dict[str, Any]:
             "work_dir": str(run.dir / "work"), "counts": counts(run.state), "back_to_pending": back,
             "initial": bool(run.state.get("initial")), "review": bool(run.state.get("review")),
             "integration": bool(run.state.get("integration")), "max_rework": run.state.get("max_rework"),
-            "permission_steps": permission_steps(output, mcp_tools), "next": "tick で次にすることを聞く"}
+            "permission_steps": permission_steps(output, mcp_tools, client), "next": "tick で次にすることを聞く"}
 
 
 def stop(run_dir: str) -> dict[str, Any]:

@@ -132,6 +132,16 @@ class StartTest(SelftestBase):
         self.assertEqual(self.check("3-1")["status"], "skip")
         self.assertIsNone(self.check("1-1"))
 
+    def test_claude_code_client_and_screen_skip(self):
+        # in Claude Code the screen tool (1-8) is recorded as skipped: the screen is Copilot CLI only
+        self.start("--sections", "1", "--client", "Claude Code")
+        self.call("record", "--dir", str(self.dir), "--id", "1-8", "--status", "skip",
+                  "--actual", "Web管理画面は Copilot CLI だけ")
+        self.assertEqual(self.check("1-8")["status"], "skip")
+        report = Path(self.call("report", "--dir", str(self.dir))["report"]).read_text(encoding="utf-8")
+        self.assertIn("使っているもの: Claude Code", report)
+        self.assertIn("Web管理画面は Copilot CLI だけ", report)
+
     def test_sections_3_and_4_need_a_repository(self):
         result = self.call("start", "--dir", str(self.dir), "--sections", "3", expect=1)
         self.assertFalse(result["ok"])

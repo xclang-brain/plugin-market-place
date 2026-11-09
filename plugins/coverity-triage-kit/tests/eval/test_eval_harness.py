@@ -35,6 +35,8 @@ ENV.pop("CLAUDECODE", None)
 HAS_GIT = shutil.which("git") is not None
 HAS_UV = shutil.which("uv") is not None
 HAS_PARTS = bool(ek.current_parts(ROOT)) and (ROOT / "mcp.json").is_file()
+HAS_CLAUDE_FORM = (ROOT / ".claude-plugin" / "plugin.json").is_file() and (ROOT / ".mcp.json").is_file()
+PLUGIN = ek.ADAPTER.FORMAT_PLUGIN
 
 
 def write(path: Path, text: str) -> Path:
@@ -179,6 +181,19 @@ class EvalkitTest(unittest.TestCase):
         self.assertEqual(ek.summarize([init, bash, event_final("x")])["skills_loaded"], ["batch"])
         win = event_tool("w", "Read", {"file_path": "C:\\w\\.claude\\skills\\entry\\SKILL.md"})
         self.assertEqual(ek.summarize([init, win])["skills_loaded"], ["entry"])
+
+    def test_skills_from_a_copied_plugin(self):
+        root = self.base / "made" / "skills"
+        uses = [event_tool("r", "Read", {"file_path": str(root / "probe-skill" / "SKILL.md")}),
+                event_tool("b", "Bash", {"command": f'uv run "{root}/notes-skill/scripts/x.py" check'}),
+                event_tool("s", "Skill", {"skill": "fake-kit:run-steps"}),
+                event_tool("o", "Read", {"file_path": str(self.base / "repo" / "skills" / "other" / "a.c")})]
+        got = ek.summarize([event_init()] + uses, None, [root])["skills_loaded"]
+        self.assertEqual(sorted(got), ["notes-skill", "probe-skill", "run-steps"],
+                         "paths under the copied skills folder count; other skills/ folders do not")
+        self.assertEqual(ek.summarize([event_init()] + uses)["skills_loaded"], ["run-steps"], "no roots: only the Skill tool")
+        win = event_tool("w", "Read", {"file_path": "C:\\made\\skills\\entry\\SKILL.md"})
+        self.assertEqual(ek.summarize([win], None, [Path("C:/made/skills")])["skills_loaded"], ["entry"])
 
     def test_tag_content_takes_the_last(self):
         self.assertEqual(ek.tag_content("<response>1</response> x <response> 2 </response>", "response"), "2")
@@ -495,6 +510,58 @@ class Stage2Test(unittest.TestCase):
         self.assertIsNone(by_id["comment_rules"]["ok"], "no script: skipped, not failed")
         self.assertEqual(found["recommendation"], "fix")
 
+    def test_skill_script_and_definitions(self):
+        skills = {"a-skill": str(self.base / "a"), "b-skill": str(self.base / "b")}
+        write(self.base / "b" / "scripts" / "check.py", "x\n")
+        self.assertEqual(stage2.skill_script(skills, "b-skill", "check.py"), self.base / "b" / "scripts" / "check.py")
+        self.assertEqual(stage2.skill_script(skills, "a-skill", "check.py"), self.base / "b" / "scripts" / "check.py",
+                         "falls back to any copied skill that has the script")
+        self.assertIsNone(stage2.skill_script(skills, None, "none.py"))
+        self.assertEqual(stage2.skill_roots({"plugin_dir": str(self.base / "p")}), [self.base / "p" / "skills"])
+        self.assertEqual(stage2.skill_roots({}), [])
+        part = {"name": "w-agent", "path": self.base / "w-agent.agent.md"}
+        self.assertEqual(stage2.worker_definition(ek.ADAPTER.FORMAT_CONVERTED, part, self.base), part["path"])
+        with self.assertRaises(ek.ADAPTER.AdapterError):
+            stage2.worker_definition(PLUGIN, part, self.base)
+        write(self.base / "agents" / "w-agent.md", "---\nname: w-agent\n---\n")
+        self.assertEqual(stage2.worker_definition(PLUGIN, part, self.base), (self.base / "agents" / "w-agent.md").resolve())
+        self.assertEqual(stage2.make_parser().parse_args([]).format, ek.ADAPTER.FORMAT_CONVERTED)
+        self.assertEqual(stage2.make_parser().parse_args(["--format", PLUGIN]).format, PLUGIN)
+
+    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    def test_build_only_with_the_claude_plugin(self):
+        out = self.base / "out"
+        proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage2" / "run_stage2.py"),
+                               "--format", PLUGIN, "--only", "brief-20003", "--build-only", "--no-sync", "--out", str(out)],
+                              capture_output=True, env=ENV, timeout=600)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")[-2000:])
+        data = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(data["meta"]["format"], PLUGIN)
+        case = data["cases"][0]
+        argv = case["command"]
+        worker = ek.part("作業役", ROOT)["name"]
+        plugin_name = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+        plugin_dir = Path(case["plugin_dir"])
+        self.assertEqual(plugin_dir, (out / "brief-20003" / "claude-plugin").resolve())
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(plugin_dir))
+        self.assertEqual(argv[argv.index("--agent") + 1], f"{plugin_name}:{worker}", "the worker is the main agent")
+        self.assertNotIn("--agents", argv)
+        self.assertNotIn("--model", argv, "the definition's model line is used")
+        self.assertIn("指示ファイル", argv[2])
+        self.assertEqual(sorted(p.name for p in (plugin_dir / "agents").iterdir()), [f"{worker}.md"],
+                         "stage 2: the worker alone")
+        self.assertEqual((plugin_dir / "agents" / f"{worker}.md").read_bytes(), (ROOT / "agents" / f"{worker}.md").read_bytes())
+        table = {r["part"] for r in ek.ADAPTER.load_agent(ROOT / "agents" / f"{worker}.md")["table"]}
+        self.assertTrue({p.name for p in (plugin_dir / "skills").iterdir()} <= table)
+        repo = Path(case["cwd"])
+        self.assertFalse(ek.inside(plugin_dir, repo), "the plugin is outside the repository")
+        self.assertFalse((repo / ".claude" / "agents").exists())
+        self.assertEqual(ek.working_changes(repo), [])
+        brief = (out / "brief-20003" / "run" / "items" / "20003" / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("result.schema.json", brief)
+        self.assertTrue((out / "brief-20003" / "run" / "schemas" / "result.schema.json").is_file(),
+                        "the schema is read from the copied skill")
+
     def test_select_cases(self):
         cases = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
         self.assertEqual(stage2.select_cases(cases, ["c,1"]), [{"name": "c"}, {"name": "a"}])
@@ -559,6 +626,61 @@ class Stage2Test(unittest.TestCase):
         self.assertFalse(by_id["table_skills_used"]["ok"], "the stand-in loaded no skill")
         self.assertTrue((out / "report.md").is_file())
         self.assertEqual(ek.working_changes(out / "brief-20003" / "repo"), [], ".claude/ is hidden from git status")
+
+    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    def test_brief_case_with_the_claude_plugin_and_a_stand_in(self):
+        claude = fake_claude_script(self.base, """
+            import re
+            from pathlib import Path
+            plugin = Path(argv[argv.index("--plugin-dir") + 1])
+            assert (plugin / ".claude-plugin" / "plugin.json").is_file(), plugin
+            assert "--agents" not in argv and "--mcp-config" not in argv, argv
+            for skill in sorted((plugin / "skills").iterdir()):
+                emit({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+                    {"type": "tool_use", "id": "r-" + skill.name, "name": "Read",
+                     "input": {"file_path": str(skill / "SKILL.md")}}]}})
+            brief = Path(re.search(r"指示ファイル (\\S+) を読み", prompt).group(1)).read_text(encoding="utf-8")
+            paths = dict(re.findall(r"^\\| (.+?) \\| `(.+?)` \\|$", brief, re.M))
+            work = Path(next(v for k, v in paths.items() if k.startswith("直すフォルダ")))
+            result_file = Path(next(v for k, v in paths.items() if k.startswith("結果ファイル（書く）")))
+            src = work / "src" / "reader.c"
+            src.write_text(src.read_text(encoding="utf-8").replace("    buf[0] = 'a';",
+                           "    if (buf == NULL) {\\n        return -1;\\n    }\\n    buf[0] = 'a';"), encoding="utf-8")
+            result = {"item": "20003",
+                      "verdict": {"judgement": "true_bug", "summary": "malloc の戻り値を確かめずに参照している",
+                                  "rationale": "get_buf は malloc の戻り値をそのまま返し、first_char は NULL を確かめずに buf[0] に書く。",
+                                  "evidence": [{"file": "src/reader.c", "line": 49, "note": "NULL かもしれない buf に書く"}]},
+                      "recommendation": "fix", "confidence": "high", "confidence_reason": "経路をコードで確かめた",
+                      "deviation": {"classification": "Bug", "action": "Ignore", "severity": "Major",
+                                    "comment": "本物の不具合。malloc が失敗すると NULL の buf に書き込む（src/reader.c:49）。"},
+                      "fix": {"classification": "Bug", "action": "Fix Required", "severity": "Major",
+                              "summary": "buf が NULL なら -1 を返す", "impact": "malloc の失敗のときだけ振る舞いが変わる",
+                              "exceeded_constraints": [], "already_fixed_on_latest": False},
+                      "revision_drift": {"status": "none", "detail": ""}, "group_excluded_cids": []}
+            result_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+            (result_file.parent / "progress.json").write_text(json.dumps({"item": "20003", "phase": "result", "note": "書いた"}), encoding="utf-8")
+            emit({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+                {"type": "tool_use", "id": "w", "name": "Write", "input": {"file_path": str(result_file)}},
+                {"type": "tool_use", "id": "e", "name": "Edit", "input": {"file_path": str(src)}}]}})
+            emit({"type": "result", "result": "20003: 修正（確信度 高）— malloc の戻り値を確かめずに参照", "is_error": False,
+                  "total_cost_usd": 0.0, "num_turns": 2})
+            """)
+        out = self.base / "out"
+        proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage2" / "run_stage2.py"),
+                               "--format", PLUGIN, "--only", "brief-20003", "--no-sync", "--out", str(out),
+                               "--claude-bin", *claude], capture_output=True, env=ENV, timeout=600)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")[-2000:])
+        data = json.loads(proc.stdout.decode("utf-8"))
+        case = json.loads((out / "brief-20003" / "case.json").read_text(encoding="utf-8"))
+        self.assertEqual(case["format"], PLUGIN)
+        by_id = {c["id"]: c for c in case["checks"]}
+        for must in ("finished", "one_line_reply", "result_valid", "comment_rules", "evidence", "verdict",
+                     "fix_in_work_copy", "repo_unchanged", "writes_only_allowed"):
+            self.assertTrue(by_id[must]["ok"], (must, by_id[must]))
+        self.assertTrue(by_id["table_skills_used"]["ok"], by_id["table_skills_used"])
+        self.assertTrue(data["cases"][0]["passed"])
+        self.assertIn("claude-plugin", (out / "report.md").read_text(encoding="utf-8"))
+        self.assertEqual(ek.working_changes(out / "brief-20003" / "repo"), [])
 
 
 class Stage3Test(unittest.TestCase):
@@ -673,6 +795,53 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual(ek.working_changes(repo), [], "the variant's config is committed, .claude/ is hidden")
         agents = json.loads((repo / ".claude" / "eval" / "agents.json").read_text(encoding="utf-8"))
         self.assertIn(ek.part("作業役", ROOT)["name"], agents)
+
+    def test_orchestrator_definition(self):
+        part = {"name": "o-agent", "path": self.base / "o-agent.agent.md"}
+        self.assertEqual(stage3.orchestrator_definition(ek.ADAPTER.FORMAT_CONVERTED, part, self.base), part["path"])
+        write(self.base / "agents" / "o-agent.md", "---\nname: o-agent\n---\n")
+        self.assertEqual(stage3.orchestrator_definition(PLUGIN, part, self.base), (self.base / "agents" / "o-agent.md").resolve())
+        self.assertEqual(stage3.make_parser().parse_args(["--format", PLUGIN]).format, PLUGIN)
+
+    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    def test_build_only_with_the_claude_plugin(self):
+        out = self.base / "out"
+        proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage3" / "run_stage3.py"),
+                               "--format", PLUGIN, "--build-only", "--no-sync", "--variant", "default", "--limit", "1",
+                               "--agent-model", "inherit", "--out", str(out)],
+                              capture_output=True, env=ENV, timeout=600)
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")[-2000:])
+        data = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(data["meta"]["format"], PLUGIN)
+        variant = data["variants"][0]
+        argv = variant["command"]
+        plugin_name = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+        orchestrator = ek.part("統括", ROOT)["name"]
+        plugin_dir = Path(variant["plugin_dir"])
+        self.assertEqual(plugin_dir, (out / "default" / "claude-plugin").resolve())
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(plugin_dir))
+        self.assertEqual(argv[argv.index("--agent") + 1], f"{plugin_name}:{orchestrator}")
+        self.assertIn("1 件だけ", argv[2])
+        self.assertIn("Bash(uv run *)", argv)
+        self.assertIn(f"mcp__plugin_{plugin_name}_{ek.part('Coverity との通信', ROOT)['name']}__*", argv)
+        roles = {ek.part(word, ROOT)["name"] for word in ("統括", "作業役", "検証役", "統合役")}
+        self.assertEqual({p.stem for p in (plugin_dir / "agents").iterdir()}, roles)
+        for path in (plugin_dir / "agents").iterdir():
+            old = (ROOT / "agents" / path.name).read_text(encoding="utf-8").split("\n")
+            new = path.read_text(encoding="utf-8").split("\n")
+            self.assertEqual([b for a, b in zip(old, new) if a != b], ["model: inherit"], "--agent-model: only the model line")
+        self.assertIn(ek.part("一括実行", ROOT)["name"], {p.name for p in (plugin_dir / "skills").iterdir()})
+        self.assertNotIn(ek.part("画面の入口", ROOT)["name"], {p.name for p in (plugin_dir / "skills").iterdir()},
+                         "a skill named in no table is not copied")
+        repo = Path(variant["cwd"])
+        self.assertFalse(ek.inside(plugin_dir, repo))
+        output_dir = Path(argv[argv.index("--add-dir") + 1])
+        self.assertFalse(ek.inside(plugin_dir, output_dir))
+        self.assertFalse((repo / ".claude" / "agents").exists())
+        self.assertEqual(ek.working_changes(repo), [])
+        record = json.loads((out / "default" / "variant.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["format"], PLUGIN)
+        self.assertEqual({a["model"] for a in record["agents"]}, {"inherit"})
 
 
 class Stage4Test(unittest.TestCase):
