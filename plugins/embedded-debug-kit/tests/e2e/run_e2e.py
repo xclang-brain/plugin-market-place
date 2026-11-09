@@ -16,7 +16,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -163,24 +165,42 @@ def case_orchestrator(base, ftp, shell):
     return checks, text
 
 
+def press_stop(url, session, events_file, seconds=120):
+    """依頼が記録されたら、画面の「実行を止める」と同じ要求をサーバーに送る"""
+    end = time.time() + seconds
+    while time.time() < end and not events_file.is_file():
+        time.sleep(0.1)
+    base, token = url.split("/#k=")
+    host = base.split("//", 1)[1]
+    req = urllib.request.Request(base + "/api/stop", data=json.dumps({"session": session}).encode("utf-8"), method="POST",
+                                 headers={"X-Dashboard-Token": token, "Origin": base, "Host": host,
+                                          "Content-Type": "application/json"})
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 127.0.0.1 にはプロキシを通さない
+    with direct.open(req, timeout=10) as res:
+        return json.loads(res.read().decode("utf-8")).get("ok") is True
+
+
 def case_stop(base, ftp, shell):
     work = make_workdir(base / "stop", ftp, shell)
     py = "py" if os.name == "nt" else sys.executable
     dash = PLUGIN / "skills" / "debug-dashboard" / "scripts" / "dashboard.py"
     started = json.loads(subprocess.run([py, str(dash), "start", "--workdir", str(work)], capture_output=True, text=True).stdout)
     session = str(uuid.uuid4())
-    stop = work / ".debug-dashboard" / "sessions" / session / "stop"
-    stop.parent.mkdir(parents=True, exist_ok=True)
-    stop.write_text("", encoding="utf-8")
+    folder = work / ".debug-dashboard" / "sessions" / session
+    pressed = {}
+    presser = threading.Thread(target=lambda: pressed.update(ok=press_stop(started["url"], session, folder / "events.jsonl")))
+    presser.start()
     try:
         events = claude(work, "device-debugger", STOP_TASK, base / "stop.jsonl", session=session, budget="1")
     finally:
+        presser.join(5)
         subprocess.run([py, str(dash), "stop", "--workdir", str(work)], capture_output=True)
     results = list(tool_results(events))
     checks = {
         "画面を起動できた": bool(started.get("ok")),
+        "「実行を止める」が受け付けられた": pressed.get("ok") is True,
         "ツールの呼び出しを断った": bool(results) and all(r.get("is_error") for r in results),
-        "記録が残った": any((work / ".debug-dashboard" / "sessions" / session).glob("*.jsonl")),
+        "記録が残った": (folder / "events.jsonl").is_file(),
     }
     return checks, final(events)
 
