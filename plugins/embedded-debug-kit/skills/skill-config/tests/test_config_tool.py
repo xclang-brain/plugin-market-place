@@ -399,7 +399,7 @@ class SetTest(unittest.TestCase):
     def test_log_folder_that_cannot_be_made(self):
         p = Project(self)
         before = p.raw()
-        with open(os.path.join(p.dir, ".skill-config"), "w") as fh:
+        with open(os.path.join(p.dir, ".skill-config"), "w", encoding="utf-8") as fh:
             fh.write("ファイル")
         code, data = p.set("host", "a")
         self.assertEqual(code, 1)

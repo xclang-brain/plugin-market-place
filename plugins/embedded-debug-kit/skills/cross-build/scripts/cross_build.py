@@ -314,7 +314,11 @@ def command_exists(word, s):
     if s["shell"] == "powershell" and re.match(r"^[A-Za-z]+-[A-Za-z]+$", word):
         return True  # Get-Item のような PowerShell のコマンド
     if "/" in word or (IS_WINDOWS and "\\" in word):
-        return shutil.which(os.path.join(s["source_dir"], word)) is not None  # Windows では .exe などを補う
+        path = os.path.join(s["source_dir"], word)
+        if IS_WINDOWS:  # Python 3.11 までの shutil.which は、フォルダを含む名前に .exe などを補わない
+            exts = [""] + os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+            return any(os.path.isfile(path + ext) for ext in exts)
+        return shutil.which(path) is not None
     if shutil.which(word):
         return True
     return s["shell"] == "cmd" and shutil.which(word, path=s["source_dir"]) is not None
