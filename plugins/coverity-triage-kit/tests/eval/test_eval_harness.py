@@ -432,6 +432,15 @@ class Stage2Test(unittest.TestCase):
         self.assertTrue(stage2.has_fix_proposal("最新のリビジョンで直っているので作りません"))
         self.assertEqual(stage2.comment_of("\n> 誤検知。呼び出し元で確かめている（src/a.c:3）。\n"),
                          "誤検知。呼び出し元で確かめている（src/a.c:3）。")
+        # a long note between the label and the colon (seen with the Claude Code plugin, 2026-11-09)
+        noted = ("**修正案**（まだ適用していません。下の差分を見て同意をもらえたら、この差分どおりに直します）：\n"
+                 "```diff\n+ fclose(fp);\n```\n\n"
+                 "**逸脱コメント案**（推奨は修正なので参考です。チェッカーで確かめ済み、108 文字、`ok: true`）：\n"
+                 "> 本物の不具合。open_and_read()（src/reader.c:19〜20）は fp を閉じずに戻る。\n")
+        sections = stage2.parse_report(noted)
+        self.assertEqual(stage2.comment_of(sections["逸脱コメント案"]),
+                         "本物の不具合。open_and_read()（src/reader.c:19〜20）は fp を閉じずに戻る。")
+        self.assertNotIn("逸脱コメント案", sections["修正案"])
 
     def test_one_line_reply(self):
         for text in ("20003: 修正（確信度 高）— malloc の戻り値を見ていない",

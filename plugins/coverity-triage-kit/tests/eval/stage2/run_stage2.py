@@ -67,8 +67,9 @@ SOURCE_EXT = r"(?:c|h|cc|cpp|cxx|hpp|hh|hxx|inc)"
 EVIDENCE_RE = re.compile(r"(?P<path>[A-Za-z0-9_./\\-]+\." + SOURCE_EXT + r")\s*[:：]\s*L?(?P<line>\d+)"
                          r"(?:\s*[-–〜~]\s*L?(?P<end>\d+))?")
 _LABEL_ALT = "|".join(LABELS)
-# 見出しの後ろに括弧の補足が付くことがある（例「修正案（差分。まだ適用していません）：」）
-LABEL_NOTE = r"(?:\s*[（(][^）)\n]{0,40}[）)])?"
+# 見出しの後ろに括弧の補足が付くことがある（例「修正案（差分。まだ適用していません）：」、
+# 「逸脱コメント案（推奨は修正なので参考です。チェッカーで確かめ済み、108 文字、`ok: true`）：」）
+LABEL_NOTE = r"(?:\s*[（(][^）)\n]{0,80}[）)])?"
 LABEL_LINE_RE = re.compile(r"^\s*(?:[-*>#]+\s*)?(?:\*\*)?(" + _LABEL_ALT + r")(?:\*\*)?" + LABEL_NOTE + r"(?:\*\*)?\s*[：:]\s*(?:\*\*)?\s*(.*)$")
 LABEL_ROW_RE = re.compile(r"^\s*\|\s*(?:\*\*)?(" + _LABEL_ALT + r")(?:\*\*)?\s*\|\s*(.*?)\s*\|?\s*$")
 ONE_LINE_RE = re.compile(r"^(?P<id>[A-Za-z0-9]+)\s*[:：]\s*(?P<rec>修正|逸脱)(?:を推奨)?\s*[（(]\s*確信度\s*(?P<conf>高|中|低)\s*[）)]"
