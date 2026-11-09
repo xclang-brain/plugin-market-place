@@ -1,0 +1,42 @@
+{
+  "item": "20013",
+  "verdict": {
+    "judgement": "true_bug",
+    "summary": "i <= k で msgs[4] を読む",
+    "rationale": "total_count(4) のとき、47 行の i <= k で i が 4 になり、48 行で 4 要素の msgs の外を読む。",
+    "evidence": [
+      {
+        "file": "src/buf.c",
+        "line": 47,
+        "note": "i <= k"
+      },
+      {
+        "file": "src/buf.c",
+        "line": 48,
+        "note": "msgs[i] を読む"
+      }
+    ]
+  },
+  "recommendation": "fix",
+  "confidence": "high",
+  "confidence_reason": "経路をコードで最後まで追えた",
+  "deviation": {
+    "classification": "Bug",
+    "action": "Ignore",
+    "severity": "Major",
+    "comment": "本物の不具合。total_count() のループ（src/buf.c:47）は k 番目まで読むため、k が 4 のとき msgs の外を読み、直さない理由は説明できない。"
+  },
+  "fix": {
+    "classification": "Bug",
+    "action": "Fix Required",
+    "severity": "Major",
+    "summary": "47 行の条件を i < k にする",
+    "impact": "合計に含める件数が 1 つ減る（k 件になる）",
+    "exceeded_constraints": [],
+    "already_fixed_on_latest": false
+  },
+  "revision_drift": {
+    "status": "none",
+    "detail": ""
+  }
+}

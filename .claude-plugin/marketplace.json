@@ -1,12 +1,29 @@
 {
   "name": "plugin-market-place",
   "owner": {
-    "name": "xclang-brain"
+    "name": "xclang-brain",
+    "url": "https://github.com/xclang-brain"
   },
   "metadata": {
-    "description": "Claude Code と GitHub Copilot CLI の両方で動くプラグインを集めたマーケットプレイス"
+    "description": "Claude Code から入れられるプラグイン（GitHub Copilot CLI と両用のもの）"
   },
   "plugins": [
+    {
+      "name": "coverity-triage-kit",
+      "source": "./plugins/coverity-triage-kit",
+      "description": "Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作るプラグイン（C / C++、標準・MISRA・CERT）。スキルや MCP サーバー1つ、作業エージェント1つ、統括エージェントでの一括のトリアージ、の段階で使える（Web管理画面は GitHub Copilot CLI だけ）。",
+      "version": "0.2.0",
+      "category": "development",
+      "keywords": [
+        "coverity",
+        "static-analysis",
+        "triage",
+        "misra",
+        "cert",
+        "c",
+        "cpp"
+      ]
+    },
     {
       "name": "embedded-debug-kit",
       "description": "組み込み機器の C/C++ の不具合を、AI が実機で試しながら直すプラグイン。スキル、作業エージェント、統括・検証エージェント、Web管理画面の4つの段階で使える",

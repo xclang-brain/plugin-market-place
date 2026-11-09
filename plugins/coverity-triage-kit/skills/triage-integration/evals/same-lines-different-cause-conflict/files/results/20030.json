@@ -1,0 +1,22 @@
+{
+  "item": "20030",
+  "verdict": {
+    "judgement": "true_bug",
+    "summary": "malloc() の戻り値の NULL を確かめずに使っている",
+    "rationale": "21 行の malloc() は、メモリが足りないと NULL を返す。22 行で、その data に strcpy() で書き込む。",
+    "evidence": [
+      {"file": "src/io.c", "line": 21, "note": "malloc() が NULL を返しうる"},
+      {"file": "src/io.c", "line": 22, "note": "strcpy() で data に書き込む"}
+    ]
+  },
+  "recommendation": "fix",
+  "confidence": "high",
+  "confidence_reason": "経路をコードで最後まで追え、根拠がすべてコードにある",
+  "deviation": {"classification": "Bug", "action": "Ignore", "severity": "Moderate",
+                "comment": "本物の不具合。src/io.c:21 の malloc() はメモリが足りないと NULL を返し、22 行でその値に書き込んでおり、直さない理由は説明できない。"},
+  "fix": {"classification": "Bug", "action": "Fix Required", "severity": "Moderate",
+          "summary": "malloc() の後で data が NULL なら -1 を返す",
+          "impact": "メモリが足りないとき -1 を返す。ほかの動きは変わらない",
+          "exceeded_constraints": [], "already_fixed_on_latest": false},
+  "revision_drift": {"status": "none", "detail": ""}
+}

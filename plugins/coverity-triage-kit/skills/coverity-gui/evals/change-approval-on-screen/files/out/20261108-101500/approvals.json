@@ -1,0 +1,16 @@
+{
+ "version": 1,
+ "updated_at": "2026-11-08T11:00:00+09:00",
+ "items": {
+  "20001": {
+   "decision": "fix",
+   "edited": false,
+   "updated_at": "2026-11-08T11:00:00+09:00"
+  },
+  "20002": {
+   "decision": "deviation",
+   "edited": false,
+   "updated_at": "2026-11-08T11:00:00+09:00"
+  }
+ }
+}

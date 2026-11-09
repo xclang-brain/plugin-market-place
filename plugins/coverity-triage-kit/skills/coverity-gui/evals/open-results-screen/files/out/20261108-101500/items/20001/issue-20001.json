@@ -1,0 +1,14 @@
+{
+ "fetched_at": "2026-11-08T10:16:00+09:00",
+ "issue": {
+  "cid": 20001,
+  "checker": "NULL_RETURNS",
+  "file": "src/reader.c",
+  "function": "read_header",
+  "line": 40,
+  "impact": "High",
+  "stream": "app-main"
+ },
+ "events": [],
+ "checker_description": "NULL を返す関数"
+}

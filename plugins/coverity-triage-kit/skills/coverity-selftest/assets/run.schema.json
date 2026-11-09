@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run.schema.json",
+  "title": "実行の状態（run.json）",
+  "description": "一括実行だけが書く。ほかの部品が読む項目だけを決め、ほかの項目は許す（一括実行のための項目で、版によって変わる）。required は、いつも書く項目。$defs.job は jobs/<名前>.json の形。",
+  "type": "object",
+  "required": ["format", "tool_version", "run_id", "repo_root", "created_at", "filter_name", "stream", "review",
+               "integration", "initial", "parallel", "max_rework", "stage", "stopped", "stopped_at", "finished",
+               "finished_at", "halted", "halt_reason", "items"],
+  "properties": {
+    "format": {"const": 2, "description": "この形の版。違う値の実行フォルダは、別の形で作られたもの"},
+    "tool_version": {"type": "string", "pattern": "\\S",
+                     "description": "実行フォルダの形の版（一括実行のスクリプトが持つ）。違う版のスクリプトは、この実行フォルダを変えない"},
+    "run_id": {"type": "string", "pattern": "^[0-9]{8}-[0-9]{6}(-[0-9]+)?$", "description": "実行の ID（フォルダの名前）"},
+    "repo_root": {"type": "string", "pattern": "\\S", "description": "調べたリポジトリの一番上のフォルダ（絶対パス）"},
+    "created_at": {"type": "string", "pattern": "\\S", "description": "実行を作った日時（ISO）"},
+    "filter_name": {"type": "string", "description": "条件の名前"},
+    "stream": {"type": "string", "description": "警告のストリーム"},
+    "review": {"type": "boolean", "description": "結果の確かめ（検証役）を使う実行か"},
+    "integration": {"type": "boolean", "description": "同じ原因の統合（統合役）を使う実行か"},
+    "integrated": {"type": "boolean", "description": "統合の段が終わったか（統合を使う実行で、その段を終えたときに書く）"},
+    "initial": {"type": "boolean", "description": "初回解析をする実行か"},
+    "parallel": {"type": "integer", "minimum": 1, "description": "同時に動かす作業役の数"},
+    "max_rework": {"type": "integer", "minimum": 0, "description": "作り直しの上限の回数"},
+    "stage": {"enum": ["initial", "fetch", "details", "items", "integrate", "review", "verify", "done", "stopped"],
+              "description": "最後の tick の段（initial＝初回解析、fetch＝警告の取得、details＝警告経路の取得、items＝警告ごとの作業、integrate＝統合、review＝確かめ、verify＝ビルドでの検証、done＝終わった、stopped＝止めた）"},
+    "stopped": {"type": "boolean", "description": "止められた実行か"},
+    "stopped_at": {"type": ["string", "null"], "description": "止めた日時（ISO）"},
+    "finished": {"type": "boolean", "description": "最後まで進んだ実行か"},
+    "finished_at": {"type": ["string", "null"], "description": "最後まで進んだ日時（ISO）"},
+    "halted": {"type": "boolean", "description": "続けられないため止まっているか（認証の失敗、5xx、初回解析の失敗など。直して再開すると false に戻る）"},
+    "halt_reason": {"type": ["string", "null"], "description": "halted のときの理由"},
+    "items": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["id", "cids", "status", "merged_into", "merged_from", "review", "slot", "stage", "attempts",
+                   "review_rounds", "error", "started", "seconds"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^([0-9]+|G[0-9]+)$", "description": "作業の ID（CID か、グループの G1 など）"},
+        "cids": {"type": "array", "items": {"type": "integer"}},
+        "status": {"enum": ["pending", "in_progress", "done", "error", "merged"],
+                   "description": "pending＝まだ、in_progress＝作業中、done＝終わった、error＝処理できなかった、merged＝ほかの作業にまとめた"},
+        "merged_into": {"type": ["string", "null"], "description": "まとめた先の作業の ID（merged のとき）"},
+        "merged_from": {"type": "array", "items": {"type": "string"}, "description": "統合でまとめた元の作業の ID（統合で作った作業のとき）"},
+        "review": {"enum": ["pass", "flag", "rework", "unverified", null],
+                   "description": "確かめの結果（pass＝合格、flag＝要確認、rework＝差し戻し中、unverified＝未検証、null＝まだ）"},
+        "slot": {"type": ["integer", "null"], "description": "作業役の枠の番号（1 から parallel まで。作業中だけ）"},
+        "stage": {"type": ["string", "null"],
+                  "description": "作業中の段（copy＝作業用のコピーを用意している、ready＝用意できた、work＝作業役が作業している、save＝修正を保存している、merge＝まとめた修正を作っている。null＝作業中でない）"},
+        "attempts": {"type": "integer", "minimum": 0, "description": "作業役に頼んだ回数"},
+        "review_rounds": {"type": "integer", "minimum": 0, "description": "確かめで差し戻して作り直した回数"},
+        "error": {"type": "string", "description": "処理できなかった理由（error のとき。ほかは空）"},
+        "started": {"type": ["number", "null"], "description": "作業を始めた時刻（UNIX 秒）"},
+        "seconds": {"type": ["number", "null"], "description": "作業にかかった秒数（終わったとき）"}
+      }
+    },
+    "job": {
+      "type": "object",
+      "description": "jobs/<名前>.json：切り離して動かす処理（初回解析・作業用のコピー・修正の保存・ビルドでの検証など）の記録",
+      "required": ["name", "kind", "status", "pid", "started", "args"],
+      "properties": {
+        "name": {"type": "string", "description": "処理の名前（ファイルの名前と同じ）"},
+        "kind": {"type": "string", "description": "処理の種類（initial、copy、save、merge、verify など）"},
+        "status": {"enum": ["running", "done", "failed", "stopped"]},
+        "pid": {"type": ["integer", "null"], "description": "プロセスの番号（始めたばかりのときは null）"},
+        "started": {"type": "string", "description": "始めた日時（ISO）"},
+        "finished": {"type": ["string", "null"], "description": "終わった日時（ISO）"},
+        "args": {"type": "object", "description": "処理の引数（作業ごとの処理は item に作業の ID）",
+                 "properties": {"item": {"type": "string"}}},
+        "error": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

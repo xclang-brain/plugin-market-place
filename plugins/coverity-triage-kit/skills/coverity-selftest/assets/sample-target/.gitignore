@@ -1,0 +1,2 @@
+# 偽の Coverity への書き戻しの記録（自己診断で作られる）
+*.writes.jsonl

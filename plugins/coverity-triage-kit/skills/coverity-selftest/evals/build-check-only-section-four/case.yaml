@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: build-check-only-section-four
+expected_outcome: |
+  ④ だけを範囲にして、設定のビルドのコマンド（python3 build.py）を、リポジトリのコピーで動かす。
+  4-1 が成功になり、4-2・4-3（解析と登録のコマンドがあるか）も見つかったかどうかを記録し、伏せ字の report.md ができる。返事で report.md の場所と結果の件数（成功 1、失敗 0 など）を伝える。
+  リポジトリそのものにはビルドの生成物（out.txt）ができない。①〜③ は未実施で、Coverity にはつながず、
+  解析や登録のコマンドも動かさない。
+context:
+  scaffold_script: place-files.sh

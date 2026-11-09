@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "approvals.schema.json",
+  "title": "承認（approvals.json）",
+  "description": "一括実行が既定（推奨）を入れ、人が画面で選ぶ。反映はこれを読む。AI は人の選択を書き換えない。",
+  "type": "object",
+  "required": ["version", "items"],
+  "properties": {
+    "version": {"const": 1},
+    "updated_at": {"type": "string", "description": "最後に書いた日時（ISO）"},
+    "items": {
+      "type": "object",
+      "description": "作業の ID ごとの承認",
+      "additionalProperties": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "text": {"type": "string", "pattern": "\\S"},
+    "item": {
+      "type": "object",
+      "required": ["decision"],
+      "properties": {
+        "decision": {"enum": ["fix", "deviation", "reject", null],
+                     "description": "fix＝修正、deviation＝逸脱、reject＝却下、null＝反映しない"},
+        "edited": {"type": "boolean", "description": "推奨から変えたか（逸脱の内容を直したときも true）"},
+        "updated_at": {"type": "string"},
+        "deviation": {
+          "type": "object",
+          "description": "人が直した逸脱の内容（直したときだけある）",
+          "required": ["classification", "action", "severity", "comment"],
+          "properties": {
+            "classification": {"$ref": "#/$defs/text"},
+            "action": {"$ref": "#/$defs/text"},
+            "severity": {"$ref": "#/$defs/text"},
+            "comment": {"$ref": "#/$defs/text"}
+          }
+        }
+      }
+    }
+  }
+}

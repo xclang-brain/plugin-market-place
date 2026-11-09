@@ -1,0 +1,41 @@
+{
+  "item": "20003",
+  "verdict": {
+    "judgement": "false_positive",
+    "summary": "",
+    "rationale": "get_buf() の呼び出し元3か所は、どれも NULL を確かめてから使っている。",
+    "evidence": [
+      {
+        "file": "src/io/reader.c",
+        "line": 120,
+        "note": "NULL を確かめる"
+      }
+    ]
+  },
+  "recommendation": "deviation",
+  "confidence": "sure",
+  "confidence_reason": "呼び出し元をすべてコードで確かめた",
+  "deviation": {
+    "classification": "False Positive",
+    "action": "Ignore",
+    "severity": "Unspecified",
+    "comment": "誤検知。get_buf() の戻り値は NULL になりうるが、get_buf() を呼んでいるのは read_all() と read_header() と read_footer() の3か所で、どれも戻り値を確かめてから使っており、NULL のときはエラーの値を返して処理をやめるので、NULL を参照することはなく、警告の経路は実際には通らないことを、src/io/reader.c の 120 行と 210 行と 305 行で確かめた。そのため、この警告は直さなくてよい。"
+  },
+  "fix": {
+    "classification": "Bug",
+    "action": "Fix Required",
+    "severity": "Minor",
+    "summary": "get_buf() の呼び出し元で NULL のときのログを足す",
+    "impact": "NULL のときにログが出る",
+    "exceeded_constraints": [],
+    "already_fixed_on_latest": false
+  },
+  "revision_drift": {
+    "status": "none",
+    "detail": ""
+  },
+  "group_excluded_cids": [
+    20003
+  ],
+  "notes": "あとで見直す"
+}
