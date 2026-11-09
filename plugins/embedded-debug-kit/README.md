@@ -13,7 +13,7 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 | 1 | スキル | 1つの作業だけを頼む（ビルド、機器への転送、機器での実行とログの取得、設定） | [cross-build](docs/guide/1-cross-build.md)、[ftp-deploy](docs/guide/1-ftp-deploy.md)、[serial-console](docs/guide/1-serial-console.md)、[skill-config](docs/guide/1-skill-config.md) |
 | 2 | 作業エージェント | 不具合の調査と修正を任せる | [device-debugger](docs/guide/2-device-debugger.md) |
 | 3 | 統括エージェントと検証エージェント | 作業と合否の判定を別のエージェントに分け、合格するまで試行を繰り返す | [debug-orchestrator](docs/guide/3-debug-orchestrator.md) |
-| 4 | Web管理画面 | 3段階目の依頼文づくり、進み具合、結果をブラウザーで見る | [debug-dashboard](docs/guide/4-debug-dashboard.md) |
+| 4 | Web管理画面 | 3段階目の依頼文を作り、進み具合と結果をブラウザーで見る | [debug-dashboard](docs/guide/4-debug-dashboard.md) |
 
 ## 要るもの
 

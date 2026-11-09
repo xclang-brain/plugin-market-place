@@ -335,7 +335,7 @@ class SetTest(unittest.TestCase):
         self.assertEqual(p.raw(), before)
 
     def test_env_item_without_secret_pair_takes_any_value(self):
-        # cross-build の sdk_env のように、（秘密）の項目と対でない _env はふつうの項目
+        # 名前が _env で終わっても、（秘密）の項目と対でなければ、ふつうの項目
         p = Project(self, "[settings]\n# SDK の環境を整えるスクリプト。\nsdk_env =\n")
         self.assertEqual(p.set("sdk_env", "/opt/sdk/environment-setup-armv7")[0], 0)
 
