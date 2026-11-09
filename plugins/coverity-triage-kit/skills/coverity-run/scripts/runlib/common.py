@@ -83,10 +83,23 @@ def mtime(path: Path) -> float | None:
         return None
 
 
+def _read_bytes(path: Path) -> bytes:
+    """path.read_bytes(), retried on Windows: a file another process is replacing at that moment cannot be opened
+    there (PermissionError). Without this, a job record read during its own update looked missing."""
+    for attempt in range(20):
+        try:
+            return path.read_bytes()
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 19:
+                raise
+            time.sleep(0.05)
+    raise AssertionError("unreachable")
+
+
 def read_json(path: Path, default: Any = None) -> Any:
     """A JSON file (UTF-8, a BOM is allowed). ``default`` when the file is missing (else a RunError)."""
     try:
-        text = path.read_bytes().decode("utf-8-sig")
+        text = _read_bytes(path).decode("utf-8-sig")
     except FileNotFoundError:
         if default is not None:
             return default

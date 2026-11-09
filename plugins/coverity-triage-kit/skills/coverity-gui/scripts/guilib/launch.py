@@ -182,11 +182,26 @@ def _start(repo: Path) -> dict[str, Any]:
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
                 raise GuiError("画面のサーバを起動できませんでした", log=str(log_path), log_tail=tail)
             time.sleep(0.05)
-        data = json.loads(ready.read_text(encoding="utf-8"))
+        data = read_ready(ready, deadline)
     finally:
         with contextlib.suppress(OSError):
             ready.unlink()
     return {"url": data["url"], "pid": proc.pid}
+
+
+def read_ready(path: Path, deadline: float) -> dict[str, Any]:
+    """The ready file's JSON. On Windows the file can be in the middle of being replaced for a moment, so opening it
+    fails (PermissionError); it is read again until the deadline."""
+    while True:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (PermissionError, ValueError):
+            pass
+        if time.monotonic() > deadline:
+            raise GuiError("画面のサーバの準備のファイルを読めませんでした", file=str(path))
+        time.sleep(0.05)
 
 
 def open_screen(repo_root: str, run: str | None = None, view: str | None = None, item: str | None = None,

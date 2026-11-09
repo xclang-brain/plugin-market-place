@@ -199,3 +199,37 @@ class PidAliveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadyFileTest(unittest.TestCase):
+    """The ready file of a new server: on Windows it can be in the middle of being replaced for a moment."""
+
+    def test_a_ready_file_being_replaced_is_read_again(self) -> None:
+        from guilib import launch
+
+        tmp = Path(__import__("tempfile").mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        ready = tmp / "x.ready.json"
+        ready.write_text('{"url": "http://127.0.0.1:1/", "port": 1}', encoding="utf-8")
+        real = Path.read_text
+        calls = {"n": 0}
+
+        def flaky(self: Path, *args: object, **kwargs: object) -> str:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise PermissionError(13, "in use")
+            return real(self, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", flaky):
+            self.assertEqual(launch.read_ready(ready, time.monotonic() + 5)["port"], 1)
+        self.assertEqual(calls["n"], 3)
+
+    def test_a_ready_file_that_stays_unreadable_is_an_error(self) -> None:
+        from guilib import launch
+
+        tmp = Path(__import__("tempfile").mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        ready = tmp / "x.ready.json"
+        ready.write_text("not json", encoding="utf-8")
+        with self.assertRaises(common.GuiError):
+            launch.read_ready(ready, time.monotonic() + 0.2)

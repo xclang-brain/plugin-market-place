@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from support import SKILL, import_runlib, script_runner
@@ -405,6 +406,44 @@ class LongPathTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(tmp), "add", "-A"], check=True)
         self.assertIsNone(views.long_path_problem(Path("C:/out/run/work"), tmp, vcs_type="git"))
         self.assertIsNotNone(views.long_path_problem(Path("C:/out/run/work"), tmp), "without the VCS, every file counts")
+
+
+class ReadWhileReplacedTest(unittest.TestCase):
+    """On Windows, a file that another process is replacing cannot be opened for a moment: it is read again."""
+
+    def test_a_file_being_replaced_is_read_again_on_windows(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        path = tmp / "job.json"
+        path.write_text('{"status": "running"}', encoding="utf-8")
+        real = Path.read_bytes
+        calls = {"n": 0}
+
+        def busy(self: Path) -> bytes:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise PermissionError(13, "Permission denied")
+            return real(self)
+
+        with mock.patch.object(Path, "read_bytes", busy), mock.patch.object(common.sys, "platform", "win32"), \
+                mock.patch.object(common.time, "sleep"):
+            self.assertEqual(common.read_json(path), {"status": "running"})
+        self.assertEqual(calls["n"], 3)
+
+    def test_elsewhere_or_when_it_stays_refused_it_is_an_error(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        path = tmp / "job.json"
+        path.write_text("{}", encoding="utf-8")
+
+        def refused(self: Path) -> bytes:
+            raise PermissionError(13, "Permission denied")
+
+        for platform in ("linux", "win32"):
+            with self.subTest(platform=platform), mock.patch.object(Path, "read_bytes", refused), \
+                    mock.patch.object(common.sys, "platform", platform), mock.patch.object(common.time, "sleep"):
+                with self.assertRaises(common.RunError):
+                    common.read_json(path)
 
 
 class ClaudeSkillRulesTest(unittest.TestCase):

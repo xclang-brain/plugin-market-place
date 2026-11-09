@@ -208,7 +208,14 @@ class Server:
                 self.close()
                 raise AssertionError("the server did not start: " + (tmp / "server.log").read_text(errors="replace"))
             time.sleep(0.05)
-        self.port = json.loads(ready.read_text(encoding="utf-8"))["port"]
+        while True:  # on Windows the file can be in the middle of being replaced for a moment
+            try:
+                self.port = json.loads(ready.read_text(encoding="utf-8"))["port"]
+                break
+            except (PermissionError, ValueError, KeyError):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.05)
         self.host = f"127.0.0.1:{self.port}"
         self.origin = f"http://{self.host}"
 
