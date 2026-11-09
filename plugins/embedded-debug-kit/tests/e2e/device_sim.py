@@ -1,4 +1,4 @@
-"""EVAL のための模擬の機器。この PC の上で、機器の FTP サーバーとシリアルコンソールの代わりを動かす。
+"""通しのテスト（E2E）のための模擬の機器。この PC の上で、機器の FTP サーバーとシリアルコンソールの代わりを動かす。
 
 - FTP サーバー：127.0.0.1:<--ftp-port>。ユーザー root、パスワード sim。機器のルートは --root のフォルダ。
 - コンソール：127.0.0.1:<--shell-port> の TCP。つなぐと、--root のフォルダで本物の bash が動く
@@ -7,7 +7,7 @@
 機器のルートからの相対パスで、FTP の送り先とシェルのパスがそろう（例：送り先 app → シェルの ./app）。
 Linux と macOS で動く（疑似端末を使う）。pyftpdlib が要る（pip install pyftpdlib）。
 
-  python3 tests/eval/device_sim.py --root /tmp/device
+  python3 tests/e2e/device_sim.py --root /tmp/device
 """
 
 import argparse
@@ -79,7 +79,7 @@ def ftp_server(port, root):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="EVAL のための模擬の機器（FTP とコンソール）")
+    parser = argparse.ArgumentParser(description="通しのテスト（E2E）のための模擬の機器（FTP とコンソール）")
     parser.add_argument("--root", required=True, help="機器のルートにするフォルダ（なければ作る）")
     parser.add_argument("--ftp-port", type=int, default=2121)
     parser.add_argument("--shell-port", type=int, default=2323)
