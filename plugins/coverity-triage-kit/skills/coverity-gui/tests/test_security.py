@@ -98,6 +98,10 @@ class SecurityTest(unittest.TestCase):
             time.sleep(0.2)  # the server has read the head and answered; the body comes after (as with two packets)
             sock.sendall(b'{"a": 1}' * 64)
             time.sleep(0.3)
+            # the server still reads what comes: sending to a socket it had closed would be refused (a reset)
+            sock.sendall(b" " * 64)
+            time.sleep(0.1)
+            sock.sendall(b" ")
             answer = b""
             while True:
                 part = sock.recv(65536)

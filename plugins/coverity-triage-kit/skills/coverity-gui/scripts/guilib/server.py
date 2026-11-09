@@ -84,11 +84,15 @@ class GuiServer(ThreadingHTTPServer):
         data resets the connection, so the client can lose the answer that was already sent (seen on Windows)."""
         try:
             request.shutdown(socket.SHUT_WR)
-            request.settimeout(0.2)
             deadline = time.monotonic() + DRAIN_SECONDS
-            while time.monotonic() < deadline and request.recv(65536):
-                pass
-        except OSError:
+            while True:  # until the client closes its side, or the time is up (a quiet moment is not the end)
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                request.settimeout(left)
+                if not request.recv(65536):
+                    break
+        except OSError:  # the time is up (socket.timeout), or the client is already gone
             pass
         self.close_request(request)
 
