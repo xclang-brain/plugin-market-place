@@ -48,7 +48,7 @@ from job import read_json, write_bytes, write_json  # noqa: E402
 SCRIPT = Path(__file__).resolve()
 WAIT = 20  # seconds start and finish wait for a background job before they answer that it still runs
 STALE = 30 * 60  # seconds after which a claim without a save is taken from its slot
-OLD_LIST = 10 * 60  # seconds after which start says when the list was fetched, and fetches an empty one again
+OLD_LIST = 10 * 60  # seconds after which start says when the list was fetched
 BATCH = 5  # CIDs per slot and round (keeps a worker's context small)
 VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intentional": "意図的", "undetermined": "判定不能"}
 RECOMMEND = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する"}
@@ -95,6 +95,7 @@ def settings(repo: Path) -> dict:
         data = data if isinstance(data, dict) else {}
         coverity, build = data.get("coverity") or {}, data.get("build") or {}
         found = {"url": str(coverity.get("url") or ""), "stream": str(coverity.get("stream") or ""),
+                 "conditions": data.get("conditions") or {},  # as read: the search tool applies them
                  "output_dir": (repo / str(data.get("output_dir") or "../coverity-triage-out")).resolve(),
                  "parallel": min(8, max(1, int(data.get("parallel") or 3))),
                  "base_branch": str(data.get("base_branch") or ""), "command": str(build.get("command") or ""),
@@ -174,11 +175,6 @@ def age(stamp: str) -> float:
     return (datetime.now() - datetime.fromisoformat(stamp)).total_seconds()
 
 
-def written(path: Path) -> float:
-    """When the file was written (0: there is no such file)."""
-    return path.stat().st_mtime if path.is_file() else 0
-
-
 def remove_work(run_dir: Path, repo: Path) -> str:
     """Delete the work copies of a run. This is cleanup: a folder that another program holds (on Windows
     also a shell that sits in it) stays, and the sentence that says so is returned."""
@@ -191,21 +187,19 @@ def remove_work(run_dir: Path, repo: Path) -> str:
 
 
 def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
-    """The newest result folder of this repository while it is not finished, else a new one. Not
-    finished: it has no list yet, or unfinished CIDs, or (a run that processes every CID) finish has not
-    written the summary since a CID changed last. A list without warnings is the answer to the request
-    while it is fresh: the folder stays the newest one, and a later request fetches again."""
+    """The newest result folder of this repository, or a new one. A new one is made: with --new; when
+    the stream or the conditions of the settings file are no longer the ones the folder was made for;
+    once the step after the OK has handled the results (applied.json, written.json); and when it was
+    answered that no warning matches (the list is empty and start has written summary.md)."""
     out = cfg["output_dir"]
+    made_for = {"stream": cfg["stream"], "conditions": cfg["conditions"]}
     runs = sorted((p for p in out.iterdir() if (read_json(p / "run.json") or {}).get("repo") == repo.as_posix()),
                   reverse=True) if out.is_dir() else []
     if runs and not new:
         latest = Run(runs[0], starting=True)
-        if latest.issues:
-            changed = max(written(latest.cid_dir(cid) / "state.json") for cid in latest.issues)
-            open_end = latest.meta["all"] and written(runs[0] / "summary.md") < changed
-        else:
-            open_end = time.time() - written(runs[0] / "issues.json") < OLD_LIST
-        if not latest.fetch or count(latest.states())["remaining"] or open_end:
+        closing = ["applied.json", "written.json", *(["summary.md"] if latest.fetch and not latest.issues else [])]
+        if ({key: latest.meta.get(key) for key in made_for} == made_for
+                and not any((runs[0] / name).is_file() for name in closing)):
             return runs[0]
     for old in runs:
         remove_work(old, repo)  # what cannot be deleted now is tried again with the next new folder
@@ -217,7 +211,7 @@ def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
         except FileExistsError:
             time.sleep(0.3)
     write_json(run_dir / "run.json", {"repo": repo.as_posix(), "vcs": kind, "base_branch": "", "base_revision": "",
-                                      "stream": cfg["stream"], "slots": 1, "review": False, "all": False})
+                                      **made_for, "slots": 1, "review": False, "all": False})
     return run_dir
 
 
@@ -245,7 +239,16 @@ def cmd_start(args) -> dict:
     current = Run(run_dir, starting=True)
     listed = bool(current.fetch)
     if listed and not current.issues:  # nothing to work on: no work copy is waited for
+        summarize(current)  # the request is answered: the next one asks Coverity again
         return reply(run_dir, counts=count({}), message="条件に合う警告はありません", next=[])
+    states = current.states()
+    found = count(states)
+    if listed and not found["remaining"] and not (mode["review"] and unreviewed(states)):
+        # Complete: it stays the answer until its results are handled. No work copy is needed to show them.
+        failed = f"、失敗 {found['failed']} 件" if found["failed"] else ""
+        return reply(run_dir, counts=found, next=[command("finish", run_dir)],
+                     message=f"前回の処置は完了しています（処置済み {found['done']} 件{failed}）。"
+                             "取得し直すときは「取得し直して」と入力してください")
     deadline = time.monotonic() + WAIT
     jobs = []
     if cfg["initial_analysis"] and not listed:
@@ -353,6 +356,16 @@ def details_call(run: Run, cids: list[int]) -> list[dict]:
     return [{"tool": "coverity_get_issue_details", "arguments": arguments}] if missing else []
 
 
+def asked_again(state: dict | None) -> dict | None:
+    """The state of a CID that a person names. A saved one is like a CID that was sent back, without
+    points; a failed one is back in the queue. (The result of a merged member is the one of its leader.)"""
+    if state and state["status"] == "done" and not state.get("merged_into"):
+        return {**state, "status": "rework", "rework": []}
+    if state and state["status"] == "failed":
+        return {**state, "status": "rework"}
+    return state
+
+
 def work_copy(run: Run, slot: int):
     """(the repository, the work copy of the slot). start makes a copy that is missing or damaged again."""
     repo, copy = vcs.open_repo(run.repo), run.copy(slot)
@@ -365,22 +378,24 @@ def work_copy(run: Run, slot: int):
 def cmd_next(args) -> dict:
     run = Run(args.run)
     slot, batch = args.slot, args.batch
-    repo, copy = work_copy(run, slot)
     if args.cid is not None and args.cid not in run.issues:
         raise Problem(f"CID {args.cid} は取得した警告の一覧にありません")
+    try:
+        repo, copy = work_copy(run, slot)
+    except Problem:
+        again = asked_again(run.states().get(args.cid))
+        if again and again["status"] == "rework":
+            run.put(args.cid, again)  # finish has removed the copies: start makes them again for this CID
+        raise
     # Before a CID is claimed: a copy that cannot be made clean must not cost a CID one of its two tries.
     repo.reset(copy, run.meta["base_revision"])
     states = run.states()
-    named = states[args.cid] if args.cid is not None else None
-    if named and named["status"] == "done" and not named.get("merged_into"):
-        # the person asks for a saved CID again: like one that was sent back, without points
-        states[args.cid] = {**named, "status": "rework", "rework": []}
+    if args.cid is not None:
+        states[args.cid] = asked_again(states[args.cid])
 
     def free(state) -> bool:
         if state is None or state["status"] == "rework":
             return True
-        if state["status"] == "failed":
-            return args.cid is not None  # the person asks for this CID: once more
         return state["status"] == "working" and (state["slot"] == slot or age(state["claimed_at"]) > STALE)
 
     def own(cid) -> bool:  # the CID this slot was given and did not save comes first

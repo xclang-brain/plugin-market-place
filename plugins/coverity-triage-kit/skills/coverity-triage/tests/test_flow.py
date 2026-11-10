@@ -53,8 +53,8 @@ class Flow:
         self.assertEqual(ready["fetch"], [], "in a chat the warning paths are fetched per CID")
         self.assertIn(f'next --run "{run.as_posix()}" --slot 1', ready["next"][0])
         self.assertEqual({k: v for k, v in self.meta(run).items() if k != "base_revision"}, {
-            "repo": self.repo.as_posix(), "vcs": self.kind, "stream": "app-main", "slots": 1, "review": False,
-            "all": False, "base_branch": "main" if self.kind == "git" else ""})
+            "repo": self.repo.as_posix(), "vcs": self.kind, "stream": "app-main", "conditions": {}, "slots": 1,
+            "review": False, "all": False, "base_branch": "main" if self.kind == "git" else ""})
         self.assertTrue(self.meta(run)["base_revision"] and (run / "work" / "w1" / "src" / "a.c").is_file())
 
         every = self.start("--slots", 1)
@@ -85,6 +85,39 @@ class Flow:
         fetched = datetime.now() - timedelta(hours=3)
         os.utime(run / "issues.json", (fetched.timestamp(), fetched.timestamp()))
         self.assertEqual(self.start()["message"], f"条件に合う警告を 3 件取得しました（警告の取得: {fetched:%Y-%m-%d %H:%M}）")
+
+    def test_other_conditions_or_another_stream_get_a_new_folder(self):
+        self.configure("conditions:\n  impacts: [Medium, Low]\n")
+        run = self.begin(THREE_ISSUES)
+        self.work(self.next(run, "--cid", ONE))
+        self.assertEqual(self.meta(run)["conditions"], {"impacts": ["Medium", "Low"]})
+        self.assertEqual(self.start()["run_dir"], run.as_posix(), "the conditions of the folder: continued")
+        high = "conditions:\n  impacts: [High]\n"
+        self.configure(high)  # the person changes the conditions and asks again: the list is fetched for them
+        second = self.begin(THREE_ISSUES[:1])
+        self.assertNotEqual(second, run)
+        self.assertEqual((self.meta(second)["stream"], self.meta(second)["conditions"]),
+                         ("app-main", {"impacts": ["High"]}))
+        self.assertFalse((run / "work").exists(), "the copies of the earlier folder are removed")
+        self.configure(high, stream="app-next")
+        third = self.start()
+        self.assertNotIn(third["run_dir"], (run.as_posix(), second.as_posix()))
+        self.assertEqual(third["fetch"][0]["tool"], "coverity_search_issues")
+        self.assertEqual(self.meta(Path(third["run_dir"]))["stream"], "app-next")
+
+    def test_no_warning_is_answered_once_and_the_next_request_fetches_again(self):
+        first = self.start("--slots", 1)
+        run = Path(first["run_dir"])
+        (run / "issues.json").write_text(json.dumps({"issues": [], "total_matched": 0, "limited": False}))
+        answer = self.start("--slots", 1)  # the folder with the empty list is open until this was answered
+        self.assertEqual((answer["run_dir"], answer["message"], answer["next"], answer["counts"]["total"]),
+                         (first["run_dir"], "条件に合う警告はありません", [], 0))
+        self.assertIn("- 警告: 0 件（処置済み 0 件、失敗 0 件、未処置 0 件）", (run / "summary.md").read_text(encoding="utf-8"))
+        self.settle()
+        again = self.start("--slots", 1)  # the same request a minute later: Coverity is asked again
+        self.assertNotEqual(again["run_dir"], first["run_dir"])
+        self.assertEqual(again["fetch"][0]["tool"], "coverity_search_issues")
+        self.assertFalse((run / "work").exists())
 
     def test_next_hands_out_every_cid_once_and_save_stores_the_fix(self):
         run = self.begin(THREE_ISSUES, "--slots", 1)
@@ -119,7 +152,7 @@ class Flow:
         self.assertEqual(len((run / "log.txt").read_text(encoding="utf-8").splitlines()), 9, "one line per command")
         # every CID is saved, but the run was not finished: the same request leads to finish, not to a new fetch
         again = self.start("--slots", 1)
-        self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), "前回の続きから進めます（残り 0 件）"))
+        self.assertEqual((again["run_dir"], again["counts"]["done"]), (run.as_posix(), 3))
         self.assertIn("finish --run", again["next"][0])
 
     def test_save_fills_in_the_values_for_coverity(self):
@@ -411,9 +444,13 @@ class Flow:
         self.assertIn(f"| 誤検知 | 逸脱コメントを登録する | 高 | 未検証 | なし | {support.KEEP_COMMENT} |", summary)
         self.assertIn(f"| {THREE} | NULL_RETURNS | src/a.c:3 | 失敗 | - | - | - | - | - |", summary)
         self.assertFalse((run / "work").exists(), "the work copies are removed")
-        self.assertNotEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "a finished run is not continued")
+        again = self.start("--slots", 1)
+        self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), (
+            "前回の処置は完了しています（処置済み 2 件、失敗 1 件）。取得し直すときは「取得し直して」と入力してください")))
+        (run / "written.json").write_text("{}")  # the deviation comments were registered after the OK
+        self.assertNotEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "handled: the next request fetches")
 
-    def test_the_same_request_continues_until_finish_has_run(self):
+    def test_a_run_stays_the_answer_until_its_results_are_handled(self):
         run = self.begin(THREE_ISSUES)  # in a chat first: one CID is saved and the summary is shown
         self.work(self.next(run, "--cid", ONE))
         self.assertTrue(self.run_triage("finish", "--run", run)["ok"] and (run / "summary.md").is_file())
@@ -422,13 +459,48 @@ class Flow:
         self.work(self.next(run, "--slot", 1, "--batch", 1), B_EDIT)
         self.work(self.next(run, "--slot", 2, "--batch", 1))
         self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "pass")
-        again = self.start(*agents)  # stopped while the results are reviewed: finish has not run since the saves
+        again = self.start(*agents)  # stopped while the results are reviewed
         self.assertEqual((again["run_dir"], again["fetch"]), (run.as_posix(), []), "no new folder, no new fetch")
         self.assertIn("review --run", again["next"][0])
         self.assertTrue((run / "work" / "w2").is_dir(), "the work copies stay")
         for cid in (TWO, THREE):
             self.run_triage("review", "--run", run, "--cid", cid, "--outcome", "pass")
-        self.assertIn("finish --run", self.start(*agents)["next"][0], "reviewed, not finished: continued")
+        complete = "前回の処置は完了しています（処置済み 3 件）。取得し直すときは「取得し直して」と入力してください"
+        for flags in (agents, ()):  # the agents before finish; then a request in a chat, after finish
+            again = self.start(*flags)
+            self.assertEqual((again["run_dir"], again["message"], again["counts"]["done"]),
+                             (run.as_posix(), complete, 3))
+            self.assertTrue(again["next"][0].endswith(f'finish --run "{run.as_posix()}"'), again["next"])
+            self.assertIn(f"| {THREE} |", self.follow(again["next"][0])["table"])
+        self.assertFalse((run / "work").exists(), "no work copy is made to show the results again")
+        (run / "applied.json").write_text("{}")  # the fixes were taken in after the OK
+        fresh = self.start(*agents)
+        self.assertNotEqual(fresh["run_dir"], run.as_posix())
+        self.assertEqual(fresh["fetch"][0]["tool"], "coverity_search_issues", "handled: the next request fetches")
+
+    def test_a_cid_is_made_again_after_finish(self):
+        run = self.begin(THREE_ISSUES, "--slots", 1)
+        self.work(self.next(run))
+        self.work(self.next(run), B_EDIT)
+        for _ in range(3):  # THREE is handed out twice without a save: failed
+            self.next(run)
+        self.assertEqual(self.run_triage("finish", "--run", run)["counts"]["failed"], 1)
+        self.assertFalse((run / "work").exists())
+        for cid in (TWO, THREE):  # the person reads the table: a remark on a result, and the failed CID once more
+            asked = self.next(run, "--cid", cid)
+            self.assertEqual((asked["ok"], asked["error"][:12]), (False, "作業用コピーがありません"))
+        self.assertEqual([self.state(run, cid)["status"] for cid in (ONE, TWO, THREE)], ["done", "rework", "rework"])
+        self.assertEqual((self.state(run, TWO)["rework"], "rework" in self.state(run, THREE)), ([], False))
+        ready = self.follow(asked["next"][0])  # the start line: the folder is continued, the copy is made again
+        self.assertEqual((ready["run_dir"], ready["message"]), (run.as_posix(), "前回の続きから進めます（残り 2 件）"))
+        given = self.follow(ready["next"][0])
+        self.assertEqual((given["cid"], given["rework"]), (TWO, {"points": [], "patch_applied": True}))
+        self.assertIn(b"return 1;", (Path(given["work_dir"]) / "src" / "b.c").read_bytes(), "the earlier fix")
+        self.assertTrue(self.work(given, {"src/b.c": (b"return 1;", b"return 2;")})["ok"])
+        self.assertIn(b"+    return 2;", (run / "cid" / str(TWO) / "fix.patch").read_bytes())
+        failed = self.next(run)
+        self.assertEqual((failed["cid"], "rework" in failed, self.work(failed)["ok"]), (THREE, False, True))
+        self.assertEqual(self.run_triage("finish", "--run", run)["counts"]["done"], 3)
 
     def test_one_named_cid_in_a_chat(self):
         run = self.begin(THREE_ISSUES)  # no --slots: stage 1
@@ -519,7 +591,7 @@ class CleanupTest(support.RunCase):
             done = self.triage.cmd_finish(args)
             self.assertEqual((done["ok"], done["message"]), (True, f"作業用コピーが残っています。{held}"))
             self.assertIn(f"| {ONE} |", done["table"])
-            other = self.triage.find_run(self.repo, self.triage.settings(self.repo), "git", False)
+            other = self.triage.find_run(self.repo, self.triage.settings(self.repo), "git", True)  # 取得し直して
         self.assertTrue(other != run and other.is_dir() and (run / "work").is_dir(), "the next fetch is not stopped")
 
 

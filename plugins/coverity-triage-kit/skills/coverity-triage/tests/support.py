@@ -11,11 +11,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+import job  # noqa: E402
 import vcs  # noqa: E402
 
 GIT = ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "core.autocrlf=false"]
@@ -135,12 +137,20 @@ class RunCase(unittest.TestCase):
             self.skipTest("svn コマンドがありません")
         self.top = Path(tempfile.mkdtemp(prefix="triage-test-")).resolve()
         self.addCleanup(vcs.remove_tree, self.top)
+        self.addCleanup(self.settle)
         self.repo = make_repo(self.kind, self.top)
         self.configure(self.settings)
 
-    def configure(self, more: str = "") -> None:
-        text = "coverity:\n  url: https://coverity.example.co.jp:8443\n  stream: app-main\n" + more
+    def configure(self, more: str = "", stream: str = "app-main") -> None:
+        text = f"coverity:\n  url: https://coverity.example.co.jp:8443\n  stream: {stream}\n" + more
         write(self.repo, {".coverity-triage/config.yaml": text.encode("utf-8")})
+
+    def settle(self) -> None:
+        """Wait for the jobs that make work copies: start does not wait for them while the list is missing,
+        and a folder that a job still writes into is not to be deleted."""
+        for record in self.top.glob("coverity-triage-out/*/work/prepare.json"):
+            while (job.read(record.parents[1], "prepare") or {}).get("status") == "running":
+                time.sleep(0.05)
 
     def run_triage(self, *args) -> dict:
         return triage(*args, env=self.env)
