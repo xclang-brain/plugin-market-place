@@ -1,7 +1,7 @@
-# 統括エージェントと検証エージェント（3段階目）
+# 統括エージェントの使い方
 
-直してほしいことを依頼すると、統括エージェント（debug-orchestrator）が、計画・作業・評価の試行を、合格するか上限に達するまで繰り返します。
-作業は作業エージェント（device-debugger）がします。合否は、直した本人ではなく、検証エージェント（debug-verifier）がログを読んで判定します。
+直してほしいことを依頼すると、統括エージェントが、計画・作業・評価の試行を、合格するか上限に達するまで繰り返します。
+作業は、作業エージェントがします。合否は、作業エージェントとは別の検証エージェントが、ログを読んで判定します。
 
 ## 始め方
 
@@ -14,11 +14,9 @@
      copilot --agent embedded-debug-kit:debug-orchestrator
      ```
 
-   - 起動してから指定する。`/agent` と入力し、一覧から `embedded-debug-kit:debug-orchestrator` を選びます。`/agent embedded-debug-kit:debug-orchestrator` と、名前を続けて書いてもかまいません。
+   - 起動してから指定する。`/agent` と入力し、一覧から `embedded-debug-kit:debug-orchestrator` を選びます。`/agent embedded-debug-kit:debug-orchestrator` と、名前を続けて書くこともできます。
 
    Claude Code では、`claude --agent embedded-debug-kit:debug-orchestrator` で起動します。
-
-検証エージェント（debug-verifier）は、`/agent` の一覧に出ません。統括エージェントが呼びます。
 
 ## 依頼のしかた
 
