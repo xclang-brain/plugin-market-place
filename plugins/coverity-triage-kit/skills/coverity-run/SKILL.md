@@ -132,7 +132,6 @@ uv run --native-tls --quiet "<このスキルのフォルダ>/scripts/run.py" no
 
 本文が長いときや改行を含むときは、`echo '{"title": "…", "body": "…"}' | uv run … note-issue --run "<run_dir>" --stdin`
 のように JSON を標準入力で渡します（PowerShell でも bash でも同じ書き方。改行は `\n`、文の中に `'` を使わない）。書き残した課題は、チャットでも短く伝えます。
-課題の起票は、利用者が一件ずつ承認してから行うもので、ここではしません。
 
 ## 実行の様子を聞かれたとき
 

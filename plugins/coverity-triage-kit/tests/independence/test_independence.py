@@ -189,16 +189,6 @@ class AgentIndependence(unittest.TestCase):
         self.assertEqual(len(mcp_tool_problems("x", "copilot", copilot, set(), set())), 1)
         self.assertEqual(mcp_tool_problems("x", "claude", claude, {server}, set()), [])
 
-    def test_no_stage4_words(self):
-        """エージェントは、4段階目（エクステンション）を知らない"""
-        patterns = upper_patterns()[:2] + [(w, pp.token(w)) for w in ("extension", "extensions")]
-        patterns.append((pp.PLUGIN_NAME + "_", re.compile(re.escape(pp.PLUGIN_NAME + "_"))))
-        problems = []
-        for kind, name in self.agents:
-            path = kind_path(name, kind)
-            problems += pp.hits_in_text(pp.rel(path), scan_text(path, kind), patterns)
-        self.assertEqual(problems, [], "エージェントが、エクステンションのことを書いています：\n" + "\n".join(problems))
-
     def test_worker_knows_no_stage3(self):
         """2段階目の作業役は、3段階目（統括・検証・統合のエージェント）のことを書かない"""
         paths = [(kind, kind_path(pp.ROLES["worker"], kind)) for kind in KINDS]

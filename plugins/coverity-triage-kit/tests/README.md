@@ -51,7 +51,7 @@ python3 tests/run.py --only docs --only structure
 | Python | 3.10 以上 | 動かせない（終了コード 2） |
 | uv | （あること） | 部品の試験を動かせない（終了コード 2） |
 | git | （あること） | 部品の試験を動かせない（終了コード 2） |
-| svn、cppcheck | （あれば使う） | それを使う試験だけを飛ばす |
+| svn | （あれば使う） | それを使う試験だけを飛ばす |
 | Claude Code（`claude`） | （あれば使う） | `structure` の `claude plugin validate` だけを飛ばす |
 | Node.js、Playwright（Chromium） | （あれば使う） | 画面をブラウザーで確認するテスト（`ui`）だけをスキップします（CI では不合格になります）。インストール：`npm install --prefix tests --no-save --no-package-lock playwright@1.56.1` と `npx --prefix tests playwright install chromium` |
 

@@ -342,7 +342,7 @@ def check_prerequisites(needs):
                          "version": ".".join(map(str, version)) if version else None})
         if exe is None:
             missing.append(name)
-    for name, command in (("svn", ["svn", "--version", "--quiet"]), ("cppcheck", ["cppcheck", "--version"])):
+    for name, command in (("svn", ["svn", "--version", "--quiet"]),):
         exe, version = version_of(command)
         optional.append({"name": name, "found": exe is not None, "path": exe,
                          "version": ".".join(map(str, version)) if version else None,

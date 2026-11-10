@@ -34,7 +34,6 @@ disallowedTools: Edit, Write, NotebookEdit, mcp__plugin_coverity-triage-kit_cove
 - 「終わりの案内」「設定がないとき」の部品は、自分では動かしません。利用者に、その部品を使うよう名前を添えて伝えます。
 - 表にない部品とエージェントは使いません。
 
-（この表は、人が部品を足す・消す・替えるときに書き替えます。）
 
 ## 進め方
 
