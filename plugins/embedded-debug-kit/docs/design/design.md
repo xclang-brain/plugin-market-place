@@ -75,7 +75,7 @@ CLI の動きを調べた結果は、[実測の記録](measurements.md)に分け
 | SKILL.md | description は「何をするか」と「いつ使うか」だけ。本文は、コマンドの表、結果の読み方、最後に「してはいけないこと」の節。詳しいことは `reference/` に分ける |
 | スクリプト | `scripts/` に置く。Python 3.8 以上の標準ライブラリだけを使う。ほかのものは `scripts/vendor/` に同梱する |
 | 呼び方 | Windows は `py -3`、ほかは `python3`。パスは `<このスキルのフォルダ>/scripts/…` と書く |
-| サブコマンド | `run`（作業）、`check`（設定を確かめる。何も作らない）、`init`（設定ファイルをひな形から作る）。`--workdir` で作業フォルダを指定できる |
+| 最初の引数 | `run`（作業）、`check`（設定を確かめる。何も作らない）、`init`（設定ファイルをひな形から作る）。`--workdir` で作業フォルダを指定できる |
 | 結果 | 標準出力に JSON を1つ。共通の項目は `ok`・`message`・`problems`・`config`（設定ファイルの場所）・`log` |
 | 文字コード | JSON は ASCII だけで書く（日本語は `\uXXXX`）。PowerShell も bash も、これなら化けない |
 | 終了コード | 0：成功、1：作業の失敗、2：設定や引数の問題 |
@@ -103,9 +103,9 @@ YAML の読み取りは、Python の標準ライブラリにない。PyYAML を�
 | スキル | 違うところ | 理由 |
 | --- | --- | --- |
 | serial-console | pyserial 3.5（BSD ライセンス）を `scripts/vendor/` に同梱する | 標準ライブラリでは、シリアルポートを扱えない |
-| skill-config | サブコマンドは `show`（読むだけ。何も作らない）と `set`。SKILL.md に、質問の進め方の節を足す | 自分の設定を持たない |
+| skill-config | 最初の引数は `show`（読むだけ。何も作らない）と `set`。SKILL.md に、質問の進め方の節を足す | 自分の設定を持たない |
 | skill-config | `set` は、その項目の行だけを書き換える。値は標準入力で渡す | コメントと並びを残す。値がシェルで変わらないようにする |
-| debug-dashboard | サブコマンドは `start`・`stop`・`status`。SKILL.md に `disable-model-invocation: true` を書く | 利用者が呼んだときだけ動かす（REQ-401、M4） |
+| debug-dashboard | 最初の引数は `start`・`stop`・`status`。SKILL.md に `disable-model-invocation: true` を書く | 利用者が呼んだときだけ動かす（REQ-401、M4） |
 
 ## 5. エージェント
 

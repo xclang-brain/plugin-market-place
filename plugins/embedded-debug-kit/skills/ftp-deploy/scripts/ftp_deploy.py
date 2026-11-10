@@ -512,7 +512,7 @@ def remove_part(ftp, part):
         return False
 
 
-# --- サブコマンド -------------------------------------------------------------
+# --- 最初の引数ごとの処理 -----------------------------------------------------
 
 def checked_settings(raw, workdir, result, need_files):
     LOG("設定：%s" % logged_settings(raw))

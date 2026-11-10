@@ -606,7 +606,7 @@ def run_command(con, s, item):
     return bool(back)
 
 
-# --- サブコマンド -------------------------------------------------------------
+# --- 最初の引数ごとの処理 -----------------------------------------------------
 
 def checked_settings(raw, result, commands_arg=None, need_commands=False):
     LOG("設定：%s" % logged_settings(raw))
