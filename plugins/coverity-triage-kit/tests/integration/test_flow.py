@@ -14,7 +14,7 @@ with different checkers (the integrator merges them). The test does what the orc
    refused and nothing is written to the emulator, the right one writes, a second write writes nothing new,
    apply-code pushes the fix branches to the bare remote (and does not push again).
 
-The scripts are named in tests/structure/plugin_parts.py, the MCP server in mcp.json. The test is skipped when uv
+The scripts are named in flowlib.py, the MCP server in mcp.json. The test is skipped when uv
 or git is missing (in CI that fails); a missing part fails. It takes about a minute.
 """
 

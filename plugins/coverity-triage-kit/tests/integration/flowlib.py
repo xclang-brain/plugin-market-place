@@ -2,7 +2,7 @@
 
 - a tiny C repository with five Coverity-like warnings (one group of two, one pair with one cause, one
   deviation) and what is true about each of them;
-- the batch run's commands (the scripts named in tests/structure/plugin_parts.py);
+- the batch run's commands (the scripts named in `pp` below);
 - scripted fake agents that do what the instruction files (briefs) ask: the worker makes a real, minimal
   fix in its work copy and writes result.json, the reviewer writes review.json, the integrator writes
   integration/plan.json;
@@ -10,7 +10,7 @@
 - the tick loop of the orchestrator (fetch actions to the MCP server or to offline files, launch actions
   to the fake agents).
 
-Used by tests/integration/test_flow.py, tests/independence (the briefs name no part) and tests/ui.
+Used by tests/integration/test_flow.py and tests/ui.
 """
 
 from __future__ import annotations
@@ -32,9 +32,21 @@ HERE = Path(__file__).resolve().parent
 TESTS = HERE.parent
 PLUGIN = TESTS.parent
 sys.dont_write_bytecode = True
-if str(TESTS / "structure") not in sys.path:
-    sys.path.insert(0, str(TESTS / "structure"))
-import plugin_parts as pp  # noqa: E402
+MCP_SERVER = "coverity-connect"
+
+
+class pp:
+    """The scripts these tests run, and the JSON Schema check (needs the jsonschema package)."""
+    RUN_SCRIPT = PLUGIN / "skills" / "coverity-run" / "scripts" / "run.py"
+    GUI_SCRIPT = PLUGIN / "skills" / "coverity-gui" / "scripts" / "gui.py"
+    APPLY_SCRIPT = PLUGIN / "skills" / "coverity-apply" / "scripts" / "apply.py"
+
+    @staticmethod
+    def schema_errors(instance: Any, schema: dict[str, Any]) -> list[str]:
+        from jsonschema import Draft202012Validator
+        return [f"{'/'.join(str(p) for p in e.absolute_path) or '$'}: {e.message}"
+                for e in Draft202012Validator(schema).iter_errors(instance)]
+
 
 UV = shutil.which("uv")
 GIT = shutil.which("git")
@@ -274,22 +286,16 @@ def run_script(script: Path, *args: str, env: dict[str, str], cwd: Path | None =
 # the MCP server over stdio
 # ---------------------------------------------------------------------------
 
-def mcp_command() -> tuple[list[str], dict[str, str]] | None:
-    """The command and env of the first stdio server of mcp.json (${PLUGIN_ROOT} expanded), or None."""
-    servers = pp.mcp_config().get("mcpServers") or {}
-    if not servers:
-        return None
-    _, server = next(iter(servers.items()))
-    if not isinstance(server, dict) or not server.get("command"):
-        return None
-    command = [shutil.which(server["command"]) or server["command"]] + [pp.expand_plugin_root(a) for a in server.get("args") or []]
-    return command, dict(server.get("env") or {})
+def mcp_command() -> tuple[list[str], dict[str, str]]:
+    """The command and env of the server in mcp.json (${PLUGIN_ROOT} expanded)."""
+    server = json.loads((PLUGIN / "mcp.json").read_text(encoding="utf-8"))["mcpServers"][MCP_SERVER]
+    args = [a.replace("${PLUGIN_ROOT}", str(PLUGIN)) for a in server["args"]]
+    return [shutil.which(server["command"]) or server["command"]] + args, dict(server.get("env") or {})
 
 
 def mcp_folder() -> Path | None:
-    regs = pp.mcp_registrations()
-    folder = next(iter(regs.values()), None) if regs else None
-    return folder if folder is not None and (folder / "pyproject.toml").is_file() else None
+    folder = PLUGIN / "mcp-servers" / MCP_SERVER
+    return folder if (folder / "pyproject.toml").is_file() else None
 
 
 class ToolError(AssertionError):

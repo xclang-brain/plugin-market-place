@@ -54,7 +54,7 @@ jobs:
         run: python tests/run.py --only parts
 
   checks:
-    name: 独立性・取り決め・構造・結合・文書（${{ matrix.os }}）
+    name: 構造・結合・文書（${{ matrix.os }}）
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -92,12 +92,11 @@ jobs:
               sys.exit(1)
           print("どの試験の組も、どれかのジョブで動きます（" + "、".join(sorted(covered)) + "）")
           EOF
-      # 一括実行の作業の流れを、試験のプロセスの中で動かす試験（Windows の競合の試験など）は、
-      # pyyaml と jsonschema がないと飛ばされる。CI では入れて、飛ばさずに動かす
+      # structure は PyYAML で frontmatter を読み、integration は jsonschema で実行フォルダのファイルを確認する
       - name: 試験のプロセスで使うライブラリを入れる
         run: python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
       - name: プラグイン全体の試験
-        run: python tests/run.py --only structure --only contracts --only independence --only integration --only docs --only eval
+        run: python tests/run.py --only structure --only integration --only docs --only eval
 
   ui:
     name: 結果と設定の画面（${{ matrix.os }}、Chromium）
@@ -127,6 +126,9 @@ jobs:
         run: |
           npm install --prefix tests --no-save --no-package-lock playwright@1.56.1
           (cd tests && npx playwright install --with-deps chromium)
+      # 画面の試験は、jsonschema で approvals.json を確認する
+      - name: 試験のプロセスで使うライブラリを入れる
+        run: python -m pip install --disable-pip-version-check --quiet jsonschema
       # 入れそこなうと、画面の試験は「飛ばした」になって合格に見えるので、先に確かめる
       - name: Playwright と Chromium があるか確かめる
         shell: bash

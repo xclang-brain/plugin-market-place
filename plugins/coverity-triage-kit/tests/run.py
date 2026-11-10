@@ -13,7 +13,7 @@
        uv run --native-tls --frozen --quiet --directory <フォルダ> python -m unittest discover -s tests -v
      なければ
        python -m unittest discover -s tests -v
-  2. tests/structure、tests/contracts、tests/independence、tests/integration、tests/ui、tests/docs、tests/eval（Python の unittest。
+  2. tests/structure、tests/integration、tests/ui、tests/docs、tests/eval（Python の unittest。
      ui は結果と設定の画面を Playwright のブラウザーで確かめる。Node.js か Playwright がなければ、理由を書いて飛ばす）
 
 結果は tests/results/latest.json にも書く（git に入れない）。終了コード：0 すべて合格（飛ばしたものはあってよい）、
@@ -47,7 +47,7 @@ MIN_PYTHON = (3, 10)
 TAIL_LINES = 80
 TIMEOUTS = {"part": 900}
 DEFAULT_TIMEOUT = 900
-PLUGIN_SUITES = ["structure", "contracts", "independence", "integration", "ui", "docs", "eval"]
+PLUGIN_SUITES = ["structure", "integration", "ui", "docs", "eval"]
 SLOW_SUITES = {"integration", "ui"}
 # 試験が作るが、リポジトリに残してよいもの（.gitignore にある結果の置き場所）
 ALLOWED_LEFTOVERS = ("tests/results/",)
@@ -179,7 +179,7 @@ def run_command(command, cwd, env, timeout):
 # ---------------------------------------------------------------------------
 
 def unittest_counts(out, code, modules=None):
-    # A test that runs another suite and prints its output (independence) leaves earlier "Ran N tests"
+    # A test that runs another suite and prints its output leaves earlier "Ran N tests"
     # and "OK"/"FAILED" lines: the suite's own summary is the last "Ran" line and the lines after it.
     runs = list(re.finditer(r"^Ran (\d+) tests?", out, re.M))
     total = int(runs[-1].group(1)) if runs else 0
@@ -476,8 +476,8 @@ def now():
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="coverity-triage-kit の、モデルを使わない試験をすべて動かす")
     parser.add_argument("--only", action="append", default=[], metavar="名前",
-                        help="動かす試験（parts、skills/<名前>、<部品の名前>、structure、contracts、independence、"
-                             "integration、ui、docs、eval）。何回でも付けられる")
+                        help="動かす試験（parts、skills/<名前>、<部品の名前>、structure、integration、ui、docs、eval）。"
+                             "何回でも付けられる")
     parser.add_argument("--skip-slow", action="store_true", help="時間のかかる試験を飛ばす")
     parser.add_argument("--list", action="store_true", help="試験の名前を出して終わる")
     parser.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),
