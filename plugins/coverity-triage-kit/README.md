@@ -36,7 +36,7 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | [1. 警告を1件、AI に調べてもらう](docs/guide/1-skill.md) | インストールして、警告1件の情報を伝えて調査を頼む | 頼んだことだけ（1段階目） | 15分 |
 | [2. Coverity に接続して、1件を任せる](docs/guide/2-agent.md) | 対話で接続を設定し、CID を伝えてトリアージを任せる | 1件の調査から修正案・逸脱コメント案まで（2段階目） | 30分 |
 | [3. まとめてトリアージして、反映する](docs/guide/3-batch.md) | 条件に合う警告を一括で処理し、画面で確認して反映する | 複数件の一括処理（3段階目） | 30分〜 |
-| [4. 画面で進み具合と結果を確認する](docs/guide/4-screen.md) | `/coverity-gui` で画面を開き、進み具合を見て、警告ごとに修正か逸脱かを選ぶ | 3の確認と選択を、画面で行う（4段階目） | 10分 |
+| [4. 画面で進み具合と結果を確認する](docs/guide/4-screen.md) | 画面を開き、進み具合を見て、警告ごとに修正か逸脱かを選ぶ | 3の確認と選択を、画面で行う（4段階目） | 10分 |
 
 ## 必要なもの
 
@@ -46,22 +46,22 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | uv（Python と必要なライブラリを自動で用意するツール） | `uv --version` |
 | git または svn | `git --version` / `svn --version` |
 | Coverity Connect のアカウントと認証キー | ブラウザーで Coverity にログインできること |
-| `cov-build`・`cov-analyze`・`cov-commit-defects`（最初に解析も行う場合だけ） | `/coverity-setup`（最初の解析を使う設定のとき、コマンドが PATH にあるかを確認します） |
+| `cov-build`・`cov-analyze`・`cov-commit-defects`（最初に解析も行う場合だけ） | `/coverity-triage-kit:coverity-setup`（最初の解析を使う設定のとき、コマンドが PATH にあるかを確認します） |
 
 ## 日常の使い方（チュートリアルを終えた人向け）
 
 ```text
-/coverity-run High だけ 20 件     ← AI がトリアージする
-/coverity-gui                     ← 結果を確認して、警告ごとに選ぶ
-/coverity-apply                   ← 選んだ結果を反映する
+/coverity-triage-kit:coverity-run High だけ 20 件     ← AI がトリアージする
+/coverity-triage-kit:coverity-gui                     ← 結果を確認して、警告ごとに選ぶ
+/coverity-triage-kit:coverity-apply                   ← 選んだ結果を反映する
 ```
 
 | コマンド | 用途 |
 | --- | --- |
-| `/coverity-setup` | 接続と設定を対話で用意する（最初の1回。設定の変更にも使う） |
-| `/coverity-run` | 一括トリアージを実行する |
-| `/coverity-gui` | 設定・進み具合・結果の画面を開く |
-| `/coverity-apply` | 承認した結果を Coverity とリポジトリに反映する |
+| `/coverity-triage-kit:coverity-setup` | 接続と設定を対話で用意する（最初の1回。設定の変更にも使う） |
+| `/coverity-triage-kit:coverity-run` | 一括トリアージを実行する |
+| `/coverity-triage-kit:coverity-gui` | 設定・進み具合・結果の画面を開く |
+| `/coverity-triage-kit:coverity-apply` | 承認した結果を Coverity とリポジトリに反映する |
 
 ## 文書
 
@@ -77,5 +77,5 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 ## 補足
 
 - AI が行うのは提案までです。作業中のソースコードと Coverity は、あなたが承認して反映するまで変更されません。
-- 4つの段階は、それぞれ単独で使えます。たとえば、スキルだけ、エージェントだけを取り出して使うこともできます。
+- どの段階も、上の段階を使わずに単独で使えます。
 - MIT License です（[LICENSE](LICENSE)）。

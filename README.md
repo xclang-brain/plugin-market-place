@@ -22,7 +22,7 @@ copilot plugin install <プラグインの名前>@plugin-market-place
 | [weekly-sales-report](plugins/weekly-sales-report/) | 毎週の売上データ（sales.csv）から、部長に出す週報 weekly_report.md を作る | 0.1.0 |
 | [embedded-debug-loop](plugins/embedded-debug-loop/) | 組み込み機器の C/C++ の不具合を、スキルを使って機器で試すことを繰り返して調べ、直す。スキルだけ、作業エージェントだけ、統括エージェントと Web管理画面つき、の3つの段階で使える | 0.4.0 |
 | [coverity-warning-triage](plugins/coverity-warning-triage/) | Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作る（C / C++、標準・MISRA・CERT）。既存のプラグイン coverity-triage を plugin-creator で作り直したもの | 0.1.0 |
-| [coverity-triage-kit](plugins/coverity-triage-kit/) | Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作る（C / C++、標準・MISRA・CERT）。スキルや MCP サーバー1つ、作業エージェント1つ、一括のトリアージ、Web管理画面つき、の4つの段階で使える | 0.2.0 |
+| [coverity-triage-kit](plugins/coverity-triage-kit/) | Coverity Connect の警告をトリアージし、警告ごとに修正案と逸脱コメント案の両方を作る（C / C++、標準・MISRA・CERT）。スキルと MCP サーバー、作業エージェント、一括トリアージ、結果を確認する画面の4つの段階で使える | 0.3.0 |
 | [ng-repro-pick](plugins/ng-repro-pick/) | 試験部門から毎週届く試験結果の Excel と試験仕様書の Word から、最初に実機の台で再現させる NG を1つ選び、pick.md のメモにする | 0.1.0 |
 | [handoff-compare-report](plugins/handoff-compare-report/) | 病棟の申し送りの3つの形（AI なし／AI が全体を下書き／事実の欄だけ AI）の机上の比較で、形ごとに漏れや時間を数え、結論つきの比較報告 compare_report.md を作る | 0.1.0 |
 | [embedded-debug-kit](plugins/embedded-debug-kit/) | 組み込み機器の C/C++ の不具合を、AI が実機で試しながら直す。スキル、作業エージェント、統括・検証エージェント、Web管理画面の4つの段階で使える。Claude Code でも使える | 0.1.0 |

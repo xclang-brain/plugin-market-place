@@ -7,8 +7,9 @@
 流れは「実行する → 確認して選ぶ → 反映する」の3つです。
 
 ```text
-/coverity-run   →   /coverity-gui   →   /coverity-apply
- AI が調べる        人が確認して選ぶ       選んだ結果を反映する
+/coverity-triage-kit:coverity-run     AI が調べる
+/coverity-triage-kit:coverity-gui     人が確認して選ぶ
+/coverity-triage-kit:coverity-apply   選んだ結果を反映する
 ```
 
 ## 1. 少ない件数で実行する
@@ -16,7 +17,7 @@
 リポジトリで Copilot CLI を起動し、次のように入力します。
 
 ```text
-/coverity-run 3 件だけ
+/coverity-triage-kit:coverity-run 3 件だけ
 ```
 
 AI が Coverity から未分類の警告を3件取得し、1件ずつトリアージします。実行中に、ファイルの書き込みやコマンドの許可を求められたら、「このセッションでは許可」を選んでください。
@@ -36,10 +37,10 @@ AI が Coverity から未分類の警告を3件取得し、1件ずつトリア�
 ## 2. 結果を確認して、警告ごとに選ぶ
 
 ```text
-/coverity-gui
+/coverity-triage-kit:coverity-gui
 ```
 
-ブラウザーで結果の画面が開きます。「結果」タブに、警告の一覧が確信度の低い順に並びます。
+ブラウザーで画面が開きます。「結果」タブに、警告の一覧が確信度の低い順に並びます。
 
 | 列 | 内容 |
 | --- | --- |
@@ -61,7 +62,7 @@ AI が Coverity から未分類の警告を3件取得し、1件ずつトリア�
 ## 3. 反映する
 
 ```text
-/coverity-apply
+/coverity-triage-kit:coverity-apply
 ```
 
 AI が、反映する内容を件数と ID で表示します。
@@ -78,19 +79,19 @@ AI が、反映する内容を件数と ID で表示します。
 
 ## 4. 件数を増やす、条件を変える
 
-流れが分かったら、対象を広げます。条件は `/coverity-run` の後ろに書くだけです。
+流れが分かったら、対象を広げます。条件は、コマンドの後ろに書くだけです。
 
 ```text
-/coverity-run High だけ 20 件
-/coverity-run MISRA 10 番台だけ
-/coverity-run misra.yaml で
+/coverity-triage-kit:coverity-run High だけ 20 件
+/coverity-triage-kit:coverity-run MISRA 10 番台だけ
+/coverity-triage-kit:coverity-run misra.yaml で
 ```
 
 何も書かなければ、既定の条件（未分類の警告を20件まで）で実行します。毎回使う条件は、条件ファイルとして保存できます。指定できる条件の一覧と、条件ファイルの書き方は [条件の指定](conditions.md) にあります。
 
 ## ここまでで分かったこと
 
-- 一括トリアージは「`/coverity-run` → `/coverity-gui` → `/coverity-apply`」の順に進めます。
+- 一括トリアージは「実行する → 確認して選ぶ → 反映する」の順に進めます。
 - AI が行うのは提案までです。何を反映するかは、画面で人が選びます。
 - 条件は、実行のたびに言葉で指定できます。
 
@@ -103,20 +104,20 @@ AI が、反映する内容を件数と ID で表示します。
 
 ### 補足
 
-- **途中で止まった・止めた場合**：`/coverity-run 前回の続きから` で再開できます。
-- **進み具合を見る**：実行中に `/coverity-gui` を開くと、「監視」タブで状況が分かります。チャットで「進み具合は？」と聞くこともできます。
-- **精度を上げるオプション**：別の AI による結果の検証、同じ原因の警告の統合、修正案のビルド確認を追加できます。`/coverity-setup` で「検証も使いたい」のように頼むと設定できます。時間は長くなります。
+- **途中で止まった・止めた場合**：`/coverity-triage-kit:coverity-run 前回の続きから` で再開できます。
+- **進み具合を見る**：実行中に `/coverity-triage-kit:coverity-gui` で画面を開くと、「監視」タブで状況が分かります。チャットで「進み具合は？」と聞くこともできます。
+- **精度を上げるオプション**：別の AI による結果の検証、同じ原因の警告の統合、修正案のビルド確認を追加できます。`/coverity-triage-kit:coverity-setup` で「検証も使いたい」のように頼むと設定できます。時間は長くなります。
 - **プロジェクト固有の知識を教える**：`.coverity-triage/knowledge.md` に「fatal_error() は戻らない」のような事実や方針を書いておくと、AI が調査の前に読みます。
 - **svn の場合**：「修正」は、ブランチの push の代わりに、作業コピーへ差分を適用します。コミットは人が行います。
 
 ### 無人で実行する
 
-夜間などに無人で実行する場合は、次のように許可を指定して Copilot CLI を起動してから、`/coverity-run` を実行します。出力先がリポジトリの外にあるため、許可を指定しないと、書き込みのたびに Copilot CLI の許可確認で止まります。
+夜間などに無人で実行する場合は、次のように許可を指定して Copilot CLI を起動してから、`/coverity-triage-kit:coverity-run` を実行します。出力先がリポジトリの外にあるため、許可を指定しないと、書き込みのたびに Copilot CLI の許可確認で止まります。
 
 ```text
 copilot --add-dir "<出力先>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect(coverity_check_connection)' --allow-tool 'coverity-connect(coverity_search_issues)' --allow-tool 'coverity-connect(coverity_get_issue_details)' --allow-tool 'coverity-connect(coverity_preview_triage)'
 ```
 
-`<出力先>` の既定は、リポジトリと同じ階層の `coverity-triage-out` です。`/coverity-run` も、開始前に実際のパスを入れたコマンドを表示します。
+`<出力先>` の既定は、リポジトリと同じ階層の `coverity-triage-out` です。`/coverity-triage-kit:coverity-run` も、開始前に実際のパスを入れたコマンドを表示します。
 
-> **Coverity に書き込むツール（`coverity_update_triage`）は、事前に許可しないでください。** サーバー名だけの `--allow-tool 'coverity-connect'` と、すべてを許可する `--allow-all-tools` も、書き込むツールまで許可するので使いません。書き込みは `/coverity-apply` の実行時に、必ず確認が出ます。
+> **Coverity に書き込むツール（`coverity_update_triage`）は、事前に許可しないでください。** サーバー名だけの `--allow-tool 'coverity-connect'` と、すべてを許可する `--allow-all-tools` も、書き込むツールまで許可するので使いません。書き込みは `/coverity-triage-kit:coverity-apply` の実行時に、必ず確認が出ます。

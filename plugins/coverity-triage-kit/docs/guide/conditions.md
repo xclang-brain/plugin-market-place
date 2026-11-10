@@ -6,16 +6,16 @@
 
 | 方法 | 向いている場面 | 操作 |
 | --- | --- | --- |
-| 1. 実行時に言葉で指定する | その場かぎりの条件 | `/coverity-run` の後ろに書く |
+| 1. 実行時に言葉で指定する | その場かぎりの条件 | `/coverity-triage-kit:coverity-run` の後ろに書く |
 | 2. 条件ファイルに保存する | 毎回使う条件、複雑な条件 | 画面で編集する、または YAML を直接書く |
-| 3. 設定を変える | 既定の動作そのものを変えたい | `/coverity-setup` で頼む、または画面で編集する |
+| 3. 設定を変える | 既定の動作そのものを変えたい | `/coverity-triage-kit:coverity-setup` で頼む、または画面で編集する |
 
 ## 1. 実行時に言葉で指定する
 
-`/coverity-run` の後ろに、条件を日本語で書きます。組み合わせることもできます。
+`/coverity-triage-kit:coverity-run` の後ろに、条件を日本語で書きます。組み合わせることもできます。
 
 ```text
-/coverity-run High と Medium だけ、NULL_RETURNS だけ、10 件
+/coverity-triage-kit:coverity-run High と Medium だけ、NULL_RETURNS だけ、10 件
 ```
 
 | 絞り込む対象 | 書き方の例 |
@@ -34,12 +34,12 @@
 | --- | --- |
 | 別の AI に結果を検証させる | 「検証役も使って」 |
 | 同じ原因の警告を1つにまとめる | 「同じ原因はまとめて」 |
-| 修正案をビルドして確認する | 「ビルドして確かめて」 |
+| 修正案をビルドして確認する | 「ビルドして確認して」 |
 | 最初にビルド・解析して Coverity に登録する | 「最初に解析して」 |
 
 ## 2. 条件ファイルに保存する
 
-毎回使う条件は、リポジトリの `.coverity-triage/filters/` に YAML ファイルとして保存します。`/coverity-setup` を実行すると、次の2つが最初から用意されます。
+毎回使う条件は、リポジトリの `.coverity-triage/filters/` に YAML ファイルとして保存します。`/coverity-triage-kit:coverity-setup` を実行すると、次の2つが最初から用意されます。
 
 | ファイル | 内容 |
 | --- | --- |
@@ -48,7 +48,7 @@
 
 ### 画面で作る・編集する
 
-`/coverity-gui` を開き、「設定」タブの「条件」で、条件ファイルの追加と編集ができます。保存の前に、変更内容が一覧で表示されます。
+`/coverity-triage-kit:coverity-gui` で画面を開き、「設定」タブの「条件」で、条件ファイルの追加と編集ができます。保存の前に、変更内容が一覧で表示されます。
 
 ### YAML を直接書く
 
@@ -85,7 +85,7 @@ limit: 50
 これを `.coverity-triage/filters/misra10.yaml` として保存すると、次のように使えます。
 
 ```text
-/coverity-run misra10.yaml で
+/coverity-triage-kit:coverity-run misra10.yaml で
 ```
 
 | 項目 | 書き方 |
@@ -96,14 +96,14 @@ limit: 50
 | `triage` | Coverity のトリアージ欄の値（分類・対応・状態） |
 | `limit` | 件数の上限 |
 
-条件ファイルに書いた条件と、実行時に言葉で指定した条件は、組み合わせて使えます（例：`/coverity-run misra10.yaml で 5 件だけ`）。
+条件ファイルに書いた条件と、実行時に言葉で指定した条件は、組み合わせて使えます（例：`/coverity-triage-kit:coverity-run misra10.yaml で 5 件だけ`）。
 
 ## 3. 設定を変える
 
 既定の動作は、リポジトリの `.coverity-triage/config.yaml` で決まります。変更の方法は2つです。
 
-- **対話で変える**：`/coverity-setup` を実行し、「1回の件数の上限を 50 にして」「検証を既定で使うようにして」のように頼みます。変更内容を表で確認してから保存されます。
-- **画面で変える**：`/coverity-gui` の「設定」タブで編集します。
+- **対話で変える**：`/coverity-triage-kit:coverity-setup` を実行し、「1回の件数の上限を 50 にして」「検証を既定で使うようにして」のように頼みます。変更内容を表で確認してから保存されます。
+- **画面で変える**：`/coverity-triage-kit:coverity-gui` で開く画面の「設定」タブで編集します。
 
 主な設定：
 
