@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = []
+# ///
 """設定したコマンドでビルドし、結果を JSON 1つで標準出力に返す。
 
-使い方：cross_build.py run|check|init [--workdir 作業フォルダ]
+使い方：cross_build.py run|check [--workdir 作業フォルダ]
   run    ビルドする
   check  設定を確かめる（何も作らない）
-  init   設定ファイルをひな形から作る
 終了コード：0＝成功、1＝ビルドの失敗、2＝設定や引数の問題。
-設定は <作業フォルダ>/.<このスキルのフォルダの名前>/config.yaml、ログは同じフォルダの logs/ に置く。
-Python 3.8 以上の標準ライブラリだけで動く。
+設定は <作業フォルダ>/.<このスキルのフォルダの名前>/config.yaml に置く。
+ビルドの出力は、出たそばから標準エラー出力にそのまま書く。
+uv run で動かす。依存パッケージは、先頭の # /// script に書く。
 """
 
 import codecs
 import collections
 import ctypes
-import datetime
 import json
 import locale
 import os
@@ -31,7 +34,6 @@ import traceback
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.basename(SKILL_DIR)  # フォルダの名前を変えてコピーしたら、その名前を使う
-TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 IS_WINDOWS = os.name == "nt"
 
 KEYS = ("source_dir", "shell", "sdk_env", "build_command", "outputs", "timeout_seconds")
@@ -135,14 +137,14 @@ class Problem(Exception):
         self.problems = problems
 
 
-def result(ok, message, config=None, log=None, problems=(), **extra):
-    data = {"ok": ok, "message": message, "problems": list(problems), "config": config, "log": log}
+def result(ok, message, config=None, problems=(), **extra):
+    data = {"ok": ok, "message": message, "problems": list(problems), "config": config}
     data.update(extra)
     return data
 
 
 def parse_args(argv):
-    usage = "使い方：cross_build.py run|check|init [--workdir 作業フォルダ]"
+    usage = "使い方：cross_build.py run|check [--workdir 作業フォルダ]"
     command, workdir, i = None, None, 0
     while i < len(argv):
         arg = argv[i]
@@ -153,27 +155,18 @@ def parse_args(argv):
             i += 1
         elif arg.startswith("--workdir="):
             workdir = arg.split("=", 1)[1]
-        elif arg in ("run", "check", "init") and command is None:
+        elif arg in ("run", "check") and command is None:
             command = arg
         else:
             raise Problem(["引数 {} は使えません。{}".format(arg, usage)])
         i += 1
     if command is None:
-        raise Problem(["run・check・init のどれかを指定してください。" + usage])
+        raise Problem(["run か check を指定してください。" + usage])
     return command, os.path.abspath(os.path.expanduser(workdir or os.getcwd()))
 
 
 def data_dir(workdir):
     return os.path.join(workdir, "." + SKILL)
-
-
-def prepare_dir(path):
-    """フォルダを作り、中身を Git に入れないための .gitignore を、ほかのものより先に置く。"""
-    os.makedirs(path, exist_ok=True)
-    ignore = os.path.join(path, ".gitignore")
-    if not os.path.exists(ignore):
-        with open(ignore, "w", encoding="utf-8") as f:
-            f.write("*\n")
 
 
 def find_shell(shell):
@@ -256,7 +249,8 @@ def read_yaml(lines):
 def load(config, workdir):
     """設定を読み、(値, 問題のリスト) を返す。設定ファイルを読めなければ Problem。"""
     if not os.path.isfile(config):
-        raise Problem(["設定ファイル {} がありません。init で作ってください。".format(config)])
+        raise Problem(["設定ファイル {} がありません。スキルのフォルダの assets/config-template.yaml を写して、"
+                       "値を書いてください。".format(config)])
     try:
         with open(config, encoding="utf-8-sig") as f:  # BOM があっても読める
             entries = read_yaml(f.read().split("\n"))
@@ -360,19 +354,6 @@ def command_exists(word, s):
     return s["shell"] == "cmd" and shutil.which(word, path=s["source_dir"]) is not None
 
 
-def cmd_init(workdir):
-    data = data_dir(workdir)
-    config = os.path.join(data, "config.yaml")
-    if not os.path.isdir(workdir):
-        raise Problem(["作業フォルダ {} がありません。".format(workdir)])
-    if os.path.exists(config):
-        return 0, result(True, "設定ファイルはもうあります。変えていません。", config, created=False)
-    prepare_dir(data)
-    shutil.copyfile(TEMPLATE, config)
-    return 0, result(True, "設定ファイルを作りました。build_command と outputs を書いてから、check で確かめてください。",
-                     config, created=True)
-
-
 def cmd_check(workdir):
     config = os.path.join(data_dir(workdir), "config.yaml")
     s, problems = load(config, workdir)
@@ -421,10 +402,10 @@ def decode(raw):
 
 
 class Scanner:
-    """出力を1行ずつ読んでログに書き、エラー・警告らしい行と最後の行を集める。"""
+    """出力を1行ずつ読んで out（標準エラー出力）に書き、エラー・警告らしい行と最後の行を集める。"""
 
-    def __init__(self, log):
-        self.log = log
+    def __init__(self, out):
+        self.out = out
         self.lock = threading.Lock()
         self.stopped = False
         self.errors, self.warnings = [], []
@@ -436,8 +417,18 @@ class Scanner:
             with self.lock:
                 if self.stopped:
                     return
-                self.log.write(line + "\n")
+                self.echo(line)
                 self.add(line)
+
+    def echo(self, line):
+        """出たそばから書く。書けなくなっても（閉じられたときなど）、読むのは続ける。"""
+        if self.out is None:
+            return
+        try:
+            self.out.write(line + "\n")
+            self.out.flush()
+        except (OSError, ValueError):
+            self.out = None
 
     def add(self, line):
         short = line.strip()[:LINE_CHARS]
@@ -537,9 +528,9 @@ def windows_job(proc):
     return lambda: None
 
 
-def execute(s, log):
-    """sdk_env とビルドのコマンドを1つのシェルで動かし、出力をログに書く。"""
-    scan = Scanner(log)
+def execute(s):
+    """sdk_env とビルドのコマンドを1つのシェルで動かし、出力を標準エラー出力に書く。"""
+    scan = Scanner(sys.stderr)
     r = {"start_error": None, "exit_code": None, "stopped": None, "loaded": False, "duration": 0.0, "scan": scan}
     tmp = tempfile.mkdtemp(prefix="build-")
     try:
@@ -614,19 +605,6 @@ def lock_run(data):
     return f
 
 
-def new_log(data):
-    logs = os.path.join(data, "logs")
-    os.makedirs(logs, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    n = 1
-    while True:
-        path = os.path.join(logs, stamp + ("" if n == 1 else "-{}".format(n)) + ".log")
-        try:
-            return path, open(path, "x", encoding="utf-8", buffering=1)
-        except FileExistsError:
-            n += 1
-
-
 def run_message(s, r, names, outputs):
     scan = r["scan"]
     rc = r["exit_code"]
@@ -654,7 +632,7 @@ def run_message(s, r, names, outputs):
             return "コマンドが見つかりません：「{}」。PC にインストールされているかと、PATH と sdk_env を確かめてください。".format(line)
         msg = "ビルドが失敗しました（終了コード {}）。".format(rc)
         msg += ("最初のエラーは「{}」です。".format(scan.errors[0]) if scan.errors
-                else "ログの最後（tail）を確かめてください。")
+                else "出力の最後（tail）を確かめてください。")
         if not_found:
             msg += "コマンドが見つからないという行もあります：「{}」。".format(not_found[0])
         return msg
@@ -677,30 +655,15 @@ def cmd_run(workdir):
     if problems:
         return 2, result(False, "設定に問題があるため、ビルドしませんでした。" + "".join(problems), config,
                          problems=problems)
-    data = data_dir(workdir)
-    prepare_dir(data)
-    lock = lock_run(data)
+    lock = lock_run(data_dir(workdir))
     if lock is None:
         return 1, result(False, "同じ作業フォルダで、ほかの run が動いています。ビルドしませんでした。"
                                 "それが終わってから、もう一度動かしてください。", config)
     names = s["outputs"]
     paths = [os.path.normpath(os.path.join(s["source_dir"], os.path.expanduser(n))) for n in names]
     before = [stat_of(p) for p in paths]
-    log_path, log = new_log(data)
-    with lock, log:
-        log.write("\n".join([
-            "{} のログ".format(SKILL),
-            "開始：{}".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            "設定ファイル：{}".format(config),
-            "source_dir：{}".format(s["source_dir"]),
-            "shell：{}（{}）".format(s["shell"], s["shell_program"]),
-            "sdk_env：{}".format(s["sdk_env"] or "なし"),
-            "build_command：{}".format(s["build_command"]),
-            "outputs：{}".format("、".join(names)),
-            "timeout_seconds：{:g}".format(s["timeout_seconds"]),
-            "---- ビルドの出力 ----",
-            ""]))
-        r = execute(s, log)
+    with lock:
+        r = execute(s)
         outputs = []
         for p, old in zip(paths, before):
             now = stat_of(p)
@@ -709,20 +672,14 @@ def cmd_run(workdir):
         message = run_message(s, r, names, outputs)
         ok = (r["exit_code"] == 0 and (r["loaded"] or not s["sdk_env"])
               and all(o["exists"] for o in outputs))
-        log.write("---- ここまで ----\n終了コード：{}　{:.1f} 秒{}\n".format(r["exit_code"], r["duration"], {
-            "timeout": "　時間切れ", "interrupted": "　途中で止められた"}.get(r["stopped"], "")))
-        for o in outputs:
-            log.write("{}：{}\n".format(o["path"], "{} バイト　{}".format(o["size"], o["elf_machine"] or "")
-                                         if o["exists"] else "ありません"))
-        log.write("結果：{}\n".format(message))
     scan = r["scan"]
     return (0 if ok else 1), result(
-        ok, message, config, log_path, exit_code=r["exit_code"],
+        ok, message, config, exit_code=r["exit_code"],
         duration_seconds=round(r["duration"], 1), timed_out=r["stopped"] == "timeout", error_lines=scan.errors,
         warning_lines=scan.warnings, tail=list(scan.tail), outputs=outputs)
 
 
-COMMANDS = {"run": cmd_run, "check": cmd_check, "init": cmd_init}
+COMMANDS = {"run": cmd_run, "check": cmd_check}
 
 
 def stop_on_signal(signum, frame):

@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = []
+# ///
 """ファイルを FTP で機器に送る。
 
-  ftp_deploy.py run|check|init [--workdir 作業フォルダ]
+  uv run ftp_deploy.py run|check [--workdir 作業フォルダ]
 
-設定は <作業フォルダ>/.<スキルの名前>/config.yaml、ログは同じフォルダの logs/ に置く。
+設定は <作業フォルダ>/.<スキルの名前>/config.yaml に置く。
 標準出力には結果の JSON を1つだけ、ASCII で書く。
+進み具合と機器の答えは、出たそばから標準エラー出力に1行ずつ書く。ファイルには残さない。
 終了コード：0 成功、1 作業の失敗、2 設定や引数の問題。
-Python 3.8 以上の標準ライブラリだけで動く。
+uv run で動かす。依存パッケージは、先頭の # /// script に書く。
 """
 
 import argparse
-import datetime
 import errno
 import ftplib
 import json
 import math
 import os
 import re
-import shutil
 import socket
 import ssl
 import sys
@@ -26,10 +29,9 @@ import traceback
 # スキルの名前は、このスクリプトのフォルダの親の名前。名前を変えて写せば、その名前になる。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL_NAME = os.path.basename(SKILL_DIR)
-TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 KEYS = ("host", "port", "user", "password", "password_env", "passive", "tls",
         "files", "remote_dir", "file_mode", "timeout_seconds")
-USAGE = "使い方：ftp_deploy.py run|check|init [--workdir 作業フォルダ]"
+USAGE = "使い方：ftp_deploy.py run|check [--workdir 作業フォルダ]"
 MASK = "***"
 BLOCK_SIZE = 64 * 1024
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -71,32 +73,11 @@ def mask(text):
     return text
 
 
-class Log(object):
-    """ログのファイル（UTF-8）。開いていなければ何も書かない（check は何も作らない）。"""
-
-    def __init__(self):
-        self.path = None
-        self.fh = None
-
-    def open(self, path):
-        self.fh = open(path, "x", encoding="utf-8")
-        self.path = path
-
-    def __call__(self, text):
-        if self.fh is None:
-            return
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for line in str(text).splitlines() or [""]:
-            self.fh.write("%s %s\n" % (stamp, line))
-        self.fh.flush()
-
-    def close(self):
-        if self.fh is not None:
-            self.fh.close()
-            self.fh = None
-
-
-LOG = Log()
+def LOG(text):
+    """進み具合や機器の答えを、標準エラー出力に1行ずつ書く。機器の答えは、mask を通してから渡す。"""
+    for line in str(text).splitlines() or [""]:
+        sys.stderr.write(line + "\n")
+    sys.stderr.flush()
 
 
 def log_failure(e):
@@ -107,17 +88,6 @@ def log_failure(e):
 
 def data_dir(workdir):
     return os.path.join(workdir, "." + SKILL_NAME)
-
-
-def prepare_data_dir(workdir):
-    """設定とログのフォルダを作る。中に何かを書く前に、中身を Git に入れない .gitignore を置く。"""
-    path = data_dir(workdir)
-    os.makedirs(path, exist_ok=True)
-    ignore = os.path.join(path, ".gitignore")
-    if not os.path.exists(ignore):
-        with open(ignore, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("*\n")
-    return path
 
 
 # --- 設定ファイル（YAML）を読む。設定を持つスキルは、どれも同じ中身を持つ ------------------------
@@ -176,7 +146,7 @@ def read_yaml(lines):
 def read_config(path):
     """設定の項目を辞書で返す。リストの値は、1行に1つずつ並べた文字列にする。読めなければ Stop（終了コード 2）。"""
     if not os.path.isfile(path):
-        raise Stop("設定ファイル %s がありません。init で作ってから、値を書いてください。" % path, 2)
+        raise Stop("設定ファイル %s がありません。スキルのフォルダの assets/config-template.yaml を写して、値を書いてください。" % path, 2)
     try:
         with open(path, encoding="utf-8-sig") as fh:  # BOM があっても読める
             entries = read_yaml(fh.read().split("\n"))
@@ -526,41 +496,6 @@ def checked_settings(raw, workdir, result, need_files):
     return s
 
 
-def open_log(workdir):
-    try:
-        logs = os.path.join(prepare_data_dir(workdir), "logs")
-        os.makedirs(logs, exist_ok=True)
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        for n in range(1, 100):  # 同じ秒に何度も動かしたときは、名前に -2、-3… を付ける
-            try:
-                LOG.open(os.path.join(logs, "%s-%s%s.log" % (SKILL_NAME, stamp, "-%d" % n if n > 1 else "")))
-                return
-            except FileExistsError:
-                pass
-    except OSError as e:
-        raise Stop("ログのファイルを作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
-                   % (e.strerror or e))
-
-
-def cmd_init(workdir, result):
-    config = result["config"]
-    result["created"] = False
-    if os.path.exists(config):
-        result.update(ok=True, message="設定ファイル %s はもうあるので、そのままにしました。" % config)
-        return 0
-    if not os.path.isfile(TEMPLATE):
-        raise Stop("ひな形 %s がありません。スキルのフォルダがそろっているかを確かめてください。" % TEMPLATE)
-    try:
-        prepare_data_dir(workdir)
-        shutil.copyfile(TEMPLATE, config)
-    except OSError as e:
-        raise Stop("設定ファイル %s を作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
-                   % (config, e.strerror or e))
-    result.update(ok=True, created=True,
-                  message="設定ファイル %s を作りました。各項目のすぐ上のコメントを読んで、値を書いてください。" % config)
-    return 0
-
-
 def cmd_check(workdir, result):
     result.update(notes=[], remote_dir=None)
     s = checked_settings(read_config(result["config"]), workdir, result, need_files=False)
@@ -596,8 +531,6 @@ def cmd_check(workdir, result):
 def cmd_run(workdir, result):
     result.update(files=[], remote_dir=None)
     raw = read_config(result["config"])
-    open_log(workdir)
-    result["log"] = LOG.path
     LOG("run を始めます。設定ファイル：%s" % result["config"])
     s = checked_settings(raw, workdir, result, need_files=True)
     ftp = connect(s)
@@ -630,16 +563,18 @@ class Parser(argparse.ArgumentParser):
 
 def main(argv=None):
     parser = Parser(prog="ftp_deploy.py", add_help=False)
-    parser.add_argument("command", choices=("run", "check", "init"))
+    parser.add_argument("command", choices=("run", "check"))
     parser.add_argument("--workdir")
-    result = {"ok": False, "message": "", "problems": [], "config": None, "log": None}
+    result = {"ok": False, "message": "", "problems": [], "config": None}
+    if hasattr(sys.stderr, "reconfigure"):  # Windows でも、日本語を UTF-8 で書く
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     try:
         args = parser.parse_args(argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
         result["config"] = os.path.join(data_dir(workdir), "config.yaml")
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir, 2)
-        code = {"run": cmd_run, "check": cmd_check, "init": cmd_init}[args.command](workdir, result)
+        code = {"run": cmd_run, "check": cmd_check}[args.command](workdir, result)
     except Stop as e:
         result["ok"] = False
         result["message"] = e.message
@@ -649,12 +584,9 @@ def main(argv=None):
     except Exception as e:
         LOG(mask(traceback.format_exc()))
         result["ok"] = False
-        result["message"] = "思わぬエラーで止まりました（%s: %s）。" % (type(e).__name__, mask(e))
-        if LOG.path:
-            result["message"] += "ログ %s を見てください。" % LOG.path
+        result["message"] = "思わぬエラーで止まりました（%s: %s）。標準エラー出力を見てください。" % (type(e).__name__, mask(e))
         code = 1
     LOG(result["message"])
-    LOG.close()
     sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     return code
