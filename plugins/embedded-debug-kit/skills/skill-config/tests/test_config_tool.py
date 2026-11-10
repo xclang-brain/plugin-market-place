@@ -122,7 +122,7 @@ class Project(object):
 
 
 def tree(folder):
-    return sorted(os.path.relpath(os.path.join(d, n), folder) for d, dirs, files in os.walk(folder)
+    return sorted(os.path.relpath(os.path.join(d, n), folder).replace(os.sep, "/") for d, dirs, files in os.walk(folder)
                   for n in dirs + files)
 
 
