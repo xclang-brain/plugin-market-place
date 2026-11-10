@@ -15,17 +15,16 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 | 3 | 統括エージェントと検証エージェント | 作業と合否の判定を別のエージェントに分け、合格するまで試行を繰り返す | [debug-orchestrator](docs/guide/3-debug-orchestrator.md) |
 | 4 | Web管理画面 | 統括エージェントへの依頼文を作り、進み具合と結果をブラウザーで見る | [debug-dashboard](docs/guide/4-debug-dashboard.md) |
 
-## 呼び方（GitHub Copilot CLI）
+スキルと作業エージェントは、自分で作ったものに交換できます（[部品を交換する](docs/guide/5-replace-parts.md)）。
 
-| 段階 | 文で依頼する | 名前を指定して呼ぶ |
-| --- | --- | --- |
-| 1 スキル | 「ビルドして」のように依頼すると、AI がスキルを選ぶ | `/embedded-debug-kit:<スキルの名前> <依頼>` |
-| 2 作業エージェント | 指定して使う（右の欄） | `copilot --agent embedded-debug-kit:device-debugger` で起動するか、起動してから `/agent` で選ぶ |
-| 3 統括エージェント | できない | `copilot --agent embedded-debug-kit:debug-orchestrator` で起動するか、起動してから `/agent` で選ぶ |
-| 4 Web管理画面 | できない（利用者が呼んだときだけ動く） | `/embedded-debug-kit:debug-dashboard` |
+## GitHub Copilot CLI での呼び方
 
-- 使えるスキルは `/skills`、エージェントは `/agent`、読み込まれた部品の全体は `/env` で見られます。
-- スキルや作業エージェントを別のものに替える手順は、[部品を交換する](docs/guide/5-replace-parts.md)にあります。
+| 段階 | 呼び方 |
+| --- | --- |
+| 1 | 「ビルドして」のように依頼する。スキルを指定するときは、`/embedded-debug-kit:<スキルの名前> <依頼>` |
+| 2 | `copilot --agent embedded-debug-kit:device-debugger` で起動する。起動した後なら、`/agent` で選ぶ |
+| 3 | `copilot --agent embedded-debug-kit:debug-orchestrator` で起動する。起動した後なら、`/agent` で選ぶ |
+| 4 | `/embedded-debug-kit:debug-dashboard` |
 
 ## 必要なもの
 
@@ -52,7 +51,7 @@ claude plugin marketplace add xclang-brain/plugin-market-place
 claude plugin install embedded-debug-kit@plugin-market-place
 ```
 
-スキルだけなら、プラグインをインストールせずに、スキルのフォルダをプロジェクトにコピーしても使えます。やり方は、各スキルの使い方にあります。
+スキルは、`skills/<スキルの名前>/` フォルダを、CLI のスキルの置き場所にコピーするだけでも使えます。フォルダの名前を変えるときは、SKILL.md の `name` も同じ名前にします。設定とログのフォルダは、`.<新しい名前>/` になります。
 
 ## フォルダの構成
 
@@ -75,7 +74,7 @@ python3 -m unittest discover -s tests/docs -v
 claude plugin validate .
 ```
 
-各スキルをテストするときは、スキルのフォルダで `python3 -m unittest discover -s tests` を動かします。
+各スキルをテストするときは、スキルのフォルダで `python3 -m unittest discover -s tests` を動かします。ftp-deploy は、先に `python3 -m pip install -r tests/requirements.txt` を動かします。
 通しのテスト（`tests/e2e/run_e2e.py`）と `claude plugin eval .` は、AI の利用料がかかります。
 
 ## してはいけないこと

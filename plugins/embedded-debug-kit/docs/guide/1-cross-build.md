@@ -6,45 +6,24 @@ SDK の環境設定スクリプト（`sdk_env`）を読み込んでから、設�
 
 ## 必要なもの
 
-- Python 3.8 以上。ほかにインストールするものはありません。
+- Python 3.8 以上。
 - ビルドに使うツール（make など）と、機器の SDK（クロスツールチェーン）。
 - シェル。Windows は cmd（既定）、PowerShell、Git for Windows の bash のどれか。ほかの OS では bash（既定）か PowerShell（pwsh）。
-
-## インストール
-
-プラグインとしてインストールしたときは、何もしなくても使えます。
-
-プラグインなしで使うときは、`skills/cross-build/` フォルダを次のどれかにコピーして、CLI を起動し直します。`tests/` はコピーしなくてもかまいません。
-
-| CLI | 1つのプロジェクトで使う | どのプロジェクトでも使う |
-| --- | --- | --- |
-| GitHub Copilot CLI | `<プロジェクト>/.github/skills/cross-build/` | `~/.copilot/skills/cross-build/` |
-| Claude Code | `<プロジェクト>/.claude/skills/cross-build/` | `~/.claude/skills/cross-build/` |
-
-`~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
-フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。設定とログのフォルダも `.<新しい名前>/` になります。
 
 ## 依頼のしかた
 
 1. 「cross-build の設定ファイルを作って」と依頼します。`<作業フォルダ>/.cross-build/config.ini` ができます。
 2. 設定ファイルに値を書きます（[設定](#設定)）。機器向けにビルドするなら、`sdk_env` も書きます。
-3. 「ビルドの設定を確かめて」と依頼します。フォルダやコマンドがあるかを見ます。ビルドせず、ファイルも作りません。
+3. 「ビルドの設定を確かめて」と依頼します。フォルダやコマンドがあるかだけを見ます。
 4. 「ビルドして」と依頼します。
 
 作業フォルダは、CLI を起動したフォルダです。
 
-### スキルを名前で指定して呼ぶ
-
-ふつうは、上のように依頼すれば、AI がこのスキルを選びます。
-確実にこのスキルを使わせたいときは、スラッシュコマンドで呼びます。後ろに依頼を続けて書けます。
+スキルを指定して呼ぶときは、スラッシュコマンドを使います。後ろに、依頼を続けて書けます。
 
 ```text
 /embedded-debug-kit:cross-build ビルドして
 ```
-
-- プラグインなしでコピーしたスキルは、`/cross-build` で呼びます。
-- Claude Code では、`/cross-build` で呼びます。
-- 使えるスキルの一覧は、`/skills` で見られます。
 
 ## 設定
 
@@ -71,7 +50,7 @@ outputs =
     build/my_app.map
 ```
 
-`.cross-build/` には、中身が `*` の `.gitignore` を置きます。設定とログは Git に入りません。
+`.cross-build/` には、設定とログを Git から外すための `.gitignore` を置きます。
 
 ## 結果とログ
 
@@ -79,7 +58,6 @@ outputs =
 失敗したら、起きたことと、主なエラーの行と、確かめることを伝えます。
 
 ビルドするたびに、`.cross-build/logs/` にログ（UTF-8）が1つできます。ビルドの出力がすべて入ります。
-設定を確かめたときは、ログを作りません。
 
 ## 困ったとき
 
@@ -98,17 +76,6 @@ outputs =
 | cmd がネットワークのフォルダ（`\\` で始まる）で動けない | フォルダをドライブに割り当てるか、`shell` を powershell か bash にする |
 
 WSL の中の SDK を使うときは、`sdk_env` を空にし、`build_command` を `wsl bash -c ". /opt/sdk/environment-setup-xxx && make"` のようにします。
-
-## テストの動かし方
-
-スキルのフォルダで、次を動かします（Windows では `python3` を `py -3` に替えます）。
-
-```sh
-python3 -m unittest discover -s tests
-```
-
-テストは、偽のビルドのコマンド（`tests/fake_build.py`）を使います。ほかにインストールするものはなく、外のネットワークも使いません。
-PowerShell（pwsh か powershell）がなければ、PowerShell のテストは飛ばします。
 
 ## してはいけないこと
 
