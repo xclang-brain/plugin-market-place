@@ -1,10 +1,10 @@
 """段階の独立性を確認するテスト（仕様 REQ-001、REQ-003、REQ-101、REQ-202）。
 
-- 1段階目のコンポーネント（スキルと MCP サーバー）：フォルダの中に、上の段階の言葉と、フォルダの外を指すパスがない。
-  sys.path でフォルダの外を読まない。tests/ と evals/ をフォルダの中に持つ。
+- 1段階目のコンポーネント（スキルと MCP サーバー）：フォルダの中に、上の段階の言葉、エージェントの名前、
+  フォルダの外を指すパスがない。sys.path でフォルダの外を読まない。tests/ と evals/ をフォルダの中に持つ。
 - エージェント（Copilot CLI の .agent.md と、Claude Code の agents/<名前>.md の両方）：自分の名前を書かない。
   tools の MCP のツールは、「## 使う部品」の表の MCP サーバーのものだけ。4段階目の言葉を書かない。
-  2段階目の作業エージェントは、3段階目の言葉を書かない。
+  2段階目の作業エージェントは、3段階目の言葉と、統括・検証・統合のエージェントの名前を書かない。
 - 一括実行が書く指示ファイル：作業・検証・統合の3つの役割に渡され、実行フォルダかリポジトリの中だけを指す。
   一時フォルダのリポジトリで、取得済みの警告の一覧から実行を作り、決まった動作の偽のエージェントで最後まで流して確認する。
 
@@ -32,7 +32,9 @@ STAGE3_WORDS_JA = ["統括", "検証エージェント", "統合エージェン�
 
 
 def upper_patterns():
-    return [(w, re.compile(re.escape(w))) for w in UPPER_WORDS_JA] + [(w, pp.token(w)) for w in UPPER_WORDS_EN]
+    """上の段階の言葉と、エージェントの名前"""
+    return ([(w, re.compile(re.escape(w))) for w in UPPER_WORDS_JA] + [(w, pp.token(w)) for w in UPPER_WORDS_EN]
+            + [(n, pp.name_token(n)) for n in (pp.ORCHESTRATOR, *pp.ROLES.values())])
 
 
 def outside_patterns():
@@ -201,6 +203,7 @@ class AgentIndependence(unittest.TestCase):
         """2段階目の作業役は、3段階目（統括・検証・統合のエージェント）のことを書かない"""
         paths = [(kind, kind_path(pp.ROLES["worker"], kind)) for kind in KINDS]
         patterns = [(w, re.compile(re.escape(w))) for w in STAGE3_WORDS_JA] + [(w, pp.token(w)) for w in UPPER_WORDS_EN[2:]]
+        patterns += [(n, pp.name_token(n)) for n in (pp.ORCHESTRATOR, pp.ROLES["reviewer"], pp.ROLES["integrator"])]
         found = []
         for kind, path in paths:
             found += pp.hits_in_text(pp.rel(path), scan_text(path, kind), patterns)

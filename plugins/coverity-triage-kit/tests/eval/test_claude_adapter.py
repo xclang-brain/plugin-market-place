@@ -451,9 +451,11 @@ class EncodingTest(unittest.TestCase):
         self.assertFalse(json.loads(text)["ok"])
 
 
-@unittest.skipUnless(any(REAL_AGENTS.glob("*.agent.md")), "このプラグインにエージェントの定義がない")
 class RealAgentsTest(unittest.TestCase):
     """The real definitions can be read and converted; names come from their tables."""
+
+    def setUp(self):
+        self.assertTrue(any(REAL_AGENTS.glob("*.agent.md")), "このプラグインにエージェントの定義がない")
 
     def test_each_definition_converts(self):
         for path in sorted(REAL_AGENTS.glob("*.agent.md")):
@@ -815,8 +817,8 @@ class RealClaudePluginTest(unittest.TestCase):
     """The real Claude Code definitions (agents/<name>.md) build a temporary plugin of their parts only."""
 
     def setUp(self):
-        if not (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").is_file() or not REAL_CLAUDE_AGENTS.is_dir():
-            self.skipTest("Claude Code の形（.claude-plugin/plugin.json と agents/）がない")
+        self.assertTrue((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").is_file() and REAL_CLAUDE_AGENTS.is_dir(),
+                        "Claude Code の形（.claude-plugin/plugin.json と agents/）がない")
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name).resolve()
         self.ws = self.base / "ws"

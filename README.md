@@ -31,8 +31,6 @@ weekly-sales-report は、plugin-creator の試験で作った見本です。AI 
 
 coverity-warning-triage は、plugin-creator の作り直しの試験で作りました。元のプラグイン coverity-triage（[coverity-triage-agent](https://github.com/xclang-brain/coverity-triage-agent)、MIT License）の部品を流用しています。plugin-creator の問いには、利用者の代わりに AI（Claude）が、元のプラグインの資料をもとに答えました。
 
-coverity-triage-kit と coverity-warning-triage は、スキルの名前が同じなので、どちらか一方だけを入れてください。
-
 ng-repro-pick は、plugin-creator のアイデア創出スキル（make-idea）で作ったアイデアを題材にした、plugin-creator の試験で作りました。AI が演じたユーザー（組み込みファームウェアの担当者）と plugin-creator が会話して作りました。中に出てくる人の名前、試験の項目、数は、架空のものです。
 
 handoff-compare-report も、make-idea で作ったアイデア（AI の申し送りを入れる前に、AI なしの良い形と並べて3つの形を比べる）を題材にした、plugin-creator の試験で作りました。AI が演じたユーザー（病院の看護の質の担当者）と plugin-creator が会話して作りました。中に出てくる患者、病棟、数は、架空のものです。医療の判断に使うものではありません。

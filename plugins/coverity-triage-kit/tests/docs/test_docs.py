@@ -103,7 +103,7 @@ class LinkTest(unittest.TestCase):
                 dest = (doc.parent / file_part).resolve() if file_part else doc
                 if not dest.exists():
                     problems.append(f"{pp.rel(doc)}: {target}（ファイルがありません）")
-                elif anchor and dest.is_file() and dest.suffix in (".md", ".markdown") and anchor not in pp.heading_slugs(dest):
+                elif anchor and dest.is_file() and dest.suffix == ".md" and anchor not in pp.heading_slugs(dest):
                     problems.append(f"{pp.rel(doc)}: {target}（見出しがありません）")
         self.assertEqual(problems, [], "\n".join(problems))
 

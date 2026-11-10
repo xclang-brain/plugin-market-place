@@ -72,8 +72,7 @@ class ManifestTest(unittest.TestCase):
 
     def test_mcp_json_matches_the_official_schema(self):
         path = pp.ROOT / "mcp.json"
-        if not path.is_file():
-            self.skipTest("mcp.json がありません")
+        self.assertTrue(path.is_file(), "mcp.json がありません")
         data = json.loads(pp.read(path))
         self.assertEqual(pp.schema_errors(data, self.schema("mcp.schema.json")), [], "mcp.json が公式の schema に合いません")
         plugin = json.loads(pp.read(pp.ROOT / "plugin.json"))
@@ -88,8 +87,7 @@ class ManifestTest(unittest.TestCase):
     def test_mcp_servers_start_from_their_folder(self):
         """stdio の command は1語。--directory（か cwd）は ${PLUGIN_ROOT}/mcp-servers/<フォルダ> を指し、そのフォルダがある"""
         servers = pp.mcp_config().get("mcpServers") or {}
-        if not servers:
-            self.skipTest("mcp.json に MCP サーバーがありません")
+        self.assertTrue(servers, "mcp.json に MCP サーバーがありません")
         for name, server in servers.items():
             with self.subTest(server=name):
                 if server.get("type") != "stdio":
@@ -106,8 +104,7 @@ class ManifestTest(unittest.TestCase):
     def test_mcp_servers_receive_credentials(self):
         """Copilot CLI は MCP サーバーに PATH のほかの環境変数を渡さないので、mcp.json の env で渡す（設計書 3.2）"""
         servers = pp.mcp_config().get("mcpServers") or {}
-        if not servers:
-            self.skipTest("mcp.json に MCP サーバーがありません")
+        self.assertTrue(servers, "mcp.json に MCP サーバーがありません")
         for name, server in servers.items():
             with self.subTest(server=name):
                 env = server.get("env") or {}
@@ -311,8 +308,7 @@ class AgentTest(unittest.TestCase):
 
     def test_agents_folder_holds_only_definitions(self):
         """agents/ の .md は、Copilot CLI がすべてエージェントの定義として読む"""
-        if not pp.AGENTS_DIR.is_dir():
-            self.skipTest("com.github.copilot/agents/ がまだありません")
+        self.assertTrue(pp.AGENTS_DIR.is_dir(), "com.github.copilot/agents/ がありません")
         for path in pp.AGENTS_DIR.iterdir():
             with self.subTest(file=path.name):
                 self.assertTrue(path.is_file(), f"agents/ の中にフォルダ {path.name} があります")
@@ -320,8 +316,7 @@ class AgentTest(unittest.TestCase):
 
     def test_frontmatter(self):
         files = pp.agent_files()
-        if not files:
-            self.skipTest("エージェントの定義がまだありません")
+        self.assertTrue(files, "エージェントの定義がありません")
         servers = set((pp.mcp_config().get("mcpServers") or {}))
         for path in files:
             with self.subTest(agent=path.name):
@@ -380,8 +375,7 @@ class ClaudeCodeTest(unittest.TestCase):
         """.mcp.json は mcp.json と同じサーバー・コマンド・引数（${PLUGIN_ROOT} → ${CLAUDE_PLUGIN_ROOT}）・env の鍵。
         env の値は ${名前:-}（Claude Code は、ない環境変数の ${名前} をそのままの文字で渡す）"""
         copilot = pp.mcp_config().get("mcpServers") or {}
-        if not copilot:
-            self.skipTest("mcp.json に MCP サーバーがありません")
+        self.assertTrue(copilot, "mcp.json に MCP サーバーがありません")
         self.assertTrue(pp.CLAUDE_MCP.is_file(), ".mcp.json がありません")
         data = pp.load_json(pp.CLAUDE_MCP)
         self.assertIsInstance(data, dict, ".mcp.json が JSON の object ではありません")
@@ -416,8 +410,7 @@ class ClaudeCodeTest(unittest.TestCase):
         """plugin-dev の決まり：name はファイルの名前（3〜50 文字、小文字・数字・ハイフン）、description は
         「Use this agent when」で始める、model と color は決まった値、tools と disallowedTools は「A, B」の文字列"""
         files = pp.claude_agent_files()
-        if not files:
-            self.skipTest("agents/ にエージェントがありません")
+        self.assertTrue(files, "agents/ にエージェントがありません")
         for path in files:
             with self.subTest(agent=path.name):
                 data, body, problem = pp.frontmatter(path)
@@ -591,8 +584,7 @@ class SchemaToolTest(unittest.TestCase):
 
     def test_write_back_tool_is_found(self):
         """この MCP サーバーの書き戻しのツールが、今の見つけ方で見つかる（見つからないと、書き戻しの守りの試験が黙って外れる）"""
-        if not pp.mcp_registrations():
-            self.skipTest("MCP サーバーがありません")
+        self.assertTrue(pp.mcp_registrations(), "MCP サーバーがありません")
         self.assertTrue(any(pp.write_back_tools().values()),
                         "書き戻しのツール（destructiveHint=True）が MCP サーバーに見つかりません")
 

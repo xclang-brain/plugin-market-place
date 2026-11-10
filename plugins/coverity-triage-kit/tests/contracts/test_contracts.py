@@ -380,8 +380,7 @@ class CasesTest(unittest.TestCase):
             for folder in part_folders():
                 for path in copies_in(folder, contract):
                     found.append((contract_name(contract), path, canonical is not None and path.resolve() == canonical.resolve()))
-        if not found:
-            self.skipTest("共通の試験のデータがまだありません")
+        self.assertTrue(found, "共通の試験のデータがありません")
         return found
 
     def check_case(self, kind, case):
@@ -442,8 +441,7 @@ class CasesTest(unittest.TestCase):
 
     def token_cases(self):
         path = cases_path("token")
-        if path is None:
-            self.skipTest("確認の文字列の試験のデータがまだありません")
+        self.assertIsNotNone(path, "確認の文字列の試験のデータがありません")
         return json.loads(pp.read(path)).get("cases", [])
 
     def test_token_cases_follow_the_rule(self):
@@ -458,8 +456,7 @@ class CasesTest(unittest.TestCase):
         entries の case は、ここ（関数）でだけ確かめる（MCP サーバーのツールは、知らない鍵と空の entries を、入力の誤りとして断る）"""
         entry = next((e for e in CONTRACTS if Path(e[0]).name == "plantoken.py"), None)
         canonical = owner_copy(entry[0], entry[1]) if entry else None
-        if canonical is None:
-            self.skipTest("確認の文字列の関数（持ち主のスクリプト）がまだありません")
+        self.assertIsNotNone(canonical, "確認の文字列の関数（持ち主のスクリプト）がありません")
         cases = self.token_cases()
         paths = [canonical] + [p for f in part_folders() for p in copies_in(f, entry[0]) if p.resolve() != canonical.resolve()]
         for n, path in enumerate(paths):
@@ -506,8 +503,7 @@ class SchemaContentTest(unittest.TestCase):
                 if found:
                     path = found[0]
                     break
-        if path is None:
-            self.skipTest(f"{contract} がまだありません")
+        self.assertIsNotNone(path, f"{contract} がありません")
         return json.loads(pp.read(path))
 
     def test_plan_schema_embeds_the_result_definitions(self):
@@ -897,12 +893,10 @@ class WriterReaderTest(unittest.TestCase):
         if shutil.which("uv") is None:
             self.skipTest("uv がありません")
         servers = pp.mcp_config().get("mcpServers") or {}
-        if not servers:
-            self.skipTest("mcp.json に MCP サーバーがありません")
+        self.assertTrue(servers, "mcp.json に MCP サーバーがありません")
         name, server = next(iter(servers.items()))
         folder = pp.mcp_registrations().get(name)
-        if folder is None or not (folder / "pyproject.toml").is_file():
-            self.skipTest("MCP サーバーのフォルダがまだありません")
+        self.assertTrue(folder and (folder / "pyproject.toml").is_file(), "MCP サーバーのフォルダがありません")
         return name, server
 
     def client(self, home):

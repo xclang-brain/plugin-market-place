@@ -67,7 +67,7 @@ PARTS = {
 }
 
 TEXT_SUFFIXES = {
-    ".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".mjs", ".js", ".cjs",
+    ".md", ".py", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".mjs", ".js", ".cjs",
     ".html", ".css", ".txt", ".sh", ".ps1", ".xml", ".ini", ".cfg", ".patch", ".c", ".h", ".cpp", ".hpp",
 }
 # 作られたもの・他者のもの（言葉の確かめから外す）
