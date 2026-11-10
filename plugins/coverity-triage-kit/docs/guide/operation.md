@@ -1,6 +1,6 @@
-# Copilot CLI ガイド（運用のリファレンス）
+# 運用ガイド
 
-GitHub Copilot CLI で coverity-triage-kit を運用するときに必要になる情報をまとめています。使い方は、[チュートリアル](1-skill.md) を順に進めると分かります。この文書は、必要になった節だけ読んでください。
+coverity-triage-kit を運用するときに必要になる情報をまとめています。使い方は、[チュートリアル](1-skill.md) を順に進めると分かります。この文書は、必要になった節だけ読んでください。
 
 | 知りたいこと | 節 |
 | --- | --- |
@@ -66,7 +66,7 @@ copilot --add-dir "<出力先>" --allow-tool 'shell(uv:*)' --allow-tool write --
 | 症状 | 原因と対処 |
 | --- | --- |
 | 「Coverity の警告をトリアージして」と頼んでも、Web管理画面の URL が表示されない | エクステンションが読み込まれていません。①試験的機能が無効：`copilot --experimental` で起動し直す。②読み込み時の確認を拒否した：Copilot CLI を再起動して許可する。③`/extensions mode` が Disabled：Load & Augment に戻す |
-| 意図しないスキルが使われる | 同名のスキルが他にも入っていないかを `/skills list` で確認する（coverity-warning-triage と併用していないか） |
+| 意図しないスキルが使われる | 同名のスキルが他にも入っていないかを `/skills list` で確認する |
 | Coverity に接続できない、設定のエラーが出る | `/coverity-help` に症状を伝える。`/coverity-selftest` で診断できる |
 
 ## 改善の Issue を起票する

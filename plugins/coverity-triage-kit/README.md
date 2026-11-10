@@ -1,6 +1,6 @@
 # coverity-triage-kit
 
-Coverity Connect の警告を AI がトリアージし、警告ごとに「修正案」と「逸脱コメント案」の両方を用意するプラグインです。対象は C / C++（標準チェッカー、MISRA、CERT）です。GitHub Copilot CLI と Claude Code で使えます。
+Coverity Connect の警告を AI がトリアージし、警告ごとに「修正案」と「逸脱コメント案」の両方を用意するプラグインです。GitHub Copilot CLI 用で、対象は C / C++（標準チェッカー、MISRA、CERT）です。
 
 あなたが行うのは、AI の結果を見て、警告ごとに「修正する」か「逸脱として扱う」かを選ぶことです。選んだ結果は、コマンド1つで Coverity とリポジトリに反映できます。
 
@@ -38,8 +38,6 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | [3. まとめてトリアージして、反映する](docs/guide/3-batch.md) | 条件に合う警告を一括で処理し、画面で確認して反映する | 複数件の一括処理（3段階目） | 30分〜 |
 | [4. Web管理画面で実行する](docs/guide/4-screen.md) | 画面で条件を選び、進み具合を見ながら実行する | 3に、操作と監視の画面を追加（4段階目） | 10分 |
 
-Claude Code で使う場合は、先に [Claude Code ガイド](docs/guide/claude-code.md) でインストール方法を確認してください。ステップ1〜3は同じように進められます。
-
 ## 日常の使い方（チュートリアルを終えた人向け）
 
 ```text
@@ -63,8 +61,7 @@ Claude Code で使う場合は、先に [Claude Code ガイド](docs/guide/claud
 | --- | --- |
 | 使い方を覚える | チュートリアル：[ステップ1](docs/guide/1-skill.md) → [2](docs/guide/2-agent.md) → [3](docs/guide/3-batch.md) → [4](docs/guide/4-screen.md) |
 | 対象の警告を絞り込む、設定を変える | [条件の指定](docs/guide/conditions.md) |
-| 無人で実行する、トラブルに対処する | [Copilot CLI ガイド](docs/guide/copilot-cli.md) |
-| Claude Code で使う | [Claude Code ガイド](docs/guide/claude-code.md) |
+| 無人で実行する、トラブルに対処する | [運用ガイド](docs/guide/operation.md) |
 | 個々の機能を詳しく知る | [作業エージェント](com.github.copilot/agents/triage-worker.README.markdown)・[統括エージェント](com.github.copilot/agents/triage-orchestrator.README.markdown)・各スキルの README（[skills/](skills/)）・[MCP サーバー](mcp-servers/coverity-connect/README.md) |
 | 変更点を確認する | [変更履歴](CHANGELOG.md) |
 | 開発に参加する | [憲章](docs/constitution.md)・[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[コンポーネント一覧](docs/parts.md)・[テスト](tests/README.md) |
@@ -73,5 +70,5 @@ Claude Code で使う場合は、先に [Claude Code ガイド](docs/guide/claud
 
 - AI が行うのは提案までです。作業中のソースコードと Coverity は、あなたが承認して反映するまで変更されません。
 - 4つの段階は、それぞれ単独で使えます。たとえば、スキルだけ、エージェントだけを取り出して使うこともできます。
-- [coverity-warning-triage](../coverity-warning-triage/) の後継です。スキル名が重なるため、インストールするのはどちらか一方にしてください。
-- MIT License です（[LICENSE](LICENSE)）。多くのスクリプトと資料は、coverity-warning-triage（MIT License）をもとにしています。
+- Claude Code でも、1〜3段階目を同じように使えます（4段階目は Copilot CLI だけ）。`claude plugin marketplace add xclang-brain/plugin-market-place` と `claude plugin install coverity-triage-kit@plugin-market-place` でインストールします。起動方法と、無人実行のための許可は、[統括エージェントの README](com.github.copilot/agents/triage-orchestrator.README.markdown) の「Claude Code で使う」にあります。
+- MIT License です（[LICENSE](LICENSE)）。

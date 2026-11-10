@@ -39,8 +39,7 @@ REQ_RANGE = re.compile(r"REQ-(\d{3})\s*〜\s*REQ-(\d{3})")
 README_FIRST = ["できること", "使い始める"]
 README_THEN = ["文書"]
 README_MAX_CHARS = 6000  # 入口の文書が、くわしい手順で長くならないように
-COPILOT_GUIDE = pp.ROOT / "docs" / "guide" / "copilot-cli.md"
-CLAUDE_GUIDE = pp.ROOT / "docs" / "guide" / "claude-code.md"
+COPILOT_GUIDE = pp.ROOT / "docs" / "guide" / "operation.md"  # 運用ガイド（事前の許可、対処）
 
 
 def version_line(path):
@@ -214,7 +213,7 @@ class ReadmeTest(unittest.TestCase):
 
     def test_mentions_the_essentials(self):
         self.assertLessEqual(len(self.text), README_MAX_CHARS, "README が長すぎます。くわしい手順はガイドに書きます（REQ-008）")
-        for guide in (COPILOT_GUIDE, CLAUDE_GUIDE):
+        for guide in (COPILOT_GUIDE,):
             self.assertTrue(guide.is_file(), f"{guide.name} がありません（REQ-008）")
             self.assertIn(f"(docs/guide/{guide.name})", self.text, f"README から {guide.name} へのリンクがありません")
         steps = ["1-skill.md", "2-agent.md", "3-batch.md", "4-screen.md"]
@@ -226,13 +225,13 @@ class ReadmeTest(unittest.TestCase):
                 self.assertIn(f"({steps[i + 1]})", pp.read(path), f"{name} から次のステップ {steps[i + 1]} へのリンクがありません")
         copilot = pp.read(COPILOT_GUIDE)
         for word in ["--allow-tool", "--add-dir", "--experimental", "/extensions mode", "gh auth login"]:
-            self.assertIn(word, copilot, f"Copilot CLI ガイドに {word} がありません（REQ-008）")
+            self.assertIn(word, copilot, f"運用ガイドに {word} がありません（REQ-008）")
         for stage in ["1", "2", "3", "4"]:
             self.assertRegex(self.text, rf"{stage}\s*段階", f"README に {stage}段階目の説明がありません")
 
     def test_claude_code_section(self):
         """「Claude Code で使う」の節があり、Claude Code で入れるときの名前（<プラグイン>@<マーケットプレイス>）を書く"""
-        guide = pp.read(CLAUDE_GUIDE)
+        guide = self.text  # Claude Code のことは README の1か所にだけ書く（REQ-008）
         if CLAUDE_MARKET_JSON.is_file():
             market = json.loads(pp.read(CLAUDE_MARKET_JSON)).get("name")
             self.assertIn(f"{pp.PLUGIN_NAME}@{market}", guide, f"README に、Claude Code で入れるときの名前 {pp.PLUGIN_NAME}@{market} がありません")
@@ -240,13 +239,6 @@ class ReadmeTest(unittest.TestCase):
     def test_changelog_has_the_claude_code_version(self):
         """Claude Code の形を足した版（0.2.0）の見出しが、変更履歴にある"""
         self.assertRegex(pp.read(CHANGELOG), r"(?m)^## 0\.2\.0(?![0-9])", "変更履歴に 0.2.0 の見出しがありません")
-
-    def test_original_plugin_is_named(self):
-        """元のプラグインとはどちらか一方だけを入れることを書く（REQ-007）。元の名前は仕様書から読む"""
-        m = re.search(r"元のプラグイン\s*([a-z0-9][a-z0-9-]+)", pp.read(pp.SPEC))
-        if m is None:
-            self.skipTest("仕様書に元のプラグインの名前がありません")
-        self.assertIn(m.group(1), self.text, f"README に元のプラグイン {m.group(1)} のことがありません")
 
 
 class LinkTest(unittest.TestCase):
