@@ -1,0 +1,12 @@
+schema_version: "1.1"
+name: false-positive-callers-all-safe
+expected_outcome: |
+  関数の中だけなら経路が成立するが、buf_append は static で、呼び出し元は src/textbuf.c の 3 か所
+  （25 行と 30 行は文字列リテラル、38 行は 35〜37 行で NULL を除外した name）だけなので、s が NULL になる経路はない。
+  src/report.c の write_report() は user_name() の NULL を textbuf_name() に渡しうるが、textbuf_name() が NULL のときに
+  -1 を返すので、buf_append には到達しない。判定は誤検知（false_positive）で、根拠に 3 か所の呼び出し元を相対パスと行で挙げる。
+  呼び出し元がすべてリポジトリにあり、コードで確認したので、確信度は高。推奨は逸脱、または小さく安全な修正のどちらか1つ。
+  逸脱コメントは「誤検知。」で始まり、条件を付けずに理由と場所を述べる。修正コードは、動作を変えない防御的なチェックの差分か、
+  修正コードがない理由を示す。設定ファイルがないので、ファイルは変更せず、チャットで回答する。
+context:
+  scaffold_script: place-files.sh
