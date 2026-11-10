@@ -36,7 +36,7 @@
 - `recording` がない、2 分より古い、またはシンボリックリンクである。
 - `.debug-dashboard/` か、その中のフォルダがシンボリックリンクである。
 - CLI を、画面を起動したのと違うフォルダで起動した。作業フォルダは、Claude Code では `CLAUDE_PROJECT_DIR`、Copilot CLI では `COPILOT_PROJECT_DIR` で決まる。Copilot CLI では、Git のリポジトリの中なら、そのいちばん上のフォルダになる。
-- Python が見つからない（`py` も `python3` もない。Copilot CLI の Windows では、`py` も `python` も `python3` もない）。
+- uv が見つからない。
 - Claude Code の Windows で、`bash` が WSL のもの（`C:\Windows\System32\bash.exe`）になっている。
 - プラグインとしてインストールしていない。Claude Code では、フックを settings.json に写して CLI を起動し直すまで記録しない。Copilot CLI は、プラグインとしてインストールしたときだけ記録する。
 

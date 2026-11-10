@@ -170,7 +170,7 @@ class TemplateTest(unittest.TestCase):
         self.assertEqual((values["sdk_env"], values["build_command"], values["outputs"]), ("", "", ""))
 
 
-MISSING_CONFIG = "設定ファイル {} がありません。スキルのフォルダの assets/config-template.yaml を写して、値を書いてください。"
+MISSING_CONFIG = "設定ファイル {} がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、値を書いてください。"
 
 
 class RenamedCopyTest(unittest.TestCase):

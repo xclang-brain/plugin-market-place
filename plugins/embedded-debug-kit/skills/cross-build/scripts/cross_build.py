@@ -245,7 +245,7 @@ def read_yaml(lines):
 def load(config, workdir):
     """設定を読み、(値, 問題のリスト) を返す。設定ファイルを読めなければ Problem。"""
     if not os.path.isfile(config):
-        raise Problem(["設定ファイル {} がありません。スキルのフォルダの assets/config-template.yaml を写して、"
+        raise Problem(["設定ファイル {} がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、"
                        "値を書いてください。".format(config)])
     try:
         with open(config, encoding="utf-8-sig") as f:  # BOM があっても読める

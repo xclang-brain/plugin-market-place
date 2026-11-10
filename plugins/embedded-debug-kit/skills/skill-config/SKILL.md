@@ -50,7 +50,7 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 | --- | --- |
 | `ok` | 成功したら `true` |
 | `message` | 起きたことと、確かめること。利用者にはこれを伝える |
-| `problems` | 問題の一覧（終了コード 2 のとき） |
+| `problems` | 問題の一覧（終了コード 2 のときと、依存パッケージを入れられなかったとき） |
 | `config` | show と set の結果。設定ファイルの場所 |
 | `skills` | setup の結果。スキルごとの `name`（名前）、`config`（設定ファイルの場所）、`created`（設定ファイルを作ったか）、`packages`（依存パッケージを入れられたか） |
 | `items` | show の結果。項目ごとの情報（下の表） |

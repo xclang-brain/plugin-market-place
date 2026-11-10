@@ -147,7 +147,7 @@ class ConfigTest(Base):
                 self.assertEqual(code, 2)
                 self.assertFalse(result["ok"])
                 self.assertEqual(result["message"],
-                                 "設定ファイル %s がありません。スキルのフォルダの assets/config-template.yaml を写して、"
+                                 "設定ファイル %s がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、"
                                  "値を書いてください。" % self.config)
                 self.assertEqual(result["problems"], [result["message"]])
                 self.assertEqual(self.files(), [])

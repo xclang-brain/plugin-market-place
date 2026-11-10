@@ -142,7 +142,7 @@ def read_yaml(lines):
 def read_config(path):
     """設定の項目を辞書で返す。リストの値は、1行に1つずつ並べた文字列にする。読めなければ Stop（終了コード 2）。"""
     if not os.path.isfile(path):
-        raise Stop("設定ファイル %s がありません。スキルのフォルダの assets/config-template.yaml を写して、値を書いてください。" % path, 2)
+        raise Stop("設定ファイル %s がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、値を書いてください。" % path, 2)
     try:
         with open(path, encoding="utf-8-sig") as fh:  # BOM があっても読める
             entries = read_yaml(fh.read().split("\n"))

@@ -217,7 +217,7 @@ class ConfigTest(Case):
         for command in ("check", "run"):
             code, data = self.run_script(command)
             self.assertEqual((code, data["ok"]), (2, False))
-            self.assertEqual(data["message"], "設定ファイル %s がありません。スキルのフォルダの "
+            self.assertEqual(data["message"], "設定ファイル %s がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの "
                              "assets/config-template.yaml を写して、値を書いてください。" % self.config_path)
             self.assertEqual(data["problems"], [data["message"]])
             self.assertEqual(self.local_listing(), before)
