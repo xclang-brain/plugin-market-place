@@ -1,7 +1,7 @@
 # embedded-debug-kit 仕様書
 
 - バージョン：0.1.0
-- 上位の文書：[憲章](../constitution.md) 1.0.0
+- 上位の文書：[憲章](../constitution.md) 1.1.0
 
 ## 1. 目的
 
