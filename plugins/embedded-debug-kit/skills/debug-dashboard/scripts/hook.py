@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# /// script
-# requires-python = ">=3.8"
-# dependencies = []
-# ///
 """CLI のフックから呼ばれ、依頼・ツールの呼び出し・報告を記録する。停止フラグがあれば、ツールを断る。
 
 使い方：hook.py [イベント] < フックの入力（JSON）

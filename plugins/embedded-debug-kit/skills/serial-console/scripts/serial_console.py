@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.8"
-# dependencies = []
-# ///
 """シリアルで機器のシェルにつなぎ、コマンドを順に動かして、出力と終了コードを返す。
 
   uv run serial_console.py run [--command コマンド]... [--workdir 作業フォルダ]
@@ -13,7 +9,7 @@
 標準出力には結果の JSON を1つだけ、ASCII で書く。
 進み具合と機器の出力は、出たそばから標準エラー出力に UTF-8 で書く（パスワードは伏せる）。
 終了コード：0 成功、1 作業の失敗、2 設定や引数の問題。
-uv run で動かす。依存パッケージは、先頭の # /// script に書く。pyserial 3.5 は同梱している（vendor/serial、BSD ライセンス）。
+uv run で動かす。依存パッケージは、スキルのフォルダの pyproject.toml に書く。pyserial 3.5 は同梱している（vendor/serial、BSD ライセンス）。
 """
 
 import argparse

@@ -19,14 +19,7 @@
 
 1. 設定ファイルのひな形を、スキルのフォルダの `assets/config-template.yaml` に置きます。skill-config は、これを `<ソースのフォルダ>/.<スキルの名前>/config.yaml` に写します。自分のスキルは、写した先のファイルを読みます。
 2. ひな形は、`項目: 値` の形で書きます。各項目のすぐ上に、コメントで説明を書きます。
-3. Python のスクリプトは、スキルのフォルダの `scripts/` に置き、先頭に必要なパッケージを書きます。skill-config は、これを uv で入れます。SKILL.md には、スクリプトを `uv run` で動かすと書きます。
-
-   ```python
-   # /// script
-   # requires-python = ">=3.8"
-   # dependencies = ["pyserial"]
-   # ///
-   ```
+3. Python で必要なパッケージは、スキルのフォルダの `pyproject.toml` に書きます。skill-config は、これを uv で入れます。SKILL.md には、スクリプトを `uv run --project "<スキルのフォルダ>"` で動かすと書きます。
 
 skill-config は、コメントの説明を添えて、項目を1つずつ質問します。コメントに次の語を書くと、質問のしかたが変わります。
 

@@ -8,5 +8,5 @@
 # uv が見つからないときも、hook.py が失敗したときも、0 で終える。
 [ -f "${CLAUDE_PROJECT_DIR:-${COPILOT_PROJECT_DIR:-.}}/.debug-dashboard/recording" ] || exit 0
 script="${BASH_SOURCE[0]%/*}/hook.py"
-uv run --script "$script" "$1" 2>/dev/null
+uv run --project "${BASH_SOURCE[0]%/*}/.." "$script" "$1" 2>/dev/null
 exit 0

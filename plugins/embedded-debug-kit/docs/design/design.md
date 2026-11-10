@@ -73,8 +73,8 @@ CLI の動きを調べた結果は、[実測の記録](measurements.md)に分け
 | --- | --- |
 | 名前 | フォルダの名前と SKILL.md の `name` を同じにする。スクリプトは、フォルダの名前を自分の名前として使う。名前を変えてコピーすると、設定のフォルダも `.<新しい名前>/` になる |
 | SKILL.md | description は「何をするか」と「いつ使うか」だけ。本文は、コマンドの表、結果の読み方、最後に「してはいけないこと」の節。詳しいことは `reference/` に分ける |
-| スクリプト | `scripts/` に置く。必要なパッケージは、スクリプトの先頭の `# /// script` に書く（PEP 723）。uv が、これを読んで入れる |
-| 呼び方 | `uv run "<このスキルのフォルダ>/scripts/…"`。Windows でもほかでも同じ |
+| スクリプト | `scripts/` に置く。必要なパッケージは、スキルのフォルダの `pyproject.toml` に書く。版は `uv.lock` で固定する |
+| 呼び方 | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/…"`。Windows でもほかでも同じ |
 | 最初の引数 | `run`（作業）、`check`（設定を確かめる。何も作らない）。`--workdir` で作業フォルダを指定できる |
 | 結果 | 標準出力に JSON を1つ。共通の項目は `ok`・`message`・`problems`・`config`（設定ファイルの場所） |
 | 出力 | ビルドの出力、機器の出力、進み具合は、標準エラー出力にそのまま出す。ファイルには残さない。残すかどうかは、呼ぶ側（作業エージェント）が決める |
@@ -96,7 +96,7 @@ YAML の読み取りは、Python の標準ライブラリにない。使う書�
 | cross-build | ビルドのコマンドを動かし、結果と、できたファイルの有無・更新の有無・サイズ・ELF の種類を返す。時間切れのときは、子プロセスも止める | `source_dir`、`sdk_env`、`build_command`、`outputs`、`timeout_seconds` |
 | ftp-deploy | ファイルを FTP で機器に送る。一時的な名前で送り、サイズを確かめてから名前を変える。必要なら権限を変える（SITE CHMOD）。送り先は `remote_dir` の中だけ。`tls` で FTPS も選べる | `host`、`port`、`user`、`password`、`files`、`remote_dir`、`file_mode`、`tls` |
 | serial-console | シリアルで機器のシェルにつなぎ、必要ならログインし、コマンドを順に動かして、出力と終了コードを返す。動かすコマンドは、設定の `commands`、`--command`、`--stdin`（1行に1つ）のどれかで渡す | `port`、`baud`、`login_user`、`login_password`、`prompt`、`commands` |
-| skill-config | ほかのスキルを使う準備をする。隣のスキルのひな形から `<作業フォルダ>/.<名前>/config.yaml` を作り、コメントを読んで、利用者に質問しながら値を書き込む。隣のスキルのスクリプトに必要なパッケージを、`uv sync --script` で入れる | なし |
+| skill-config | ほかのスキルを使う準備をする。隣のスキルのひな形から `<作業フォルダ>/.<名前>/config.yaml` を作り、コメントを読んで、利用者に質問しながら値を書き込む。隣のスキルに `pyproject.toml` があれば、必要なパッケージを `uv sync --project` で入れる | なし |
 | debug-dashboard | Web管理画面の起動と終了。フックから呼ばれて記録と停止をする（4段階目、8章） | なし |
 
 3章の決まりと違うところ：
@@ -274,7 +274,7 @@ hooks.json に書くコマンドは、イベントごとに次の形にする。
 
 | 決めたこと | 理由 |
 | --- | --- |
-| hook.py は、`uv run --script` で動かす | スキルのスクリプトと同じ動かし方にする |
+| hook.py は、`uv run --project` で動かす | スキルのスクリプトと同じ動かし方にする |
 | Copilot CLI のコマンドは、必ず 0 で終える | Copilot CLI は、PreToolUse のフックが 0 以外で終わるか落ちると、ツールの呼び出しを断る（M8.3） |
 | Claude Code の PreToolUse には、`"onFailure": "continue"` を付ける | Git Bash のない Windows では、フックが PowerShell で動いて失敗し、ツールの呼び出しが止まることがある（M8.1） |
 | hook.ps1 は、ファイルとして動かさず、読んでスクリプトブロックにする | PowerShell の実行ポリシーが `.ps1` の実行を禁じていても動く（Windows の初めの設定は、禁じている） |

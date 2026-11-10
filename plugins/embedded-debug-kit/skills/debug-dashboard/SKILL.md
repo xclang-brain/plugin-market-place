@@ -17,9 +17,9 @@ CLI を起動したフォルダで、`--workdir` を付けずに動かす。フ�
 
 | すること | コマンド |
 | --- | --- |
-| 画面を起動する。もう動いていれば、その URL を返す | `uv run "<このスキルのフォルダ>/scripts/dashboard.py" start` |
-| 画面を終了する。記録が止まり、「実行を止める」も解除される | `uv run "<このスキルのフォルダ>/scripts/dashboard.py" stop` |
-| 動いているかを見る。何も作らない | `uv run "<このスキルのフォルダ>/scripts/dashboard.py" status` |
+| 画面を起動する。もう動いていれば、その URL を返す | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/dashboard.py" start` |
+| 画面を終了する。記録が止まり、「実行を止める」も解除される | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/dashboard.py" stop` |
+| 動いているかを見る。何も作らない | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/dashboard.py" status` |
 
 起動したら、利用者に次のことを伝える。
 

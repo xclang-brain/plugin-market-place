@@ -17,18 +17,18 @@ description: ほかのスキルを使う準備をする。設定ファイル（�
 
 | すること | コマンド |
 | --- | --- |
-| 全部のスキルを準備する。設定ファイルがなければ、ひな形から作る。依存パッケージを入れる | `uv run "<このスキルのフォルダ>/scripts/config_tool.py" setup` |
-| 1つのスキルだけを準備する | `uv run "<このスキルのフォルダ>/scripts/config_tool.py" setup <スキルの名前>` |
-| 項目と今の値を読む。何も作らない | `uv run "<このスキルのフォルダ>/scripts/config_tool.py" show <スキルの名前>` |
-| 1つの項目に値を書く | `uv run "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --stdin` |
-| 1つの項目を空にする | `uv run "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --empty` |
+| 全部のスキルを準備する。設定ファイルがなければ、ひな形から作る。依存パッケージを入れる | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" setup` |
+| 1つのスキルだけを準備する | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" setup <スキルの名前>` |
+| 項目と今の値を読む。何も作らない | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" show <スキルの名前>` |
+| 1つの項目に値を書く | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --stdin` |
+| 1つの項目を空にする | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --empty` |
 
 `--stdin` を付けたら、値を標準入力で渡す。リストの値は、1行に1つずつ書く。
 
 bash：
 
 ```bash
-uv run "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --stdin <<'END'
+uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --stdin <<'END'
 <値>
 END
 ```
@@ -39,7 +39,7 @@ PowerShell（1行目は、日本語などを化けずに渡すため）：
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
 @'
 <値>
-'@ | uv run "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --stdin
+'@ | uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/config_tool.py" set <スキルの名前> <項目> --stdin
 ```
 
 ## 結果

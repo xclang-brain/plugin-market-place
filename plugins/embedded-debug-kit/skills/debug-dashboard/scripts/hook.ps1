@@ -11,6 +11,6 @@ if (-not $project) { $project = '.' }
 if (-not (Test-Path -LiteralPath (Join-Path $project '.debug-dashboard/recording') -PathType Leaf)) { exit 0 }
 $script = Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.py'
 if (Get-Command uv -CommandType Application -ErrorAction SilentlyContinue) {
-    & uv run --script $script $hookEvent 2>$null
+    & uv run --project (Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard') $script $hookEvent 2>$null
 }
 exit 0

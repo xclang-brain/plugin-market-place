@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.8"
-# dependencies = []
-# ///
 """ファイルを FTP で機器に送る。
 
   uv run ftp_deploy.py run|check [--workdir 作業フォルダ]
@@ -11,7 +7,7 @@
 標準出力には結果の JSON を1つだけ、ASCII で書く。
 進み具合と機器の答えは、出たそばから標準エラー出力に1行ずつ書く。ファイルには残さない。
 終了コード：0 成功、1 作業の失敗、2 設定や引数の問題。
-uv run で動かす。依存パッケージは、先頭の # /// script に書く。
+uv run で動かす。依存パッケージは、スキルのフォルダの pyproject.toml に書く。
 """
 
 import argparse

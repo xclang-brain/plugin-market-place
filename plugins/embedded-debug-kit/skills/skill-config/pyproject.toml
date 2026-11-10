@@ -1,0 +1,6 @@
+[project]
+name = "skill-config"
+version = "0.0.0"
+description = "ほかのスキルを使う準備をするスキルのスクリプト"
+requires-python = ">=3.8"
+dependencies = []

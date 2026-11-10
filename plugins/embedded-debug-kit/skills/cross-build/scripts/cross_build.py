@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# /// script
-# requires-python = ">=3.8"
-# dependencies = []
-# ///
 """設定したコマンドでビルドし、結果を JSON 1つで標準出力に返す。
 
 使い方：cross_build.py run|check [--workdir 作業フォルダ]
@@ -12,7 +8,7 @@
 終了コード：0＝成功、1＝ビルドの失敗、2＝設定や引数の問題。
 設定は <作業フォルダ>/.<このスキルのフォルダの名前>/config.yaml に置く。
 ビルドの出力は、出たそばから標準エラー出力にそのまま書く。
-uv run で動かす。依存パッケージは、先頭の # /// script に書く。
+uv run で動かす。依存パッケージは、スキルのフォルダの pyproject.toml に書く。
 """
 
 import codecs

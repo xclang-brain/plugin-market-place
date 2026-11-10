@@ -18,17 +18,17 @@ description: シリアルコンソール（UART・COM ポート）で組み込�
 
 | すること | コマンド |
 | --- | --- |
-| 設定の `commands` を順に動かす | `uv run "<このスキルのフォルダ>/scripts/serial_console.py" run` |
-| 渡したコマンドを順に動かす（設定の `commands` は使わない） | `uv run "<このスキルのフォルダ>/scripts/serial_console.py" run --command 'uname -a' --command 'ls /opt/app'` |
-| 標準入力の1行を1つのコマンドとして、順に動かす（設定の `commands` は使わない） | `uv run "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin` |
-| 設定を確かめる。必要ならログインし、プロンプトが出るまで進める。コマンドは動かさない | `uv run "<このスキルのフォルダ>/scripts/serial_console.py" check` |
+| 設定の `commands` を順に動かす | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/serial_console.py" run` |
+| 渡したコマンドを順に動かす（設定の `commands` は使わない） | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/serial_console.py" run --command 'uname -a' --command 'ls /opt/app'` |
+| 標準入力の1行を1つのコマンドとして、順に動かす（設定の `commands` は使わない） | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin` |
+| 設定を確かめる。必要ならログインし、プロンプトが出るまで進める。コマンドは動かさない | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/serial_console.py" check` |
 
 PowerShell で `"` を含むコマンドと、Windows の Git Bash で `/` で始まるコマンドは、`--command` では正しく渡らない。`--stdin` で渡す。
 
 bash：
 
 ```bash
-uv run "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin <<'END'
+uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin <<'END'
 /opt/app/my_app --selftest
 grep "a b" /var/log/messages
 END
@@ -41,7 +41,7 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 @'
 /opt/app/my_app --selftest
 grep "a b" /var/log/messages
-'@ | uv run "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin
+'@ | uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/serial_console.py" run --stdin
 ```
 
 run は、最長でおよそ「コマンドの数 ×（`command_timeout_seconds` ＋ 5 秒）＋ 1 分」かかる。`command_timeout_seconds` の既定は 30 秒。コマンドを動かすツールの待ち時間は、それより長くする。

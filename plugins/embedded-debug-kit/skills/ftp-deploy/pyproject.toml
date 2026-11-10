@@ -1,0 +1,6 @@
+[project]
+name = "ftp-deploy"
+version = "0.0.0"
+description = "ファイルを FTP で機器に送るスキルのスクリプト"
+requires-python = ">=3.8"
+dependencies = []

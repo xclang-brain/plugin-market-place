@@ -17,8 +17,8 @@ sdk_env（クロスツールチェーンを使えるようにするスクリプ�
 
 | すること | コマンド |
 | --- | --- |
-| ビルドする | `uv run "<このスキルのフォルダ>/scripts/cross_build.py" run` |
-| 設定を確かめる。何も作らない | `uv run "<このスキルのフォルダ>/scripts/cross_build.py" check` |
+| ビルドする | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/cross_build.py" run` |
+| 設定を確かめる。何も作らない | `uv run --project "<このスキルのフォルダ>" "<このスキルのフォルダ>/scripts/cross_build.py" check` |
 
 run は、最長で `timeout_seconds`（既定 480 秒）に 1 分を足した時間かかる。コマンドを動かすツールの待ち時間は、それより長くする。そこまで待てないときは、バックグラウンドで動かし、終わってから結果を読む。
 

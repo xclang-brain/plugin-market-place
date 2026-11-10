@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.8"
-# dependencies = []
-# ///
 """ほかのスキルの設定ファイル <作業フォルダ>/.<スキルの名前>/config.yaml を作り、読み書きする。
 
   config_tool.py setup [<スキルの名前>] [--workdir 作業フォルダ]
@@ -10,16 +6,15 @@
   config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]
 
 setup は、このスキルの隣にあるスキルのうち、assets/config-template.yaml を持つものを準備する。
-  設定ファイルがなければ、ひな形を写して作る。scripts/ のスクリプトの依存パッケージを、uv で入れる。
+  設定ファイルがなければ、ひな形を写して作る。pyproject.toml があれば、依存パッケージを uv で入れる。
 show は、項目ごとに、値と、すぐ上のコメントから読んだこと（必須・秘密・例・選べる値）を返す。何も作らない。
 set は、標準入力の値を1つの項目に書く（--empty なら空にする）。その項目の行だけを書き換え、コメントと並びは残す。
 標準出力には結果の JSON を1つだけ、ASCII で書く。uv の出力は、標準エラー出力に出る。
 終了コード：0 成功、1 書き込みの失敗や思わぬエラー、2 設定ファイルや引数の問題。
-uv run で動かす。依存パッケージは、先頭の # /// script に書く。
+uv run で動かす。依存パッケージは、スキルのフォルダの pyproject.toml に書く。
 """
 
 import argparse
-import glob
 import json
 import locale
 import os
@@ -362,28 +357,19 @@ def cmd_set(path, skill, key, empty, result):
     result.update(ok=True, changed=True, message="設定ファイル %s の %s を書き換えました。" % (path, item.key))
 
 
-def uv_sync(script):
-    """スクリプトの先頭に書いてある依存パッケージを、uv で入れる。問題があれば、その文を返す。"""
+def uv_sync(folder):
+    """スキルのフォルダの pyproject.toml にある依存パッケージを、uv で入れる。問題があれば、その文を返す。"""
     uv = os.environ.get("UV") or shutil.which("uv")
     if not uv:
         return "uv が見つかりません。uv を入れてから、もう一度動かしてください。"
     try:
         env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}  # このスクリプトの環境を、uv に使わせない
-        done = subprocess.run([uv, "sync", "--script", script], stdin=subprocess.DEVNULL, stdout=sys.stderr, env=env)
+        done = subprocess.run([uv, "sync", "--project", folder], stdin=subprocess.DEVNULL, stdout=sys.stderr, env=env)
     except OSError as e:
         return "uv を動かせません（%s）。" % (e.strerror or e)
     if done.returncode != 0:
-        return "%s の依存パッケージを入れられませんでした。標準エラー出力を見てください。" % script
+        return "%s の依存パッケージを入れられませんでした。標準エラー出力を見てください。" % folder
     return None
-
-
-def has_packages(script):
-    """先頭に # /// script を持つスクリプトか。"""
-    try:
-        with open(script, encoding="utf-8") as fh:
-            return any(line.strip() == "# /// script" for line in fh)
-    except (OSError, UnicodeDecodeError):
-        return False
 
 
 def cmd_setup(only, workdir, result):
@@ -407,9 +393,8 @@ def cmd_setup(only, workdir, result):
             except OSError as e:
                 raise Stop("設定ファイル %s を作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
                            % (config, e.strerror or e), 1)
-        scripts = [p for p in sorted(glob.glob(os.path.join(SKILLS_DIR, name, "scripts", "*.py")))
-                   if has_packages(p)]
-        problems = [m for m in map(uv_sync, scripts) if m]
+        skill = os.path.join(SKILLS_DIR, name)
+        problems = [m for m in [uv_sync(skill)] if m] if os.path.isfile(os.path.join(skill, "pyproject.toml")) else []
         result["problems"] += problems
         result["skills"].append({"name": name, "config": config, "created": created, "packages": not problems})
     if result["problems"]:

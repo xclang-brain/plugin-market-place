@@ -1,0 +1,6 @@
+[project]
+name = "debug-dashboard"
+version = "0.0.0"
+description = "Web管理画面のスキルのスクリプト"
+requires-python = ">=3.8"
+dependencies = []
