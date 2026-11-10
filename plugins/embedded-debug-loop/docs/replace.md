@@ -4,40 +4,35 @@
 
 ## スキルを足す
 
-例：役割「電源の入れ直し」のスキル `power-control` を足し、機器が応答しないときに使う。
+例：機器の電源を入れ直すスキル `power-control` を足す。
 
 1. `skills/power-control/` に、新しいスキルのフォルダを置きます。テストに要るパッケージがあれば、`skills/power-control/tests/requirements.txt` に書きます。
-2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の表に、次の行を足します。
-
-   ```text
-   | 電源の入れ直し | `power-control` | 機器が応答しないとき |
-   ```
-
-   「使うとき」の書き方：試すたびに使うなら `試行`（表の上から順に使うので、使う順の位置に入れる）。それ以外は、使う条件を書く。
+   SKILL.md の description には、何をするかと、いつ使うか（例：機器が応答しないとき）を書きます。作業エージェントは、これを見て使うときを決めます。
+2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の一覧に、`` `power-control` `` を足します。
 
 ## スキルを消す
 
 例：`log-capture` を消す。
 
 1. `skills/log-capture/` を消します。
-2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の表から、`` | 機器のログ取得 | `log-capture` | 試行 | `` の行を消します。
+2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の一覧から、`` `log-capture` `` を消します。
 
 ## スキルを置き換える
 
 例：`deploy` を、同じ役割の `flash` に置き換える。
 
 1. `skills/deploy/` を消し、`skills/flash/` を置きます。
-2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の表で、`` `deploy` `` を `` `flash` `` にします。
+2. `com.github.copilot/agents/device-worker.agent.md` の「## 使うスキル」の一覧で、`` `deploy` `` を `` `flash` `` にします。
 
 ## 作業エージェントを置き換える
 
 例：`device-worker` を `host-worker` に置き換える。
 
 1. `com.github.copilot/agents/device-worker.agent.md` を消し、`com.github.copilot/agents/host-worker.agent.md` を置きます。
-2. `com.github.copilot/agents/README.markdown` を、`host-worker` の README に替えます。
+2. `docs/guide/2-device-worker.md` を消し、`host-worker` の使い方を `docs/guide/2-host-worker.md` に書きます。プラグインの README の案内も替えます。
 3. `com.github.copilot/extensions/embedded-debug-loop/defaults.json` の `"worker": "embedded-debug-loop:device-worker"` を `"worker": "embedded-debug-loop:host-worker"` にします。
 
-新しい作業エージェントは、ほかのエージェントからの依頼（ask_user が使えないとき）では、質問も合否の判断もせず、頼みの文が求める形で返します（[仕様書](specs/requirements.md) の REQ-201〜REQ-208）。
+新しい作業エージェントは、ほかのエージェントからの依頼では、頼みの文に書かれた手順と返事の形に従います（[仕様書](specs/requirements.md) の REQ-201〜REQ-208）。
 
 ## 変えた後に確かめる
 

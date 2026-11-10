@@ -1,0 +1,23 @@
+{
+  "name": "embedded-debug-kit",
+  "version": "0.1.0",
+  "description": "組み込み機器の C/C++ の不具合を、AI が実機で試しながら直す。スキル、作業エージェント、統括・検証エージェント、Web管理画面の4つの段階で使える。",
+  "author": {
+    "name": "xclang-brain"
+  },
+  "repository": "https://github.com/xclang-brain/plugin-market-place",
+  "keywords": [
+    "embedded",
+    "debug",
+    "cross-compile",
+    "ftp",
+    "serial"
+  ],
+  "agents": [
+    "./com.anthropic.claude-code/agents/debug-orchestrator.md",
+    "./com.anthropic.claude-code/agents/device-debugger.md",
+    "./com.anthropic.claude-code/agents/debug-verifier.md"
+  ],
+  "hooks": "./com.anthropic.claude-code/hooks/hooks.json",
+  "license": "MIT"
+}

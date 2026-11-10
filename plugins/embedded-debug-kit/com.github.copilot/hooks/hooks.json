@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" UserPromptSubmit || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) UserPromptSubmit } catch { }; exit 0",
+        "timeoutSec": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" PreToolUse || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) PreToolUse } catch { }; exit 0",
+        "timeoutSec": 10
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" SubagentStop || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) SubagentStop } catch { }; exit 0",
+        "timeoutSec": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" Stop || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) Stop } catch { }; exit 0",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

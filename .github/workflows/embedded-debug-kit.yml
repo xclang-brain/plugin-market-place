@@ -1,0 +1,110 @@
+# embedded-debug-kit のテストを、Windows と Linux のマシンで動かす。
+# 利用者の PC は Windows なので、スキルのテストは windows-latest でも動かす。
+# Linux は ubuntu-24.04 に固定する（Python 3.8 を入れられる版）。
+# 部品の名前と、テストに要るパッケージの名前は書かない。
+# スキルは skills/ の下のフォルダから、パッケージは各スキルの tests/requirements.txt から読む。
+# 通しのテスト（tests/e2e）と claude plugin eval は、AI の利用料がかかるので動かさない。
+name: embedded-debug-kit
+
+on:
+  push:
+    paths:
+      - 'plugins/embedded-debug-kit/**'
+      - '.github/workflows/embedded-debug-kit.yml'
+  pull_request:
+    paths:
+      - 'plugins/embedded-debug-kit/**'
+      - '.github/workflows/embedded-debug-kit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  skills:
+    name: スキル（${{ matrix.os }}、Python ${{ matrix.python }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+        # 3.8 は対応する最も古い版。3.x は、そのときの最新の安定版
+        python: ['3.8', '3.12', '3.x']
+    defaults:
+      run:
+        working-directory: plugins/embedded-debug-kit/skills
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      # 各スキルの tests/requirements.txt にあるパッケージ（ないと、それを使うテストは飛ばされる）
+      - name: テストに使うパッケージを入れる
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Directory | ForEach-Object { Join-Path $_.FullName 'tests/requirements.txt' } | Where-Object { Test-Path $_ -PathType Leaf })
+          if ($files.Count -eq 0) {
+            Write-Host 'テストに要るパッケージを書いたスキルはありません。'
+            exit 0
+          }
+          $options = @()
+          foreach ($file in $files) {
+            Write-Host $file
+            $options += @('-r', $file)
+          }
+          python -m pip install --disable-pip-version-check @options
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python -m pip list --disable-pip-version-check
+      # tests/ があるフォルダを、すべて動かす。Windows では、PowerShell と Git Bash を使うテストもここで動く
+      - name: 各スキルのテスト
+        shell: pwsh
+        run: |
+          $failed = @()
+          foreach ($skill in Get-ChildItem -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'tests') }) {
+            Write-Host "::group::$($skill.Name)"
+            Push-Location $skill.FullName
+            python -m unittest discover -s tests -v
+            if ($LASTEXITCODE -ne 0) { $failed += $skill.Name }
+            Pop-Location
+            Write-Host '::endgroup::'
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::テストが通らないスキル：$($failed -join '、')"
+            exit 1
+          }
+
+  plugin:
+    name: 部品の独立性と文書（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: plugins/embedded-debug-kit
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      # 独立性のテストは、スキルのフォルダだけをコピーして、そのテストも動かす。スキルのジョブと同じパッケージを入れる
+      - name: テストに使うパッケージを入れる
+        shell: pwsh
+        working-directory: plugins/embedded-debug-kit/skills
+        run: |
+          $files = @(Get-ChildItem -Directory | ForEach-Object { Join-Path $_.FullName 'tests/requirements.txt' } | Where-Object { Test-Path $_ -PathType Leaf })
+          $options = @()
+          foreach ($file in $files) { $options += @('-r', $file) }
+          if ($options.Count -gt 0) {
+            python -m pip install --disable-pip-version-check @options
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+      - name: 独立性のテスト
+        run: python -m unittest discover -s tests/independence -v
+      # バージョンの一致と、要求の番号（仕様書・設計書・テスト）
+      - name: 文書のテスト
+        run: python -m unittest discover -s tests/docs -v
