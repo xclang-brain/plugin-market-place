@@ -71,7 +71,7 @@ CLI の動きを調べた結果は、[実測の記録](measurements.md)に分け
 
 | 項目 | 決まり |
 | --- | --- |
-| 名前 | フォルダの名前と SKILL.md の `name` を同じにする |
+| 名前 | フォルダの名前と SKILL.md の `name` を同じにする。スクリプトは、フォルダの名前を自分の名前として使う。名前を変えてコピーすると、設定とログのフォルダも `.<新しい名前>/` になる |
 | SKILL.md | description は「何をするか」と「いつ使うか」だけ。本文は、コマンドの表、結果の読み方、最後に「してはいけないこと」の節。詳しいことは `reference/` に分ける |
 | スクリプト | `scripts/` に置く。Python 3.8 以上の標準ライブラリだけを使う。ほかのものは `scripts/vendor/` に同梱する |
 | 呼び方 | Windows は `py -3`、ほかは `python3`。パスは `<このスキルのフォルダ>/scripts/…` と書く |
@@ -282,6 +282,11 @@ hooks.json に書くコマンドは、イベントごとに次の形にする。
 | `*.sh` の改行は、`.gitattributes` で LF に固定する | Windows の Git が改行を CRLF に替えると、bash が読めない |
 | 時間切れは 10 秒にする | 記録が遅れても、ツールの呼び出しを長く待たせない |
 
+Claude Code では、プラグインなしでも使える。次の2つをしてから、CLI を起動し直す。Copilot CLI は、プラグインとしてインストールしたときだけ記録する。
+
+1. `skills/debug-dashboard/` フォルダを、`<プロジェクト>/.claude/skills/debug-dashboard/` にコピーする。フォルダの名前は変えない（フックの設定が、この名前を使う）。
+2. `com.anthropic.claude-code/hooks/hooks.json` の `hooks` の中身を、`<プロジェクト>/.claude/settings.json` の `hooks` に写す。写したら、`${CLAUDE_PLUGIN_ROOT}/skills` を `${CLAUDE_PROJECT_DIR}/.claude/skills` に書き換える。
+
 断るときの出力は、CLI ごとの形にする。Claude Code は `hookSpecificOutput` の `permissionDecision`、Copilot CLI は `permissionDecision` である。どちらの CLI かは、Copilot CLI が渡す環境変数 `COPILOT_CLI` で見分ける。
 
 ### 8.4 記録する内容
@@ -329,6 +334,17 @@ hooks.json に書くコマンドは、イベントごとに次の形にする。
 | 文書 | `tests/docs/` | バージョンの一致（両方のマーケットプレイスを含む）と、要求の追跡 |
 | スキルの選ばれ方 | `skills/<名前>/evals/`、`evals/` | `claude plugin eval` の形（prompt.md と graders/）のケースを、`claude plugin eval .` で動かす。ふつうの依頼から、そのスキルが選ばれるか（スキルのフォルダだけでも動く）。関係のない依頼や Web管理画面を開く依頼で、スキルが選ばれないか |
 | 通しのテスト（E2E） | `tests/e2e/` | 模擬の機器と `claude -p` で、2段階目と3段階目が不具合を直せるか。停止フラグでツールが断られるか。AI の利用料がかかるので、CI では動かさない |
+
+テストの動かし方（プラグインのフォルダで）：
+
+```shell
+python3 -m unittest discover -s tests/independence -v
+python3 -m unittest discover -s tests/docs -v
+claude plugin validate .
+```
+
+- スキルのテストは、スキルのフォルダで `python3 -m unittest discover -s tests` を動かす。ftp-deploy と skill-config は、先に `python3 -m pip install -r tests/requirements.txt` を動かす。
+- 通しのテスト（`tests/e2e/run_e2e.py`）と `claude plugin eval .` は、AI の利用料がかかる。
 
 プラグインの検証には、`claude plugin validate`、plugin-dev の plugin-validator・skill-reviewer・検証スクリプト、skill-creator の検証スクリプトを使う。
 
