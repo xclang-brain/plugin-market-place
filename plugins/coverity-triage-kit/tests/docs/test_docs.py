@@ -6,7 +6,7 @@
 - 部品の名前：仕様書と設計書は、部品を役割で呼ぶ。書いてよいのは取り決めの名前（MCP サーバーの登録名、ツールの名前、
   エクステンションのツールの名前、defaults.json の例、取り決めのファイルの名前）だけ。仕様書は、利用者が打つコマンドとして
   スキルの名前を書いてよい（表と /<スキル> の形）。エージェントのファイルの名前とスクリプトの名前は、どちらにも書かない。
-- docs/replace.md の「今の部品」の表が、今ある部品と合う（役割と名前の対応は、ここにだけある）。
+- docs/parts.md の「今の部品」の表が、今ある部品と合う（役割と名前の対応は、ここにだけある）。
 - プラグインの README の並び（REQ-008）と、元のプラグインとどちらか一方だけを入れること（REQ-007）。
   README に「Claude Code で使う」の節があり、Claude Code で入れるときの名前（<プラグイン>@<マーケットプレイス>）を書く。
 - 文書の相対リンクが、あるファイルと見出しを指す。
@@ -164,13 +164,13 @@ class PartNamesTest(unittest.TestCase):
 
 
 class ReplaceDocTest(unittest.TestCase):
-    """docs/replace.md の「今の部品」の表（役割と今の名前の、ただ1つの対応表）"""
+    """docs/parts.md の「今の部品」の表（役割と今の名前の、ただ1つの対応表）"""
 
     def setUp(self):
         if not pp.REPLACE_DOC.is_file():
-            self.fail("docs/replace.md がありません")
+            self.fail("docs/parts.md がありません")
         rows, error = pp.parts_table(pp.read(pp.REPLACE_DOC), pp.CURRENT_PARTS_HEADING, pp.CURRENT_PARTS_HEADER)
-        self.assertIsNone(error, f"docs/replace.md：{error}")
+        self.assertIsNone(error, f"docs/parts.md：{error}")
         self.rows = pp.current_parts()
 
     def test_rows_point_to_parts(self):
@@ -190,7 +190,7 @@ class ReplaceDocTest(unittest.TestCase):
         parts += [pp.rel(p) for p in pp.agent_files()]
         if pp.EXTENSIONS_DIR.is_dir():
             parts += [pp.rel(p) for p in pp.EXTENSIONS_DIR.iterdir() if p.is_dir()]
-        self.assertEqual(sorted(set(parts) - places), [], "docs/replace.md の「今の部品」の表にない部品があります")
+        self.assertEqual(sorted(set(parts) - places), [], "docs/parts.md の「今の部品」の表にない部品があります")
 
 
 class ReadmeTest(unittest.TestCase):

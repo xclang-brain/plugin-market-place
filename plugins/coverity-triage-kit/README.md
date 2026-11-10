@@ -82,7 +82,7 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | [作業エージェント](com.github.copilot/agents/triage-worker.README.markdown)・[統括エージェント](com.github.copilot/agents/triage-orchestrator.README.markdown) | 2・3段階目を使う人 | 各エージェントの使い方 |
 | 各スキルの README（[skills/](skills/)）・[MCP サーバー](mcp-servers/coverity-connect/README.md) | 1段階目を使う人 | 単体での使い方 |
 | [変更履歴](CHANGELOG.md) | 利用者 | 版ごとの変更点 |
-| [憲章](docs/constitution.md)・[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[コンポーネントの変更手順](docs/replace.md)・[テスト](tests/README.md) | 開発者 | 設計の方針と根拠、テストの実行方法 |
+| [憲章](docs/constitution.md)・[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[コンポーネント一覧](docs/parts.md)・[テスト](tests/README.md) | 開発者 | 設計の方針と根拠、テストの実行方法 |
 
 ## ライセンス
 
