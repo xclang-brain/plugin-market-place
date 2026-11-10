@@ -122,6 +122,84 @@
     }
   }
 
+  // ---- スキルの設定 ----
+  // 項目は、ここには書かない。サーバーが設定ファイルのコメントから読んだものを、そのまま入力欄にする。
+
+  function itemInput(skill, item) {
+    let input;
+    if (item.choices && item.choices.length) {
+      input = el("select");
+      for (const choice of [""].concat(item.choices)) input.appendChild(el("option", "", choice));
+      input.value = item.value || "";
+    } else if (Array.isArray(item.value) || /1行に1つ/.test(item.comment || "")) {
+      // 値を2つ以上書ける項目（今の値がリストか、コメントに「1行に1つ」とある）
+      const values = [].concat(item.value || []);
+      input = el("textarea");
+      input.rows = Math.max(2, values.length + 1);
+      input.value = values.join("\n");
+    } else {
+      input = el("input");
+      input.type = "text";
+      input.value = item.value || "";
+      if (item.examples && item.examples.length) input.placeholder = "例：" + item.examples.join("、");
+    }
+    input.id = "skill-" + skill + "-" + item.key;
+    return input;
+  }
+
+  function renderSkillItem(skill, item, missing) {
+    const row = el("div", "item");
+    const label = el("label", "", item.key + (item.required ? "（必須）" : ""));
+    row.appendChild(label);
+    if (item.comment) row.appendChild(el("p", "hint", item.comment));
+    if (item.secret) {
+      const how = item.env_key ? "下の " + item.env_key + " に、パスワードを入れた環境変数の名前を入れてください。"
+        : "設定ファイルに、自分で書いてください。";
+      row.appendChild(el("p", "hint", "この画面では扱いません。" + how));
+      return row;
+    }
+    const input = itemInput(skill, item);
+    const result = el("span", "hint", missing ? "まだ空です。" : "");
+    label.htmlFor = input.id;
+    input.addEventListener("change", async () => {
+      const value = input.tagName === "TEXTAREA" ? input.value.split(/\r?\n/) : input.value;
+      try {
+        await api("/api/config", { skill: skill, key: item.key, value: value });
+        result.textContent = "設定ファイルに書きました。";
+      } catch (e) {
+        result.textContent = e.message;
+      }
+    });
+    row.appendChild(input);
+    row.appendChild(result);
+    return row;
+  }
+
+  async function loadSkills() {
+    const box = $("skills");
+    $("skills-result").textContent = "読んでいます。";
+    let data;
+    try {
+      data = await api("/api/config");
+    } catch (e) {
+      $("skills-result").textContent = e.message;
+      return;
+    }
+    box.textContent = "";
+    for (const skill of data.skills || []) {
+      const group = el("fieldset");
+      group.appendChild(el("legend", "", skill.name));
+      if (skill.config) group.appendChild(el("p", "hint", skill.config));
+      if (!skill.ok) group.appendChild(el("p", "hint", skill.message));
+      for (const item of skill.items) {
+        group.appendChild(renderSkillItem(skill.name, item, skill.missing.indexOf(item.key) >= 0));
+      }
+      box.appendChild(group);
+    }
+    $("skills-result").textContent = (data.skills || []).length ? ""
+      : "設定ファイルがありません。CLI で「スキルを使う準備をして」と依頼してください。";
+  }
+
   async function copyRequest() {
     const text = $("request").value;
     try {
@@ -280,7 +358,10 @@
   }
 
   for (const tab of document.querySelectorAll('[role="tab"]')) {
-    tab.addEventListener("click", () => showTab(tab.id.slice("tab-".length)));
+    tab.addEventListener("click", () => {
+      showTab(tab.id.slice("tab-".length));
+      if (tab.id === "tab-skills") loadSkills();
+    });
   }
   for (const id of ["goal", "criteria", "trials"]) {
     $(id).addEventListener("input", () => {
@@ -291,6 +372,7 @@
     });
   }
   $("copy").addEventListener("click", copyRequest);
+  $("skills-reload").addEventListener("click", loadSkills);
   $("stop").addEventListener("click", stopRun);
   updateRequest();
   tick();

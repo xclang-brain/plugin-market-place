@@ -5,7 +5,9 @@
 
 import io
 import json
+import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -102,6 +104,42 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(json.loads(request(self.info, "GET", "/api/state")[2])["settings"], form)
         for bad in (dict(form, max_trials=0), dict(form, max_trials="3"), dict(form, goal=None)):
             self.assertEqual(request(self.info, "POST", "/api/settings", bad)[0], 400, bad)
+
+    @unittest.skipUnless(shutil.which("uv") and os.path.isfile(server.CONFIG_TOOL),
+                         "uv か、隣の設定のスキルがないので飛ばす（スキルのフォルダだけをコピーしたとき）")
+    def test_skill_settings_come_from_the_config_file(self):
+        folder = self.project / ".sample-tool"
+        folder.mkdir()
+        config = folder / "config.yaml"
+        config.write_text("# 機器のアドレス（必須）。\n# 例：192.168.1.50\nhost:\n\n"
+                          "# パスワード（秘密）。\npassword: Pw-secret\n\n# 環境変数の名前。\npassword_env:\n",
+                          encoding="utf-8")
+
+        def skills():
+            return json.loads(request(self.info, "GET", "/api/config")[2])["skills"]
+        found = skills()
+        self.assertEqual([s["name"] for s in found], ["sample-tool"])  # .debug-dashboard は出さない
+        items = {i["key"]: i for i in found[0]["items"]}
+        self.assertEqual(list(items), ["host", "password", "password_env"])
+        self.assertEqual((items["host"]["required"], items["host"]["examples"]), (True, ["192.168.1.50"]))
+        self.assertEqual((items["password"]["value"], items["password"]["env_key"]), ("***", "password_env"))
+        self.assertEqual(found[0]["missing"], ["host"])
+        # 値を書く
+        form = {"skill": "sample-tool", "key": "host", "value": "device.local"}
+        self.assertEqual(request(self.info, "POST", "/api/config", form)[0], 200)
+        self.assertIn("host: device.local", config.read_text(encoding="utf-8"))
+        # パスワードの値は、画面から書けない
+        self.assertEqual(request(self.info, "POST", "/api/config", dict(form, key="password", value="x"))[0], 400)
+        self.assertIn("password: Pw-secret", config.read_text(encoding="utf-8"))
+        # 設定ファイルに項目を足すと、次に読んだときに出る
+        config.write_text(config.read_text(encoding="utf-8") + "\n# 送るファイル。1行に1つずつ書く。\nfiles:\n",
+                          encoding="utf-8")
+        self.assertIn("files", [i["key"] for i in skills()[0]["items"]])
+        form = {"skill": "sample-tool", "key": "files", "value": ["a", "", "b"]}
+        self.assertEqual(request(self.info, "POST", "/api/config", form)[0], 200)
+        self.assertIn("files:\n  - a\n  - b", config.read_text(encoding="utf-8"))
+        for bad in (dict(form, skill="../x"), dict(form, key="a b"), dict(form, value=3), dict(form, value="a\nb")):
+            self.assertEqual(request(self.info, "POST", "/api/config", bad)[0], 400, bad)
 
     def test_recording_marker_is_fresh(self):
         recording = json.loads((self.project / DATA / "recording").read_text(encoding="utf-8"))

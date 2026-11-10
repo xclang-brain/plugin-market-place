@@ -25,8 +25,9 @@ CLI を起動したフォルダで、`--workdir` を付けずに動かす。フ�
 
 1. `url` をブラウザーで開く。
 2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のセッションに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する。Copilot CLI では、同じように `copilot --agent embedded-debug-kit:debug-orchestrator` を起動する（`/agent` で選んでもよい）。
-3. 「実行を止める」は、次のツールの呼び出しから効く。すでに動いているコマンドは、終わるまで止まらない。
-4. 画面が動いている間は、この作業フォルダのセッションをすべて記録する。使い終わったら `/embedded-debug-kit:debug-dashboard stop` で終了する。
+3. 「スキルの設定」のタブで、スキルの設定ファイルの値を変えられる。
+4. 「実行を止める」は、次のツールの呼び出しから効く。すでに動いているコマンドは、終わるまで止まらない。
+5. 画面が動いている間は、この作業フォルダのセッションをすべて記録する。使い終わったら `/embedded-debug-kit:debug-dashboard stop` で終了する。
 
 ## 結果
 

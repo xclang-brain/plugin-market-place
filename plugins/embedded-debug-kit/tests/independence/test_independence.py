@@ -172,7 +172,8 @@ class UpperStageTest(unittest.TestCase):
             self.assertEqual(found, [], f"{name} が Web管理画面のことを書いています")
 
     def test_dashboard_holds_no_lower_parts(self):
-        words = list(Parts.stage1) + [Parts.worker]
+        # 設定専用のスキルだけは、Web管理画面が使ってよい（憲章 第25条4項）
+        words = [w for w in list(Parts.stage1) + [Parts.worker] if w != "skill-config"]
         for skill in Parts.others:
             for path in text_files(SKILLS / skill):
                 found = [w for w in words if w in read(path)]

@@ -16,6 +16,7 @@
 
 <nav class="tabs" role="tablist">
   <button type="button" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="true">設定</button>
+  <button type="button" role="tab" id="tab-skills" aria-controls="panel-skills" aria-selected="false">スキルの設定</button>
   <button type="button" role="tab" id="tab-progress" aria-controls="panel-progress" aria-selected="false">進み具合</button>
   <button type="button" role="tab" id="tab-results" aria-controls="panel-results" aria-selected="false">結果</button>
 </nav>
@@ -26,7 +27,7 @@
     <textarea id="goal" rows="4" placeholder="例：起動すると平均値が 3 と出る。正しくは 25。"></textarea>
 
     <label for="criteria">合格の条件（1行に1つ）</label>
-    <textarea id="criteria" rows="4" placeholder="例：ログに「平均値=25」と出る"></textarea>
+    <textarea id="criteria" rows="4" placeholder="例：機器の出力に「平均値=25」と出る"></textarea>
 
     <label for="trials">試行の上限（回）</label>
     <input id="trials" type="number" min="1" max="20" value="5">
@@ -45,6 +46,18 @@
       （プラグインなしでインストールしたときは <code>claude --agent debug-orchestrator</code>）を起動します。
       GitHub Copilot CLI では、<code>copilot --agent embedded-debug-kit:debug-orchestrator</code> を起動します。
     </p>
+  </section>
+
+  <section id="panel-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
+    <p class="hint">
+      作業フォルダにある、スキルの設定ファイルの項目です。値を変えると、設定ファイルに書きます。
+      パスワードは、ここには入れずに、環境変数の名前を入れます。
+    </p>
+    <p class="actions">
+      <button type="button" id="skills-reload">読み直す</button>
+      <span id="skills-result" class="hint" aria-live="polite"></span>
+    </p>
+    <div id="skills"></div>
   </section>
 
   <section id="panel-progress" role="tabpanel" aria-labelledby="tab-progress" hidden>

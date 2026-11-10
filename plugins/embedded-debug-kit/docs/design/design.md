@@ -319,6 +319,7 @@ Claude Code では、プラグインなしでも使える。次の2つをして�
 | タブ | 中身 |
 | --- | --- |
 | 設定 | 直したいこと・合格の条件・試行の上限。入力すると、依頼文と「コピー」ボタンが出る |
+| スキルの設定 | 作業フォルダの `.<スキルの名前>/config.yaml` の項目と値。項目は画面に持たず、タブを開くたび（と「読み直す」を押したとき）に、サーバーが skill-config の `show` で読む。値を変えると、`set` で書く。（秘密）の項目は、欄を出さない（REQ-410） |
 | 進み具合 | 今のフェーズ（計画・作業・評価）、依頼文と報告・判定を届いた順に、使われたツール（新しい順）、「実行を止める」ボタン |
 | 結果 | 統括エージェントの最後の報告、検証エージェントの最後の判定、前のセッションの一覧 |
 
@@ -368,4 +369,4 @@ claude plugin validate .
 | REQ-301〜REQ-308、REQ-310 | 5、5.1、6 | 統括・検証エージェントの定義 | `tests/e2e/`（直せるか、依頼の相手、自分で直さないこと、結論と条件ごとの判定）、`tests/independence/`（REQ-303 の Copilot CLI のフック、REQ-304）、ほかは人が読む |
 | REQ-309 | 5.2 | 統括エージェントの定義 | `tests/e2e/`（振り返り）、人が読む（Issue の流れ） |
 | REQ-311 | 7 | 統括エージェントの定義 | 人が読む |
-| REQ-401〜REQ-409 | 8 | `skills/debug-dashboard/`、フックの設定 | debug-dashboard の単体テスト、`tests/e2e/`、`claude plugin eval`（AI が画面を勝手に起動しないか）、`tests/independence/`（REQ-409）。REQ-403 の依頼文は、人が画面で確かめる |
+| REQ-401〜REQ-410 | 8 | `skills/debug-dashboard/`、フックの設定 | debug-dashboard の単体テスト、`tests/e2e/`、`claude plugin eval`（AI が画面を勝手に起動しないか）、`tests/independence/`（REQ-409）。REQ-403 の依頼文は、人が画面で確かめる |

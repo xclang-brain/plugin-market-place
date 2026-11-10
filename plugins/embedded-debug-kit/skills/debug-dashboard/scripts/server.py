@@ -15,7 +15,9 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -46,6 +48,12 @@ MAX_TRIALS = 20
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 VERIFIER = "debug-verifier"
 DEFAULT_SETTINGS = {"goal": "", "criteria": "", "max_trials": 5}
+# スキルの設定ファイルは、設定のスキル（skill-config）のスクリプトで読み書きする。このスキルの隣にある
+CONFIG_SKILL = os.path.join(os.path.dirname(os.path.dirname(SCRIPTS)), "skill-config")
+CONFIG_TOOL = os.path.join(CONFIG_SKILL, "scripts", "config_tool.py")
+SKILL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+CONFIG_TIMEOUT = 30    # 設定のスキルのスクリプトを待つ秒数
 
 
 def now_iso():
@@ -179,6 +187,46 @@ class Store:
         sessions.sort(key=lambda s: s["updated"] or "", reverse=True)
         return {"ok": True, "workdir": self.workdir, "settings": self.settings(), "sessions": sessions}
 
+    def config_tool(self, args, stdin=None):
+        """設定のスキルのスクリプトを動かし、結果の JSON を返す。動かせなければ、ok が False の結果を返す"""
+        uv = os.environ.get("UV") or shutil.which("uv")
+        if not uv or not os.path.isfile(CONFIG_TOOL):
+            return {"ok": False, "message": "設定のスキル（skill-config）か uv が見つかりません。"}
+        env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+        try:
+            done = subprocess.run([uv, "run", "--project", CONFIG_SKILL, CONFIG_TOOL] + args + ["--workdir", self.workdir],
+                                  input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, timeout=CONFIG_TIMEOUT)
+            result = json.loads(done.stdout.decode("ascii"))
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            return {"ok": False, "message": "設定のスキルを動かせませんでした（%s）。" % type(e).__name__}
+        return result if isinstance(result, dict) else {"ok": False, "message": "設定のスキルの結果を読めません。"}
+
+    def skill_configs(self):
+        """作業フォルダの .<スキルの名前>/config.yaml を探し、項目を読む。項目は、設定ファイルのコメントで決まる"""
+        skills = []
+        for name in sorted(os.listdir(self.workdir)):
+            if not (name.startswith(".") and name != DATA and SKILL_RE.match(name[1:])
+                    and os.path.isfile(os.path.join(self.workdir, name, "config.yaml"))):
+                continue
+            shown = self.config_tool(["show", name[1:]])
+            skills.append({"name": name[1:], "ok": bool(shown.get("ok")), "message": shown.get("message", ""),
+                           "config": shown.get("config"), "items": shown.get("items") or [],
+                           "missing": shown.get("missing") or []})
+        return {"ok": True, "skills": skills}
+
+    def save_skill_config(self, body):
+        """1つの項目に値を書く。値は、文字列か、文字列のリスト。空なら、項目を空にする"""
+        skill, key, value = body.get("skill"), body.get("key"), body.get("value")
+        values = value if isinstance(value, list) else [value]
+        if not (isinstance(skill, str) and SKILL_RE.match(skill) and isinstance(key, str) and KEY_RE.match(key)
+                and all(isinstance(v, str) and len(v) <= MAX_TEXT and "\n" not in v and "\r" not in v for v in values)):
+            return {"ok": False, "message": "スキルの名前、項目の名前、値を確かめてください。"}
+        values = [v.strip() for v in values if v.strip()]
+        if not values:
+            return self.config_tool(["set", skill, key, "--empty"])
+        return self.config_tool(["set", skill, key, "--stdin"], stdin="\n".join(values).encode("utf-8"))
+
     def session(self, session):
         events = self.events(session)
         if events is None:
@@ -299,6 +347,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         store = self.server.store
         if path == "/api/state":
             return self.reply(200, store.state())
+        if path == "/api/config":
+            return self.reply(200, store.skill_configs())
         if path.startswith("/api/sessions/"):
             found = store.session(unquote(path[len("/api/sessions/"):]))
             return self.reply(200, found) if found else self.fail(404, "そのセッションの記録はありません。")
@@ -313,6 +363,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/settings":
             problem = store.save_settings(body)
             return self.fail(400, problem) if problem else self.reply(200, {"ok": True})
+        if path == "/api/config":
+            result = store.save_skill_config(body)
+            if not result.get("ok"):
+                return self.fail(400, result.get("message") or "書き込めませんでした。")
+            return self.reply(200, {"ok": True, "message": result.get("message", "")})
         if path == "/api/shutdown":
             self.reply(200, {"ok": True, "message": "終了します。"})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
