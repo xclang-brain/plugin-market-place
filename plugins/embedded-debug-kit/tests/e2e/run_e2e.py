@@ -82,11 +82,11 @@ def wait_port(port, seconds=20):
 def make_workdir(base, ftp, shell):
     work = base / "work"
     shutil.copytree(FIXTURE, work)
-    home = work / ".github" / "embedded-debug-kit"
-    home.mkdir(parents=True)
-    (home / ".gitignore").write_text("*\n", encoding="utf-8")
     for skill, text in CONFIGS.items():
-        (home / f"{skill}.yaml").write_text(text.format(ftp=ftp, shell=shell), encoding="utf-8")
+        folder = work / f".{skill}"
+        folder.mkdir()
+        (folder / ".gitignore").write_text("*\n", encoding="utf-8")
+        (folder / "config.yaml").write_text(text.format(ftp=ftp, shell=shell), encoding="utf-8")
     for args in (["init", "-q"], ["add", "."], ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "commit", "-q", "-m", "fixture"]):
         subprocess.run(["git", *args], cwd=work, check=True)
     return work

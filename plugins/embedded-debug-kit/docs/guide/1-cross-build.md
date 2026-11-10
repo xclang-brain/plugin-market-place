@@ -4,9 +4,9 @@
 
 ## 手順
 
-1. ソースのフォルダで CLI を起動し、「cross-build の設定ファイルを作って」と依頼します。`.github/embedded-debug-kit/cross-build.yaml` ができます。
+1. ソースのフォルダで CLI を起動し、「cross-build の設定ファイルを作って」と依頼します。そのフォルダに、`.cross-build/config.yaml` ができます。
 2. 「cross-build の設定を、質問しながら埋めて」と依頼し、AI の質問に答えます。自分で書くときは、設定ファイルのコメントに従います。
-3. 「ビルドして」と依頼します。ビルドの出力は、`.github/embedded-debug-kit/cross-build/logs/` に残ります。
+3. 「ビルドして」と依頼します。ビルドの出力は、`.cross-build/logs/` に残ります。
 
 スキルを名前で指定して呼ぶときは、`/embedded-debug-kit:cross-build ビルドして` と入力します。
 

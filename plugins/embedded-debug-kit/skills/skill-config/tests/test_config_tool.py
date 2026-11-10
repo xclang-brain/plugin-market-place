@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """skill-config のスクリプト（scripts/config_tool.py）のテスト。スキルのフォルダだけをコピーしても動く。
 
-設定するスキルの代わりに、一時的な作業フォルダに .github/embedded-debug-kit/sample-tool.yaml を置いて使う。
+設定するスキルの代わりに、一時的な作業フォルダに .sample-tool/config.yaml を置いて使う。
 書いたファイルは、PyYAML で読んで確かめる（tests/requirements.txt）。
 
   python3 -m unittest discover -s tests（Windows は py -3）
@@ -73,8 +73,8 @@ class Project(object):
         test.addCleanup(shutil.rmtree, self.dir, True)
         self.test = test
         self.script = script
-        self.folder = os.path.join(self.dir, ".github", "embedded-debug-kit")
-        self.config = os.path.join(self.folder, TARGET + ".yaml")
+        self.folder = os.path.join(self.dir, "." + TARGET)
+        self.config = os.path.join(self.folder, "config.yaml")
         if text is not None:
             os.makedirs(self.folder)
             self.write((b"\xef\xbb\xbf" if bom else b"") + text.replace("\n", newline).encode("utf-8"))
@@ -118,7 +118,7 @@ class Project(object):
         return self.run("set", TARGET, key, "--empty")
 
     def log(self):
-        logs = os.path.join(self.folder, "skill-config", "logs")
+        logs = os.path.join(self.dir, ".skill-config", "logs")
         text = ""
         for name in os.listdir(logs) if os.path.isdir(logs) else []:
             with open(os.path.join(logs, name), encoding="utf-8") as fh:
@@ -404,7 +404,7 @@ class SetTest(unittest.TestCase):
     def test_log_folder_that_cannot_be_made(self):
         p = Project(self)
         before = p.raw()
-        with open(os.path.join(p.folder, "skill-config"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(p.dir, ".skill-config"), "w", encoding="utf-8") as fh:
             fh.write("ファイル")
         code, data = p.set("host", "a")
         self.assertEqual(code, 1)
@@ -414,10 +414,11 @@ class SetTest(unittest.TestCase):
     def test_gitignore_is_placed_before_writing(self):
         p = Project(self)
         p.set("host", "a")
-        with open(os.path.join(p.folder, ".gitignore"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), "*\n")
+        for folder in ("." + TARGET, ".skill-config"):
+            with open(os.path.join(p.dir, folder, ".gitignore"), encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "*\n")
         code, data = p.set("host", "b")
-        self.assertTrue(data["log"].startswith(os.path.join(p.folder, "skill-config", "logs")))
+        self.assertTrue(data["log"].startswith(os.path.join(p.dir, ".skill-config", "logs")))
         with open(data["log"], encoding="utf-8") as fh:
             self.assertIn('host："a" → "b"', fh.read())
 
@@ -427,8 +428,8 @@ class SetTest(unittest.TestCase):
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__"))
         p = Project(self, script=os.path.join(copy, "scripts", "config_tool.py"))
         p.set("host", "a")
-        self.assertTrue(os.path.isdir(os.path.join(p.folder, "my-config", "logs")))
-        self.assertFalse(os.path.exists(os.path.join(p.folder, "skill-config")))
+        self.assertTrue(os.path.isdir(os.path.join(p.dir, ".my-config", "logs")))
+        self.assertFalse(os.path.exists(os.path.join(p.dir, ".skill-config")))
 
 
 class YamlTest(unittest.TestCase):
@@ -497,7 +498,7 @@ class AtomicWriteTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("元のまま", data["message"])
         self.assertEqual(p.raw(), before)
-        self.assertEqual(sorted(os.listdir(p.folder)), [".gitignore", "sample-tool.yaml", "skill-config"])
+        self.assertEqual(sorted(os.listdir(p.folder)), [".gitignore", "config.yaml"])
 
     def test_success_leaves_no_temporary_file(self):
         p = Project(self)
@@ -506,7 +507,7 @@ class AtomicWriteTest(unittest.TestCase):
             code, data = self.run_in_process(p, "host", "a")
         self.assertEqual(code, 0)
         self.assertEqual(replace.call_count, 1)
-        self.assertEqual(sorted(os.listdir(p.folder)), [".gitignore", "sample-tool.yaml", "skill-config"])
+        self.assertEqual(sorted(os.listdir(p.folder)), [".gitignore", "config.yaml"])
 
     def test_read_only_file_is_left_alone(self):
         p = Project(self)

@@ -3,8 +3,7 @@
 
   ftp_deploy.py run|check|init [--workdir 作業フォルダ]
 
-設定は <作業フォルダ>/.github/embedded-debug-kit/<スキルの名前>.yaml、
-ログは <作業フォルダ>/.github/embedded-debug-kit/<スキルの名前>/logs/ に置く。
+設定は <作業フォルダ>/.<スキルの名前>/config.yaml、ログは同じフォルダの logs/ に置く。
 標準出力には結果の JSON を1つだけ、ASCII で書く。
 終了コード：0 成功、1 作業の失敗、2 設定や引数の問題。
 Python 3.8 以上の標準ライブラリだけで動く。
@@ -106,19 +105,15 @@ def log_failure(e):
 
 # --- 設定 -------------------------------------------------------------------
 
-HOME = os.path.join(".github", "embedded-debug-kit")  # 設定とログを置く、作業フォルダの中のフォルダ
-
-
 def data_dir(workdir):
-    """ログを置く、このスキルのフォルダ。"""
-    return os.path.join(workdir, HOME, SKILL_NAME)
+    return os.path.join(workdir, "." + SKILL_NAME)
 
 
 def prepare_data_dir(workdir):
-    """設定とログのフォルダを作る。中に何かを書く前に、中身を Git に入れない .gitignore を、1つ上のフォルダに置く。"""
+    """設定とログのフォルダを作る。中に何かを書く前に、中身を Git に入れない .gitignore を置く。"""
     path = data_dir(workdir)
     os.makedirs(path, exist_ok=True)
-    ignore = os.path.join(os.path.dirname(path), ".gitignore")
+    ignore = os.path.join(path, ".gitignore")
     if not os.path.exists(ignore):
         with open(ignore, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("*\n")
@@ -641,7 +636,7 @@ def main(argv=None):
     try:
         args = parser.parse_args(argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
-        result["config"] = data_dir(workdir) + ".yaml"
+        result["config"] = os.path.join(data_dir(workdir), "config.yaml")
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir, 2)
         code = {"run": cmd_run, "check": cmd_check, "init": cmd_init}[args.command](workdir, result)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ほかのスキルの設定ファイル <作業フォルダ>/.github/embedded-debug-kit/<スキルの名前>.yaml を読み書きする。
+"""ほかのスキルの設定ファイル <作業フォルダ>/.<スキルの名前>/config.yaml を読み書きする。
 
   config_tool.py show <スキルの名前> [--workdir 作業フォルダ]
   config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]
@@ -24,7 +24,6 @@ import traceback
 
 # このスキルの名前は、このスクリプトのフォルダの親の名前。名前を変えて写せば、その名前になる。
 SKILL_NAME = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HOME = os.path.join(".github", "embedded-debug-kit")  # 設定とログを置く、作業フォルダの中のフォルダ
 MASK = "***"  # ほかのスキルと同じ伏せ方
 USAGE = ("使い方：config_tool.py show <スキルの名前> [--workdir 作業フォルダ]、"
          "config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]")
@@ -60,10 +59,10 @@ class Log(object):
     fh = None
 
     def open(self, workdir):
-        folder = os.path.join(workdir, HOME, SKILL_NAME)
+        folder = os.path.join(workdir, "." + SKILL_NAME)
         try:
             os.makedirs(folder, exist_ok=True)
-            put_gitignore(os.path.dirname(folder))
+            put_gitignore(folder)
             logs = os.path.join(folder, "logs")
             os.makedirs(logs, exist_ok=True)
             path = os.path.join(logs, "%s-%s.log" % (SKILL_NAME, datetime.date.today().strftime("%Y%m%d")))
@@ -426,7 +425,7 @@ def main(argv=None):
         workdir = os.path.abspath(args.workdir or os.getcwd())
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir)
-        path = os.path.join(workdir, HOME, args.skill + ".yaml")
+        path = os.path.join(workdir, "." + args.skill, "config.yaml")
         result["config"] = path
         if args.command == "show":
             cmd_show(path, args.skill, result)

@@ -7,7 +7,7 @@ description: シリアルコンソール（UART・COM ポート）で組み込�
 
 シリアルポートで機器のシェルにつなぎ、コマンドを1つずつ動かして、出力と終了コードを JSON で返す。
 
-設定ファイルは `<作業フォルダ>/.github/embedded-debug-kit/serial-console.yaml`。各項目の意味は、項目のすぐ上のコメントにある。
+設定ファイルは `<作業フォルダ>/.serial-console/config.yaml`。各項目の意味は、項目のすぐ上のコメントにある。
 パスワードは、設定ファイルの `login_password` か、`login_password_env` に名前を書いた環境変数で渡す。
 
 ## コマンド
