@@ -13,7 +13,7 @@ CLI のバージョンを上げたら、ここを確かめ直す。
 | M8.2 | Copilot CLI のフックの入力 | Copilot CLI 1.0.108 | 実測、配布物 |
 | M8.3 | Copilot CLI のフックの動かし方 | Copilot CLI 1.0.108 | bash は実測。PowerShell は公式文書と配布物 |
 | M8.4 | フックの処理を hook.sh と hook.ps1 に移した後 | Claude Code 2.1.321（2026-11-10）、CI | 実測、テスト |
-| M9 | 部品の交換 | Claude Code 2.1.321、Copilot CLI 1.0.108（2026-11-10） | 複製での入れ替え、テスト、通しのテスト |
+| M9 | 部品の置き換え | Claude Code 2.1.321、Copilot CLI 1.0.108（2026-11-10） | 複製での入れ替え、テスト、通しのテスト |
 
 ## M2 マニフェストと置き場所
 
@@ -118,7 +118,7 @@ hook.sh と hook.ps1 に移した後（設計書 8.3）に確かめたことを�
 | hooks.json のコマンドが、bash で働く | `skills/debug-dashboard/tests/` を、CI の ubuntu-24.04 と windows-latest（Git Bash）で動かす（2026-11-10） | 通った |
 | hooks.json の `powershell` の欄が働く | 同じテストを、CI の windows-latest で動かす（2026-11-10）。Copilot CLI と同じ引数の PowerShell に、実行ポリシー Restricted を指定する | 通った |
 
-## M9 部品の交換
+## M9 部品の置き換え
 
 プラグインの複製で部品を置き換え、Claude Code 2.1.321 の通しのテストで確かめた（2026-11-10）。
 
@@ -136,4 +136,4 @@ hook.sh と hook.ps1 に移した後（設計書 8.3）に確かめたことを�
 
 - Windows の Copilot CLI そのもので、`powershell` の欄を動かすこと。テストは、Copilot CLI と同じ引数の PowerShell で動かしているが、Copilot CLI そのものは通していない。
 - hook.sh と hook.ps1 に移した後の、Copilot CLI そのものでの記録と停止（Linux・Windows とも）。
-- 部品を交換した後に、Copilot CLI で AI を動かすこと（M9 は、Claude Code とテストで確かめた）。
+- 部品を置き換えた後に、Copilot CLI で AI を動かすこと（M9 は、Claude Code とテストで確かめた）。
