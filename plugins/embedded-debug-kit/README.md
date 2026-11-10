@@ -15,6 +15,18 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 | 3 | 統括エージェントと検証エージェント | 作業と合否の判定を別のエージェントに分け、合格するまで試行を繰り返す | [debug-orchestrator](docs/guide/3-debug-orchestrator.md) |
 | 4 | Web管理画面 | 統括エージェントへの依頼文を作り、進み具合と結果をブラウザーで見る | [debug-dashboard](docs/guide/4-debug-dashboard.md) |
 
+## 呼び方（GitHub Copilot CLI）
+
+| 段階 | 文で依頼する | 名前を指定して呼ぶ |
+| --- | --- | --- |
+| 1 スキル | 「ビルドして」のように依頼すると、AI がスキルを選ぶ | `/embedded-debug-kit:<スキルの名前> <依頼>` |
+| 2 作業エージェント | 指定して使う（右の欄） | `copilot --agent embedded-debug-kit:device-debugger` で起動するか、起動してから `/agent` で選ぶ |
+| 3 統括エージェント | できない | `copilot --agent embedded-debug-kit:debug-orchestrator` で起動するか、起動してから `/agent` で選ぶ |
+| 4 Web管理画面 | できない（利用者が呼んだときだけ動く） | `/embedded-debug-kit:debug-dashboard` |
+
+- 使えるスキルは `/skills`、エージェントは `/agent`、読み込まれた部品の全体は `/env` で見られます。
+- スキルや作業エージェントを別のものに替える手順は、[部品を交換する](docs/guide/5-replace-parts.md)にあります。
+
 ## 必要なもの
 
 - Claude Code か GitHub Copilot CLI（1.0.107 以降）
@@ -26,18 +38,18 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 
 ## インストール
 
-Claude Code：
-
-```shell
-claude plugin marketplace add xclang-brain/plugin-market-place
-claude plugin install embedded-debug-kit@plugin-market-place
-```
-
 GitHub Copilot CLI：
 
 ```shell
 copilot plugin marketplace add xclang-brain/plugin-market-place
 copilot plugin install embedded-debug-kit@plugin-market-place
+```
+
+Claude Code：
+
+```shell
+claude plugin marketplace add xclang-brain/plugin-market-place
+claude plugin install embedded-debug-kit@plugin-market-place
 ```
 
 スキルだけなら、プラグインをインストールせずに、スキルのフォルダをプロジェクトにコピーしても使えます。やり方は、各スキルの使い方にあります。

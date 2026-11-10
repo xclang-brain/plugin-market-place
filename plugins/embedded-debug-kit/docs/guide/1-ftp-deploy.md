@@ -18,8 +18,8 @@ PC のファイルを、FTP で組み込み機器のフォルダに送るスキ�
 
 | CLI | 1つのプロジェクトで使う | どのプロジェクトでも使う |
 | --- | --- | --- |
-| Claude Code | `<プロジェクト>/.claude/skills/ftp-deploy/` | `~/.claude/skills/ftp-deploy/` |
 | GitHub Copilot CLI | `<プロジェクト>/.github/skills/ftp-deploy/` | `~/.copilot/skills/ftp-deploy/` |
+| Claude Code | `<プロジェクト>/.claude/skills/ftp-deploy/` | `~/.claude/skills/ftp-deploy/` |
 
 `~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。設定とログのフォルダも `.<新しい名前>/` になります。
@@ -32,6 +32,19 @@ PC のファイルを、FTP で組み込み機器のフォルダに送るスキ�
 4. 「機器に送って」と依頼します。設定の `files` に書いたファイルを送ります。
 
 作業フォルダは、CLI を起動したフォルダです。
+
+### スキルを名前で指定して呼ぶ
+
+ふつうは、上のように依頼すれば、AI がこのスキルを選びます。
+確実にこのスキルを使わせたいときは、スラッシュコマンドで呼びます。後ろに依頼を続けて書けます。
+
+```text
+/embedded-debug-kit:ftp-deploy 機器に送って
+```
+
+- プラグインなしでコピーしたスキルは、`/ftp-deploy` で呼びます。
+- Claude Code では、`/ftp-deploy` で呼びます。
+- 使えるスキルの一覧は、`/skills` で見られます。
 
 ## 設定
 

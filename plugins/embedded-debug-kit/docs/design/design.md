@@ -40,6 +40,7 @@ CLI の動きを調べた結果は、[実測の記録](measurements.md)に分け
 | `docs/guide/2-device-debugger.md` | 作業エージェントの使い方 | 人 |
 | `docs/guide/3-debug-orchestrator.md` | 3段階目の使い方 | 人 |
 | `docs/guide/4-debug-dashboard.md` | Web管理画面の使い方 | 人 |
+| `docs/guide/5-replace-parts.md` | スキルと作業エージェントを交換する手順（Copilot CLI） | 人 |
 | `docs/`（`guide/` 以外） | 憲章・仕様書・設計書・実測の記録 | 人 |
 | `tests/` | プラグイン全体のテスト | 人・CI |
 | `.gitattributes` | シェルスクリプトの改行を LF に固定する（8.3） | Git |

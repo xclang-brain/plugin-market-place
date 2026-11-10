@@ -19,8 +19,8 @@
 
 | CLI | 1つのプロジェクトで使う | どのプロジェクトでも使う |
 | --- | --- | --- |
-| Claude Code | `<プロジェクト>/.claude/skills/skill-config/` | `~/.claude/skills/skill-config/` |
 | GitHub Copilot CLI | `<プロジェクト>/.github/skills/skill-config/` | `~/.copilot/skills/skill-config/` |
+| Claude Code | `<プロジェクト>/.claude/skills/skill-config/` | `~/.claude/skills/skill-config/` |
 
 `~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。ログのフォルダも `.<新しい名前>/` になります。
@@ -43,6 +43,19 @@
 - 自分でファイルに書く：伝えられた設定ファイルを開いて、値を書きます。
 
 ほかのエージェントから依頼されたときなど、質問できないときは、依頼の中にある値だけを書き込み、設定ファイルの場所と空の必須の項目を伝えます。
+
+### スキルを名前で指定して呼ぶ
+
+ふつうは、上のように依頼すれば、AI がこのスキルを選びます。
+確実にこのスキルを使わせたいときは、スラッシュコマンドで呼びます。後ろに依頼を続けて書けます。
+
+```text
+/embedded-debug-kit:skill-config ftp-deploy の設定を埋めて
+```
+
+- プラグインなしでコピーしたスキルは、`/skill-config` で呼びます。
+- Claude Code では、`/skill-config` で呼びます。
+- 使えるスキルの一覧は、`/skills` で見られます。
 
 ## 設定ファイルの決まり
 

@@ -18,8 +18,8 @@
 
 | CLI | 1つのプロジェクトで使う | どのプロジェクトでも使う |
 | --- | --- | --- |
-| Claude Code | `<プロジェクト>/.claude/skills/serial-console/` | `~/.claude/skills/serial-console/` |
 | GitHub Copilot CLI | `<プロジェクト>/.github/skills/serial-console/` | `~/.copilot/skills/serial-console/` |
+| Claude Code | `<プロジェクト>/.claude/skills/serial-console/` | `~/.claude/skills/serial-console/` |
 
 `~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。設定とログのフォルダも `.<新しい名前>/` になります。
@@ -32,6 +32,19 @@
 4. 「機器で uname -a を動かして」のように依頼します。設定の `commands` を動かすなら、「設定のコマンドを機器で動かして」と依頼します。
 
 作業フォルダは、CLI を起動したフォルダです。
+
+### スキルを名前で指定して呼ぶ
+
+ふつうは、上のように依頼すれば、AI がこのスキルを選びます。
+確実にこのスキルを使わせたいときは、スラッシュコマンドで呼びます。後ろに依頼を続けて書けます。
+
+```text
+/embedded-debug-kit:serial-console 機器で uname -a を動かして
+```
+
+- プラグインなしでコピーしたスキルは、`/serial-console` で呼びます。
+- Claude Code では、`/serial-console` で呼びます。
+- 使えるスキルの一覧は、`/skills` で見られます。
 
 ## 設定
 

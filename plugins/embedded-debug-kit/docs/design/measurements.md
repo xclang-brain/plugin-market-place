@@ -62,6 +62,12 @@ frontmatter の項目：
 - `user-invocable: false` のエージェントは、`/agent` の一覧に出ない。ほかのエージェントからは呼べる。`--agent` で名前を指定すれば動かせる。
 - `skills` に書いたスキルは、エージェントが動き始めるときに中身が読み込まれる。公式文書の表にはないが、更新履歴（「Custom agents can now declare a `skills` field to eagerly load skill content into agent context at startup」）と実測で確かめた。
 
+コマンド（Copilot CLI 1.0.108 のヘルプと、認証なしで動くコマンドで確かめた。2026-11-10）：
+
+- `/agent [名前]` で、エージェントを一覧から選ぶか、名前で指定する。`/skills` でスキル、`/env` で読み込まれた部品の全体を見られる。
+- `copilot --plugin-dir <フォルダ>` で、手元のフォルダのプラグインを読み込む。`copilot --plugin-dir <フォルダ> skill list` に、そのプラグインのスキルが出る。
+- `copilot plugin install <所有者>/<リポジトリ>:<パス>` で、リポジトリの中のフォルダからインストールできる。
+
 名前：
 
 - エージェントの名前は、`embedded-debug-kit:<ファイルの名前から .agent.md を除いたもの>` になる。プラグインの名前を省くと見つからない。

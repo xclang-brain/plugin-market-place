@@ -18,8 +18,8 @@ SDK の環境設定スクリプト（`sdk_env`）を読み込んでから、設�
 
 | CLI | 1つのプロジェクトで使う | どのプロジェクトでも使う |
 | --- | --- | --- |
-| Claude Code | `<プロジェクト>/.claude/skills/cross-build/` | `~/.claude/skills/cross-build/` |
 | GitHub Copilot CLI | `<プロジェクト>/.github/skills/cross-build/` | `~/.copilot/skills/cross-build/` |
+| Claude Code | `<プロジェクト>/.claude/skills/cross-build/` | `~/.claude/skills/cross-build/` |
 
 `~` はホームフォルダ（Windows では `C:\Users\<ユーザー名>`）です。
 フォルダの名前を変えてコピーするときは、`SKILL.md` の `name` も同じ名前にします。設定とログのフォルダも `.<新しい名前>/` になります。
@@ -32,6 +32,19 @@ SDK の環境設定スクリプト（`sdk_env`）を読み込んでから、設�
 4. 「ビルドして」と依頼します。
 
 作業フォルダは、CLI を起動したフォルダです。
+
+### スキルを名前で指定して呼ぶ
+
+ふつうは、上のように依頼すれば、AI がこのスキルを選びます。
+確実にこのスキルを使わせたいときは、スラッシュコマンドで呼びます。後ろに依頼を続けて書けます。
+
+```text
+/embedded-debug-kit:cross-build ビルドして
+```
+
+- プラグインなしでコピーしたスキルは、`/cross-build` で呼びます。
+- Claude Code では、`/cross-build` で呼びます。
+- 使えるスキルの一覧は、`/skills` で見られます。
 
 ## 設定
 

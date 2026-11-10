@@ -6,16 +6,21 @@
 ## 始め方
 
 1. プラグインをインストールします（[インストール](../../README.md#インストール)）。
-2. 直したいソースのフォルダで、作業エージェントを指定して CLI を起動します。
+2. 直したいソースのフォルダで CLI を起動し、作業エージェントを指定します。指定のしかたは2つあります。
 
-   ```shell
-   # Claude Code
-   claude --agent embedded-debug-kit:device-debugger
-   # GitHub Copilot CLI（起動してから /agent で選んでもかまいません）
-   copilot --agent embedded-debug-kit:device-debugger
-   ```
+   - 起動するときに指定する。
+
+     ```shell
+     copilot --agent embedded-debug-kit:device-debugger
+     ```
+
+   - 起動してから指定する。`/agent` と入力し、一覧から `embedded-debug-kit:device-debugger` を選びます。`/agent embedded-debug-kit:device-debugger` と、名前を続けて書いてもかまいません。
+
+   Claude Code では、`claude --agent embedded-debug-kit:device-debugger` で起動します。
 
 3. 初めて使うときは、「スキルを設定したい」と依頼します。質問に答えると、ビルドの方法や機器への接続を設定できます。
+
+エージェントを指定しないと、AI が作業エージェントをサブエージェントとして呼ぶことがあります。サブエージェントは、利用者に質問できません。上のどちらかで指定して使います。
 
 ## 依頼のしかた
 
@@ -44,6 +49,7 @@ sensor_app を機器で動かすと、AVG=3 と出ます。正しくは AVG=25 �
 - 設定：[skill-config](1-skill-config.md)
 
 設定の項目は、各スキルの使い方にあります。
+スキルや作業エージェントを別のものに替える手順は、[部品を交換する](5-replace-parts.md)にあります。
 
 ## 困ったとき
 

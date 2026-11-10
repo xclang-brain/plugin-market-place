@@ -6,14 +6,19 @@
 ## 始め方
 
 1. 作業エージェントを、単体で使える状態にしておきます（[作業エージェントの使い方](2-device-debugger.md)）。
-2. 直したいソースのフォルダで、統括エージェントを指定して CLI を起動します。
+2. 直したいソースのフォルダで CLI を起動し、統括エージェントを指定します。指定のしかたは2つあります。
 
-   ```shell
-   # Claude Code
-   claude --agent embedded-debug-kit:debug-orchestrator
-   # GitHub Copilot CLI（起動してから /agent で選んでもかまいません）
-   copilot --agent embedded-debug-kit:debug-orchestrator
-   ```
+   - 起動するときに指定する。
+
+     ```shell
+     copilot --agent embedded-debug-kit:debug-orchestrator
+     ```
+
+   - 起動してから指定する。`/agent` と入力し、一覧から `embedded-debug-kit:debug-orchestrator` を選びます。`/agent embedded-debug-kit:debug-orchestrator` と、名前を続けて書いてもかまいません。
+
+   Claude Code では、`claude --agent embedded-debug-kit:debug-orchestrator` で起動します。
+
+検証エージェント（debug-verifier）は、`/agent` の一覧に出ません。統括エージェントが呼びます。
 
 ## 依頼のしかた
 
