@@ -100,8 +100,8 @@ class EvalkitTest(unittest.TestCase):
 
     def make_doc(self) -> Path:
         root = self.base / "plugin"
-        write(root / "docs" / "replace.md", """
-            # 部品を変える
+        write(root / "docs" / "parts.md", """
+            # コンポーネント一覧
 
             ## 今の部品
 

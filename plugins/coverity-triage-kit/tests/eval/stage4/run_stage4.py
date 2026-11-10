@@ -6,7 +6,7 @@
 """EVAL stage 4 (entry routing): which skill and tool Claude picks for each way of asking.
 
 The workspace is the self-test's sample repository with three skills copied into ``.claude/skills/``
-(the screen entry, the batch run and the help skill; names read from docs/replace.md by role) and a
+(the screen entry, the batch run and the help skill; names read from docs/parts.md by role) and a
 stand-in for the extension's open tool (fake_open_server.py: a stdio MCP server that logs each call
 and returns a fake URL and the notices). The tool's name, description and notices are read from the
 extension's core/messages.mjs with node when it is there.

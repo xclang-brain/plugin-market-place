@@ -17,7 +17,7 @@
   一括実行のコマンドが受け付けて作業を始める。真偽の調査のスクリプトが issue-<CID>.json を読める。
   MCP サーバーの確認の文字列が、反映の計画のファイルのバイト列から決まる（計画のファイルの case を MCP サーバーで）。
 
-部品の名前は書かない。部品は、役割の名前で表に書き、docs/replace.md の「## 今の部品」の表で今の名前に直す。
+部品の名前は書かない。部品は、役割の名前で表に書き、docs/parts.md の「## 今の部品」の表で今の名前に直す。
 ないものは、理由を書いて飛ばす。
 
   python3 -m unittest discover -s tests/contracts -v
@@ -46,7 +46,7 @@ sys.path.insert(0, str(TESTS / "structure"))
 import plugin_parts as pp  # noqa: E402
 
 # 取り決めのファイル（設計書 4.17 の表）。ここだけに、取り決めのファイルの名前を書く。
-# （持ち主のフォルダの中のパス, 持ち主の役割, 写しを持つ部品の役割）。役割の名前は docs/replace.md の「今の部品」の表と同じ。
+# （持ち主のフォルダの中のパス, 持ち主の役割, 写しを持つ部品の役割）。役割の名前は docs/parts.md の「今の部品」の表と同じ。
 # 写しの置き場所：データは assets/、スクリプトは scripts/（MCP サーバーはパッケージ src/<パッケージ>/）、
 # 共通の試験のデータは assets/contract/（MCP サーバーは tests/contract/）。
 CONTRACTS = [
@@ -95,7 +95,7 @@ IMPORT_NAMES = {"pyyaml": "yaml", "beautifulsoup4": "bs4", "pillow": "PIL"}
 # ---------------------------------------------------------------------------
 
 def part_folder(role):
-    """役割 → 今の部品のフォルダ（docs/replace.md の表）。表にない・フォルダがないときは None"""
+    """役割 → 今の部品のフォルダ（docs/parts.md の表）。表にない・フォルダがないときは None"""
     for row in pp.current_parts():
         if row["role"] == role:
             folder = pp.ROOT / row["place"]
@@ -271,10 +271,10 @@ class CopiesTest(unittest.TestCase):
 
     def test_replace_doc_names_the_roles(self):
         if not pp.REPLACE_DOC.is_file():
-            self.skipTest("docs/replace.md がまだありません")
+            self.skipTest("docs/parts.md がまだありません")
         roles = {row["role"] for row in pp.current_parts()}
         needed = {role for _, owner, holders in CONTRACTS for role in [owner] + holders}
-        self.assertEqual(sorted(needed - roles), [], "docs/replace.md の「今の部品」の表に、取り決めの役割がありません")
+        self.assertEqual(sorted(needed - roles), [], "docs/parts.md の「今の部品」の表に、取り決めの役割がありません")
 
     def test_owners_have_their_files(self):
         problems, checked = [], 0
@@ -306,7 +306,7 @@ class CopiesTest(unittest.TestCase):
         if not checked:
             self.skipTest("写しがまだありません")
         self.assertEqual(problems, [], "取り決めの写しが、持ち主のものと違います（持ち主のファイルをそのままコピーしてください。"
-                                       "手順は docs/replace.md の「取り決めの写し」）：\n" + "\n".join(problems))
+                                       "元のファイルを直したら、写しも同じ内容にする）：\n" + "\n".join(problems))
 
     def test_holders_have_their_copies(self):
         """設計書 4.17 の「写しを持つ部品」が写しを持つ。まだない写しは、理由を書いて飛ばす（ほかの人が作っている途中のことがある）"""
@@ -318,7 +318,7 @@ class CopiesTest(unittest.TestCase):
                         self.skipTest(f"{holder} の部品がまだありません")
                     if not copies_in(folder, contract):
                         self.skipTest(f"{holder}（{pp.rel(folder)}）に {expected_place(folder, contract)} の写しがまだありません"
-                                      f"（持ち主：{owner}。docs/replace.md の手順でコピーしてください）")
+                                      f"（持ち主：{owner}。持ち主のファイルをそのままコピーしてください）")
 
     def test_copies_are_listed(self):
         """同じ名前のファイルを持つ部品は、表（設計書 4.17）の持ち主か写しを持つ部品"""

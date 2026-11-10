@@ -4,7 +4,7 @@
 利用者から見た振る舞いは [仕様書](../specs/requirements.md) にある。
 
 - バージョン：0.2.0
-- この設計書は、部品を役割で呼ぶ（「一括実行のスキル」など）。今の部品の名前との対応は、開発者向けの [部品の変え方](../replace.md) にだけある。名前を書くのは、取り決めの名前（MCP サーバーの登録名、ツールの名前、`defaults.json`）だけにする。
+- この設計書は、部品を役割で呼ぶ（「一括実行のスキル」など）。今の部品の名前との対応は、開発者向けの [コンポーネント一覧](../parts.md) にだけある。名前を書くのは、取り決めの名前（MCP サーバーの登録名、ツールの名前、`defaults.json`）だけにする。
 
 ## 1. 基本の考え方
 
@@ -80,7 +80,7 @@ coverity-triage-kit/
   plugin.json  mcp.json            Copilot CLI のマニフェストと MCP サーバーの登録（Agent Plugins の形）
   .claude-plugin/plugin.json  .mcp.json   Claude Code のマニフェストと MCP サーバーの登録
   README.md  CHANGELOG.md  LICENSE  .gitignore  .github/plugin/marketplace.json
-  docs/  constitution.md  specs/requirements.md  design/design.md  replace.md  guide/4-screen.md
+  docs/  constitution.md  specs/requirements.md  design/design.md  parts.md  guide/4-screen.md
   mcp-servers/<名前>/              MCP サーバー（README.md、pyproject.toml、uv.lock、src/、tests/、evals/）。両方のツールが使う
   skills/<名前>/                   スキル（SKILL.md、README.md、scripts/、references/、assets/、tests/、evals/）。両方のツールが使う
   agents/                          Claude Code のエージェントの定義（<名前>.md）だけ
@@ -561,7 +561,7 @@ status の出力（画面のため。読むだけ）：
 - データ（JSON Schema、評価基準）は、ファイルをそのまま写す。
 - 決まりをコードで持つものは、持ち主のスクリプトのファイル（標準ライブラリか、写す側も持てるライブラリだけを使うもの）を、そのまま写す。写す側は、写しを読み込んで使い、自分で書き直さない。スクリプトが読み込んでよいのは、同じフォルダにある、この表のほかのスクリプトだけ（写す側も必ず一緒に写す。例：結果の決まりと統合の計画の決まりは、逸脱コメントの決まりを読み込む）。
 - 持ち主は、共通の試験のデータ（`assets/contract/<名前>/cases.json`：入力と期待する答えの組）も持ち、写しを持つ部品もそれを自分の試験で動かす。
-- `tests/contracts/` が、写しが同じバイト列であることと、書く部品の出力を読む部品が受け付けることを確かめる。持ち主を直したら、写しも同じに直す（手順は `docs/replace.md`）。
+- `tests/contracts/` が、写しが同じバイト列であることと、書く部品の出力を読む部品が受け付けることを確かめる。持ち主を直したら、写しも同じに直す（写しの一覧は `tests/contracts/`）。
 
 | 取り決め | 持ち主（ファイル） | 写しを持つ部品 |
 | --- | --- | --- |

@@ -7,7 +7,7 @@
 - エージェント：com.github.copilot/agents/<名前>.agent.md（Copilot CLI）と、agents/<名前>.md（Claude Code。同じ名前の組）
 - プラグイン全体のスキルと役割：エクステンションの defaults.json（pluginSkills・roles・orchestrator）
 - 部品の組：エージェントとプラグイン全体のスキルの「## 使う部品」の表
-- 役割と今の名前の対応：docs/replace.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
+- 役割と今の名前の対応：docs/parts.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
 - 設定の項目：設計書 4.1 の config.yaml の表（取り決め）
 
 structure・independence・contracts・docs の試験が、このファイルを読み込む。
@@ -37,7 +37,7 @@ DEFAULTS = EXT_DIR / "defaults.json"
 DOCS_DIR = ROOT / "docs"
 SPEC = DOCS_DIR / "specs" / "requirements.md"
 DESIGN = DOCS_DIR / "design" / "design.md"
-REPLACE_DOC = DOCS_DIR / "replace.md"
+REPLACE_DOC = DOCS_DIR / "parts.md"
 GUIDE_DIR = DOCS_DIR / "guide"
 SCHEMAS_DIR = TESTS / "structure" / "schemas" / "agent-plugins-1.0.0"
 # Claude Code の形（同じフォルダに置く。Copilot CLI は、plugin.json の $schema が Agent Plugins 1.0.0 なら読まない）
@@ -574,7 +574,7 @@ def parts_table(text: str, heading: str = PARTS_HEADING, header=None):
 
 
 def current_parts():
-    """docs/replace.md の「## 今の部品」の表：[{role, stage, name, place}]。読めなければ []"""
+    """docs/parts.md の「## 今の部品」の表：[{role, stage, name, place}]。読めなければ []"""
     if not REPLACE_DOC.is_file():
         return []
     rows, _ = parts_table(read(REPLACE_DOC), CURRENT_PARTS_HEADING, CURRENT_PARTS_HEADER)

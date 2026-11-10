@@ -652,11 +652,11 @@ class DocumentIndependence(unittest.TestCase):
             problems += pp.hits_in_text(pp.rel(doc), text, self.internals())
         self.assertEqual(problems, [], "上の段の文書に、下の段の中身（スクリプトの名前・設定の項目）があります：\n" + "\n".join(problems))
 
-    def test_replace_doc_is_for_developers(self):
-        """部品を変える手順は、開発者向けの docs/replace.md にだけ書く（利用者向けのガイドに置かない）"""
-        self.assertTrue(pp.REPLACE_DOC.is_file(), "docs/replace.md がありません")
+    def test_parts_list_is_for_developers(self):
+        """役割と名前の対応表は、開発者向けの docs/parts.md にだけ置く（利用者向けのガイドに置かない）"""
+        self.assertTrue(pp.REPLACE_DOC.is_file(), "docs/parts.md がありません")
         if pp.GUIDE_DIR.is_dir():
-            self.assertFalse((pp.GUIDE_DIR / pp.REPLACE_DOC.name).exists(), "部品を変える手順が、利用者向けのガイドの中にあります")
+            self.assertFalse((pp.GUIDE_DIR / pp.REPLACE_DOC.name).exists(), "コンポーネント一覧が、利用者向けのガイドの中にあります")
 
 
 class ExtensionIndependence(unittest.TestCase):

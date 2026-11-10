@@ -1,6 +1,12 @@
-# Copilot CLI ガイド
+# 運用ガイド
 
-GitHub Copilot CLI で coverity-triage-kit を使う人のための、セットアップと運用の手引きです。[README](../../README.md) の「はじめる」を補う内容で、必要な節だけ読めば足ります。Web管理画面の操作は [Web管理画面ガイド](4-screen.md) にあります。
+coverity-triage-kit を運用するときに必要になる情報をまとめています。使い方は、[チュートリアル](1-skill.md) を順に進めると分かります。この文書は、必要になった節だけ読んでください。
+
+| 知りたいこと | 節 |
+| --- | --- |
+| 無人で実行したい | [一括トリアージの前に、ツールを許可しておく](#一括トリアージの前にツールを許可しておく) |
+| うまく動かない | [うまく動かないとき](#うまく動かないとき) |
+| 必要なソフトウェアを確認したい | [必要なもの](#必要なもの) |
 
 ## 必要なもの
 
@@ -12,18 +18,7 @@ GitHub Copilot CLI で coverity-triage-kit を使う人のための、セット�
 | Coverity Connect のアカウントと認証キー | ブラウザで Coverity にログインできること |
 | `cov-build`・`cov-analyze`・`cov-commit-defects`（最初に解析も行う場合だけ） | `/coverity-selftest` の④ |
 
-## セットアップ
-
-### 1. インストールする
-
-```shell
-copilot plugin marketplace add xclang-brain/plugin-market-place
-copilot plugin install coverity-triage-kit@plugin-market-place
-```
-
-Copilot CLI の中からは、`/plugin marketplace add xclang-brain/plugin-market-place` と `/plugin install coverity-triage-kit@plugin-market-place` でもインストールできます。
-
-### 2. MCP サーバーの依存ライブラリを先に取得する（任意）
+## MCP サーバーの初回起動を速くする（任意）
 
 Coverity と通信する MCP サーバーは、初回の起動時に依存ライブラリをダウンロードするため、起動に時間がかかります。次のコマンドを先に1回実行しておくと、すぐに起動します。
 
@@ -34,21 +29,6 @@ uv sync --native-tls --frozen --directory "<プラグインのフォルダ>/mcp-
 `<プラグインのフォルダ>` は、GitHub からインストールした場合は `~/.copilot/installed-plugins/<マーケットプレイス名>/coverity-triage-kit` です。
 
 Windows 以外では、Copilot CLI が認証情報の環境変数を MCP サーバーに渡せないことがあります。その場合は [MCP サーバーの README](../../mcp-servers/coverity-connect/README.md) の手順で登録し直してください。
-
-### 3. 設定を作る
-
-調査したいリポジトリで Copilot CLI を起動し、`/coverity-setup` と入力します（20分ほど）。
-
-- 設定は、リポジトリの `.coverity-triage/` に保存されます。コミットすればチームで共有できます。
-- 認証情報は環境変数 `COV_USER` / `COV_AUTH_KEY` で渡します。設定ファイルには書きません。認証キーはチャットに貼らず、ターミナルの入力欄（入力内容は表示されません）に入力します。
-- 対象の警告は、条件ファイル（`.coverity-triage/filters/` の YAML）で絞り込みます。既定は「未分類の警告を20件まで」です。
-
-### 4. Web管理画面を使う場合
-
-Web管理画面は、Copilot CLI の試験的機能（エクステンション）で動きます。
-
-- `copilot --experimental` で起動します（一度指定すれば設定に残ります）。起動後なら `/settings experimental on` でも有効にできます。
-- 読み込み時に `Extension "plugin:coverity-triage-kit:coverity-triage-kit" wants elevated permissions` という確認が出ます。許可しないと読み込まれません。「Yes, and always allow … in this directory」を選ぶと、そのフォルダでは次回から確認が出ません。
 
 ## 一括トリアージの前に、ツールを許可しておく
 
@@ -86,7 +66,7 @@ copilot --add-dir "<出力先>" --allow-tool 'shell(uv:*)' --allow-tool write --
 | 症状 | 原因と対処 |
 | --- | --- |
 | 「Coverity の警告をトリアージして」と頼んでも、Web管理画面の URL が表示されない | エクステンションが読み込まれていません。①試験的機能が無効：`copilot --experimental` で起動し直す。②読み込み時の確認を拒否した：Copilot CLI を再起動して許可する。③`/extensions mode` が Disabled：Load & Augment に戻す |
-| 意図しないスキルが使われる | 同名のスキルが他にも入っていないかを `/skills list` で確認する（coverity-warning-triage と併用していないか） |
+| 意図しないスキルが使われる | 同名のスキルが他にも入っていないかを `/skills list` で確認する |
 | Coverity に接続できない、設定のエラーが出る | `/coverity-help` に症状を伝える。`/coverity-selftest` で診断できる |
 
 ## 改善の Issue を起票する

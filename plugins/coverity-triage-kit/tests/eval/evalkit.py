@@ -7,7 +7,7 @@
 
 The harnesses (run_mcp_eval.py, stage2/, stage3/, stage4/) use this module for:
 
-- part names by role, read from the "## 今の部品" table of docs/replace.md (no part name is
+- part names by role, read from the "## 今の部品" table of docs/parts.md (no part name is
   written in the harnesses; contract names such as the extension tool name are fine);
 - the result folder (outside the plugin folder; default $TMPDIR/<plugin>-evals/<stage>/<time>);
 - running ``claude -p`` with ``--output-format stream-json --verbose``: the transcript is saved
@@ -42,7 +42,7 @@ sys.dont_write_bytecode = True
 
 HERE = Path(__file__).resolve().parent
 PLUGIN_ROOT = HERE.parents[1] if len(HERE.parents) > 1 else HERE
-REPLACE_DOC = Path("docs") / "replace.md"
+REPLACE_DOC = Path("docs") / "parts.md"
 CURRENT_PARTS_HEADING = "今の部品"
 CURRENT_PARTS_HEADER = ["役割", "段階", "部品", "置き場所"]
 AGENT_SUFFIX = ".agent.md"
@@ -89,7 +89,7 @@ def progress(tag: str, message: str) -> None:
 
 
 def current_parts(root: Path = PLUGIN_ROOT) -> list[dict]:
-    """Rows of the "## 今の部品" table of docs/replace.md: [{role, stage, name, place}]."""
+    """Rows of the "## 今の部品" table of docs/parts.md: [{role, stage, name, place}]."""
     doc = Path(root) / REPLACE_DOC
     if not doc.is_file():
         return []
