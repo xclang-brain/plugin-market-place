@@ -4,7 +4,7 @@ REQ-202、REQ-603、設計書 9.1「独立性」）。
 名前は、フォルダ・mcp.json・「使う部品」の表と、tests/structure/plugin_parts.py の定数から読みます。
 
 確かめること：
-- 1段階目の部品（plugin_parts.py の PLUGIN_SKILLS にないスキルと、MCP サーバー）：フォルダの中に、プラグインの名前（と略）、
+- 1段階目の部品（スキルと MCP サーバー）：フォルダの中に、プラグインの名前（と略）、
   ほかの部品の名前、MCP サーバーの登録名とツールの名前（MCP サーバーの中を除く）、上の段階の言葉、フォルダの外を指すパスがない。
   sys.path でフォルダの外を読まない。フォルダだけを別の場所にコピーして（スキルは名前を変えたコピーも）、その試験が通る。
 - エージェント（Copilot CLI の .agent.md と、Claude Code の agents/<名前>.md の両方）：部品の名前は「## 使う部品」の表にだけ
@@ -147,7 +147,7 @@ def sys_path_problems(folder):
 
 def stage1_parts():
     """1段階目の部品のフォルダ：(フォルダ, その部品の名前の集まり, 種類)"""
-    parts = [(pp.SKILLS_DIR / n, {n}, "skill") for n in pp.stage1_skill_names()]
+    parts = [(pp.SKILLS_DIR / n, {n}, "skill") for n in pp.skill_names()]
     for entry in mcp_entries().values():
         folder = entry["folder"]
         if folder and folder.is_dir():
@@ -484,14 +484,13 @@ class Stage2And3Sets(unittest.TestCase):
         worker = pp.ROLES["worker"]
         names, missing = closure(worker, kind)
         self.assertEqual(missing, [], f"作業役の表に、ない部品があります：{missing}")
-        upper = [n for n in names - {worker} if resolve(n, kind) == "agent" or n in pp.PLUGIN_SKILLS]
+        upper = [n for n in names - {worker} if resolve(n, kind) == "agent"]
         self.assertEqual(upper, [], f"作業役の表に、1段階目でない部品があります（2段階目は1段階目の部品だけで動く）：{upper}")
         return names
 
     def orchestrator_set(self, kind):
         names, missing = closure(pp.ORCHESTRATOR, kind)
         self.assertEqual(missing, [], f"3段階目の組に、ない部品があります：{missing}")
-        self.assertEqual(sorted(names & set(pp.PLUGIN_SKILLS)), [], "3段階目の組に、他のコンポーネントを名前で使うスキルがあります")
         for role, agent in pp.ROLES.items():
             with self.subTest(role=role):
                 self.assertIn(agent, names, f"{role} のエージェントが、統括エージェントの表にありません")

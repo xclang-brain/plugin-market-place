@@ -24,8 +24,6 @@ coverity-triage-kit を構成するスキル、MCP サーバー、エージェ�
 | 統括 | 3 | `triage-orchestrator` | `com.github.copilot/agents/triage-orchestrator.agent.md` |
 | 検証役 | 3 | `triage-reviewer` | `com.github.copilot/agents/triage-reviewer.agent.md` |
 | 統合役 | 3 | `triage-integrator` | `com.github.copilot/agents/triage-integrator.agent.md` |
-| 困ったとき | 4 | `coverity-help` | `skills/coverity-help/` |
-| 自己診断 | 4 | `coverity-selftest` | `skills/coverity-selftest/` |
 
 - 段階は、そのコンポーネントが単独で使える最も下の段階です。どの段階も、それより上の段階のコンポーネントなしで使えます。
 - エージェントは、Claude Code 用（`agents/<名前>.md`）と Copilot CLI 用（`com.github.copilot/agents/<名前>.agent.md`）の2つの定義を持ちます。表には Copilot CLI 用の場所を書いています。

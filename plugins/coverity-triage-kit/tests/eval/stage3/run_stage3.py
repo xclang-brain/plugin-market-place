@@ -7,8 +7,8 @@
 
 For each variant:
 
-1. the self-test skill (a temp copy, run by path) makes its sample repository: git, a push target
-   and a fake Coverity (``selftest.py start --sections 2`` and ``sample``). The variant sets
+1. the sample (``tests/fixtures/sample/sample-target``: C code and a fake Coverity) becomes a git
+   repository with a push target. The variant sets
    ``agents.review`` / ``agents.integration`` in its config and commits it; ``--limit N`` asks for
    「N 件だけ」 in the request (the batch-run skill turns it into --limit; 1 for a smoke test);
 2. claude_adapter extracts the orchestrator's table, followed through the agents of the table (all
@@ -20,8 +20,8 @@ For each variant:
    repository) is passed with ``--add-dir``;
 3. ``claude -p "<request>" --agent <orchestrator> --max-turns N`` runs (the orchestrator is the main
    agent); with claude-plugin it is ``--plugin-dir <variant>/claude-plugin --agent <plugin>:<orchestrator>``;
-4. checks: the self-test's ``check-run`` (2-2〜2-6: run finished, all items done, conclusions against
-   expected.yaml, the group, files and the user's working files), summary.html and approvals.json,
+4. checks: run finished, all items done, the files of each done item, conclusions and the group
+   against expected.yaml, summary.html and approvals.json,
    result.json for every item, review.json when review is on, the user's repository unchanged,
    only role agents called, the orchestrator edited no file; plus counts, accuracy, time and cost.
 
@@ -34,7 +34,7 @@ Variants: ``default`` (review and integration off, the design defaults) and ``fu
         [--model M] [--agent-model M] [--tools-from-definitions] [--timeout S] [--max-turns N] [--max-budget-usd X]
         [--out DIR] [--build-only] [--no-sync]
 
-Writes <out>/<variant>/ (selftest/, transcript.jsonl, variant.json), <out>/results.json, <out>/report.md.
+Writes <out>/<variant>/ (sample/, transcript.jsonl, variant.json), <out>/results.json, <out>/report.md.
 Prints one JSON object on stdout.
 """
 
@@ -53,7 +53,6 @@ import evalkit as ek  # noqa: E402
 
 TAG = "stage3"
 ROLE_ORCHESTRATOR = "統括"
-ROLE_SELFTEST = "自己診断"
 ROLE_RUN = "一括実行"
 ROLES = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合役"}
 BARE = "bare"
@@ -68,7 +67,7 @@ PROMPT_LIMIT = "Coverity の警告を、条件ファイル {filter} で、{limit
 PROMPT_BARE = "Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。"
 RUN_DIR_RE = re.compile(r"^[0-9]{8}-[0-9]{6}(-[0-9]+)?$")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
-SELFTEST_LEVELS = {"2-2": "must", "2-3": "must", "2-4": "should", "2-5": "should", "2-6": "must"}
+RESULT_KEYS = {"verdict", "recommendation", "confidence", "deviation", "fix"}
 
 
 # --------------------------------------------------------------------------- config of the sample
@@ -103,24 +102,19 @@ def prompt_for(filter_name: str, limit: int | None, variant: str = "default") ->
     return (PROMPT_LIMIT if limit else PROMPT).replace("{filter}", filter_name).replace("{limit}", str(limit or ""))
 
 
-def prepare_sample(selftest_script: Path, vdir: Path, variant: str) -> dict:
-    sdir = vdir / "selftest"
-    started, res = ek.run_json(ek.uv_script(selftest_script, "start", "--sections", "2", "--dir", str(sdir),
-                                            "--client", "Claude Code（EVAL）"), timeout=600)
-    if not started or not started.get("ok"):
-        raise ek.EvalError("自己診断のスクリプトの start が失敗しました",
-                           [str((started or {}).get("error") or res["stderr"][-800:])])
-    sample, res = ek.run_json(ek.uv_script(selftest_script, "sample", "--dir", str(sdir)), timeout=600)
-    if not sample or not sample.get("ok"):
-        raise ek.EvalError("自己診断のスクリプトの sample が失敗しました",
-                           [str((sample or {}).get("error") or res["stderr"][-800:])])
-    repo = Path(sample["repo_root"])
+def prepare_sample(vdir: Path, variant: str) -> dict:
+    """The sample as a git repository with a push target; the variant's settings are committed."""
+    sdir = (vdir / "sample").resolve()
+    repo, origin = sdir / "sample-target", sdir / "sample-origin.git"
+    ek.make_repo(ek.SAMPLE / "sample-target", repo)
+    ek.git(sdir, "init", "-q", "--bare", str(origin))
+    ek.git(repo, "remote", "add", "origin", str(origin))
+    ek.git(repo, "push", "-q", "-u", "origin", "main")
     config = repo / ".coverity-triage" / "config.yaml"
     config.write_text(set_agent_options(config.read_text(encoding="utf-8"), VARIANTS[variant]), encoding="utf-8")
-    filter_name = sample.get("filter") or DEFAULT_FILTER
     ek.git(repo, "add", "-A")
     ek.git(repo, "commit", "-q", "-m", f"EVAL の設定（{variant}）", check=False)
-    return {"selftest_dir": sdir, "repo": repo, "output_dir": Path(sample["output_dir"]), "filter": filter_name}
+    return {"repo": repo, "output_dir": sdir / "coverity-triage-out", "filter": DEFAULT_FILTER}
 
 
 # --------------------------------------------------------------------------- after the run
@@ -197,21 +191,28 @@ def start_checks(summary: dict, run_skill: str) -> list[dict]:
     ]
 
 
-def selftest_checks(selftest_script: Path, sdir: Path, run_dir: Path, limited: bool = False) -> tuple[list[dict], dict | None]:
-    """The self-test's check-run (2-2〜2-6). A limited run cannot meet 2-4 and 2-5 (they need every warning)."""
-    data, res = ek.run_json(ek.uv_script(selftest_script, "check-run", "--dir", str(sdir), "--run", str(run_dir)),
-                            timeout=600)
-    if not data or not data.get("ok"):
-        return [ek.check("selftest_check_run", False, str((data or {}).get("error") or res["stderr"][-600:]))], data
-    out = []
-    for c in data.get("checks") or []:
-        level = SELFTEST_LEVELS.get(str(c.get("id")), "should")
-        ok = c.get("status") != "fail" if level == "must" else c.get("status") == "pass"
-        if limited and str(c.get("id")) in ("2-4", "2-5"):
-            ok = None  # skipped: the run was limited to fewer warnings than the sample has
-        detail = f"{c.get('status')}: {c.get('actual', '')}" + (f"（{c['detail']}）" if c.get("detail") else "")
-        out.append(ek.check(f"selftest-{c.get('id')}", ok, detail[:600], level))
-    return out, data
+def sample_checks(run_dir: Path, run_json: dict, expected: dict, limited: bool = False) -> list[dict]:
+    """The run against the sample: every item done, the files of each done item, and the conclusions and the
+    group of expected.yaml (skipped for a limited run: it has fewer warnings than the sample)."""
+    items = [i for i in run_json.get("items") or [] if isinstance(i, dict) and i.get("id") is not None]
+    unfinished = [f"{i['id']}: {i.get('status')}" for i in items if i.get("status") not in ("done", "merged")]
+    incomplete = []
+    for item_id in (str(i["id"]) for i in items if i.get("status") == "done"):
+        result = ek.read_json(run_dir / "items" / item_id / "result.json")
+        if not isinstance(result, dict) or not RESULT_KEYS <= set(result):
+            incomplete.append(f"{item_id}: result.json がないか、項目が足りません")
+        elif not (run_dir / "cid" / f"{item_id}.html").is_file():
+            incomplete.append(f"{item_id}: 詳細レポート cid/{item_id}.html がありません")
+    wrong = [f"{r['id']}: 推奨 {r['got']}（想定 {r['expected']}）" for r in accuracy(run_dir, expected)["items"] if not r["ok"]]
+    group = set((expected.get("group") or {}).get("cids") or [])
+    groups = [f"{i['id']}: {i.get('cids')}" for i in items if len(i.get("cids") or []) > 1]
+    return [
+        ek.check("all_items_done", bool(items) and not unfinished, "、".join(unfinished) or f"作業 {len(items)} 件"),
+        ek.check("item_files", not incomplete, "、".join(incomplete) or "そろっている"),
+        ek.check("expected_conclusions", None if limited else not wrong, "、".join(wrong) or "想定どおり", "should"),
+        ek.check("expected_group", None if limited else any(set(i.get("cids") or []) == group for i in items),
+                 "グループ: " + ("、".join(groups) or "なし"), "should"),
+    ]
 
 
 def run_status(run_script: Path | None, run_dir: Path) -> dict | None:
@@ -244,7 +245,7 @@ def orchestrator_definition(fmt: str, orchestrator: dict, root: Path) -> Path:
 def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     vdir = ctx["out"] / variant
     ek.progress(TAG, f"{variant}: 見本のリポジトリを作る")
-    sample = prepare_sample(ctx["selftest_script"], vdir, variant)
+    sample = prepare_sample(vdir, variant)
     repo, output_dir = sample["repo"], sample["output_dir"]
     venv = vdir / "mcp-venv"
     build = ek.ADAPTER.build(adapter_args(
@@ -294,7 +295,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     made = run_dirs(output_dir)
     checks.append(ek.check("one_run_folder", len(made) <= 1,
                            f"実行フォルダを {len(made)} つ作った（{', '.join(p.name for p in made)}）", "should"))
-    status, selftest, acc = None, None, None
+    status, acc = None, None
     if run_dir is not None:
         run_json = ek.read_json(run_dir / "run.json") or {}
         status = run_status(ctx["run_script"](build), run_dir)
@@ -305,8 +306,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
         missing = [n for n in ("summary.html", "approvals.json") if not (run_dir / n).is_file()]
         checks.append(ek.check("summary_files", not missing, f"ない: {missing}" if missing else "summary.html と approvals.json がある"))
         checks += item_checks(run_dir, run_json, VARIANTS[variant]["review"], VARIANTS[variant]["integration"])
-        st_checks, selftest = selftest_checks(ctx["selftest_script"], sample["selftest_dir"], run_dir, bool(args.limit))
-        checks += st_checks
+        checks += sample_checks(run_dir, run_json, ctx["expected"], bool(args.limit))
         acc = accuracy(run_dir, ctx["expected"]) if not args.limit else None
     changed = ek.working_changes(repo)
     moved = ek.head(repo) != head
@@ -323,7 +323,7 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
         "skills_loaded": summary["skills_loaded"], "tool_errors": summary["tool_errors"][:20],
         "permission_denials": summary["permission_denials"][:20], "reply": ek.final_text(summary)[:4000],
         "accuracy": acc, "counts": (status or {}).get("counts"), "criteria_results": (status or {}).get("criteria_results"),
-        "errors": (status or {}).get("errors"), "selftest": selftest, "init": summary.get("init"),
+        "errors": (status or {}).get("errors"), "init": summary.get("init"),
         "transcript": run["transcript"]})
     ek.write_json(vdir / "variant.json", record)
     ek.progress(TAG, f"{variant}: {'合格' if record['passed'] else '不合格'}（{run['seconds']:.0f} 秒、{ek.money(summary.get('cost_usd'))}）")
@@ -343,7 +343,7 @@ def render_report(meta: dict, records: list[dict]) -> str:
              f"- 日時: {meta['started_at']}", f"- 形: `{meta.get('format', ek.ADAPTER.FORMAT_CONVERTED)}`",
              f"- 統括エージェント: `{meta['orchestrator']}`（モデル `{meta['model']}`）",
              f"- エージェントのモデル: {meta['agent_model'] or meta.get('agent_model_default') or '各定義の claude-* のモデル'}",
-             f"- 部品: {', '.join(meta['parts'])}", f"- 見本: 自己診断の sample-target（期待は expected.yaml）", "",
+             f"- 部品: {', '.join(meta['parts'])}", "- 見本: tests/fixtures/sample（想定は expected.yaml）", "",
              "## まとめ", ""]
     lines += ek.md_table(["変種", "合否", "落ちた確かめ", "件数", "推奨の一致", "時間（秒）", "ターン", "費用"],
                          [[r["variant"], ek.mark(r.get("passed")),
@@ -403,16 +403,11 @@ def run(args: argparse.Namespace) -> dict:
     if args.limit is not None and BARE in (args.variant or []):
         raise ek.EvalError("--limit は bare と一緒に使えません（bare の頼みの文には条件を付けません）")
     orchestrator = ek.part(ROLE_ORCHESTRATOR, root)
-    selftest = ek.part(ROLE_SELFTEST, root)
     run_skill = ek.part(ROLE_RUN, root)["name"]
     role_names = {role: ek.part(word, root)["name"] for role, word in ROLES.items()}
     variants = list(args.variant or DEFAULT_VARIANTS)
     out = ek.prepare_out(args.out, "stage3", root)
-    tools = ek.copy_tree(selftest["path"], out / "tools" / selftest["path"].name)
-    selftest_script = tools / "scripts" / "selftest.py"
-    if not selftest_script.is_file():
-        raise ek.EvalError(f"自己診断のスクリプトがありません: {selftest_script}")
-    expected = ek.load_yaml(tools / "assets" / "expected.yaml") or {}
+    expected = ek.load_yaml(ek.SAMPLE / "expected.yaml") or {}
     plugin = args.format == ek.ADAPTER.FORMAT_PLUGIN
     definition = orchestrator_definition(args.format, orchestrator, root)
     agent = ek.ADAPTER.load_agent(definition)
@@ -426,8 +421,7 @@ def run(args: argparse.Namespace) -> dict:
         shown_model = model or "（claude の既定）"
     collected = ek.ADAPTER.collect_parts(definition, ek.ADAPTER.Layout(root, flavor="claude" if plugin else "copilot"))
     ctx = {"root": root, "out": out, "orchestrator": orchestrator, "definition": definition,
-           "selftest_script": selftest_script, "run_skill": run_skill,
-           "expected": expected, "model": model, "role_names": role_names,
+           "run_skill": run_skill, "expected": expected, "model": model, "role_names": role_names,
            "run_script": lambda build: (Path(build["skills"][run_skill]) / "scripts" / "run.py") if run_skill in build["skills"] else None}
     meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "format": args.format,
             "orchestrator": orchestrator["name"], "orchestrator_definition": str(definition),

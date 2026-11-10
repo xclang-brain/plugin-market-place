@@ -116,6 +116,6 @@ CID 12345 をトリアージして
 
 - **設定をあとから変える**：もう一度 `/coverity-setup` を実行し、「1回の件数の上限を 50 にして」のように頼みます。画面で変えることもできます（ステップ3の `/coverity-gui`）。
 - **チームの2人目以降**：コミットされた `.coverity-triage/` を pull してから `/coverity-setup` を実行すると、認証情報の設定だけで済みます。
-- **うまく接続できないとき**：`/coverity-help` に症状を伝えるか、`/coverity-selftest` で診断します。
+- **うまく接続できないとき**：もう一度 `/coverity-setup` を実行します。設定・認証情報・接続を確認し、直す箇所を示します。
 - この段階では、Coverity への書き込みは行いません。
 - エージェントの詳しい説明は、[作業エージェントの README](../../com.github.copilot/agents/triage-worker.README.markdown) にあります。

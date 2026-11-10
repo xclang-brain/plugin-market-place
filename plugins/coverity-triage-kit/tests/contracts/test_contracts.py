@@ -76,8 +76,8 @@ CONTRACTS = [
     ("scripts/plantoken.py", "反映", ["Coverity との通信"]),
     ("assets/contract/token/cases.json", "反映", ["Coverity との通信"]),
     # 実行フォルダと承認の形
-    ("assets/run.schema.json", "一括実行", ["反映", "結果と設定の画面", "自己診断", "困ったとき"]),
-    ("assets/approvals.schema.json", "一括実行", ["反映", "結果と設定の画面", "自己診断"]),
+    ("assets/run.schema.json", "一括実行", ["反映", "結果と設定の画面"]),
+    ("assets/approvals.schema.json", "一括実行", ["反映", "結果と設定の画面"]),
 ]
 LINT_CODES = {"evidence_missing_file", "evidence_line_out_of_range", "undetermined_high", "drift_high",
               "true_bug_deviation", "not_bug_fix", "no_evidence"}

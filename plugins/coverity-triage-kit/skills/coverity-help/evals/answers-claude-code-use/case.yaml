@@ -1,8 +1,0 @@
-schema_version: "1.1"
-name: answers-claude-code-use
-expected_outcome: |
-  Claude Code での使い方を、資料（usage.md の「Claude Code で使う」）から短く答える。Web管理画面（4段階目）は
-  GitHub Copilot CLI だけの機能で、Claude Code にはないことを伝える。夜通しの一括のトリアージには、/add-dir だけでは
-  許可が足りないことと、起動のときの --allowedTools（か /permissions）で前もって許可するしかたを示す。書き戻すツールと、
-  サーバーの名前だけの許可は前もって許可しない。反映は --agent を付けずに起動したセッションですることを伝える。
-  読めなかったマーケットプレイスのリポジトリや名前を推測で埋めず、<…> のまま示すか、プラグインの README を案内する。

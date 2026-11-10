@@ -548,7 +548,7 @@ class NamedPartsTest(unittest.TestCase):
         for name in [pp.ORCHESTRATOR, *pp.ROLES.values()]:
             for path in (pp.agent_path(name), pp.claude_agent_path(name)):
                 self.assertTrue(path.is_file(), f"{pp.rel(path)} がありません")
-        for path in [pp.RUN_SCRIPT, pp.GUI_SCRIPT, pp.APPLY_SCRIPT, *(skill_md(n) for n in pp.PLUGIN_SKILLS)]:
+        for path in [pp.RUN_SCRIPT, pp.GUI_SCRIPT, pp.APPLY_SCRIPT]:
             self.assertTrue(path.is_file(), f"{pp.rel(path)} がありません")
 
 

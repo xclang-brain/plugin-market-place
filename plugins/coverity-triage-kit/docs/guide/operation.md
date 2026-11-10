@@ -16,7 +16,7 @@ coverity-triage-kit を運用するときに必要になる情報をまとめて
 | uv（Python と必要なライブラリを自動で用意するツール） | `uv --version` |
 | git または svn | `git --version` / `svn --version` |
 | Coverity Connect のアカウントと認証キー | ブラウザで Coverity にログインできること |
-| `cov-build`・`cov-analyze`・`cov-commit-defects`（最初に解析も行う場合だけ） | `/coverity-selftest` の④ |
+| `cov-build`・`cov-analyze`・`cov-commit-defects`（最初に解析も行う場合だけ） | `/coverity-setup`（最初の解析を使う設定のとき、コマンドが PATH にあるかを確認します） |
 
 ## MCP サーバーの初回起動を速くする（任意）
 
@@ -66,4 +66,4 @@ copilot --add-dir "<出力先>" --allow-tool 'shell(uv:*)' --allow-tool write --
 | 症状 | 原因と対処 |
 | --- | --- |
 | 意図しないスキルが使われる | 同名のスキルが他にも入っていないかを `/skills list` で確認する |
-| Coverity に接続できない、設定のエラーが出る | `/coverity-help` に症状を伝える。`/coverity-selftest` で診断できる |
+| Coverity に接続できない、設定のエラーが出る | もう一度 `/coverity-setup` を実行する。設定・認証情報・接続を確認し、直す箇所を示す |

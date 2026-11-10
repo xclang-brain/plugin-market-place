@@ -5,9 +5,9 @@
 - MCP サーバー：mcp-servers/ の下のフォルダと、mcp.json の mcpServers の鍵（登録名）。
   ツールの名前は、MCP サーバーのソースの @….tool の付いた関数から読む
 - エージェント：com.github.copilot/agents/<名前>.agent.md（Copilot CLI）と、agents/<名前>.md（Claude Code。同じ名前の組）
-- テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト、
-  他のコンポーネントを名前で使うスキル）：このファイルの定数（ORCHESTRATOR など）。ここに書いたものがなければ、テストは不合格になります
-- 部品の組：エージェントとプラグイン全体のスキルの「## 使う部品」の表
+- テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト）：
+  このファイルの定数（ORCHESTRATOR など）。ここに書いたものがなければ、テストは不合格になります
+- 部品の組：エージェントの「## 使う部品」の表
 - 役割と今の名前の対応：docs/parts.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
 - 設定の項目：設計書 4.1 の config.yaml の表（取り決め）
 
@@ -59,7 +59,6 @@ ROLES = {"worker": "triage-worker", "reviewer": "triage-reviewer", "integrator":
 RUN_SCRIPT = SKILLS_DIR / "coverity-run" / "scripts" / "run.py"
 GUI_SCRIPT = SKILLS_DIR / "coverity-gui" / "scripts" / "gui.py"
 APPLY_SCRIPT = SKILLS_DIR / "coverity-apply" / "scripts" / "apply.py"
-PLUGIN_SKILLS = ["coverity-help", "coverity-selftest"]  # 他のコンポーネントを名前で使うスキル（1段階目に数えません）
 
 TEXT_SUFFIXES = {
     ".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".mjs", ".js", ".cjs",
@@ -432,10 +431,6 @@ def without_frontmatter_keys(text: str, keys=CLAUDE_NAME_KEYS) -> str:
             blank = m.group(1) in keys
         out.append("" if blank else line)
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
-
-
-def stage1_skill_names():
-    return [n for n in skill_names() if n not in PLUGIN_SKILLS]
 
 
 def entry_scripts(skill_dir: Path):

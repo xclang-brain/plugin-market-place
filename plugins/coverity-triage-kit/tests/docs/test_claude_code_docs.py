@@ -5,7 +5,7 @@
 - プラグインの README に「Claude Code で使う」があり、入れ方・段階ごとの呼び方・4段階目は Copilot CLI だけ・
   前もって許可するしかた・認証情報の環境変数がある。
 - 前もって許可する指定（--allowedTools の行と、``` で囲んだ写して使う行）に、書き戻すツールも、サーバーの名前だけの許可も、
-  * もない。対象は、プラグインの README、エージェントの README（すべて）、使い方の案内（スキルの references/usage.md）。
+  * もない。対象は、プラグインの README、エージェントの README（すべて）。
   そこに書いた mcp__plugin_<プラグイン>_<登録名>__<ツール>（と手で登録したときの mcp__<登録名>__<ツール>）は、
   プラグインの名前・.mcp.json の登録名・MCP サーバーのツール（ソースと、サーバーの README の「## ツール」の見出し）と合う。
   --allowedTools の行は、書き戻すツールのほかのツール（読むツール）をすべて並べる。
@@ -40,8 +40,6 @@ CLAUDE_MARKET = MARKET_ROOT / ".claude-plugin" / "marketplace.json"
 COPILOT_MARKET = MARKET_ROOT / ".github" / "plugin" / "marketplace.json"
 MARKET_README = MARKET_ROOT / "README.md"
 HEADING = "Claude Code で使う"
-# 使い方の案内（スキルの references/usage.md。前もって許可するしかたも書く）
-USAGE_NAME = Path("references") / "usage.md"
 # 文の中の MCP のツールの名前（<…> の置き換える形は、あとで飛ばす）
 MCP_NAME = re.compile(r"mcp__[^\s\"'`)（）、。，,]+")
 FENCE_LINE = re.compile(r"^\s*```")
@@ -254,10 +252,8 @@ class ClaudePermissionSetTest(unittest.TestCase):
 
 
 def permission_docs():
-    """前もって許可するしかたを書く文書：プラグインの README、エージェントの README（すべて）、使い方の案内"""
-    docs = [README] + sorted(pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX))
-    docs += [d / USAGE_NAME for d in pp.skill_dirs() if (d / USAGE_NAME).is_file()]
-    return docs
+    """前もって許可するしかたを書く文書：プラグインの README、エージェントの README（すべて）"""
+    return [README] + sorted(pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX))
 
 
 def claude_servers():

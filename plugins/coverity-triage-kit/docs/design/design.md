@@ -28,9 +28,6 @@
 
 ```mermaid
 flowchart TB
-    subgraph L4["4段階目　プラグイン全体"]
-        ENT["［スキル］困ったとき・自己診断<br/>（使う部品の表で下の部品を名前で使う）"]
-    end
     subgraph L3["3段階目　一括のトリアージ"]
         ORC["［エージェント］統括エージェント<br/>一括実行のスキルの指示に従い、エージェントを呼ぶ<br/>（ファイルは直さない）"]
         REV["［エージェント］検証エージェント<br/>1件の結果を評価基準で確かめる"]
@@ -66,7 +63,6 @@ flowchart TB
 | 1 | MCP サーバー | `mcp-servers/<名前>/` | Coverity Connect と、データの取り決め（4.1〜4.4、4.10）だけ |
 | 2 | 作業エージェント | `agents/<名前>.md`（Claude Code）と `com.github.copilot/agents/<名前>.agent.md`（Copilot CLI） | 使う部品の名前と役割（「使う部品」の表） |
 | 3 | 統括・検証・統合のエージェント | `agents/<名前>.md` と `com.github.copilot/agents/<名前>.agent.md` | 使う部品の名前と役割（表） |
-| 4 | プラグイン全体のスキル（困ったとき・自己診断） | `skills/<名前>/` | 使う部品の名前と役割（SKILL.md の「使う部品」の表） |
 
 ### 2.2 プラグインのフォルダ
 
@@ -219,11 +215,11 @@ Claude Code での名前（2.1.319 で確認）：
 
 | ファイル | 中身 | 書く | 読む |
 | --- | --- | --- | --- |
-| `config.yaml` | 下の表 | 準備、結果と設定の画面 | MCP サーバー（`coverity:`）、一括実行、反映、困ったとき、自己診断 |
+| `config.yaml` | 下の表 | 準備、結果と設定の画面 | MCP サーバー（`coverity:`）、一括実行、反映 |
 | `filters/*.yaml` | 条件ファイル（4.2） | 準備、結果と設定の画面 | MCP サーバー、一括実行 |
 | `knowledge.md` | プロジェクトの知識（`## 調査で使う事実` / `## 推奨の方針（修正か逸脱か）` / `## 逸脱コメントの書き方`、1行に1つ。追記は `## 追記（日付、実行 ID）`） | 準備（ひな形）、反映（追記）、画面 | 手順のスキル（調査・修正・逸脱コメント・確かめ・統合） |
 | `no-grouping.yaml` | `cids: [...]`（グループにしない CID） | 反映（却下したグループを追記）、画面 | 一括実行 |
-| `fake-issues.yaml` など | 偽の警告（`coverity.api: fake` のとき。形は MCP サーバーの README） | 人、自己診断 | MCP サーバー |
+| `fake-issues.yaml` など | 偽の警告（`coverity.api: fake` のとき。形は MCP サーバーの README） | 人 | MCP サーバー |
 
 `config.yaml` の項目（既定の値）：
 
@@ -420,11 +416,11 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 
 | ファイル | 書く | 読む部品 | 読む項目 |
 | --- | --- | --- | --- |
-| `run.json` | 一括実行 | 画面、反映、困ったとき、自己診断 | `format`、`tool_version`、`run_id`、`repo_root`、`created_at`、`filter_name`、`stream`、`stage`、`stopped`、`halted`、`halt_reason`、`finished`、`review`、`integration`、`integrated`、`parallel`、`initial`、`items[].{id, cids, status, merged_into, review, started, seconds, attempts, review_rounds, slot, stage, error}` |
+| `run.json` | 一括実行 | 画面、反映 | `format`、`tool_version`、`run_id`、`repo_root`、`created_at`、`filter_name`、`stream`、`stage`、`stopped`、`halted`、`halt_reason`、`finished`、`review`、`integration`、`integrated`、`parallel`、`initial`、`items[].{id, cids, status, merged_into, review, started, seconds, attempts, review_rounds, slot, stage, error}` |
 | `jobs/<名前>.json` | 一括実行 | 画面 | `name`、`kind`、`status`、`pid`、`started`、`args.item` |
 | `agents/<役>/progress.json`（検証役も `agents/reviewer/progress.json` の1つ） | 検証役・統合役 | 画面 | 4.8 |
 | `apply-code.result.json` | 反映 | 反映、画面 | 反映の README（何を反映したか、確認の文字列ごとの結果、効果の記録） |
-| `items/<ID>/result.json` | 作業役 | 画面、反映、自己診断 | 4.5 のすべて |
+| `items/<ID>/result.json` | 作業役 | 画面、反映 | 4.5 のすべて |
 | `items/<ID>/review.json` | 検証役 | 画面、反映 | 4.6 |
 | `items/<ID>/saved.json` | 一括実行 | 反映、画面 | `fix.{files, patch, branch, commit}`、`annotation.{…}` |
 | `items/<ID>/progress.json` | 作業役など | 画面 | 4.8 |
@@ -554,11 +550,11 @@ status の出力（画面のため。読むだけ）：
 | 人に見せる確信度 | 一括実行（`contract/confidence`：作業・確かめ・ビルドでの検証から、いちばん低いもの） | 反映、結果と設定の画面 |
 | 注釈を残す書き換え | 準備（`scripts/yamledit.py`、`contract/yaml-edit`） | 結果と設定の画面 |
 | 確認の文字列 | 反映（`scripts/plantoken.py`、`contract/token`） | MCP サーバー |
-| 実行フォルダと承認の形 | 一括実行（`assets/run.schema.json`、`assets/approvals.schema.json`） | 反映、結果と設定の画面、自己診断（困ったときは `run.schema.json` だけ） |
+| 実行フォルダと承認の形 | 一括実行（`assets/run.schema.json`、`assets/approvals.schema.json`） | 反映、結果と設定の画面 |
 | `issues.json`・`issue-<CID>.json` | MCP サーバー | 一括実行、真偽の調査（読むだけ） |
 
 - 実行フォルダと承認の形の写し（JSON Schema）は、読み書きの実行時には使わない。反映と結果と設定の画面は、それぞれのコードで形を確かめ、その試験が、自分の書くもの・読むものの見本を写しで確かめる（写しは、形の取り決めを各部品の中で見えるようにするためのもの）。
-- Windows のユーザーの環境変数の読み方は、MCP サーバー・準備・一括実行・結果と設定の画面・困ったときが、それぞれ持つ（写しではない）。決まりは同じにする：前後の空白を除く、`${…}` のままの値は無いものとする、`REG_EXPAND_SZ` の値は `%NAME%` を展開する。各部品の試験と Windows の CI で確かめる。
+- Windows のユーザーの環境変数の読み方は、MCP サーバー・準備・一括実行・結果と設定の画面が、それぞれ持つ（写しではない）。決まりは同じにする：前後の空白を除く、`${…}` のままの値は無いものとする、`REG_EXPAND_SZ` の値は `%NAME%` を展開する。各部品の試験と Windows の CI で確かめる。
 - 「止まっているかもしれない」の決まり（10 分、初回解析は 30 分、スクリプトが動いている段 `copy`・`save`・`merge` は除く）は、一括実行の `status` と結果と設定の画面の監視が、それぞれ持つ。`tests/contracts` が、両方の値が同じかを確かめる。
 - 写しのファイルは、持ち主と同じ名前で、スクリプトは写す側の `scripts/`（MCP サーバーはパッケージ `src/coverity_mcp/`）、データは `assets/` に置く（スクリプトは自分のフォルダの `assets/` を `Path(__file__).parents[1]` で探すので、同じ場所に置けば同じに動く）。人に見せる確信度の決まりは、一括実行が `scripts/confidence.py` に持つ。
 
@@ -597,13 +593,6 @@ status の出力（画面のため。読むだけ）：
 | 一括実行 | 4.12 のコマンド。Coverity との通信の道具がなければ、`new-run --issues-file <4.3 の形>` で、取ってある警告で始められる。役のエージェントがなければ、その作業を失敗として伝える（4.13） | 4.1〜4.14、4.17 |
 | 反映 | 承認の確かめと反映の計画、修正のブランチ・push・svn の差分の当て、却下のグループの記録、知識の追記、効果の集計。逸脱の書き戻しは「Coverity にトリアージを書き戻せる道具があれば」計画のファイルと確認の文字列を渡す | 4.9、4.10（書く）、4.11、4.17 `token`（持ち主） |
 | 結果と設定の画面 | ブラウザーの画面（4.16）。設定・条件・知識・グループにしない CID の編集、監視、結果（承認の選択、逸脱コメントの手直し、差分と修正後のファイル） | 4.1、4.2（書く）、4.8、4.9（人の選択を書く）、4.11、4.16（持ち主） |
-
-プラグイン全体のスキル（4段階目。名前は「使う部品」の表にだけ書く）：
-
-| 役割 | すること |
-| --- | --- |
-| 困ったとき | 使い方の全体の説明（`references/`。Claude Code での使い方も）、点検（道具・設定・環境変数・実行の様子）、画面を開く（表の画面のスキル）、接続の確かめ（表の MCP サーバー） |
-| 自己診断 | ①道具とエージェント（表のエージェントがあり、役割の言葉を持つか。Copilot CLI か Claude Code かを記録し、Claude Code では Web管理画面の確かめを skip にする） ②見本のリポジトリ（`assets/`）で、偽の Coverity で一括実行と反映を流し、間違った確認の文字列が断られることと、結果が期待と合うことを確かめる ③社内の Coverity を読むだけで確かめる ④ビルドの試し。伏せ字の `report.md` |
 
 ## 7. エージェント
 

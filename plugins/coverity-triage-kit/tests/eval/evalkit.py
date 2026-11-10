@@ -42,6 +42,7 @@ sys.dont_write_bytecode = True
 
 HERE = Path(__file__).resolve().parent
 PLUGIN_ROOT = HERE.parents[1] if len(HERE.parents) > 1 else HERE
+SAMPLE = HERE.parent / "fixtures" / "sample"  # sample-target/ (C code and a fake Coverity) and expected.yaml
 REPLACE_DOC = Path("docs") / "parts.md"
 CURRENT_PARTS_HEADING = "今の部品"
 CURRENT_PARTS_HEADER = ["役割", "段階", "部品", "置き場所"]

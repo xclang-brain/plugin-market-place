@@ -62,14 +62,14 @@ uv run --native-tls --quiet tests/eval/stage2/run_stage2.py
 uv run --native-tls --quiet tests/eval/stage2/run_stage2.py --format claude-plugin
 ```
 
-課題ごとに、自己診断のスキルの見本（`assets/sample-target`）から git のリポジトリを作り、`claude_adapter.py --parts-from-table` で作業エージェントとその表の部品だけを取り出します。MCP サーバーは偽の Coverity で動きます。
+課題ごとに、見本（`tests/fixtures/sample/sample-target`）から git のリポジトリを作り、`claude_adapter.py --parts-from-table` で作業エージェントとその表の部品だけを取り出します。MCP サーバーは偽の Coverity で動きます。
 
 - `copilot-converted`（既定）：置き換えた定義を、そのリポジトリの `.claude/` に置きます（`.git/info/exclude` で git の状態から外します）。
 - `claude-plugin`：作業エージェントの定義（`agents/<名前>.md`）・表のスキル・MCP サーバーを、そのまま `<out>/<課題>/claude-plugin/` に写します（`.claude-plugin/plugin.json` と `.mcp.json` つき。リポジトリの外）。作業エージェントをメインにして、`claude -p "<頼みの文>" --plugin-dir <out>/<課題>/claude-plugin --agent <プラグイン>:<作業エージェント> ...` で動かします。モデルは、定義の `model` のままです（`--model` を付けたときは、それを使い、写しの `model` の行もそれに替えます）。
 
 | 課題（`stage2/cases.json`） | 形 | 主な確かめ |
 | --- | --- | --- |
-| `user-20001`、`user-20002` | 利用者がチャットで頼む（ストリームとリポジトリを書いた、質問の要らない頼み。「差分を見せるだけで、ファイルは変えないで」） | 推奨が `assets/expected.yaml` と合う、修正案と逸脱コメント案の両方、逸脱コメントが決まりに合う（逸脱コメントのスキルの `check_comment.py`）、根拠のファイルと行がある、作業中のファイルが変わらない |
+| `user-20001`、`user-20002` | 利用者がチャットで頼む（ストリームとリポジトリを書いた、質問の要らない頼み。「差分を見せるだけで、ファイルは変えないで」） | 推奨が見本の `expected.yaml` と合う、修正案と逸脱コメント案の両方、逸脱コメントが決まりに合う（逸脱コメントのスキルの `check_comment.py`）、根拠のファイルと行がある、作業中のファイルが変わらない |
 | `brief-20003` | ほかのエージェントからの頼み（実行フォルダの形の指示ファイル） | 返事が決まった1行、`result.json` が決まりに合う（結果の記録のスキルの `check_result.py`）、修正は作業用のコピーにだけ、書いたのは許された場所だけ、コマンドを使わない、進み具合 |
 | `brief-group` | 同じ原因のグループ（CID 20004〜20006） | 上に加えて、`item` と `group_excluded_cids`、すべての CID の行を直した |
 
@@ -85,14 +85,14 @@ uv run --native-tls --quiet tests/eval/stage3/run_stage3.py
 uv run --native-tls --quiet tests/eval/stage3/run_stage3.py --format claude-plugin
 ```
 
-- 自己診断のスキルの一時コピーで、見本のリポジトリ（git、push 先、偽の Coverity）を作ります（`selftest.py start --sections 2` と `sample`）。
+- 見本（`tests/fixtures/sample/sample-target`）から、リポジトリ（git、push 先、偽の Coverity）を作ります。
 - 統括エージェントの表を（表のエージェントの表まで）たどって、エージェント・スキル・MCP サーバーをすべて取り出し、統括エージェントをメインにして動かします（`claude -p "Coverity の警告を、条件ファイル all.yaml で、すべてトリアージしてください。途中で質問せず、最後まで進めてください。" --agent <統括> --max-turns 500`）。実行フォルダの置き場所（リポジトリの外）は `--add-dir` で渡します。
 - `claude-plugin` では、統括エージェントと、表でたどれるエージェント（`agents/<名前>.md`）・スキル・MCP サーバーを、そのまま `<out>/<変種>/claude-plugin/` に写し、`--plugin-dir <out>/<変種>/claude-plugin --agent <プラグイン>:<統括>` で動かします。どの表にもないスキルは写しません（Claude Code は、プラグインの `skills/` のスキルをすべて読むため）。
 - `claude-plugin` で `--model` を付けたときは、`claude` の `--model` に渡すだけでなく、写した統括エージェントの定義の `model` の行もそれに替えます（`--agent` で動かすメインのエージェントに、`--model` と定義の `model` のどちらが効くかによらず、そのモデルで動くようにするため）。ほかのエージェントの `model` の行は、`--agent-model` のときだけ替えます。
 - 変種：`default`（確かめと統合なし。設定の既定）と `full`（両方あり）。`--variant` で選びます（既定は両方）。
 - `bare` は `--variant bare` のときだけ動きます。条件のない頼み「Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。」で、設定は `default` と同じです。`--limit` とは一緒に使えません。
 - どの変種でも、一括実行のスキルを読んだこと（`run_skill_loaded`）と、`new-run` を動かしたこと（`new_run_called`）を確かめます。
-- 確かめ：自己診断の `check-run`（2-2〜2-6：最後まで進む、すべての作業が終わる、推奨が想定と合う、グループ、成果物と作業中のファイル）、`summary.html` と `approvals.json`、すべての作業の `result.json`、確かめありなら `review.json`、利用者のリポジトリが変わらない、役のエージェントだけを呼んだ、統括エージェントがファイルを書いていない、実行フォルダが1つ。件数・推奨の一致・時間・ターン・費用も記録します。
+- 確認すること：最後まで進む、すべての作業が終わる（`all_items_done`）、終わった作業の `result.json` の項目と詳細レポートがそろう（`item_files`）、推奨とグループが見本の `expected.yaml` と合う（`expected_conclusions`、`expected_group`。`--limit` のときは確認しません）、`summary.html` と `approvals.json`、すべての作業の `result.json`、確かめありなら `review.json`、利用者のリポジトリが変わらない、役のエージェントだけを呼んだ、統括エージェントがファイルを書いていない、実行フォルダが1つ。件数・推奨の一致・時間・ターン・費用も記録します。
 - 主なオプション：`--format F`、`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル。`claude-plugin` では定義の `model`。付けたときは、写した統括の `model` の行も替える）、`--agent-model M`（ほかのエージェント。既定は各定義のモデル。`claude-plugin` では、写した定義の `model` の行を替える。統括は `--model` が先）、`--tools-from-definitions`（`claude-plugin` で `--tools` を付ける。既定は付けない）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
 
 ### 結果の読み方

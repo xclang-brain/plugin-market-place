@@ -1,9 +1,0 @@
-schema_version: "1.1"
-name: finds-output-dir-inside-repo
-expected_outcome: |
-  設定 output_dir が results（リポジトリの中）になっていることを、点検のスクリプト（check）で確かめて突き止め、
-  中だと結果を誤ってコミットするおそれがあるので外にすることを伝える。リポジトリの外（既定 ../coverity-triage-out など）にするよう、
-  変える内容（ファイル・項目・今の値・1つに決めた新しい値 ../coverity-triage-out）を示し、変えてよいかを聞いて返事を終える。
-  同意を得る前には config.yaml を書き換えない。
-context:
-  scaffold_script: place-files.sh

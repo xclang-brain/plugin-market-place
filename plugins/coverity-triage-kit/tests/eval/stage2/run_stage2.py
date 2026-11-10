@@ -7,8 +7,8 @@
 
 For each case of cases.json (next to this file):
 
-1. a fresh git repository is made from the self-test's sample (``assets/sample-target``: C code and a
-   fake Coverity under ``.coverity-triage/``); the expected conclusions are its ``assets/expected.yaml``;
+1. a fresh git repository is made from the sample (``tests/fixtures/sample/sample-target``: C code and a
+   fake Coverity under ``.coverity-triage/``); the expected conclusions are ``expected.yaml`` next to it;
 2. claude_adapter extracts the worker agent and the parts of its table only (``--parts-from-table``),
    with the MCP server on the fake Coverity. ``--format copilot-converted`` (the default) converts the
    Copilot CLI definition into ``<repo>/.claude/`` (hidden from git status through .git/info/exclude);
@@ -52,7 +52,6 @@ import evalkit as ek  # noqa: E402
 TAG = "stage2"
 CASES_FILE = HERE / "cases.json"
 ROLE_WORKER = "作業役"
-ROLE_SELFTEST = "自己診断"
 ROLE_COMMENT = "逸脱コメント"
 ROLE_REPORT = "結果の記録"
 DEFAULT_JUDGE_MODEL = "claude-sonnet-5-5"
@@ -401,9 +400,9 @@ def brief_checks(case: dict, ctx: dict, run: dict, summary: dict) -> tuple[list[
 # --------------------------------------------------------------------------- the sample and the brief
 
 
-def sample_data(selftest: Path) -> dict:
-    sample = selftest / "assets" / "sample-target"
-    expected_file = selftest / "assets" / "expected.yaml"
+def sample_data(folder: Path) -> dict:
+    sample = folder / "sample-target"
+    expected_file = folder / "expected.yaml"
     if not sample.is_dir() or not expected_file.is_file():
         raise ek.EvalError(f"見本がありません: {sample}", ["--sample で見本のフォルダを渡します"])
     expected = ek.load_yaml(expected_file) or {}
@@ -697,7 +696,7 @@ def make_parser() -> argparse.ArgumentParser:
                    help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin"
                         "（Claude Code の定義を一時のプラグインに写し、--plugin-dir で動かす）")
     p.add_argument("--only", action="append", help="動かす課題の名前か番号（何度でも。カンマ区切りも可）")
-    p.add_argument("--sample", help="見本のフォルダ（assets/sample-target と assets/expected.yaml のあるフォルダ）")
+    p.add_argument("--sample", help="見本のフォルダ（sample-target と expected.yaml のあるフォルダ。既定 tests/fixtures/sample）")
     p.add_argument("--model", help="モデル（既定は作業エージェントの定義の claude-* のモデル。claude-plugin では定義の model のまま）")
     p.add_argument("--agent-model", help="エージェントの定義の model を替える（既定は --model）")
     p.add_argument("--tools-from-definitions", action="store_true",
@@ -717,11 +716,11 @@ def make_parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace) -> dict:
     root = Path(args.plugin_root).resolve() if args.plugin_root else ek.PLUGIN_ROOT
     worker_part = ek.part(ROLE_WORKER, root)
-    selftest = Path(args.sample).resolve() if args.sample else ek.part(ROLE_SELFTEST, root)["path"]
+    sample = Path(args.sample).resolve() if args.sample else ek.SAMPLE
     cases = select_cases((ek.read_json(Path(args.cases)) or {}).get("cases") or [], args.only)
     if not cases:
         raise ek.EvalError(f"課題がありません: {args.cases}")
-    data = sample_data(selftest)
+    data = sample_data(sample)
     out = ek.prepare_out(args.out, "stage2", root)
     plugin = args.format == ek.ADAPTER.FORMAT_PLUGIN
     worker = worker_definition(args.format, worker_part, root)
@@ -737,7 +736,7 @@ def run(args: argparse.Namespace) -> dict:
     meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "format": args.format, "model": shown_model,
             "judge": args.judge_model if args.judge else None, "worker": worker_part["name"],
             "worker_definition": str(worker),
-            "parts": sorted(collected["skills"]) + sorted(collected["mcp"]), "sample": str(selftest), "out": str(out)}
+            "parts": sorted(collected["skills"]) + sorted(collected["mcp"]), "sample": str(sample), "out": str(out)}
     records = [run_case(c, args, data, root, out, worker, model) for c in cases]
     report = ek.write_text(out / "report.md", render_report(meta, records))
     done = [r for r in records if r.get("passed") is not None]

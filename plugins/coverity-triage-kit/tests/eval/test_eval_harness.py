@@ -132,7 +132,7 @@ class EvalkitTest(unittest.TestCase):
     @unittest.skipUnless(HAS_PARTS, "プラグインの部品の表がない（tests/eval だけをコピーしたとき）")
     def test_real_parts_table_has_the_roles_the_harnesses_use(self):
         roles = {r["role"] for r in ek.current_parts(ROOT)}
-        for role in ("作業役", "統括", "検証役", "統合役", "自己診断", "一括実行", "困ったとき", "逸脱コメント", "結果の記録"):
+        for role in ("作業役", "統括", "検証役", "統合役", "一括実行", "逸脱コメント", "結果の記録"):
             self.assertIn(role, roles)
 
     def test_out_dir_outside_the_plugin(self):
@@ -791,25 +791,23 @@ class Stage3Test(unittest.TestCase):
         failed = {c["id"] for c in stage3.agent_checks(bad, names) if c["ok"] is False}
         self.assertEqual(failed, {"role_agents_only", "worker_called", "orchestrator_no_edits"})
 
-    def test_selftest_checks_mapping(self):
-        answer = {"ok": True, "checks": [{"id": "2-2", "status": "review", "actual": "a"},
-                                         {"id": "2-3", "status": "fail", "actual": "b", "detail": "d"},
-                                         {"id": "2-4", "status": "review", "actual": "c"},
-                                         {"id": "2-5", "status": "pass", "actual": "e"},
-                                         {"id": "2-6", "status": "pass", "actual": "f"}]}
-        original = ek.run_json
-        ek.run_json = lambda argv, **kw: (answer, {"stderr": "", "stdout": ""})
-        try:
-            full = {c["id"]: c for c in stage3.selftest_checks(Path("s.py"), Path("d"), Path("r"))[0]}
-            limited = {c["id"]: c for c in stage3.selftest_checks(Path("s.py"), Path("d"), Path("r"), limited=True)[0]}
-        finally:
-            ek.run_json = original
-        self.assertEqual([full[k]["ok"] for k in ("selftest-2-2", "selftest-2-3", "selftest-2-4", "selftest-2-5", "selftest-2-6")],
-                         [True, False, False, True, True], "must: review passes; should: only pass passes")
-        self.assertEqual(full["selftest-2-3"]["level"], "must")
-        self.assertIsNone(limited["selftest-2-4"]["ok"], "a limited run skips the conclusions check")
-        self.assertIsNone(limited["selftest-2-5"]["ok"], "and the group check")
-        self.assertFalse(limited["selftest-2-3"]["ok"])
+    def test_sample_checks(self):
+        run = self.make_run()
+        ek.write_json(run / "items" / "20001" / "result.json",
+                      {"verdict": {}, "recommendation": "fix", "confidence": "high", "deviation": {}, "fix": {}})
+        ek.write_text(run / "cid" / "20001.html", "")
+        expected = {"items": {"20001": {"recommendation": "fix"}}, "group": {"cids": [20004, 20005]}}
+        good = {"items": [{"id": "20001", "status": "done"}, {"id": "G1", "status": "merged", "cids": [20005, 20004]}]}
+        self.assertEqual([(c["id"], c["ok"], c["level"]) for c in stage3.sample_checks(run, good, expected)],
+                         [("all_items_done", True, "must"), ("item_files", True, "must"),
+                          ("expected_conclusions", True, "should"), ("expected_group", True, "should")])
+        bad = {"items": [{"id": "20001", "status": "error"}, {"id": "20002", "status": "done"}]}
+        expected["items"] = {"20002": {"recommendation": "deviation"}}
+        self.assertEqual([c["ok"] for c in stage3.sample_checks(run, bad, expected)], [False, False, False, False],
+                         "an unfinished item, a result without its fields, another conclusion, no group")
+        self.assertEqual([c["ok"] for c in stage3.sample_checks(run, bad, expected, limited=True)], [False, False, None, None],
+                         "a limited run skips the conclusions and the group")
+        self.assertFalse(stage3.sample_checks(run, {"items": []}, {})[0]["ok"], "no items")
 
     @unittest.skipUnless(HAS_PARTS and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
     def test_build_only(self):

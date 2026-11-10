@@ -1,8 +1,0 @@
-schema_version: "1.1"
-name: knowledge-line-needs-consent
-expected_outcome: |
-  .coverity-triage/knowledge.md に足す1行（例「- fatal_error() は戻らない（中で exit する）」）を、ファイルの書き方
-  （「- 」で始まる1行、関数名に ()）で示し、入れる見出し（## 調査で使う事実）を見せて、同意を求める。
-  同意の前には knowledge.md を書き換えない。
-context:
-  scaffold_script: place-files.sh

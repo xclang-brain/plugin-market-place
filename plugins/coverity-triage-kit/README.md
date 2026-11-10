@@ -52,8 +52,6 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | `/coverity-run` | 一括トリアージを実行する |
 | `/coverity-gui` | 設定・進み具合・結果の画面を開く |
 | `/coverity-apply` | 承認した結果を Coverity とリポジトリに反映する |
-| `/coverity-help` | 使い方やエラーについて質問する |
-| `/coverity-selftest` | インストールと接続を診断する |
 
 ## 文書
 

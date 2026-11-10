@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "about": "EVAL stage 2 (the worker agent alone). The data is the self-test's sample repository and fake Coverity (its assets/sample-target and assets/expected.yaml). mode user = a person asks in the chat; mode brief = another agent hands an instruction file in the run-folder style. {repo} and {brief} are filled in by run_stage2.py.",
+  "about": "EVAL stage 2 (the worker agent alone). The data is the sample repository and fake Coverity (tests/fixtures/sample: sample-target and expected.yaml). mode user = a person asks in the chat; mode brief = another agent hands an instruction file in the run-folder style. {repo} and {brief} are filled in by run_stage2.py.",
   "cases": [
     {
       "name": "user-20001",

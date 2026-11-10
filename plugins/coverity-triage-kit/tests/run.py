@@ -179,7 +179,7 @@ def run_command(command, cwd, env, timeout):
 # ---------------------------------------------------------------------------
 
 def unittest_counts(out, code, modules=None):
-    # A test that runs another suite and prints its output (independence, selftest) leaves earlier "Ran N tests"
+    # A test that runs another suite and prints its output (independence) leaves earlier "Ran N tests"
     # and "OK"/"FAILED" lines: the suite's own summary is the last "Ran" line and the lines after it.
     runs = list(re.finditer(r"^Ran (\d+) tests?", out, re.M))
     total = int(runs[-1].group(1)) if runs else 0
