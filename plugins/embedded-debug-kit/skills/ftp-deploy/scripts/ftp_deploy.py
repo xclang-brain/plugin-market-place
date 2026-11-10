@@ -639,9 +639,6 @@ def main(argv=None):
         result["config"] = os.path.join(data_dir(workdir), "config.yaml")
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir, 2)
-        if args.command == "run" and not os.path.exists(result["config"]):
-            cmd_init(workdir, result)
-            raise Stop("設定ファイル %s がなかったので、ひな形から作りました。各項目のすぐ上のコメントを読んで値を書いてから、もう一度動かしてください。" % result["config"], 2)
         code = {"run": cmd_run, "check": cmd_check, "init": cmd_init}[args.command](workdir, result)
     except Stop as e:
         result["ok"] = False

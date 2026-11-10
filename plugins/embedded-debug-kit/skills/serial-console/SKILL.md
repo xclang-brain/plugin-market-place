@@ -23,8 +23,6 @@ Python は、Windows では `py -3`、ほかでは `python3` で動かす（下�
 | 設定を確かめる。必要ならログインし、プロンプトが出るまで進める。コマンドは動かさず、何も作らない | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" check` |
 | 設定ファイルをひな形から作る。もうあれば、そのままにする | `python3 "<このスキルのフォルダ>/scripts/serial_console.py" init` |
 
-設定ファイルがないときの run は、ひな形から設定ファイルを作って終わる（終了コード 2）。値を書くよう、利用者に伝える。
-
 PowerShell で `"` を含むコマンドと、Windows の Git Bash で `/` で始まるコマンドは、`--command` では正しく渡らない。`--stdin` で渡す。
 
 bash：

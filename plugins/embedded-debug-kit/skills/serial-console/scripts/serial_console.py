@@ -754,9 +754,6 @@ def main(argv=None):
         check_command_args(args.commands)
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir, 2)
-        if args.subcommand == "run" and not os.path.exists(result["config"]):
-            cmd_init(workdir, result, None)
-            raise Stop("設定ファイル %s がなかったので、ひな形から作りました。各項目のすぐ上のコメントを読んで値を書いてから、もう一度動かしてください。" % result["config"], 2)
         run = {"run": cmd_run, "check": cmd_check, "init": cmd_init}[args.subcommand]
         code = run(workdir, result, stdin_commands() if args.stdin else args.commands)
     except Stop as e:

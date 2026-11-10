@@ -673,11 +673,6 @@ def run_message(s, r, names, outputs):
 
 def cmd_run(workdir):
     config = os.path.join(data_dir(workdir), "config.yaml")
-    if not os.path.exists(config):
-        cmd_init(workdir)
-        message = ("設定ファイル {} がなかったので、ひな形から作りました。"
-                   "build_command と outputs を書いてから、もう一度動かしてください。".format(config))
-        return 2, result(False, message, config, created=True, problems=[message])
     s, problems = load(config, workdir)
     if problems:
         return 2, result(False, "設定に問題があるため、ビルドしませんでした。" + "".join(problems), config,
