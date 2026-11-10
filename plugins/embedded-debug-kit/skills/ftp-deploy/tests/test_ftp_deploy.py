@@ -159,8 +159,9 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.mkdtemp(prefix="ftp-deploy-work-")
         self.addCleanup(shutil.rmtree, self.work, True)
-        self.data = os.path.join(self.work, "." + SKILL_NAME)
-        self.config_path = os.path.join(self.data, "config.yaml")
+        self.home = os.path.join(self.work, ".github", "embedded-debug-kit")
+        self.data = os.path.join(self.home, SKILL_NAME)
+        self.config_path = self.data + ".yaml"
         self.app = self.write("build/app", b"\x7fELF app v2\n")
 
     def write(self, rel, data):
@@ -214,7 +215,7 @@ class ConfigTest(Case):
         code, data = self.run_script("init")
         self.assertEqual((code, data["ok"], data["created"]), (0, True, True))
         self.assertEqual(data["config"], self.config_path)
-        with open(os.path.join(self.data, ".gitignore"), encoding="utf-8") as fh:
+        with open(os.path.join(self.home, ".gitignore"), encoding="utf-8") as fh:
             self.assertEqual(fh.read().strip(), "*")
         with open(TEMPLATE, "rb") as a, open(self.config_path, "rb") as b:
             self.assertEqual(a.read(), b.read())
@@ -309,8 +310,8 @@ class ConfigTest(Case):
         proc = subprocess.run([sys.executable, os.path.join(copy, "scripts", "ftp_deploy.py"), "init",
                                "--workdir", self.work], stdout=subprocess.PIPE, timeout=60)
         self.assertEqual(proc.returncode, 0)
-        self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", "config.yaml")))
-        self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", ".gitignore")))
+        self.assertTrue(os.path.isfile(os.path.join(self.home, "my-ftp.yaml")))
+        self.assertTrue(os.path.isfile(os.path.join(self.home, ".gitignore")))
 
     def test_bad_arguments_answer_json(self):
         code, data = self.run_script("deploy")
@@ -399,7 +400,7 @@ class DeviceTest(Case):
         self.assertEqual(device.read("/opt/app/app"), b"\x7fELF app v2\n")
         self.assertEqual(device.listing(), ["opt", "opt/app", "opt/app/app", "opt/app/app.conf"])
         self.assertEqual(device.chmods, [])
-        self.assertTrue(os.path.isfile(os.path.join(self.data, ".gitignore")))
+        self.assertTrue(os.path.isfile(os.path.join(self.home, ".gitignore")))
         self.assertEqual(os.path.dirname(data["log"]), os.path.join(self.data, "logs"))
         self.assertIn("***", data["log_text"])
 

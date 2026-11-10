@@ -7,7 +7,7 @@ description: ファイルを FTP か FTPS で組み込み機器のフォルダ�
 
 設定の `files` に書いた PC のファイルを、FTP で機器のフォルダに送る。
 
-設定ファイルは `<作業フォルダ>/.ftp-deploy/config.yaml`。各項目の意味は、項目のすぐ上のコメントにある。
+設定ファイルは `<作業フォルダ>/.github/embedded-debug-kit/ftp-deploy.yaml`。各項目の意味は、項目のすぐ上のコメントにある。
 パスワードは、設定ファイルの `password` か、`password_env` に名前を書いた環境変数で渡す。
 
 ## コマンド

@@ -91,7 +91,7 @@ class StageOneTest(unittest.TestCase):
             self.assertTrue((SKILLS / name / "SKILL.md").is_file(), name)
 
     def test_skill_files_name_no_other_part(self):
-        names = set(Parts.stage1) | set(Parts.others) | set(Parts.agents) | {ROOT.name}
+        names = set(Parts.stage1) | set(Parts.others) | set(Parts.agents)  # プラグインの名前は、設定の置き場所に使う
         problems = []
         for skill in Parts.stage1:
             words = (names - {skill}) | {"CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"}

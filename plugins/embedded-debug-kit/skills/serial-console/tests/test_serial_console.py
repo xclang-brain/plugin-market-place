@@ -86,8 +86,9 @@ class Base(unittest.TestCase):
 
     def use_workdir(self, workdir):
         self.workdir = workdir
-        self.data = os.path.join(workdir, "." + SKILL_NAME)
-        self.config = os.path.join(self.data, "config.yaml")
+        self.home = os.path.join(workdir, ".github", "embedded-debug-kit")
+        self.data = os.path.join(self.home, SKILL_NAME)
+        self.config = self.data + ".yaml"
 
     def device(self, **kw):
         kw.setdefault("password", PASSWORD)
@@ -140,7 +141,7 @@ class InitTest(Base):
     def test_init_creates_config_and_gitignore(self):
         code, result = self.script("init")
         self.assertEqual((code, result["ok"], result["created"]), (0, True, True))
-        with open(os.path.join(self.data, ".gitignore"), encoding="utf-8") as fh:
+        with open(os.path.join(self.home, ".gitignore"), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "*\n")
         with open(self.config, encoding="utf-8") as fh, open(TEMPLATE, encoding="utf-8") as template:
             self.assertEqual(fh.read(), template.read())
@@ -176,8 +177,8 @@ class InitTest(Base):
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
         code, result = self.script("init", script=os.path.join(copy, "scripts", "serial_console.py"))
         self.assertEqual(code, 0)
-        self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", "config.yaml")))
-        self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", ".gitignore")))
+        self.assertTrue(os.path.isfile(os.path.join(self.home, "my-console.yaml")))
+        self.assertTrue(os.path.isfile(os.path.join(self.home, ".gitignore")))
         self.assertFalse(os.path.exists(os.path.join(copy, "scripts", "vendor", "serial", "__pycache__")))
 
 
@@ -442,10 +443,10 @@ class RunTest(Base):
 
     def test_gitignore_is_put_back_before_writing(self):
         self.configure(self.device(state="shell"))
-        os.remove(os.path.join(self.data, ".gitignore"))
+        os.remove(os.path.join(self.home, ".gitignore"))
         code, result = self.script("run", "--command", "true")
         self.assertEqual(code, 0, result["message"])
-        with open(os.path.join(self.data, ".gitignore"), encoding="utf-8") as fh:
+        with open(os.path.join(self.home, ".gitignore"), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "*\n")
 
     def test_disconnected_in_the_middle(self):

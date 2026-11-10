@@ -96,8 +96,9 @@ class Project:
         self.dir = tempfile.mkdtemp(prefix="cross-build-test-")
         test.addCleanup(shutil.rmtree, self.dir, True)
         self.script = script
-        self.data = os.path.join(self.dir, "." + os.path.basename(os.path.dirname(os.path.dirname(script))))
-        self.config = os.path.join(self.data, "config.yaml")
+        self.home = os.path.join(self.dir, ".github", "embedded-debug-kit")
+        self.data = os.path.join(self.home, os.path.basename(os.path.dirname(os.path.dirname(script))))
+        self.config = self.data + ".yaml"
 
     def path(self, *parts):
         return os.path.join(self.dir, *parts)
@@ -174,7 +175,7 @@ class InitTest(unittest.TestCase):
         self.assertEqual(code, 0, data)
         self.assertTrue(data["created"])
         self.assertEqual(data["config"], p.config)
-        with open(os.path.join(p.data, ".gitignore"), encoding="utf-8") as f:
+        with open(os.path.join(p.home, ".gitignore"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "*\n")
         with open(p.config, "rb") as a, open(TEMPLATE, "rb") as b:
             self.assertEqual(a.read(), b.read())
@@ -203,8 +204,8 @@ class InitTest(unittest.TestCase):
         p = Project(self, os.path.join(copy, "scripts", "cross_build.py"))
         code, data = p.run("init")
         self.assertEqual(code, 0, data)
-        self.assertTrue(os.path.isfile(p.path(".my-build", "config.yaml")))
-        self.assertFalse(os.path.exists(p.path(".cross-build")))
+        self.assertTrue(os.path.isfile(os.path.join(p.home, "my-build.yaml")))
+        self.assertFalse(os.path.exists(os.path.join(p.home, "cross-build.yaml")))
 
 
 class ArgumentTest(unittest.TestCase):
@@ -438,7 +439,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(data["outputs"][0]["path"], p.path("app"))
         self.assertEqual(data["outputs"][0]["size"], os.path.getsize(p.path("app")))
         self.assertIn("ARM", data["message"])
-        with open(os.path.join(p.data, ".gitignore"), encoding="utf-8") as f:
+        with open(os.path.join(p.home, ".gitignore"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "*\n")
         self.assertEqual(os.path.dirname(data["log"]), os.path.join(p.data, "logs"))
         with open(data["log"], "rb") as f:

@@ -5,7 +5,8 @@
   serial_console.py run --stdin [--workdir 作業フォルダ]   （標準入力の1行を1つのコマンドにする）
   serial_console.py check|init [--workdir 作業フォルダ]
 
-設定は <作業フォルダ>/.<スキルの名前>/config.yaml、ログは同じフォルダの logs/ に置く。
+設定は <作業フォルダ>/.github/embedded-debug-kit/<スキルの名前>.yaml、
+ログは <作業フォルダ>/.github/embedded-debug-kit/<スキルの名前>/logs/ に置く。
 標準出力には結果の JSON を1つだけ、ASCII で書く。
 終了コード：0 成功、1 作業の失敗、2 設定や引数の問題。
 Python 3.8 以上の標準ライブラリと、同梱の pyserial 3.5（vendor/serial、BSD ライセンス）で動く。
@@ -164,15 +165,19 @@ def drop_echo(lines, command):
 
 # --- 設定 -------------------------------------------------------------------
 
+HOME = os.path.join(".github", "embedded-debug-kit")  # 設定とログを置く、作業フォルダの中のフォルダ
+
+
 def data_dir(workdir):
-    return os.path.join(workdir, "." + SKILL_NAME)
+    """ログを置く、このスキルのフォルダ。"""
+    return os.path.join(workdir, HOME, SKILL_NAME)
 
 
 def prepare_data_dir(workdir):
-    """設定とログのフォルダを作る。中に何かを書く前に、中身を Git に入れない .gitignore を置く。"""
+    """設定とログのフォルダを作る。中に何かを書く前に、中身を Git に入れない .gitignore を、1つ上のフォルダに置く。"""
     path = data_dir(workdir)
     os.makedirs(path, exist_ok=True)
-    ignore = os.path.join(path, ".gitignore")
+    ignore = os.path.join(os.path.dirname(path), ".gitignore")
     if not os.path.exists(ignore):
         with open(ignore, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("*\n")
@@ -746,7 +751,7 @@ def main(argv=None):
     try:
         args = parser.parse_args(argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
-        result["config"] = os.path.join(data_dir(workdir), "config.yaml")
+        result["config"] = data_dir(workdir) + ".yaml"
         if (args.commands is not None or args.stdin) and args.subcommand != "run":
             raise Stop("--command と --stdin は run でだけ使えます。" + USAGE, 2)
         if args.commands is not None and args.stdin:

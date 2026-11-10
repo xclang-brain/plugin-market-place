@@ -7,7 +7,8 @@
   check  設定を確かめる（何も作らない）
   init   設定ファイルをひな形から作る
 終了コード：0＝成功、1＝ビルドの失敗、2＝設定や引数の問題。
-設定は <作業フォルダ>/.<このスキルのフォルダの名前>/config.yaml、ログは同じフォルダの logs/ に置く。
+設定は <作業フォルダ>/.github/embedded-debug-kit/<このスキルのフォルダの名前>.yaml、
+ログは <作業フォルダ>/.github/embedded-debug-kit/<このスキルのフォルダの名前>/logs/ に置く。
 Python 3.8 以上の標準ライブラリだけで動く。
 """
 
@@ -33,6 +34,7 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.basename(SKILL_DIR)  # フォルダの名前を変えてコピーしたら、その名前を使う
 TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 IS_WINDOWS = os.name == "nt"
+HOME = os.path.join(".github", "embedded-debug-kit")  # 設定とログを置く、作業フォルダの中のフォルダ
 
 KEYS = ("source_dir", "shell", "sdk_env", "build_command", "outputs", "timeout_seconds")
 SHELLS = ("auto", "bash", "cmd", "powershell")
@@ -164,13 +166,18 @@ def parse_args(argv):
 
 
 def data_dir(workdir):
-    return os.path.join(workdir, "." + SKILL)
+    """ログなどを置く、このスキルのフォルダ。"""
+    return os.path.join(workdir, HOME, SKILL)
+
+
+def config_path(workdir):
+    return data_dir(workdir) + ".yaml"
 
 
 def prepare_dir(path):
-    """フォルダを作り、中身を Git に入れないための .gitignore を、ほかのものより先に置く。"""
+    """フォルダを作り、中身を Git に入れないための .gitignore を、ほかのものより先に、1つ上のフォルダに置く。"""
     os.makedirs(path, exist_ok=True)
-    ignore = os.path.join(path, ".gitignore")
+    ignore = os.path.join(os.path.dirname(path), ".gitignore")
     if not os.path.exists(ignore):
         with open(ignore, "w", encoding="utf-8") as f:
             f.write("*\n")
@@ -362,7 +369,7 @@ def command_exists(word, s):
 
 def cmd_init(workdir):
     data = data_dir(workdir)
-    config = os.path.join(data, "config.yaml")
+    config = config_path(workdir)
     if not os.path.isdir(workdir):
         raise Problem(["作業フォルダ {} がありません。".format(workdir)])
     if os.path.exists(config):
@@ -374,7 +381,7 @@ def cmd_init(workdir):
 
 
 def cmd_check(workdir):
-    config = os.path.join(data_dir(workdir), "config.yaml")
+    config = config_path(workdir)
     s, problems = load(config, workdir)
     notes = []
     try:
@@ -672,7 +679,7 @@ def run_message(s, r, names, outputs):
 
 
 def cmd_run(workdir):
-    config = os.path.join(data_dir(workdir), "config.yaml")
+    config = config_path(workdir)
     s, problems = load(config, workdir)
     if problems:
         return 2, result(False, "設定に問題があるため、ビルドしませんでした。" + "".join(problems), config,
@@ -740,7 +747,7 @@ def main(argv=None):
     config = None
     try:
         command, workdir = parse_args(argv)
-        config = os.path.join(data_dir(workdir), "config.yaml")
+        config = config_path(workdir)
         code, data = COMMANDS[command](workdir)
     except Problem as e:
         code, data = 2, result(False, "".join(e.problems), config, problems=e.problems)
