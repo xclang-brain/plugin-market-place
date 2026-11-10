@@ -29,7 +29,7 @@ python3 tests/run.py
 | --- | --- |
 | `--list` | 試験の組の名前を出す |
 | `--only <名前>` | その組だけを動かす。何回でも付けられる。`parts` は部品ごとの試験すべて。部品は `skills/<名前>` か、フォルダの名前でも選べる |
-| `--skip-slow` | 時間のかかる試験を飛ばす（結合の試験、画面の試験） |
+| `--skip-slow` | 時間のかかる試験を飛ばす（`integration`、`flow`、`ui`） |
 | `--jobs <数>` | 部品ごとの試験を同時にいくつ動かすか（既定は CPU の数。4 まで） |
 | `--timeout <秒>` | 1つの組の時間の上限（既定は 900 秒） |
 | `--results <ファイル>` | 結果の JSON の置き場所 |
@@ -51,8 +51,8 @@ python3 tests/run.py --only docs --only structure
 | Python | 3.10 以上 | 動かせない（終了コード 2） |
 | uv | （あること） | 部品の試験を動かせない（終了コード 2） |
 | git | （あること） | 部品の試験を動かせない（終了コード 2） |
-| svn | （あれば使う） | それを使う試験だけを飛ばす |
-| PyYAML、jsonschema（Python のパッケージ） | （あること） | `structure`（PyYAML）、`integration` と `ui`（jsonschema）が不合格になります。インストール：`python -m pip install pyyaml jsonschema` |
+| svn（`svn` と `svnadmin`） | （あれば使う） | svn を使うテストだけをスキップします（CI では、`flow` の svn の分が不合格になります） |
+| PyYAML、jsonschema（Python のパッケージ） | （あること） | `structure` と `flow`（PyYAML）、`integration` と `ui`（jsonschema）が不合格になります。インストール：`python -m pip install pyyaml jsonschema` |
 | Node.js、Playwright（Chromium） | （あれば使う） | 画面をブラウザーで確認するテスト（`ui`）だけをスキップします（CI では不合格になります）。インストール：`npm install --prefix tests --no-save --no-package-lock playwright@1.56.1` と `npx --prefix tests playwright install chromium` |
 
 要る道具は、選んだ組の分だけを確かめます（`--only docs` なら Python だけ）。
@@ -64,6 +64,7 @@ python3 tests/run.py --only docs --only structure
 | 部品ごと | `skills/<名前>/tests/`、`mcp-servers/<名前>/tests/` | スクリプトとツールの振る舞い。部品のフォルダだけでも動く |
 | `structure` | `tests/structure/` | マニフェスト（`plugin.json`、`.claude-plugin/plugin.json`、`mcp.json`、`.mcp.json`）が正しく、互いに一致する。バージョンが、2つのマニフェスト、リポジトリの `.github/plugin/marketplace.json`、`CHANGELOG.md` で同じ。すべての `skills/<名前>/SKILL.md` の frontmatter（`name` はフォルダー名と同じ、`description` がある、使えるキーは `name`・`description`・`allowed-tools`・`disable-model-invocation`）。すべてのエージェントの frontmatter。Claude Code のエージェント（`agents/<名前>.md`）と Copilot CLI のエージェント（`com.github.copilot/agents/<名前>.agent.md`）が、同じ名前、同じ見出し、同じコードブロックで、ツールの呼び名と `tools` だけが対応するものに置き換わっている |
 | `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合。一括のトリアージを、モデルを使わずに最後まで流す（`test_flow.py`：模擬の Coverity の5件の警告、MCP サーバーでの取得、決まった振る舞いの偽のエージェント、一覧、反映の確認の文字列、書き戻し、修正のブランチの push） |
+| `flow` | `tests/flow/` | `skills/coverity-triage` の処置の流れを、エージェントの代わりのスクリプトで、git と svn の両方で実行します。スクリプトは、`triage.py` が `next` に出力するコマンドをそのまま実行し、作業用コピーのファイルを修正して `result.json` を書きます。リポジトリと警告の一覧は `tests/fixtures/sample/` です。確認する内容：CID 1件の処置（1段階目）、全件の処置と `summary.md`（2段階目）、中断した後の再開、CRLF と Shift_JIS のファイルの修正が新しいチェックアウトに適用できること、逸脱コメントのない結果を `save` が受け付けないこと |
 | `ui` | `tests/ui/` | 結果と設定の画面を、Playwright の Chromium で（幅 390 px と 1280 px、ライトとダーク）。タブが出る、横にはみ出さない、ダークで読める、一覧で選んだ承認と詳細で直した逸脱コメントが `approvals.json` に保存され、反映がそれを読む、サーバを止められる |
 | `docs` | `tests/docs/` | `README.md` と `docs/guide/*.md` の相対リンクが、実在するファイルと見出しを指す |
 | `eval` | `tests/eval/` | EVAL の道具の、モデルを使わない試験 |
@@ -119,8 +120,8 @@ python3 tests/run.py --only docs --only structure
 
 | ジョブ | 動かすもの |
 | --- | --- |
-| 部品ごとの試験 | `tests/run.py --only parts`（Python 3.12 と最新） |
-| プラグイン全体の試験 | `structure`、`integration`、`docs`、`eval`。最初に、`tests/run.py --list` のどの組も、どれかのジョブで動くことを確かめる（Linux だけ） |
+| 部品ごとの試験 | `tests/run.py --only parts`（Python 3.10、3.12、最新。Subversion をインストールしてから実行する） |
+| プラグイン全体の試験 | `structure`、`integration`、`flow`、`docs`、`eval`（Subversion をインストールしてから実行する）。最初に、`tests/run.py --list` のどの組も、どれかのジョブで動くことを確かめる（Linux だけ） |
 | 結果と設定の画面 | `ui`（Node 22。Playwright と Chromium を入れ、あることを確かめてから動かす） |
 
 `tests/` に試験の組を足したら、どれかのジョブの `--only` に足します。足し忘れると、プラグイン全体の試験のジョブが不合格になります。

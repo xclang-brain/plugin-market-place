@@ -13,7 +13,7 @@
        uv run --native-tls --frozen --quiet --directory <フォルダ> python -m unittest discover -s tests -v
      なければ
        python -m unittest discover -s tests -v
-  2. tests/structure、tests/integration、tests/ui、tests/docs、tests/eval（Python の unittest。
+  2. tests/structure、tests/integration、tests/flow、tests/ui、tests/docs、tests/eval（Python の unittest。
      ui は結果と設定の画面を Playwright のブラウザーで確かめる。Node.js か Playwright がなければ、理由を書いて飛ばす）
 
 結果は tests/results/latest.json にも書く（git に入れない）。終了コード：0 すべて合格（飛ばしたものはあってよい）、
@@ -47,8 +47,8 @@ MIN_PYTHON = (3, 10)
 TAIL_LINES = 80
 TIMEOUTS = {"part": 900}
 DEFAULT_TIMEOUT = 900
-PLUGIN_SUITES = ["structure", "integration", "ui", "docs", "eval"]
-SLOW_SUITES = {"integration", "ui"}
+PLUGIN_SUITES = ["structure", "integration", "flow", "ui", "docs", "eval"]
+SLOW_SUITES = {"integration", "flow", "ui"}
 # 試験が作るが、リポジトリに残してよいもの（.gitignore にある結果の置き場所）
 ALLOWED_LEFTOVERS = ("tests/results/",)
 
@@ -476,7 +476,7 @@ def now():
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="coverity-triage-kit の、モデルを使わない試験をすべて動かす")
     parser.add_argument("--only", action="append", default=[], metavar="名前",
-                        help="動かす試験（parts、skills/<名前>、<部品の名前>、structure、integration、ui、docs、eval）。"
+                        help="動かす試験（parts、skills/<名前>、<部品の名前>、structure、integration、flow、ui、docs、eval）。"
                              "何回でも付けられる")
     parser.add_argument("--skip-slow", action="store_true", help="時間のかかる試験を飛ばす")
     parser.add_argument("--list", action="store_true", help="試験の名前を出して終わる")

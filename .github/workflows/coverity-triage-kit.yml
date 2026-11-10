@@ -43,6 +43,17 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@v6
+      # svn の作業コピーを使う試験を、スキップせずに実行するために、Subversion（svn と svnadmin）をインストールする
+      - name: Subversion をインストールする（Linux）
+        if: runner.os == 'Linux'
+        run: sudo apt-get update --quiet && sudo apt-get install --yes --quiet subversion && svn --version --quiet
+      - name: Subversion をインストールする（Windows）
+        if: runner.os == 'Windows'
+        run: |
+          choco install sliksvn --yes --no-progress
+          $bin = Join-Path $env:ProgramFiles 'SlikSvn\bin'
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          & (Join-Path $bin 'svn.exe') --version --quiet
       # 一括実行の作業の流れを、試験のプロセスの中で動かす試験（Windows の競合の試験など）は、
       # pyyaml と jsonschema がないと飛ばされる。CI では入れて、飛ばさずに動かす
       - name: 試験のプロセスで使うライブラリを入れる
@@ -92,11 +103,22 @@ jobs:
               sys.exit(1)
           print("どの試験の組も、どれかのジョブで動きます（" + "、".join(sorted(covered)) + "）")
           EOF
-      # structure は PyYAML で frontmatter を読み、integration は jsonschema で実行フォルダのファイルを確認する
+      # flow は、同じ流れを git と svn で実行する。CI では、svn がないとスキップせずに不合格になる
+      - name: Subversion をインストールする（Linux）
+        if: runner.os == 'Linux'
+        run: sudo apt-get update --quiet && sudo apt-get install --yes --quiet subversion && svn --version --quiet
+      - name: Subversion をインストールする（Windows）
+        if: runner.os == 'Windows'
+        run: |
+          choco install sliksvn --yes --no-progress
+          $bin = Join-Path $env:ProgramFiles 'SlikSvn\bin'
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          & (Join-Path $bin 'svn.exe') --version --quiet
+      # structure は PyYAML で frontmatter を、flow は PyYAML で見本の警告を読み、integration は jsonschema で実行フォルダのファイルを確認する
       - name: 試験のプロセスで使うライブラリを入れる
         run: python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
       - name: プラグイン全体の試験
-        run: python tests/run.py --only structure --only integration --only docs --only eval
+        run: python tests/run.py --only structure --only integration --only flow --only docs --only eval
 
   ui:
     name: 結果と設定の画面（${{ matrix.os }}、Chromium）
