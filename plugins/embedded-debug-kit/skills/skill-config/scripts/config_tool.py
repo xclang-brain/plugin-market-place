@@ -210,7 +210,7 @@ class Doc(object):
 
 def load(path, skill):
     if not os.path.isfile(path):
-        raise Stop("設定ファイル %s がありません。先に %s スキルに、設定ファイルを作るよう頼んでください"
+        raise Stop("設定ファイル %s がありません。先に %s スキルに、設定ファイルを作るよう依頼してください"
                    "（そのスキルの init で作れます）。" % (path, skill))
     try:
         with open(path, "rb") as fh:
@@ -288,7 +288,7 @@ def read_input():
         waiting = True
     text = "" if waiting else decode_input(stream.read())
     lines = [line.strip() for line in re.split(r"\r\n|\r|\n", text) if line.strip()]
-    if not lines:  # 渡し忘れを、空にする頼みと取り違えない
+    if not lines:  # 渡し忘れを、空にする依頼と取り違えない
         raise Stop("値が標準入力で渡されていません。" + HOW_TO_PASS)
     return lines
 

@@ -4,7 +4,7 @@
 
 使い方：server.py --workdir 作業フォルダ
 127.0.0.1 の、OS が選ぶポートで待ち受ける（REQ-402）。起動ごとにトークンを作る。
-.debug-dashboard/server.json に URL とトークンを、recording に記録中の目印を書く。
+.debug-dashboard/server.json に URL とトークンを、recording（記録中フラグ）に時刻を書く。
 recording は 30 秒ごとに書き直し、終わるときに消す。server.json が自分のものでなくなったら終わる。
 """
 
@@ -83,7 +83,7 @@ def read_json(path):
 
 
 def summarize(events):
-    """記録から、今の段・動いているエージェント・最後の報告と判定を求める（設計書 8.6）"""
+    """記録から、今のフェーズ・動いているエージェント・最後の報告と判定を求める（設計書 8.6）"""
     running = {}
     result = {"title": "", "started": None, "updated": None, "count": len(events), "requests": 0,
               "last_report": None, "last_verdict": None}
@@ -301,14 +301,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(200, store.state())
         if path.startswith("/api/sessions/"):
             found = store.session(unquote(path[len("/api/sessions/"):]))
-            return self.reply(200, found) if found else self.fail(404, "その実行の記録はありません。")
+            return self.reply(200, found) if found else self.fail(404, "そのセッションの記録はありません。")
         return self.fail(404, "ありません。")
 
     def post_api(self, path, body):
         store = self.server.store
         if path == "/api/stop":
             if not store.stop(body.get("session")):
-                return self.fail(404, "その実行の記録はありません。")
+                return self.fail(404, "そのセッションの記録はありません。")
             return self.reply(200, {"ok": True, "message": "止めました。次のツールの呼び出しから断ります。"})
         if path == "/api/settings":
             problem = store.save_settings(body)
@@ -341,7 +341,7 @@ def keep_recording(httpd, base, info, done, every=REFRESH_SECONDS):
 
 
 def remove_own(path, pid):
-    """自分が書いた目印だけを消す（後から起動したサーバーのものは残す）"""
+    """自分が書いたフラグだけを消す（後から起動したサーバーのものは残す）"""
     info = read_json(path)
     if isinstance(info, dict) and info.get("pid") == pid and not os.path.islink(path):
         os.remove(path)

@@ -108,7 +108,7 @@ def probe(paths, info):
 
 
 def clear(paths):
-    """前のサーバーの目印と、「実行を止める」の目印を消す。シンボリックリンクは触らない"""
+    """前のサーバーの記録中フラグと、停止フラグを消す。シンボリックリンクは触らない"""
     targets = [paths.server, paths.recording]
     if os.path.isdir(paths.sessions):
         for name in os.listdir(paths.sessions):
@@ -186,7 +186,7 @@ def stop(paths):
     if found == BUSY or (found and call(info, "POST", "/api/shutdown") == BUSY):
         return busy(paths, info)
     if not found:
-        clear(paths)  # 前のサーバーが残した目印があれば消す
+        clear(paths)  # 前のサーバーが残したフラグがあれば消す
         return output(0, True, "Web管理画面は動いていません。", paths)
     deadline = time.time() + STOP_SECONDS
     while time.time() < deadline:

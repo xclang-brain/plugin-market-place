@@ -40,16 +40,16 @@
       <span id="copy-result" class="hint" aria-live="polite"></span>
     </p>
     <p class="hint">
-      依頼文は、統括エージェントを動かす別のチャットに貼り付けて送ります。
+      依頼文は、統括エージェントを動かす別のセッションに貼り付けて送ります。
       Claude Code では、同じ作業フォルダで <code>claude --agent embedded-debug-kit:debug-orchestrator</code>
-      （プラグインなしで入れたときは <code>claude --agent debug-orchestrator</code>）を起動します。
+      （プラグインなしでインストールしたときは <code>claude --agent debug-orchestrator</code>）を起動します。
       GitHub Copilot CLI では、<code>copilot --agent embedded-debug-kit:debug-orchestrator</code> を起動します。
     </p>
   </section>
 
   <section id="panel-progress" role="tabpanel" aria-labelledby="tab-progress" hidden>
-    <p class="sub">実行：<span id="progress-title">まだ記録がありません</span></p>
-    <ol class="stages" aria-label="今の段">
+    <p class="sub">セッション：<span id="progress-title">まだ記録がありません</span></p>
+    <ol class="stages" aria-label="今のフェーズ">
       <li data-stage="plan">計画</li>
       <li data-stage="work">作業</li>
       <li data-stage="review">評価</li>
@@ -68,14 +68,14 @@
   </section>
 
   <section id="panel-results" role="tabpanel" aria-labelledby="tab-results" hidden>
-    <p class="sub">実行：<span id="results-title">まだ記録がありません</span></p>
+    <p class="sub">セッション：<span id="results-title">まだ記録がありません</span></p>
     <h2>統括エージェントの最後の報告</h2>
     <pre id="last-report" class="text"></pre>
 
     <h2>検証エージェントの最後の判定</h2>
     <pre id="last-verdict" class="text"></pre>
 
-    <h2>前の実行</h2>
+    <h2>前のセッション</h2>
     <ol id="sessions" class="sessions"></ol>
   </section>
 </main>

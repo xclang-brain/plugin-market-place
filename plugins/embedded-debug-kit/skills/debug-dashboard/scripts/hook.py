@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""CLI のフックから呼ばれ、依頼・ツールの呼び出し・報告を記録する。止める目印があれば、ツールを断る。
+"""CLI のフックから呼ばれ、依頼・ツールの呼び出し・報告を記録する。停止フラグがあれば、ツールを断る。
 
 使い方：hook.py [イベント] < フックの入力（JSON）
   イベント：UserPromptSubmit、PreToolUse、SubagentStop、Stop。省くと入力の hook_event_name を使う。
-作業フォルダの .debug-dashboard/recording が新しくなければ、何もしない（REQ-407、REQ-408）。
+作業フォルダの記録中フラグ（.debug-dashboard/recording）が新しくなければ、何もしない（REQ-407、REQ-408）。
 どんなときも終了コード 0 で終える。標準出力には、ツールを断るときの JSON だけを出す。
 """
 

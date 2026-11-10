@@ -2,7 +2,7 @@
 
 このスキルのフォルダで動かす：python3 -m unittest discover -s tests（Windows は py -3）
 機器の代わりに、tests/fake_device.py の機器のまねを TCP（socket://127.0.0.1:<番号>）で動かす。
-ほかに入れるものはなく、外のネットワークも使わない。
+ほかにインストールするものはなく、外のネットワークも使わない。
 bash と PowerShell から --stdin で渡すテストは、そのシェルがないときは飛ばす。
 """
 

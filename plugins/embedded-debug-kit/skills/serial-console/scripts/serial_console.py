@@ -64,7 +64,7 @@ LOGIN_RE = re.compile(r"login:\s*$")
 PASSWORD_RE = re.compile(r"[Pp]assword:\s*$")
 INCORRECT_RE = re.compile(r"(?i)login incorrect|authentication fail")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]"           # 色、カーソルの移動など
-                     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # 端末の題名など
+                     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # 端末のタイトルなど
                      r"|\x1b[ -/]*[0-~]")                  # そのほかの短いもの
 CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # Windows の Git Bash は、/ で始まる引数（と「名前=/…」の後ろ）を「C:/Program Files/Git/…」に書き換える
@@ -235,7 +235,7 @@ def settings_from(raw, environ, commands_arg):
         s["password"] = environ[s["password_env"]]
         if s["password"]:
             SECRETS.append(s["password"])
-    # 環境変数がないことは、機器がパスワードを求めたときに伝える（もうログインしていれば要らない）
+    # 環境変数がないことは、機器がパスワードを求めたときに伝える（もうログインしていれば不要）
     s["env_missing"] = bool(s["password_env"]) and s["password_env"] not in environ and not s["password"]
 
     prompt = get("prompt", DEFAULT_PROMPT)

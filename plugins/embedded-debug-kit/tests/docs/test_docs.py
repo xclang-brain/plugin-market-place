@@ -1,6 +1,6 @@
 """文書の食い違いを確かめるテスト。
 
-- 版：2つのマニフェスト、仕様書、設計書、マーケットプレイスの一覧が、同じ版を書いている。
+- バージョン：2つのマニフェスト、仕様書、設計書、マーケットプレイスの一覧が、同じバージョンを書いている。
 - 要求の番号：設計書とテストが挙げる REQ-xxx は、仕様書にある。仕様書の要求は、どれも設計書の「要求の追跡」の表にある（憲章 第6条3項）。
 
   python3 -m unittest discover -s tests/docs -v
@@ -29,7 +29,7 @@ def read(path):
 
 
 def version_line(path):
-    m = re.search(r"(?m)^- 版：(\S+)$", read(path))
+    m = re.search(r"(?m)^- バージョン：(\S+)$", read(path))
     return m.group(1) if m else None
 
 
@@ -48,10 +48,10 @@ def covered(text, known):
 class VersionTest(unittest.TestCase):
     def test_versions_match(self):
         versions = {str(p.relative_to(ROOT)): json.loads(read(p))["version"] for p in MANIFESTS}
-        self.assertEqual(len(set(versions.values())), 1, f"マニフェストの版が違います：{versions}")
+        self.assertEqual(len(set(versions.values())), 1, f"マニフェストのバージョンが違います：{versions}")
         version = next(iter(versions.values()))
-        self.assertEqual(version_line(SPEC), version, "仕様書の版")
-        self.assertEqual(version_line(DESIGN), version, "設計書の版")
+        self.assertEqual(version_line(SPEC), version, "仕様書のバージョン")
+        self.assertEqual(version_line(DESIGN), version, "設計書のバージョン")
         for market in MARKET_JSONS:
             if market.is_file():
                 listed = [p for p in json.loads(read(market))["plugins"] if p.get("name") == ROOT.name]
@@ -59,7 +59,7 @@ class VersionTest(unittest.TestCase):
         if MARKET_README.is_file():
             row = [line for line in read(MARKET_README).splitlines() if line.startswith(f"| [{ROOT.name}]")]
             self.assertEqual(len(row), 1, "マーケットプレイスの README の一覧に、このプラグインの行がありません")
-            self.assertTrue(row[0].rstrip().endswith(f"| {version} |"), "マーケットプレイスの README の版")
+            self.assertTrue(row[0].rstrip().endswith(f"| {version} |"), "マーケットプレイスの README のバージョン")
 
 
 class TraceTest(unittest.TestCase):

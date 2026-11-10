@@ -18,15 +18,15 @@ CLI を起動したフォルダで、`--workdir` を付けずに動かす。フ�
 | すること | コマンド |
 | --- | --- |
 | 画面を起動する。もう動いていれば、その URL を返す | `python3 "<このスキルのフォルダ>/scripts/dashboard.py" start` |
-| 画面を終了する。記録が止まり、「実行を止める」も解ける | `python3 "<このスキルのフォルダ>/scripts/dashboard.py" stop` |
+| 画面を終了する。記録が止まり、「実行を止める」も解除される | `python3 "<このスキルのフォルダ>/scripts/dashboard.py" stop` |
 | 動いているかを見る。何も作らない | `python3 "<このスキルのフォルダ>/scripts/dashboard.py" status` |
 
 起動したら、利用者に次のことを伝える。
 
 1. `url` をブラウザーで開く。
-2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のチャットに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する。Copilot CLI では、同じように `copilot --agent embedded-debug-kit:debug-orchestrator` を起動する（`/agent` で選んでもよい）。
+2. 「設定」のタブで依頼文を作り、統括エージェントを動かす別のセッションに送る。Claude Code では、同じ PC の別のターミナルで、同じ作業フォルダから `claude --agent embedded-debug-kit:debug-orchestrator` を起動する。Copilot CLI では、同じように `copilot --agent embedded-debug-kit:debug-orchestrator` を起動する（`/agent` で選んでもよい）。
 3. 「実行を止める」は、次のツールの呼び出しから効く。すでに動いているコマンドは、終わるまで止まらない。
-4. 画面が動いている間は、この作業フォルダのチャットをすべて記録する。使い終わったら `/debug-dashboard stop`（Copilot CLI では `/embedded-debug-kit:debug-dashboard stop`）で終了する。
+4. 画面が動いている間は、この作業フォルダのセッションをすべて記録する。使い終わったら `/debug-dashboard stop`（Copilot CLI では `/embedded-debug-kit:debug-dashboard stop`）で終了する。
 
 ## 結果
 
@@ -43,11 +43,11 @@ CLI を起動したフォルダで、`--workdir` を付けずに動かす。フ�
 
 失敗したら、`message` を伝え、`log` があれば最後の数行も伝える。
 
-記録されるもの、記録されないときに確かめること、画面がどのチャットを見せるかは [reference/records.md](reference/records.md) にある。
+記録されるもの、記録されないときに確かめること、画面がどのセッションを表示するかは [reference/records.md](reference/records.md) にある。
 
 ## してはいけないこと
 
-- 「実行を止めて」と頼まれても、`stop` を動かさない。画面を終了すると「実行を止める」も解け、実行は止まらない。
+- 「実行を止めて」と依頼されても、`stop` を動かさない。画面を終了すると「実行を止める」も解除され、実行は止まらない。
 - `.debug-dashboard/` の中のファイルを、自分で書き換えたり消したりしない。起動と終了は、このスクリプトだけで行う。
 - URL を、チャット以外（ファイル、Issue など）に書かない。URL にはトークンが入っている。
-- 頼まれていないのに、画面を終了しない。
+- 依頼されていないのに、画面を終了しない。

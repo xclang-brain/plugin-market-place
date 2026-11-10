@@ -30,7 +30,7 @@ def temp_project(test):
 
 
 def mark_recording(project, age=0.0):
-    """サーバーの代わりに、記録中の目印を置く"""
+    """サーバーの代わりに、記録中フラグを置く"""
     base = project / DATA
     base.mkdir(mode=0o700, exist_ok=True)
     (base / "recording").write_text(json.dumps({"pid": 1, "port": 1, "time": time.time() - age}), encoding="utf-8")

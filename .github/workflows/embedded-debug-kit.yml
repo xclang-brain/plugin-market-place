@@ -105,6 +105,6 @@ jobs:
           }
       - name: 独立性のテスト
         run: python -m unittest discover -s tests/independence -v
-      # 版の一致と、要求の番号（仕様書・設計書・テスト）
+      # バージョンの一致と、要求の番号（仕様書・設計書・テスト）
       - name: 文書のテスト
         run: python -m unittest discover -s tests/docs -v

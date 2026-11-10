@@ -5,7 +5,7 @@
   （シリアルの代わりに socket://127.0.0.1:<番号> でつなぐ）。
 
 機器のルートからの相対パスで、FTP の送り先とシェルのパスがそろう（例：送り先 app → シェルの ./app）。
-Linux と macOS で動く（疑似端末を使う）。pyftpdlib が要る（pip install pyftpdlib）。
+Linux と macOS で動く（疑似端末を使う）。pyftpdlib が必要（pip install pyftpdlib）。
 
   python3 tests/e2e/device_sim.py --root /tmp/device
 """

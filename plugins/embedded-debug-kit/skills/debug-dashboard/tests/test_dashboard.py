@@ -77,17 +77,17 @@ class DashboardTest(unittest.TestCase):
         self.assertFalse(dashboard("status", "--workdir", self.workdir)[1]["running"])
 
     def test_stop_marks_do_not_outlive_the_server(self):
-        """画面を終了すると「実行を止める」も解ける。落ちた画面の目印は、次の起動で消える"""
+        """画面を終了すると「実行を止める」も解除される。落ちた画面のフラグは、次の起動で消える"""
         self.addCleanup(dashboard, "stop", "--workdir", self.workdir)
         stop = self.project / DATA / "sessions" / "s1" / "stop"
         self.assertEqual(dashboard("start", "--workdir", self.workdir)[0], 0)
         stop.parent.mkdir(parents=True)
         stop.write_text("")
         self.assertEqual(dashboard("stop", "--workdir", self.workdir)[0], 0)
-        self.assertFalse(stop.exists(), "stop が「実行を止める」の目印を消していません")
+        self.assertFalse(stop.exists(), "stop が停止フラグを消していません")
         stop.write_text("")
         self.assertEqual(dashboard("start", "--workdir", self.workdir)[0], 0)
-        self.assertFalse(stop.exists(), "start が前の「実行を止める」の目印を消していません")
+        self.assertFalse(stop.exists(), "start が前の停止フラグを消していません")
 
     def test_workdir_defaults_to_the_project_dir(self):
         """シェルが下のフォルダに移っていても、フックと同じ CLAUDE_PROJECT_DIR を使う"""
@@ -113,7 +113,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(dashboard("status", cwd=str(sub))[1]["running"], False, "Claude Code では今のフォルダを使う")
 
     def test_unresponsive_server_is_left_alone(self):
-        """応答しないサーバーの目印を消さず、2つ目のサーバーも起動しない"""
+        """応答しないサーバーのフラグを消さず、2つ目のサーバーも起動しない"""
         listener = socket.socket()
         self.addCleanup(listener.close)
         listener.bind(("127.0.0.1", 0))
