@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'm=\"${CLAUDE_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" UserPromptSubmit; else python3 \"$s\" UserPromptSubmit; fi 2>/dev/null || true'",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.sh\" UserPromptSubmit",
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'm=\"${CLAUDE_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" PreToolUse; else python3 \"$s\" PreToolUse; fi 2>/dev/null || true'",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.sh\" PreToolUse",
             "timeout": 10,
             "onFailure": "continue"
           }
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'm=\"${CLAUDE_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" SubagentStop; else python3 \"$s\" SubagentStop; fi 2>/dev/null || true'",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.sh\" SubagentStop",
             "timeout": 10
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'm=\"${CLAUDE_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" Stop; else python3 \"$s\" Stop; fi 2>/dev/null || true'",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/debug-dashboard/scripts/hook.sh\" Stop",
             "timeout": 10
           }
         ]

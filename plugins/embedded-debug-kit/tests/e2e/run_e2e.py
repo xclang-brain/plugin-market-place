@@ -1,4 +1,4 @@
-"""通しのテスト（E2E）。模擬の機器と `claude -p` で、2段階目と3段階目が不具合を直せるかと、止める目印でツールが断られるかを確かめる。
+"""通しのテスト（E2E）。模擬の機器と `claude -p` で、2段階目と3段階目が不具合を直せるかと、停止フラグでツールが断られるかを確かめる。
 
 AI の利用料がかかるので、CI では動かさない。Linux で動く（模擬の機器が疑似端末を使う）。
 模擬の機器には pyftpdlib が要る。--python に、それが入った Python を渡す。
@@ -156,9 +156,9 @@ def case_orchestrator(base, ftp, shell):
     text = final(events)
     checks = {
         "直った（AVG=25）": EXPECTED in device_output(work),
-        "作業エージェントに頼んだ": any(c.endswith("device-debugger") for c in called),
-        "検証エージェントに頼んだ": any(c.endswith("debug-verifier") for c in called),
-        "ほかのエージェントに頼んでいない": all(c.endswith(("device-debugger", "debug-verifier")) for c in called),
+        "作業エージェントに依頼した": any(c.endswith("device-debugger") for c in called),
+        "検証エージェントに依頼した": any(c.endswith("debug-verifier") for c in called),
+        "ほかのエージェントに依頼していない": all(c.endswith(("device-debugger", "debug-verifier")) for c in called),
         "統括エージェントが自分でファイルを直していない": not direct,
         "結論と条件ごとの判定を報告した": "C1" in text and ("成功" in text or "失敗" in text or "人の判断" in text),
         "振り返りを書いた": "振り返り" in text,

@@ -10,9 +10,9 @@
   const $ = (id) => document.getElementById(id);
 
   const token = takeToken();
-  let selected = null;    // 表示している実行（チャット）
-  let shown = null;       // 表示している実行の要約
-  let follow = true;      // 統括エージェントの新しい実行を表示し続けるか
+  let selected = null;    // 表示しているセッション
+  let shown = null;       // 表示しているセッションの要約
+  let follow = true;      // 統括エージェントの新しいセッションを表示し続けるか
   let shownKey = "";      // 表示中の内容。変わったときだけ描き直す
   let listKey = "";
   let settingsFilled = false;
@@ -173,8 +173,8 @@
     return (session.title || "（依頼の記録がありません）") + "（" + when(session.started, true) + " から）";
   }
 
-  // 追う実行：エージェントに依頼したチャットのうち、いちばん新しいもの。なければ、いちばん新しいチャット。
-  // 画面を起動したチャットなど、エージェントを使わないチャットに移らないようにする
+  // 追うセッション：エージェントに依頼したセッションのうち、いちばん新しいもの。なければ、いちばん新しいセッション。
+  // 画面を起動したセッションなど、エージェントを使わないセッションに移らないようにする
   function latest(sessions) {
     const run = sessions.find((s) => s.requests > 0) || sessions[0];
     return run ? run.id : null;
@@ -200,7 +200,7 @@
       : "動いているエージェントはありません。";
     $("stop").disabled = !s || s.stopped;
     $("stop-result").textContent = s && s.stopped
-      ? "止めています。次のツールの呼び出しから断ります。このチャットで次の依頼を送ると解けます。"
+      ? "止めています。次のツールの呼び出しから断ります。このセッションで次の依頼を送ると解けます。"
       : "";
 
     const events = detail ? detail.events : [];

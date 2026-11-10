@@ -75,7 +75,7 @@ ELF_MACHINES = {2: "SPARC", 3: "x86", 8: "MIPS", 20: "PowerPC", 21: "PowerPC64",
                 42: "SuperH", 43: "SPARC V9", 62: "x86-64", 94: "Xtensa", 183: "AArch64",
                 243: "RISC-V", 258: "LoongArch"}
 
-# bash：sdk_env を読み込み、source_dir に戻ってから、目印のファイルを作る。その後にコマンドを足す。
+# bash：sdk_env を読み込み、source_dir に戻ってから、読み込めたことを示すファイルを作る。その後にコマンドを足す。
 # pipefail は「make | tee build.log」の make の失敗も失敗にするため。
 BASH_SCRIPT = """\
 if [ -n "${SKILL_BUILD_SDK_ENV-}" ]; then

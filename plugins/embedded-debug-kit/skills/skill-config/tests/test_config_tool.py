@@ -274,7 +274,7 @@ class SetTest(unittest.TestCase):
         self.assertEqual(p.show()[1]["missing"], ["host", "files"])
 
     def test_missing_stdin_does_not_clear(self):
-        # heredoc を付け忘れると、標準入力は空になる。空にする頼みと取り違えない
+        # heredoc を付け忘れると、標準入力は空になる。空にする依頼と取り違えない
         p = Project(self, CONFIG.replace("host =", "host = 10.0.0.1"))
         before = p.raw()
         for args, stdin in ((("--stdin",), None), (("--stdin",), b""), (("--stdin",), b"\n  \r\n"),

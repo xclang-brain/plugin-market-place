@@ -4,32 +4,32 @@
     "UserPromptSubmit": [
       {
         "type": "command",
-        "bash": "m=\"${COPILOT_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" UserPromptSubmit; else python3 \"$s\" UserPromptSubmit; fi 2>/dev/null || true",
-        "powershell": "$d = $env:COPILOT_PROJECT_DIR; if (-not $d) { $d = '.' }; if (-not (Test-Path -LiteralPath (Join-Path $d '.debug-dashboard/recording') -PathType Leaf)) { exit 0 }; $s = Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.py'; try { if (Get-Command py -CommandType Application -ErrorAction SilentlyContinue) { & py -3 $s UserPromptSubmit 2>$null } elseif (Get-Command python -CommandType Application -ErrorAction SilentlyContinue) { & python $s UserPromptSubmit 2>$null } else { & python3 $s UserPromptSubmit 2>$null } } catch { }; exit 0",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" UserPromptSubmit || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) UserPromptSubmit } catch { }; exit 0",
         "timeoutSec": 10
       }
     ],
     "PreToolUse": [
       {
         "type": "command",
-        "bash": "m=\"${COPILOT_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" PreToolUse; else python3 \"$s\" PreToolUse; fi 2>/dev/null || true",
-        "powershell": "$d = $env:COPILOT_PROJECT_DIR; if (-not $d) { $d = '.' }; if (-not (Test-Path -LiteralPath (Join-Path $d '.debug-dashboard/recording') -PathType Leaf)) { exit 0 }; $s = Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.py'; try { if (Get-Command py -CommandType Application -ErrorAction SilentlyContinue) { & py -3 $s PreToolUse 2>$null } elseif (Get-Command python -CommandType Application -ErrorAction SilentlyContinue) { & python $s PreToolUse 2>$null } else { & python3 $s PreToolUse 2>$null } } catch { }; exit 0",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" PreToolUse || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) PreToolUse } catch { }; exit 0",
         "timeoutSec": 10
       }
     ],
     "SubagentStop": [
       {
         "type": "command",
-        "bash": "m=\"${COPILOT_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" SubagentStop; else python3 \"$s\" SubagentStop; fi 2>/dev/null || true",
-        "powershell": "$d = $env:COPILOT_PROJECT_DIR; if (-not $d) { $d = '.' }; if (-not (Test-Path -LiteralPath (Join-Path $d '.debug-dashboard/recording') -PathType Leaf)) { exit 0 }; $s = Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.py'; try { if (Get-Command py -CommandType Application -ErrorAction SilentlyContinue) { & py -3 $s SubagentStop 2>$null } elseif (Get-Command python -CommandType Application -ErrorAction SilentlyContinue) { & python $s SubagentStop 2>$null } else { & python3 $s SubagentStop 2>$null } } catch { }; exit 0",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" SubagentStop || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) SubagentStop } catch { }; exit 0",
         "timeoutSec": 10
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "bash": "m=\"${COPILOT_PROJECT_DIR:-.}/.debug-dashboard/recording\"; [ -f \"$m\" ] || exit 0; s=\"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.py\"; if command -v py >/dev/null 2>&1; then py -3 \"$s\" Stop; else python3 \"$s\" Stop; fi 2>/dev/null || true",
-        "powershell": "$d = $env:COPILOT_PROJECT_DIR; if (-not $d) { $d = '.' }; if (-not (Test-Path -LiteralPath (Join-Path $d '.debug-dashboard/recording') -PathType Leaf)) { exit 0 }; $s = Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.py'; try { if (Get-Command py -CommandType Application -ErrorAction SilentlyContinue) { & py -3 $s Stop 2>$null } elseif (Get-Command python -CommandType Application -ErrorAction SilentlyContinue) { & python $s Stop 2>$null } else { & python3 $s Stop 2>$null } } catch { }; exit 0",
+        "bash": "bash \"$PLUGIN_ROOT/skills/debug-dashboard/scripts/hook.sh\" Stop || true",
+        "powershell": "try { & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:PLUGIN_ROOT 'skills/debug-dashboard/scripts/hook.ps1')))) Stop } catch { }; exit 0",
         "timeoutSec": 10
       }
     ]

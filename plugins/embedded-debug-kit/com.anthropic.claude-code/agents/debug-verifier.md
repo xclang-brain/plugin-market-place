@@ -1,6 +1,6 @@
 ---
 name: debug-verifier
-description: 作業の結果が合格の条件を満たすかを、ログなどのファイルを読んで条件ごとに判定する。試行の結果を評価するよう頼まれたときに使う。
+description: 作業の結果が合格の条件を満たすかを、ログなどのファイルを読んで条件ごとに判定する。試行の結果を評価するよう依頼されたときに使う。
 model: inherit
 color: yellow
 tools: Read, Grep, Glob

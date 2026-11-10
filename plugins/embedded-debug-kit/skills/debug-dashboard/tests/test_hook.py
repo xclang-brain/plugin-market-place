@@ -1,4 +1,4 @@
-"""フック（hook.py）のテスト。記録、止める目印、パスワードを伏せること、大きさの上限（REQ-405、REQ-407、REQ-408）。
+"""フック（hook.py）のテスト。記録、停止フラグ、パスワードを伏せること、大きさの上限（REQ-405、REQ-407、REQ-408）。
 
   python3 -m unittest discover -s tests
 """
@@ -15,7 +15,7 @@ import support
 from support import DATA, mark_recording, read_events, run_hook, temp_project
 
 sys.path.insert(0, str(support.SCRIPTS))
-import server  # noqa: E402  今の段の求め方を確かめる
+import server  # noqa: E402  今のフェーズの求め方を確かめる
 
 WORKER = "my-plugin:worker-agent"
 VERIFIER = "my-plugin:debug-verifier"
@@ -399,7 +399,7 @@ class LimitTest(unittest.TestCase):
 
 
 class StageTest(unittest.TestCase):
-    """今の段は、動いているエージェントの名前で決める（設計書 8.6）"""
+    """今のフェーズは、動いているエージェントの名前で決める（設計書 8.6）"""
 
     def stage(self, *events):
         return server.summarize(list(events))["stage"]
@@ -537,6 +537,7 @@ class CopilotHooksJsonTest(unittest.TestCase):
                                 COPILOT_CLI="1")
         env.pop("PSModulePath", None)  # pwsh から受け継いだものを Windows PowerShell 5.1 に渡さない（モジュールを読み違える）
         env.pop("PSMODULEPATH", None)
+        env["PSExecutionPolicyPreference"] = "Restricted"  # Windows の初めの設定。.ps1 のファイルを動かせなくても、フックは動く
         if path:
             env["PATH"] = path
         command = self.config["hooks"][event][0][field]
