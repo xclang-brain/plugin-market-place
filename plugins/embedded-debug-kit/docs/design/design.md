@@ -98,6 +98,7 @@ YAML の読み取りは、Python の標準ライブラリにない。使う書�
 | serial-console | シリアルで機器のシェルにつなぎ、必要ならログインし、コマンドを順に動かして、出力と終了コードを返す。動かすコマンドは、設定の `commands`、`--command`、`--stdin`（1行に1つ）のどれかで渡す | `port`、`baud`、`login_user`、`login_password`、`prompt`、`commands` |
 | skill-config | ほかのスキルを使う準備をする。隣のスキルのひな形から `<作業フォルダ>/.<名前>/config.yaml` を作り、コメントを読んで、利用者に質問しながら値を書き込む。隣のスキルに `pyproject.toml` があれば、必要なパッケージを `uv sync --project` で入れる | なし |
 | debug-dashboard | Web管理画面の起動と終了。フックから呼ばれて記録と停止をする（4段階目、8章） | なし |
+| skill-replace | 利用者のスキルを写し、3章の決まり（名前、ひな形、設定ファイル、`pyproject.toml`）に合うように作り変えて、元のスキルと置き換える。SKILL.md だけで、スクリプトは持たない | なし |
 
 3章の決まりと違うところ：
 
@@ -362,6 +363,7 @@ claude plugin validate .
 | REQ-101〜REQ-110 | 3、4 | `skills/<1段階目>/` | スキルの単体テスト、`claude plugin eval`（ふつうの依頼でスキルが選ばれるか）、`tests/independence/`（REQ-108） |
 | REQ-111 | 3、4 | `skills/skill-config/` | skill-config の単体テスト、`claude plugin eval` |
 | REQ-112、REQ-113 | 3 | `skills/<1段階目>/` | スキルの単体テスト |
+| REQ-114 | 4 | `skills/skill-replace/` | 人が読む |
 | REQ-201〜REQ-209 | 5 | 作業エージェントの定義 | `tests/e2e/`（直せるか、スキルを使ったか、デバッグ用の出力を消したか）、`tests/independence/`（REQ-202）、ほかは人が読む |
 | REQ-301〜REQ-308、REQ-310 | 5、5.1、6 | 統括・検証エージェントの定義 | `tests/e2e/`（直せるか、依頼の相手、自分で直さないこと、結論と条件ごとの判定）、`tests/independence/`（REQ-303 の Copilot CLI のフック、REQ-304）、ほかは人が読む |
 | REQ-309 | 5.2 | 統括エージェントの定義 | `tests/e2e/`（振り返り）、人が読む（Issue の流れ） |
