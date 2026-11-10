@@ -13,13 +13,13 @@ description: ファイルを FTP か FTPS で組み込み機器のフォルダ�
 ## コマンド
 
 Python は、Windows では `py -3`、ほかでは `python3` で動かす（下の表は `python3` で書く）。
-作業フォルダで動かすか、`--workdir <作業フォルダ>` を付ける。パスに空白があれば `"…"` で囲む（PowerShell でも bash でも使える）。
+作業フォルダで動かすか、`--workdir "<作業フォルダ>"` を付ける。パスは `"…"` で囲む。
 
 | すること | コマンド |
 | --- | --- |
-| ファイルを送る | `python3 <このスキルのフォルダ>/scripts/ftp_deploy.py run` |
-| 設定を確かめる。機器にログインし、送り先のフォルダの一覧を取る。何も作らない | `python3 <このスキルのフォルダ>/scripts/ftp_deploy.py check` |
-| 設定ファイルをひな形から作る。もうあれば、そのままにする | `python3 <このスキルのフォルダ>/scripts/ftp_deploy.py init` |
+| ファイルを送る | `python3 "<このスキルのフォルダ>/scripts/ftp_deploy.py" run` |
+| 設定を確かめる。機器にログインし、送り先のフォルダの一覧を取る。何も作らない | `python3 "<このスキルのフォルダ>/scripts/ftp_deploy.py" check` |
+| 設定ファイルをひな形から作る。もうあれば、そのままにする | `python3 "<このスキルのフォルダ>/scripts/ftp_deploy.py" init` |
 
 - 送るのは、設定の `files` に書いたファイルだけ。依頼されたファイルが `files` にないときは、`files` に足すかを利用者に聞いてから送る。
 - 大きなファイルを送るときは、コマンドを動かすツールの待ち時間を長くする。

@@ -1,7 +1,7 @@
 """通しのテスト（E2E）。模擬の機器と `claude -p` で、2段階目と3段階目が不具合を直せるかと、停止フラグでツールが断られるかを確かめる。
 
 AI の利用料がかかるので、CI では動かさない。Linux で動く（模擬の機器が疑似端末を使う）。
-模擬の機器には pyftpdlib が要る。--python に、それが入った Python を渡す。
+模擬の機器には pyftpdlib が必要。--python に、それが入った Python を渡す。
 
   python3 tests/e2e/run_e2e.py --python <pyftpdlib の入った python> [--case worker|orchestrator|stop ...]
 

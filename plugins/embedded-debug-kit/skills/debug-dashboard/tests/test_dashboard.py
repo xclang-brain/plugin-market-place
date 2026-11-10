@@ -77,7 +77,7 @@ class DashboardTest(unittest.TestCase):
         self.assertFalse(dashboard("status", "--workdir", self.workdir)[1]["running"])
 
     def test_stop_marks_do_not_outlive_the_server(self):
-        """画面を終了すると「実行を止める」も解ける。落ちた画面のフラグは、次の起動で消える"""
+        """画面を終了すると「実行を止める」も解除される。落ちた画面のフラグは、次の起動で消える"""
         self.addCleanup(dashboard, "stop", "--workdir", self.workdir)
         stop = self.project / DATA / "sessions" / "s1" / "stop"
         self.assertEqual(dashboard("start", "--workdir", self.workdir)[0], 0)

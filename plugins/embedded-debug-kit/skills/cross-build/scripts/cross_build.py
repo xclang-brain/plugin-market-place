@@ -50,10 +50,10 @@ STOP_SIGNALS = [getattr(signal, n) for n in ("SIGINT", "SIGTERM", "SIGHUP", "SIG
 
 SHELL_MISSING = {
     "cmd": "shell の cmd は Windows でだけ使えます。auto か bash にしてください。",
-    "powershell": "PowerShell（pwsh か powershell）が見つかりません。PowerShell を入れるか、shell を変えてください。",
-    "bash": ("bash が見つかりません。Git for Windows を入れるか、shell を cmd か powershell にしてください"
+    "powershell": "PowerShell（pwsh か powershell）が見つかりません。PowerShell をインストールするか、shell を変えてください。",
+    "bash": ("bash が見つかりません。Git for Windows をインストールするか、shell を cmd か powershell にしてください"
              "（WSL の bash は使えません）。" if IS_WINDOWS else
-             "bash が見つかりません。bash を入れるか、shell を変えてください。"),
+             "bash が見つかりません。bash をインストールするか、shell を変えてください。"),
 }
 # check で、PATH を探さない語（シェルの中のコマンドなど）
 BUILTINS = {".", "cd", "chdir", "pushd", "source", "export", "set", "setlocal", "call", "if", "for", "foreach",
@@ -350,7 +350,7 @@ def cmd_check(workdir):
     if word and not command_exists(word, s):
         notes.append("build_command の {} が、今の PATH にありません。{}".format(
             word, "sdk_env が PATH に足すなら、このままで動きます。" if s["sdk_env"]
-            else "PC に入っているかと、PATH を確かめてください。"))
+            else "PC にインストールされているかと、PATH を確かめてください。"))
     extra = {"notes": notes, "settings": s}
     if problems:
         return 2, result(False, "設定に問題があります。" + "".join(problems + notes), config, problems=problems,
@@ -608,14 +608,14 @@ def run_message(s, r, names, outputs):
         if rc == 0:
             return ("sdk_env（{}）の読み込みの途中で、シェルが終わりました。sdk_env の中で exit していないかを"
                     "確かめてください。").format(s["sdk_env"])
-        return ("sdk_env（{}）の読み込みに失敗しました（終了コード {}）。SDK が入っているかと、"
+        return ("sdk_env（{}）の読み込みに失敗しました（終了コード {}）。SDK がインストールされているかと、"
                 "sdk_env の最後のコマンドが 0 以外で終わっていないかを確かめてください。").format(s["sdk_env"], rc)
     if rc != 0:
         # エラーの行があれば、そちらを先に伝える（Makefile の中の $(shell ...) が見つからないだけのこともある）
         not_found = [line for line in scan.tail if NOT_FOUND_RE.search(line)]
         if rc in NOT_FOUND_CODES or (not_found and not scan.errors):
             line = (not_found or [l for l in scan.tail if l][-1:] or ["終了コード {}".format(rc)])[0]
-            return "コマンドが見つかりません：「{}」。PC に入っているかと、PATH と sdk_env を確かめてください。".format(line)
+            return "コマンドが見つかりません：「{}」。PC にインストールされているかと、PATH と sdk_env を確かめてください。".format(line)
         msg = "ビルドが失敗しました（終了コード {}）。".format(rc)
         msg += ("最初のエラーは「{}」です。".format(scan.errors[0]) if scan.errors
                 else "ログの最後（tail）を確かめてください。")

@@ -200,7 +200,7 @@
       : "動いているエージェントはありません。";
     $("stop").disabled = !s || s.stopped;
     $("stop-result").textContent = s && s.stopped
-      ? "止めています。次のツールの呼び出しから断ります。このセッションで次の依頼を送ると解けます。"
+      ? "止めています。次のツールの呼び出しから断ります。このセッションで次の依頼を送ると解除されます。"
       : "";
 
     const events = detail ? detail.events : [];

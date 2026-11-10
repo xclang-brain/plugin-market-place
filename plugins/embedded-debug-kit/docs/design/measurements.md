@@ -1,7 +1,7 @@
 # embedded-debug-kit 実測の記録
 
 [設計書](design.md)の判断のもとになった、CLI の動きの記録である。決めたことは設計書に書き、ここには調べた事実だけを書く。
-CLI の版を上げたら、ここを確かめ直す。
+CLI のバージョンを上げたら、ここを確かめ直す。
 
 | 節 | 中身 | 確かめたもの | 方法 |
 | --- | --- | --- | --- |
@@ -108,8 +108,8 @@ hook.sh と hook.ps1 に移した後（設計書 8.3）に確かめたことを�
 | 確かめたこと | 方法 | 結果 |
 | --- | --- | --- |
 | Claude Code で、記録と「実行を止める」が働く | Claude Code 2.1.321（Linux）で、通しのテストの stop のケース（2026-11-10） | 働いた |
-| hooks.json のコマンドが、bash で働く | `skills/debug-dashboard/tests/`（Linux と、Windows の Git Bash） | CI で確かめる |
-| hooks.json の `powershell` の欄が、実行ポリシーが Restricted でも働く | 同じテスト。Copilot CLI と同じ引数の Windows PowerShell と pwsh で動かす（Windows の CI） | CI で確かめる |
+| hooks.json のコマンドが、bash で働く | `skills/debug-dashboard/tests/` を、CI の ubuntu-24.04 と windows-latest（Git Bash）で動かす（2026-11-10） | 通った |
+| hooks.json の `powershell` の欄が働く | 同じテストを、CI の windows-latest で動かす（2026-11-10）。Copilot CLI と同じ引数の PowerShell に、実行ポリシー Restricted を指定する | 通った |
 
 ## まだ確かめていないこと
 

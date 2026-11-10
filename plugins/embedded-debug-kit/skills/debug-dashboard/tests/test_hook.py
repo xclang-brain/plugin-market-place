@@ -215,7 +215,7 @@ class RecordingTest(unittest.TestCase):
         stop = self.stop_run()
         run_hook(self.project, {"session_id": "s1", "prompt": "\n<task-notification>\n<task-id>a1</task-id>\n"},
                  "UserPromptSubmit")
-        self.assertTrue(stop.exists(), "サブエージェントの知らせで、止めた状態が解けました")
+        self.assertTrue(stop.exists(), "サブエージェントの知らせで、止めた状態が解除されました")
         self.assertEqual(read_events(self.project), [])
 
     def test_stop_waits_for_background_subagents(self):
@@ -293,7 +293,7 @@ class CopilotTest(unittest.TestCase):
         run_hook(self.project, dict(sub, hook_event_name="UserPromptSubmit", prompt="試行 1"), COPILOT_CLI="1")
         run_hook(self.project, dict(sub, hook_event_name="Stop", transcript_path="/nowhere", stop_reason="end_turn"),
                  COPILOT_CLI="1")
-        self.assertTrue(stop.exists(), "サブエージェントの始まりで、止めた状態が解けました")
+        self.assertTrue(stop.exists(), "サブエージェントの始まりで、止めた状態が解除されました")
         self.assertEqual(read_events(self.project), [])
         self.assertEqual(os.listdir(str(self.base / "sessions")), ["s1"])
 

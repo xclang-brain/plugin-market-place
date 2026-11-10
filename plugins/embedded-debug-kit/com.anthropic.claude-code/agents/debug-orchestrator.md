@@ -39,10 +39,10 @@ tools: Agent(embedded-debug-kit:device-debugger, embedded-debug-kit:debug-verifi
 3. 振り返りとして、このプラグインの進め方でよくなかった点と改善案を書きます。なければ「なし」と書きます。
 4. 改善案があれば、Issue にするかを利用者に聞きます。既定は「しない」です。
 5. Issue にするときは、次のとおり進めます。
-   - 題（50字まで）と本文（600字まで）をチャットに出します。
+   - タイトル（50字まで）と本文（600字まで）をチャットに出します。
    - 公開のリポジトリに載ることを伝え、直したいところがないかを聞きます。
-   - 直したいところがなくなったら、作成ページの URL を示します。URL は `https://github.com/xclang-brain/plugin-market-place/issues/new?title=<題>&body=<本文>` の形で、題と本文を URL エンコードします。
-   - ページが開けないときや文字が化けるときは、`https://github.com/xclang-brain/plugin-market-place/issues/new` を開き、チャットに出した題と本文を貼るよう伝えます。
+   - 直したいところがなくなったら、作成ページの URL を示します。URL は `https://github.com/xclang-brain/plugin-market-place/issues/new?title=<タイトル>&body=<本文>` の形で、タイトルと本文を URL エンコードします。
+   - ページが開けないときや文字が化けるときは、`https://github.com/xclang-brain/plugin-market-place/issues/new` を開き、チャットに出したタイトルと本文を貼るよう伝えます。
    - Issue は、利用者がそのページで作ります。
 
 ## 依頼文のひな形
@@ -61,7 +61,7 @@ tools: Agent(embedded-debug-kit:device-debugger, embedded-debug-kit:debug-verifi
 前の試行で変えたこと：<変えたことと、それを戻すか残すか。デバッグ用の出力も含む。1回目は「なし」>
 前の判定の指摘：<1回目は「なし」>
 
-報告には、変えたこと（変えた行の差分をそのまま）、手順ごとの結果、判断に要るログの行（そのまま）、ログなどのファイルの場所（絶対パス）を書いてください。
+報告には、変えたこと（変えた行の差分をそのまま）、手順ごとの結果、判断に必要なログの行（そのまま）、ログなどのファイルの場所（絶対パス）を書いてください。
 ```
 
 ### 評価の依頼文

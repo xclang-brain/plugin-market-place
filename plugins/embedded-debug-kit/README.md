@@ -15,7 +15,7 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 | 3 | 統括エージェントと検証エージェント | 作業と合否の判定を別のエージェントに分け、合格するまで試行を繰り返す | [debug-orchestrator](docs/guide/3-debug-orchestrator.md) |
 | 4 | Web管理画面 | 統括エージェントへの依頼文を作り、進み具合と結果をブラウザーで見る | [debug-dashboard](docs/guide/4-debug-dashboard.md) |
 
-## 要るもの
+## 必要なもの
 
 - Claude Code か GitHub Copilot CLI（1.0.107 以降）
 - Python 3.8 以上（Windows は `py -3`、ほかは `python3` で動くもの）
@@ -24,7 +24,7 @@ AI に任せる範囲に合わせて、4つの段階で使えます。どの段�
 
 利用者の PC は Windows を想定しています。Linux でも動きます。
 
-## 入れ方
+## インストール
 
 Claude Code：
 
@@ -40,7 +40,7 @@ copilot plugin marketplace add xclang-brain/plugin-market-place
 copilot plugin install embedded-debug-kit@plugin-market-place
 ```
 
-スキルだけなら、プラグインを入れずに、スキルのフォルダをプロジェクトにコピーしても使えます。やり方は、各スキルの使い方にあります。
+スキルだけなら、プラグインをインストールせずに、スキルのフォルダをプロジェクトにコピーしても使えます。やり方は、各スキルの使い方にあります。
 
 ## フォルダの構成
 
