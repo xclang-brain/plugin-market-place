@@ -34,7 +34,7 @@ import serial.tools.list_ports  # noqa: E402
 # スキルの名前は、scripts/ の親のフォルダの名前。名前を変えて写せば、その名前になる。
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 SKILL_NAME = os.path.basename(SKILL_DIR)
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 KEYS = ("port", "baud", "login_user", "login_password", "login_password_env", "prompt",
         "commands", "command_timeout_seconds")
 USAGE = "使い方：serial_console.py run [--command コマンド]... | run --stdin | check | init [--workdir 作業フォルダ]"

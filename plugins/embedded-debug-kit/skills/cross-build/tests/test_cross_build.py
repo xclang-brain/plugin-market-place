@@ -22,7 +22,7 @@ from unittest import mock
 TESTS = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(TESTS)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "cross_build.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 FAKE = os.path.join(TESTS, "fake_build.py")
 IS_WINDOWS = os.name == "nt"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")

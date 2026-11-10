@@ -26,7 +26,7 @@ import traceback
 # スキルの名前は、このスクリプトのフォルダの親の名前。名前を変えて写せば、その名前になる。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL_NAME = os.path.basename(SKILL_DIR)
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 KEYS = ("host", "port", "user", "password", "password_env", "passive", "tls",
         "files", "remote_dir", "file_mode", "timeout_seconds")
 USAGE = "使い方：ftp_deploy.py run|check|init [--workdir 作業フォルダ]"

@@ -31,7 +31,7 @@ import traceback
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.basename(SKILL_DIR)  # フォルダの名前を変えてコピーしたら、その名前を使う
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 IS_WINDOWS = os.name == "nt"
 
 KEYS = ("source_dir", "shell", "sdk_env", "build_command", "outputs", "timeout_seconds")
