@@ -1,10 +1,9 @@
 """The confirmation token is a shared rule (contract "token"): ``src/coverity_mcp/plantoken.py`` is a byte
 copy of the file of the part that writes the plan file, and the write-back tools use it as it is.
 
-Every case of ``tests/contract/token/cases.json`` (a copy of the shared test data, when it is there) is run
-through the copied function. The tools add input checks of their own at the tool boundary (unknown keys and
-an empty list are refused, so that a misspelt key is not lost); whenever a tool takes the input of a case, its
-token must be the function's.
+Every case of ``tests/contract/token/cases.json`` is run through the copied function. The tools add input
+checks of their own at the tool boundary (unknown keys and an empty list are refused, so that a misspelt key
+is not lost); whenever a tool takes the input of a case, its token must be the function's.
 
 Case format: ``{"name", "input": {"plan_text": "<exact file text>"} | {"entries": [...]},
 "expect": {"token": "<12 hex>"}}``.
@@ -38,7 +37,6 @@ def cases() -> list[dict]:
     return data["cases"]
 
 
-@unittest.skipUnless(CASES.is_file(), f"the shared test data is not here yet: {CASES}")
 class TokenRuleTest(unittest.TestCase):
     """The function itself: runs with or without the server's packages."""
 
@@ -60,7 +58,6 @@ class TokenRuleTest(unittest.TestCase):
 
 
 @unittest.skipIf(MISSING, "the server's packages are not in this Python (test_uv_child.py runs this in uv)")
-@unittest.skipUnless(CASES.is_file(), f"the shared test data is not here yet: {CASES}")
 class TokenToolTest(unittest.TestCase):
     """The tools use the copied function: same token whenever they take the input."""
 

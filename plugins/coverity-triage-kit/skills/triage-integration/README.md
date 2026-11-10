@@ -79,7 +79,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/check_plan.py" --plan 
 
 `warnings`：`deviation_combo`・`comment_judgement`・`fix_combo`（Classification などの組が目安と違う）、`items_unchecked`（候補の作業が渡されていない）。
 
-`assets/plan.schema.json` と、この決まりの試験のデータ `assets/contract/plan/cases.json` は、ほかの部品と共有する取り決めの正（持ち主はこのスキル）です。`assets/result.schema.json` は1件の結果の形の写しで、計画の中の結果の定義と同じであることを試験で確かめます。`assets/contract/comment/cases.json` は、逸脱コメントの決まりの写しの試験のデータです。
+`assets/plan.schema.json` と、この決まりの試験のデータ `assets/contract/plan/cases.json` は、ほかの部品と共有する取り決めの正（持ち主はこのスキル）です。`assets/result.schema.json` は1件の結果の形の写しで、計画の中の結果の定義と同じであることを試験で確かめます。
 
 ## うまくいかないとき
 

@@ -1,5 +1,5 @@
-"""Shared test data: contract "plan" (this skill owns it), a copy of contract "comment",
-and the result definitions inside plan.schema.json (compared with the copy of result.schema.json in this folder)."""
+"""Shared test data: contract "plan" (this skill owns it), and the result definitions inside plan.schema.json
+(compared with the copy of result.schema.json in this folder)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from _support import SKILL, UV, clean_bytecode, load_script, run_json
 
 ASSETS = SKILL / "assets"
 PLAN_CASES = ASSETS / "contract" / "plan" / "cases.json"
-COMMENT_CASES = ASSETS / "contract" / "comment" / "cases.json"
 COMMENT_SCRIPT = SKILL / "scripts" / "check_comment.py"
 PLAN_SCHEMA = ASSETS / "plan.schema.json"
 RESULT_SCHEMA = ASSETS / "result.schema.json"
@@ -32,7 +31,6 @@ def load_cases(path, contract: str) -> list[dict]:
     return data["cases"]
 
 
-@unittest.skipUnless(PLAN_CASES.is_file(), "assets/contract/plan/cases.json がない")
 class PlanContractTest(unittest.TestCase):
     def test_case_file_shape(self) -> None:
         cases = load_cases(PLAN_CASES, "plan")
@@ -102,38 +100,6 @@ class CommentRulesAreImportedTest(unittest.TestCase):
             self.assertFalse(out["ok"])
             self.assertIn("check_comment.py", out["error"])
             self.assertEqual(out["problems"][0]["code"], "missing_comment_rules")
-
-@unittest.skipUnless(COMMENT_CASES.is_file(), "assets/contract/comment/cases.json がない（写しは後で置かれる）")
-class CommentContractCopyTest(unittest.TestCase):
-    def test_case_file_shape(self) -> None:
-        cases = load_cases(COMMENT_CASES, "comment")
-        self.assertGreaterEqual(len(cases), 8)
-        self.assertEqual(len({c["name"] for c in cases}), len(cases))
-
-    @unittest.skipUnless(COMMENT_SCRIPT.is_file(), "scripts/check_comment.py がない")
-    def test_comment_rules(self) -> None:
-        """Every case through the copied script and through check_plan.py (which imports it)."""
-        copy, plan = load_script("check_comment"), load_script("check_plan")
-        for case in load_cases(COMMENT_CASES, "comment"):
-            with self.subTest(case["name"]):
-                self.assertEqual(copy.check_comment(case["input"]["comment"])["ok"], case["expect"]["ok"])
-                self.assertEqual(plan.check_comment(case["input"]["comment"])["ok"], case["expect"]["ok"])
-
-    PICKED = ("false_positive_example_passes", "true_bug_with_tadashi_fails", "think_omou_fails", "darou_fails",
-              "tool_assumes_kangaete_passes", "request_word_fails")
-
-    @unittest.skipUnless(UV, "uv がないので、コマンドの試験を飛ばす")
-    def test_comment_rules_inside_plan_check(self) -> None:
-        """A plan that is fine except for its merged comment is accepted exactly when the comment is."""
-        base = next(c["input"] for c in load_cases(PLAN_CASES, "plan") if c["name"] == "valid_merge_of_two_items")
-        picked = [c for c in load_cases(COMMENT_CASES, "comment") if c["name"] in self.PICKED]
-        self.assertEqual(len(picked), len(self.PICKED))
-        for case in picked:
-            with self.subTest(case["name"]):
-                value = json.loads(json.dumps(base))
-                value["plan"]["merges"][0]["result"]["deviation"]["comment"] = case["input"]["comment"]
-                code, out = run_json("check_plan", "--stdin", stdin=json.dumps(value, ensure_ascii=False))
-                self.assertEqual(out["ok"], case["expect"]["ok"], out)
 
 
 @unittest.skipUnless(PLAN_SCHEMA.is_file() and RESULT_SCHEMA.is_file(),

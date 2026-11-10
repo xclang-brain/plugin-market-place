@@ -20,7 +20,6 @@ def load_cases() -> list[dict]:
     return data["cases"]
 
 
-@unittest.skipUnless(CASES.is_file(), "assets/contract/comment/cases.json がない")
 class CommentContractTest(unittest.TestCase):
     def test_case_file_shape(self) -> None:
         cases = load_cases()

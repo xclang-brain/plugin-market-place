@@ -1,8 +1,5 @@
-"""Comment-keeping YAML rewrite (REQ-107), through ``gui.py yaml-edit --stdin``.
-
-The cases of ``tests/data/yaml-edit-cases.json`` are this skill's own. The shared test data of the
-contract (``assets/contract/yaml-edit/cases.json``, owned by the part that prepares the settings) is run
-too when its copy is here: both copies must give the same answers."""
+"""Comment-keeping YAML rewrite (REQ-107), through ``gui.py yaml-edit --stdin``, with the cases of
+``tests/data/yaml-edit-cases.json``."""
 
 from __future__ import annotations
 
@@ -13,7 +10,6 @@ from pathlib import Path
 import helpers
 
 OWN = helpers.SKILL / "tests" / "data" / "yaml-edit-cases.json"
-CONTRACT = helpers.SKILL / "assets" / "contract" / "yaml-edit" / "cases.json"
 
 
 def load(path: Path) -> list[dict]:
@@ -39,11 +35,6 @@ class YamlEditTest(unittest.TestCase):
         cases = load(OWN)
         self.assertGreaterEqual(len(cases), 12)
         self.check(cases)
-
-    def test_contract_cases(self) -> None:
-        if not CONTRACT.is_file():
-            self.skipTest("assets/contract/yaml-edit/cases.json is not here yet (the copy of the contract arrives later)")
-        self.check(load(CONTRACT))
 
     def test_wrong_input_is_told(self) -> None:
         code, out = helpers.run_gui(["yaml-edit", "--stdin"], self.env, stdin={"original": 1})

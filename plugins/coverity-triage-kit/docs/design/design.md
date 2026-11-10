@@ -206,7 +206,7 @@ coverity-triage-kit/
 | `agents.integration` / `agents.review` | `false` / `false` | 統合と確かめを使うか |
 | `agents.max_rework` | `1`（0〜2） | 確かめで差し戻した警告を作り直す回数の上限 |
 
-`config.yaml` を書き換える部品（準備、結果と設定の画面）は、REQ-107 の決まりで注釈を残す。どちらも自分のスクリプトにその処理を持ち、共通の試験のデータ（4.17 の `yaml-edit`）で同じ答えを出す。
+`config.yaml` を書き換える部品（準備、結果と設定の画面）は、REQ-107 の決まりで注釈を残す。どちらも自分のスクリプトにその処理を持つ（4.17 の `scripts/yamledit.py` と、その写し）。
 
 ### 4.2 条件ファイル `filters/*.yaml` と `filter.json`
 
@@ -495,7 +495,7 @@ status の出力（画面のため。読むだけ）：
 
 - データ（JSON Schema、評価基準）は、ファイルをそのまま写す。
 - 決まりをコードで持つものは、持ち主のスクリプトのファイル（標準ライブラリか、写す側も持てるライブラリだけを使うもの）を、そのまま写す。写す側は、写しを読み込んで使い、自分で書き直さない。スクリプトが読み込んでよいのは、同じフォルダにある、この表のほかのスクリプトだけ（写す側も必ず一緒に写す。例：結果の決まりと統合の計画の決まりは、逸脱コメントの決まりを読み込む）。
-- 持ち主は、共通の試験のデータ（`assets/contract/<名前>/cases.json`：入力と期待する答えの組）も持ち、写しを持つ部品もそれを自分の試験で動かす。
+- 持ち主は、試験のデータ（`assets/contract/<名前>/cases.json`：入力と期待する答えの組）も持つ（確認の文字列の試験のデータは、MCP サーバーの `tests/contract/token/cases.json`）。
 - `tests/contracts/` が、写しが同じバイト列であることと、書く部品の出力を読む部品が受け付けることを確かめる。持ち主を直したら、写しも同じに直す（写しの一覧は `tests/contracts/`）。
 
 | 取り決め | 持ち主（ファイル） | 写しを持つ部品 |
@@ -509,7 +509,7 @@ status の出力（画面のため。読むだけ）：
 | 統合の計画の決まり | 同じ原因の統合（`scripts/check_plan.py`、`contract/plan`） | 一括実行 |
 | 人に見せる確信度 | 一括実行（`contract/confidence`：作業・確かめ・ビルドでの検証から、いちばん低いもの） | 反映、結果と設定の画面 |
 | 注釈を残す書き換え | 準備（`scripts/yamledit.py`、`contract/yaml-edit`） | 結果と設定の画面 |
-| 確認の文字列 | 反映（`scripts/plantoken.py`、`contract/token`） | MCP サーバー |
+| 確認の文字列 | 反映（`scripts/plantoken.py`） | MCP サーバー |
 | 実行フォルダと承認の形 | 一括実行（`assets/run.schema.json`、`assets/approvals.schema.json`） | 反映、結果と設定の画面 |
 | `issues.json`・`issue-<CID>.json` | MCP サーバー | 一括実行、真偽の調査（読むだけ） |
 
@@ -654,7 +654,7 @@ Claude Code 2.1.319、2026-11-09 に確かめた（憲章 第5条3項）。新�
 | REQ-103 | 4.1 | 各スキルの試験、`tests/contracts/` |
 | REQ-104 | 3.2、4.1 | 各部品の試験 |
 | REQ-105・REQ-106 | 3.1、3.3 | 各部品の試験、`tests/independence/` |
-| REQ-107 | 4.1、4.17 | 準備と画面の試験、`tests/contracts/`（`yaml-edit`） |
+| REQ-107 | 4.1、4.17 | 準備と画面の試験、`tests/contracts/`（`yamledit.py`） |
 | REQ-111〜REQ-113 | 3.2、5 | MCP サーバーの試験、`tests/integration/`、EVAL 1（MCP） |
 | REQ-121〜REQ-126 | 3.1、6 | 各スキルの試験、EVAL 1（スキル） |
 | REQ-201〜REQ-205 | 3.3、7 | `tests/independence/`、`tests/structure/`、EVAL 2 |

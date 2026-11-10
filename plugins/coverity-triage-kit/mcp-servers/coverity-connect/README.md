@@ -343,6 +343,6 @@ uv run --native-tls --frozen --directory "<このフォルダ>" python -B -m uni
 
 - サーバーのライブラリのない Python で `python3 -B -m unittest discover -s tests` を動かしたときは、uv の一時の環境で同じ試験を動かします（このフォルダに `.venv` を作りません）。`-B` を付けると `__pycache__` も残りません。
 - リポジトリの中で動かすときは、`UV_PROJECT_ENVIRONMENT` を一時のフォルダにすると、このフォルダに `.venv` を作りません。
-- 確認の文字列の取り決めの試験は、共通の試験のデータ（`tests/contract/token/cases.json`）があるときだけ動きます。すべての組を `plantoken.py` の関数で確かめ、ツールが受け付ける組では、ツールの確認の文字列も同じになることを確かめます。
+- 確認の文字列のテストは、テストデータ（`tests/contract/token/cases.json`）のすべてのケースを `plantoken.py` の関数で確認します。ツールが受け付けるケースでは、ツールの確認の文字列も同じになることを確認します。
 
 モデルに課題を解かせて採点する試験（mcp-builder の形）は [evals/README.md](evals/README.md) にあります。

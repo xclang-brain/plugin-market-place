@@ -111,7 +111,6 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(out["problems"][0]["code"], "bad_input")
 
 
-@unittest.skipUnless(CASES.is_file(), "assets/contract/lint/cases.json がない")
 class LintContractTest(unittest.TestCase):
     """This skill owns the lint contract."""
 

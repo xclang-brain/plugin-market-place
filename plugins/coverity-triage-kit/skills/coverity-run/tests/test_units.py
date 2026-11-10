@@ -1,5 +1,4 @@
-"""Unit tests of the deterministic pieces, imported from the skill's scripts (the shared contract cases run in
-one separate process, started like run.py)."""
+"""Unit tests of the deterministic pieces, imported from the skill's scripts."""
 
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from support import SKILL, import_runlib, script_runner
+from support import SKILL, import_runlib
 
 import_runlib()
 
@@ -200,64 +199,6 @@ class ClientDocsTest(unittest.TestCase):
     def test_cli_accepts_the_client(self) -> None:
         text = (SKILL / "scripts" / "run.py").read_text(encoding="utf-8")
         self.assertEqual(text.count('cmd.add_argument("--client", **client)'), 2)  # new-run and resume
-
-
-class ContractCasesTest(unittest.TestCase):
-    """Every case of the shared test data (design 4.17) through the code the run uses: scripts/runlib/rules.py with
-    the copied scripts. They run in a separate process started like run.py (uv reads the libraries it needs)."""
-
-    answers: dict = {}
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        names = [n for n in ("comment", "result", "lint", "plan", "confidence") if (CONTRACTS / n / "cases.json").is_file()]
-        if not names:
-            return
-        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
-        env.pop("VIRTUAL_ENV", None)
-        proc = subprocess.run([*script_runner(SKILL / "tests" / "contract_runner.py"), *names], capture_output=True,
-                              env=env, timeout=300, cwd=tempfile.gettempdir())
-        if proc.returncode != 0:
-            raise AssertionError(f"contract_runner failed: {proc.stderr.decode('utf-8', 'replace')}")
-        cls.answers = json.loads(proc.stdout.decode("utf-8"))
-
-    def answers_of(self, name: str) -> list[dict]:
-        path = CONTRACTS / name / "cases.json"
-        if not path.is_file():
-            self.skipTest(f"{path.relative_to(SKILL)} がまだありません（持ち主の部品のものが写されたら動きます）")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual((data.get("version"), data.get("contract")), (1, name))
-        self.assertGreaterEqual(len(data["cases"]), 8)
-        self.assertEqual(len({c["name"] for c in data["cases"]}), len(data["cases"]))
-        self.assertEqual(len(self.answers[name]), len(data["cases"]))
-        return self.answers[name]
-
-    def test_comment(self) -> None:
-        for case in self.answers_of("comment"):
-            with self.subTest(case["name"]):
-                self.assertEqual(case["got"]["ok"], case["expect"]["ok"])
-                self.assertEqual(case["got"]["inside_result"], case["expect"]["ok"])
-                self.assertEqual(case["got"]["inside_plan"], case["expect"]["ok"])
-
-    def test_result(self) -> None:
-        for case in self.answers_of("result"):
-            with self.subTest(case["name"]):
-                self.assertEqual(case["got"]["ok"], case["expect"]["ok"])
-
-    def test_lint(self) -> None:
-        for case in self.answers_of("lint"):
-            with self.subTest(case["name"]):
-                self.assertEqual(case["got"]["points"], sorted(case["expect"]["points"]))
-
-    def test_plan(self) -> None:
-        for case in self.answers_of("plan"):
-            with self.subTest(case["name"]):
-                self.assertEqual(case["got"]["ok"], case["expect"]["ok"])
-
-    def test_confidence(self) -> None:
-        for case in self.answers_of("confidence"):
-            with self.subTest(case["name"]):
-                self.assertEqual(case["got"]["confidence"], case["expect"]["confidence"])
 
 
 class ConfidenceTest(unittest.TestCase):

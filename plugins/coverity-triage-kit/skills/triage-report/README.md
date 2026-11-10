@@ -83,7 +83,7 @@ uv run --native-tls --quiet "<このフォルダ>/scripts/check_result.py" rende
 
 `warnings` の `code`：`deviation_combo`（逸脱案の Classification・Action・Severity が目安と違う）、`comment_judgement`（逸脱コメントの判定区分が判定と違う）、`fix_combo`・`fix_severity`（修正案の組が目安と違う）、`group_unchecked`（グループの CID が分からず確かめていない）。
 
-この決まりは、ほかの部品と共有する取り決めです。試験のデータは `assets/contract/result/cases.json` にあります（`assets/contract/comment/cases.json` は、逸脱コメントの決まりの写しの試験のデータです）。
+この決まりは、ほかの部品と共有する取り決めです。試験のデータは `assets/contract/result/cases.json` にあります。
 
 ## うまくいかないとき
 
