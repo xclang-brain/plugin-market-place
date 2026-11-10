@@ -33,6 +33,8 @@ sys.path.insert(0, str(TESTS / "structure"))
 import plugin_parts as pp  # noqa: E402
 
 README = pp.ROOT / "README.md"
+# Claude Code の利用者向けのガイド（README は入口だけ。くわしい手順はここ。REQ-008、REQ-009）
+CLAUDE_GUIDE = pp.ROOT / "docs" / "guide" / "claude-code.md"
 CLAUDE_MANIFEST = pp.ROOT / ".claude-plugin" / "plugin.json"
 CLAUDE_AGENTS_DIR = pp.ROOT / "agents"
 MARKET_ROOT = pp.ROOT.parents[1]
@@ -100,16 +102,12 @@ class ClaudeNamesTest(unittest.TestCase):
 
 class ReadmeClaudeSectionTest(unittest.TestCase):
     def setUp(self):
+        self.assertTrue(CLAUDE_GUIDE.is_file(), "docs/guide/claude-code.md がありません（REQ-009）")
         self.text = pp.read(README)
-        self.body = section(self.text, HEADING)
-        self.assertIsNotNone(self.body, f"README に「## {HEADING}」がありません（REQ-009）")
+        self.body = pp.read(CLAUDE_GUIDE)
 
-    def test_after_usage_and_before_tests(self):
-        headings = re.findall(r"(?m)^## (.+?)\s*$", pp.strip_code_blocks(self.text))
-        i = headings.index(HEADING)
-        self.assertGreater(i, headings.index("使い方"), "「Claude Code で使う」は「使い方」の後に置く")
-        tests = [k for k, h in enumerate(headings) if "試験" in h]
-        self.assertTrue(tests and i < tests[0], "「Claude Code で使う」は「試験」の前に置く")
+    def test_readme_links_to_the_guide(self):
+        self.assertIn("(docs/guide/claude-code.md)", self.text, "README から Claude Code ガイドへのリンクがありません")
 
     def test_mentions_the_essentials(self):
         market = json.loads(pp.read(CLAUDE_MARKET)).get("name") if CLAUDE_MARKET.is_file() else None
@@ -121,7 +119,8 @@ class ReadmeClaudeSectionTest(unittest.TestCase):
             self.assertRegex(self.body, rf"{stage}\s*段階", f"README の「{HEADING}」に {stage}段階目の呼び方がありません")
 
     def test_stage4_is_copilot_only_in_the_stage_table(self):
-        rows = [line for line in self.text.splitlines() if pp.is_table_line(line) and line.strip().startswith("| 4段階目")]
+        rows = [line for line in (self.text + "\n" + self.body).splitlines()
+                if pp.is_table_line(line) and re.match(r"\|\s*4(\.|段階目)", line.strip())]
         self.assertTrue(rows, "README に4段階目の行がありません")
         self.assertTrue(any("Copilot CLI だけ" in r for r in rows), "README の段階の表で、4段階目が Copilot CLI だけと分かりません")
 
@@ -190,7 +189,7 @@ class ClaudePermissionSetTest(unittest.TestCase):
         orchestrators = [p for p in pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX)
                          if re.search(rf"--agent {re.escape(pp.PLUGIN_NAME)}:", section(pp.read(p), HEADING) or "")
                          and "### 前もって許可する" in (section(pp.read(p), HEADING) or "")]
-        self.docs = {"README.md": section(pp.read(README), HEADING) or ""}
+        self.docs = {"docs/guide/claude-code.md": pp.read(CLAUDE_GUIDE) if CLAUDE_GUIDE.is_file() else ""}
         self.docs.update({p.name: section(pp.read(p), HEADING) or "" for p in orchestrators})
         self.assertGreaterEqual(len(self.docs), 2, "統括エージェントの README に「前もって許可する」がありません")
 
@@ -261,7 +260,7 @@ class ClaudePermissionSetTest(unittest.TestCase):
 
 def permission_docs():
     """前もって許可するしかたを書く文書：プラグインの README、エージェントの README（すべて）、使い方の案内"""
-    docs = [README] + sorted(pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX))
+    docs = [README, CLAUDE_GUIDE] + sorted(pp.AGENTS_DIR.glob("*" + pp.AGENT_README_SUFFIX))
     docs += [d / USAGE_NAME for d in pp.skill_dirs() if (d / USAGE_NAME).is_file()]
     return docs
 

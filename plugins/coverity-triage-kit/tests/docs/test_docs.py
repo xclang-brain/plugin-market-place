@@ -35,8 +35,12 @@ MARKET_README = MARKET_ROOT / "README.md"
 REQ = re.compile(r"REQ-(\d{3})")
 REQ_RANGE = re.compile(r"REQ-(\d{3})\s*〜\s*REQ-(\d{3})")
 # プラグインの README の並び（REQ-008）：最初の2つ、その後に出てくる順
+# README は入口（5分で読める）。最初に「できること」と「使い方を選ぶ」、その後に始め方と文書の一覧（REQ-008）
 README_FIRST = ["できること", "使い方"]
-README_THEN = ["準備", "許可", "実行中", "うまく", "Issue", "試験"]
+README_THEN = ["はじめる", "文書"]
+README_MAX_CHARS = 6000  # 入口の文書が、くわしい手順で長くならないように
+COPILOT_GUIDE = pp.ROOT / "docs" / "guide" / "copilot-cli.md"
+CLAUDE_GUIDE = pp.ROOT / "docs" / "guide" / "claude-code.md"
 
 
 def version_line(path):
@@ -209,20 +213,22 @@ class ReadmeTest(unittest.TestCase):
             position = later[0]
 
     def test_mentions_the_essentials(self):
-        for word in ["--allow-tool", "--add-dir", "tests/run.py"]:
-            self.assertIn(word, self.text, f"README に {word} がありません（REQ-008）")
+        self.assertLessEqual(len(self.text), README_MAX_CHARS, "README が長すぎます。くわしい手順はガイドに書きます（REQ-008）")
+        for guide in (COPILOT_GUIDE, CLAUDE_GUIDE):
+            self.assertTrue(guide.is_file(), f"{guide.name} がありません（REQ-008）")
+            self.assertIn(f"(docs/guide/{guide.name})", self.text, f"README から {guide.name} へのリンクがありません")
+        copilot = pp.read(COPILOT_GUIDE)
+        for word in ["--allow-tool", "--add-dir", "--experimental", "/extensions mode", "gh auth login"]:
+            self.assertIn(word, copilot, f"Copilot CLI ガイドに {word} がありません（REQ-008）")
         for stage in ["1", "2", "3", "4"]:
             self.assertRegex(self.text, rf"{stage}\s*段階", f"README に {stage}段階目の説明がありません")
 
     def test_claude_code_section(self):
         """「Claude Code で使う」の節があり、Claude Code で入れるときの名前（<プラグイン>@<マーケットプレイス>）を書く"""
-        found = [h for h in self.headings if CLAUDE_SECTION in h]
-        self.assertTrue(found, f"README に「{CLAUDE_SECTION}」の見出しがありません")
-        part = pp.section(self.text, found[0])
-        self.assertTrue(part and part.strip(), f"README の「{CLAUDE_SECTION}」の節が空です")
+        guide = pp.read(CLAUDE_GUIDE)
         if CLAUDE_MARKET_JSON.is_file():
             market = json.loads(pp.read(CLAUDE_MARKET_JSON)).get("name")
-            self.assertIn(f"{pp.PLUGIN_NAME}@{market}", self.text, f"README に、Claude Code で入れるときの名前 {pp.PLUGIN_NAME}@{market} がありません")
+            self.assertIn(f"{pp.PLUGIN_NAME}@{market}", guide, f"README に、Claude Code で入れるときの名前 {pp.PLUGIN_NAME}@{market} がありません")
 
     def test_changelog_has_the_claude_code_version(self):
         """Claude Code の形を足した版（0.2.0）の見出しが、変更履歴にある"""
