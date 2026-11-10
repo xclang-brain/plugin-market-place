@@ -7,13 +7,12 @@
   check  設定を確かめる（何も作らない）
   init   設定ファイルをひな形から作る
 終了コード：0＝成功、1＝ビルドの失敗、2＝設定や引数の問題。
-設定は <作業フォルダ>/.<このスキルのフォルダの名前>/config.ini、ログは同じフォルダの logs/ に置く。
+設定は <作業フォルダ>/.<このスキルのフォルダの名前>/config.yaml、ログは同じフォルダの logs/ に置く。
 Python 3.8 以上の標準ライブラリだけで動く。
 """
 
 import codecs
 import collections
-import configparser
 import ctypes
 import datetime
 import json
@@ -32,7 +31,7 @@ import traceback
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.basename(SKILL_DIR)  # フォルダの名前を変えてコピーしたら、その名前を使う
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
+TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 IS_WINDOWS = os.name == "nt"
 
 KEYS = ("source_dir", "shell", "sdk_env", "build_command", "outputs", "timeout_seconds")
@@ -177,13 +176,6 @@ def prepare_dir(path):
             f.write("*\n")
 
 
-def unquote(value):
-    """パスを囲む引用符を外す（INI では、引用符も値の一部になるため）。"""
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
-
-
 def find_shell(shell):
     """シェルの実行ファイルの場所。見つからなければ None。"""
     if shell == "cmd":
@@ -208,38 +200,82 @@ def find_shell(shell):
     return None
 
 
+# --- 設定ファイル（YAML）を読む。設定を持つスキルは、どれも同じ中身を持つ ------------------------
+
+YAML_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)\s*:(?:\s+(.*))?$")
+YAML_ITEM = re.compile(r"^\s*-(?:\s+(.*))?$")
+# 囲まないと、YAML として別の意味になる値（記号で始まる、「: 」を含む、「:」で終わる）
+YAML_NEEDS_QUOTES = re.compile(r"""^[\[\]{},&*!|>%@`'"#]|^[-?:](\s|$)|:\s|:$""")
+
+
+def yaml_scalar(text):
+    """YAML の1つの値を、文字列にする。数や true も、文字のまま返す。読めない書き方は ValueError。"""
+    text = (text or "").strip()
+    if text.startswith("#"):
+        return ""
+    quoted = re.match(r"^'((?:[^']|'')*)'(?:\s+#.*)?$", text)
+    if quoted:
+        return quoted.group(1).replace("''", "'")
+    quoted = re.match(r'^"((?:[^"\\]|\\["\\])*)"(?:\s+#.*)?$', text)
+    if quoted:
+        return re.sub(r"\\(.)", r"\1", quoted.group(1))
+    text = re.sub(r"\s+#.*$", "", text)  # 空白の後の # からは、コメント
+    if YAML_NEEDS_QUOTES.search(text):
+        raise ValueError("値を '…' で囲んでください（値の中の ' は '' と書きます）")
+    return text
+
+
+def read_yaml(lines):
+    """設定ファイルの行を読み、項目ごとの [名前, 値, 最初の行, 最後の行] を返す（行は 0 から数える）。
+    読むのは、YAML のうち「項目: 値」と、項目の下の「- 値」のリストだけ。値は、文字列か、文字列のリスト。
+    読めない行は ValueError。何行目かを伝え、行の中身は出さない（パスワードの行かもしれない）。"""
+    entries = []
+    for n, line in enumerate(lines):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, item = YAML_KEY.match(line), YAML_ITEM.match(line)
+        try:
+            if key:
+                if any(e[0] == key.group(1) for e in entries):
+                    raise ValueError("%s が2回書かれています" % key.group(1))
+                entries.append([key.group(1), yaml_scalar(key.group(2)), n, n])
+            elif item and entries and (entries[-1][1] == "" or isinstance(entries[-1][1], list)):
+                value = yaml_scalar(item.group(1))
+                entries[-1][1] = (entries[-1][1] or []) + ([value] if value else [])
+                entries[-1][3] = n
+            else:
+                raise ValueError("「項目: 値」か、項目の次の行からの「- 値」の形で書いてください")
+        except ValueError as e:
+            raise ValueError("%d 行目：%s" % (n + 1, e))
+    return entries
+
+
+# --- 設定ファイル（YAML）を読む：ここまで ---------------------------------------------------------
+
+
 def load(config, workdir):
     """設定を読み、(値, 問題のリスト) を返す。設定ファイルを読めなければ Problem。"""
     if not os.path.isfile(config):
         raise Problem(["設定ファイル {} がありません。init で作ってください。".format(config)])
-    parser = configparser.ConfigParser(interpolation=None)  # 値の中の % をそのまま扱う
     try:
         with open(config, encoding="utf-8-sig") as f:  # BOM があっても読める
-            parser.read_file(f)
+            entries = read_yaml(f.read().split("\n"))
     except UnicodeDecodeError:
         raise Problem(["設定ファイルを UTF-8 として読めません。UTF-8 で保存し直してください。"])
-    except configparser.DuplicateOptionError as e:
-        raise Problem(["設定ファイルの {} 行目：{} が2回書かれています。".format(e.lineno, e.option)])
-    except configparser.MissingSectionHeaderError:
-        raise Problem(["設定ファイルの最初の項目より前に、[settings] の行を書いてください。"])
-    except configparser.ParsingError as e:
-        lines = "、".join(str(n) for n, _ in e.errors)
-        raise Problem(["設定ファイルの {} 行目を読めません。「項目 = 値」の形で書いてください。".format(lines)])
-    except (configparser.Error, OSError) as e:
+    except ValueError as e:
+        raise Problem(["設定ファイルの {}。".format(e)])
+    except OSError as e:
         raise Problem(["設定ファイルを読めません（{}）。".format(e)])
-    if not parser.has_section("settings"):
-        raise Problem(["設定ファイルに [settings] の節がありません。"])
-    problems = ["[{}] の節は使いません。項目は [settings] に書いてください。".format(name)
-                for name in parser.sections() if name != "settings"]
-    section = parser["settings"]
-    problems += ["{} という項目はありません。名前を確かめてください。".format(key)
-                 for key in section if key not in KEYS]
+    # リストの値は、1行に1つずつ並べた文字列にして扱う
+    section = {key: "\n".join(value) if isinstance(value, list) else value for key, value, _, _ in entries}
+    problems = ["{} という項目はありません。名前を確かめてください。".format(key)
+                for key in section if key not in KEYS]
 
     def get(key):
         return section.get(key, "").strip()
 
     def path(value):
-        return os.path.normpath(os.path.join(workdir, os.path.expanduser(unquote(value))))
+        return os.path.normpath(os.path.join(workdir, os.path.expanduser(value)))
 
     s = {"source_dir": path(get("source_dir") or ".")}
     if not os.path.isdir(s["source_dir"]):
@@ -272,7 +308,7 @@ def load(config, workdir):
     elif "\n" in s["build_command"]:
         problems.append("build_command は1行で書いてください。")
 
-    s["outputs"] = [unquote(line.strip()) for line in get("outputs").splitlines() if line.strip()]
+    s["outputs"] = [line.strip() for line in get("outputs").splitlines() if line.strip()]
     if not s["outputs"]:
         problems.append("outputs が空です。ビルドでできるファイルを書いてください。")
 
@@ -326,7 +362,7 @@ def command_exists(word, s):
 
 def cmd_init(workdir):
     data = data_dir(workdir)
-    config = os.path.join(data, "config.ini")
+    config = os.path.join(data, "config.yaml")
     if not os.path.isdir(workdir):
         raise Problem(["作業フォルダ {} がありません。".format(workdir)])
     if os.path.exists(config):
@@ -338,7 +374,7 @@ def cmd_init(workdir):
 
 
 def cmd_check(workdir):
-    config = os.path.join(data_dir(workdir), "config.ini")
+    config = os.path.join(data_dir(workdir), "config.yaml")
     s, problems = load(config, workdir)
     notes = []
     try:
@@ -636,7 +672,7 @@ def run_message(s, r, names, outputs):
 
 
 def cmd_run(workdir):
-    config = os.path.join(data_dir(workdir), "config.ini")
+    config = os.path.join(data_dir(workdir), "config.yaml")
     s, problems = load(config, workdir)
     if problems:
         return 2, result(False, "設定に問題があるため、ビルドしませんでした。" + "".join(problems), config,
@@ -704,7 +740,7 @@ def main(argv=None):
     config = None
     try:
         command, workdir = parse_args(argv)
-        config = os.path.join(data_dir(workdir), "config.ini")
+        config = os.path.join(data_dir(workdir), "config.yaml")
         code, data = COMMANDS[command](workdir)
     except Problem as e:
         code, data = 2, result(False, "".join(e.problems), config, problems=e.problems)

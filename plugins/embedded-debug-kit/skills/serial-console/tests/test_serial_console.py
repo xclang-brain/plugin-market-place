@@ -6,7 +6,6 @@
 bash と PowerShell から --stdin で渡すテストは、そのシェルがないときは飛ばす。
 """
 
-import configparser
 import contextlib
 import errno
 import importlib.util
@@ -26,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 SKILL_NAME = os.path.basename(SKILL_DIR)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "serial_console.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
+TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 PASSWORD = "Pw%x-secret"  # % があっても、そのまま読めること
 ENV_NAME = "SERIAL_CONSOLE_TEST_PASSWORD"
 LINUX = sys.platform.startswith("linux")
@@ -74,6 +73,11 @@ def free_port():
         return s.getsockname()[1]
 
 
+def quoted(value):
+    """YAML の '…' の形にする。値に記号や「: 」があっても、そのまま読める。"""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         workdir = tempfile.mkdtemp(prefix="serial-console-test-")
@@ -83,7 +87,7 @@ class Base(unittest.TestCase):
     def use_workdir(self, workdir):
         self.workdir = workdir
         self.data = os.path.join(workdir, "." + SKILL_NAME)
-        self.config = os.path.join(self.data, "config.ini")
+        self.config = os.path.join(self.data, "config.yaml")
 
     def device(self, **kw):
         kw.setdefault("password", PASSWORD)
@@ -107,17 +111,21 @@ class Base(unittest.TestCase):
         return proc.returncode, json.loads(proc.stdout.decode("ascii"))
 
     def configure(self, device=None, **values):
-        """ひな形から設定ファイルを作り、values の項目を書き換える。"""
+        """ひな形から設定ファイルを作り、values の項目を書き換える。値は '…' で囲み、2行以上の値はリストにする。"""
         self.assertEqual(self.script("init")[0], 0)
-        parser = configparser.ConfigParser(interpolation=None)
         with open(self.config, encoding="utf-8") as fh:
-            parser.read_file(fh)
+            settings = {key: value for key, value, _, _ in serial_console.read_yaml(fh.read().split("\n"))}
         if device is not None:
             values = dict({"port": device.port, "login_password": PASSWORD}, **values)
-        for key, value in values.items():
-            parser.set("settings", key, value)
+        settings.update(values)
+        lines = []
+        for key, value in settings.items():
+            if "\n" in value:
+                lines += [key + ":"] + ["  - " + quoted(v) for v in value.split("\n")]
+            else:
+                lines.append("%s: %s" % (key, quoted(value)))
         with open(self.config, "w", encoding="utf-8") as fh:
-            parser.write(fh)
+            fh.write("\n".join(lines) + "\n")
 
     def files(self):
         return sorted(os.path.join(root, name) for root, dirs, names in os.walk(self.workdir)
@@ -148,7 +156,7 @@ class InitTest(Base):
             lines = fh.read().splitlines()
         comments = {}  # 項目 → すぐ上のコメントの行
         for i, line in enumerate(lines):
-            m = re.match(r"^([a-z_]+) =", line)
+            m = re.match(r"^([a-z_]+):", line)
             if m:
                 block = []
                 while i > 0 and lines[i - 1].startswith("# "):
@@ -168,7 +176,7 @@ class InitTest(Base):
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
         code, result = self.script("init", script=os.path.join(copy, "scripts", "serial_console.py"))
         self.assertEqual(code, 0)
-        self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", "config.ini")))
+        self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", "config.yaml")))
         self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", ".gitignore")))
         self.assertFalse(os.path.exists(os.path.join(copy, "scripts", "vendor", "serial", "__pycache__")))
 
@@ -251,10 +259,10 @@ class CheckTest(Base):
     def test_config_errors_do_not_show_the_line(self):
         os.makedirs(self.data)
         cases = [  # BOM があっても読める。パスワードの行かもしれないので、誤りの行の中身は出さない
-            ("\ufeff[settings]\nport = x\nlogin_password = hunter2\nhunter3\n".encode("utf-8"), "4 行目"),
-            ("[settings]\nport = \u3042\n".encode("cp932"), "UTF-8"),
-            (b"port = x\n", "[settings]"),
-            (b"[other]\nport = x\n", "[settings]"),
+            ("\ufeffport: x\nlogin_password: hunter2\nhunter3\n".encode("utf-8"), "3 行目"),
+            ("port: x\nlogin_password: [hunter2\n".encode("utf-8"), "2 行目"),
+            ("port: \u3042\n".encode("cp932"), "UTF-8"),
+            (b"[settings]\nport = x\nlogin_password = hunter2\n", "1 行目"),  # 前の形（INI）のファイル
         ]
         for data, expected in cases:
             with self.subTest(expected=expected):

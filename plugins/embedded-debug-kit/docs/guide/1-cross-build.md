@@ -12,7 +12,7 @@ SDK の環境設定スクリプト（`sdk_env`）を読み込んでから、設�
 
 ## 依頼のしかた
 
-1. 「cross-build の設定ファイルを作って」と依頼します。`<作業フォルダ>/.cross-build/config.ini` ができます。
+1. 「cross-build の設定ファイルを作って」と依頼します。`<作業フォルダ>/.cross-build/config.yaml` ができます。
 2. 設定ファイルに値を書きます（[設定](#設定)）。機器向けにビルドするなら、`sdk_env` も書きます。
 3. 「ビルドの設定を確かめて」と依頼します。フォルダやコマンドがあるかだけを見ます。
 4. 「ビルドして」と依頼します。
@@ -27,7 +27,7 @@ SDK の環境設定スクリプト（`sdk_env`）を読み込んでから、設�
 
 ## 設定
 
-設定ファイルは `<作業フォルダ>/.cross-build/config.ini` です。詳しい書き方は、ファイルの中で、各項目のすぐ上のコメントに書いてあります。
+設定ファイルは `<作業フォルダ>/.cross-build/config.yaml` です。詳しい書き方は、ファイルの中で、各項目のすぐ上のコメントに書いてあります。
 
 | 項目 | 意味 | ひな形の値 |
 | --- | --- | --- |
@@ -38,16 +38,15 @@ SDK の環境設定スクリプト（`sdk_env`）を読み込んでから、設�
 | `outputs` | ビルドでできるファイル（必須）。`source_dir` からの相対パス | 空 |
 | `timeout_seconds` | ビルドを待つ最長の秒数。過ぎたら、ビルドを子プロセスごと止める | `480` |
 
-`outputs` が2つ以上なら、次の行から1行に1つずつ、行頭に空白を入れて書きます。
+`outputs` が2つ以上なら、次の行から、1行に1つずつ `- ` に続けて書きます。記号で始まる値と、「: 」を含む値は、`'…'` で囲みます。
 
-```ini
-[settings]
-source_dir = firmware
-sdk_env = /opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
-build_command = make -j4
-outputs =
-    build/my_app
-    build/my_app.map
+```yaml
+source_dir: firmware
+sdk_env: /opt/poky/4.0/environment-setup-cortexa7t2hf-neon-poky-linux-gnueabi
+build_command: make -j4
+outputs:
+  - build/my_app
+  - build/my_app.map
 ```
 
 `.cross-build/` には、設定とログを Git から外すための `.gitignore` を置きます。
