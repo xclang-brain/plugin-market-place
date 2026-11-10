@@ -74,7 +74,7 @@ python3 -m unittest discover -s tests/docs -v
 claude plugin validate .
 ```
 
-各スキルをテストするときは、スキルのフォルダで `python3 -m unittest discover -s tests` を動かします。ftp-deploy は、先に `python3 -m pip install -r tests/requirements.txt` を動かします。
+各スキルをテストするときは、スキルのフォルダで `python3 -m unittest discover -s tests` を動かします。ftp-deploy と skill-config は、先に `python3 -m pip install -r tests/requirements.txt` を動かします。
 通しのテスト（`tests/e2e/run_e2e.py`）と `claude plugin eval .` は、AI の利用料がかかります。
 
 ## してはいけないこと

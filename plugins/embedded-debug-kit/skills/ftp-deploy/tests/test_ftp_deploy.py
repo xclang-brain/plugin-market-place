@@ -7,7 +7,6 @@ pyftpdlib がなければ FTP のテストを、pyOpenSSL がなければ FTPS �
 （pip install -r tests/requirements.txt）。
 """
 
-import configparser
 import datetime
 import errno
 import ftplib
@@ -29,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 SKILL_NAME = os.path.basename(SKILL_DIR)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "ftp_deploy.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
+TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 USER = "root"
 PASSWORD = "Pw%x-secret"  # % があっても、そのまま読めること
 ENV_NAME = "FTP_DEPLOY_TEST_PASSWORD"
@@ -75,6 +74,11 @@ def load_script():
 
 
 ftp_deploy = load_script()
+
+
+def quoted(value):
+    """YAML の '…' の形にする。値に記号や「: 」があっても、そのまま読める。"""
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 class FakeDevice(object):
@@ -156,7 +160,7 @@ class Case(unittest.TestCase):
         self.work = tempfile.mkdtemp(prefix="ftp-deploy-work-")
         self.addCleanup(shutil.rmtree, self.work, True)
         self.data = os.path.join(self.work, "." + SKILL_NAME)
-        self.config_path = os.path.join(self.data, "config.ini")
+        self.config_path = os.path.join(self.data, "config.yaml")
         self.app = self.write("build/app", b"\x7fELF app v2\n")
 
     def write(self, rel, data):
@@ -170,12 +174,12 @@ class Case(unittest.TestCase):
         settings = {"host": "127.0.0.1", "port": port, "user": USER, "password": PASSWORD,
                     "files": ["build/app"], "remote_dir": "/opt/app", "timeout_seconds": 10}
         settings.update(values)
-        lines = ["# テストの設定", "[settings]"]
+        lines = ["# テストの設定"]
         for key, value in settings.items():
             if isinstance(value, list):
-                lines += ["%s =" % key] + ["    " + item for item in value]
+                lines += ["%s:" % key] + ["  - " + quoted(item) for item in value]
             elif value is not None:
-                lines.append("%s = %s" % (key, value))
+                lines.append("%s: %s" % (key, quoted(value)))
         os.makedirs(self.data, exist_ok=True)
         with open(self.config_path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
@@ -230,14 +234,11 @@ class ConfigTest(Case):
             self.assertEqual(self.local_listing(), before)
 
     def test_template_comments(self):
-        parser = configparser.ConfigParser(interpolation=None)
         with open(TEMPLATE, encoding="utf-8-sig") as fh:
-            text = fh.read()
-        parser.read_string(text)
-        self.assertEqual(tuple(parser["settings"]), ftp_deploy.KEYS)
-        lines = text.splitlines()
+            lines = fh.read().splitlines()
+        self.assertEqual(tuple(key for key, _, _, _ in ftp_deploy.read_yaml(lines)), ftp_deploy.KEYS)
         for key in ftp_deploy.KEYS:
-            index = next(i for i, line in enumerate(lines) if line.startswith(key + " ="))
+            index = next(i for i, line in enumerate(lines) if line.startswith(key + ":"))
             comments = []
             for line in reversed(lines[:index]):
                 if not line.startswith("#"):
@@ -261,11 +262,11 @@ class ConfigTest(Case):
     def test_bom_percent_and_duplicate_key(self):
         os.makedirs(self.data)
         with open(self.config_path, "w", encoding="utf-8-sig") as fh:
-            fh.write("[settings]\npassword = %s\nfiles =\n    build/app\nremote_dir = app\n" % PASSWORD)
+            fh.write("password: %s\nfiles:\n  - build/app\nremote_dir: app\n" % PASSWORD)
         code, data = self.run_script("check")
         self.assertEqual(data["problems"], ["host（機器のアドレス）が空です。"])
         with open(self.config_path, "a", encoding="utf-8") as fh:
-            fh.write("remote_dir = again\n")
+            fh.write("remote_dir: again\n")
         code, data = self.run_script("check")
         self.assertEqual(code, 2)
         self.assertIn("2回", data["message"])
@@ -308,7 +309,7 @@ class ConfigTest(Case):
         proc = subprocess.run([sys.executable, os.path.join(copy, "scripts", "ftp_deploy.py"), "init",
                                "--workdir", self.work], stdout=subprocess.PIPE, timeout=60)
         self.assertEqual(proc.returncode, 0)
-        self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", "config.ini")))
+        self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", "config.yaml")))
         self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", ".gitignore")))
 
     def test_bad_arguments_answer_json(self):

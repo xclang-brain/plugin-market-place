@@ -28,7 +28,7 @@ SKILLS = ROOT / "skills"
 CLAUDE_AGENTS = ROOT / "com.anthropic.claude-code" / "agents"
 COPILOT_AGENTS = ROOT / "com.github.copilot" / "agents"
 GUIDES = ROOT / "docs" / "guide"
-TEXT = {".md", ".py", ".ini", ".txt", ".json", ".js", ".css", ".html"}
+TEXT = {".md", ".py", ".yaml", ".txt", ".json", ".js", ".css", ".html"}
 LAST = "## してはいけないこと"
 DASHBOARD_WORDS = ("Web管理画面", "管理画面", "ダッシュボード", "dashboard")
 DEVICE_WORDS = ("FTP", "シリアル", "serial", "クロス", "cross", "ftp")
@@ -111,10 +111,45 @@ class StageOneTest(unittest.TestCase):
                 self.assertEqual(run.returncode, 0, run.stderr[-3000:])
 
 
+class SettingsTest(unittest.TestCase):
+    """設定ファイル（YAML）の読み取りは、スキルどうしが互いを読まないので、スキルごとに同じ中身を持つ"""
+
+    BLOCK = re.compile(r"(?ms)^# --- 設定ファイル（YAML）を読む。.*?^# --- 設定ファイル（YAML）を読む：ここまで")
+
+    def blocks(self):
+        found = {}
+        for path in sorted(SKILLS.glob("*/scripts/*.py")):
+            m = self.BLOCK.search(read(path))
+            if m:
+                found[path.parent.parent.name] = m.group(0)
+        return found
+
+    def test_every_skill_reads_settings_with_the_same_code(self):
+        blocks = self.blocks()
+        for template in sorted(SKILLS.glob("*/config-template.yaml")):
+            self.assertIn(template.parent.name, blocks, "設定を持つスキルに、読み取りがありません")
+        self.assertGreater(len(blocks), 1)
+        self.assertEqual(len(set(blocks.values())), 1, f"読み取りの中身が、スキルで違います：{sorted(blocks)}")
+
+    def test_templates_read_the_same_with_pyyaml(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML がありません（skills/skill-config/tests/requirements.txt）")
+        space = {"re": re}
+        exec(next(iter(self.blocks().values())), space)
+        templates = sorted(SKILLS.glob("*/config-template.yaml"))
+        self.assertTrue(templates)
+        for template in templates:
+            text = read(template)
+            ours = {key: value for key, value, _, _ in space["read_yaml"](text.split("\n"))}
+            self.assertEqual(ours, yaml.load(text, Loader=yaml.BaseLoader), template.relative_to(ROOT))
+
+
 class UpperStageTest(unittest.TestCase):
     def test_worker_holds_skill_names_only(self):
         front, body = Parts.agents[Parts.worker]
-        for word in (".py", "config.ini", "scripts/", "--workdir"):
+        for word in (".py", "config.yaml", "scripts/", "--workdir"):
             self.assertNotIn(word, body, f"作業エージェントの定義が、スキルの中身（{word}）を書いています")
         for name in Parts.stage1:
             self.assertNotIn(f".{name}/", body)
@@ -146,7 +181,7 @@ class UpperStageTest(unittest.TestCase):
     def test_guides_of_upper_stages_hold_no_skill_contents(self):
         for path in sorted(GUIDES.glob("[234]-*.md")):
             text = read(path)
-            for word in (".py", "config.ini", "--workdir"):
+            for word in (".py", "config.yaml", "--workdir"):
                 self.assertNotIn(word, text, f"{path.name} がスキルの中身（{word}）を書いています")
             if not path.name.startswith("2-"):
                 found = [w for w in Parts.stage1 if w in text]

@@ -12,7 +12,7 @@
 
 ## 依頼のしかた
 
-1. 「serial-console の設定ファイルを作って」と依頼します。`<作業フォルダ>/.serial-console/config.ini` ができます。
+1. 「serial-console の設定ファイルを作って」と依頼します。`<作業フォルダ>/.serial-console/config.yaml` ができます。
 2. 設定ファイルに値を書きます（[設定](#設定)）。少なくとも `port` を書き、ログインが必要ならパスワードも渡します。
 3. 「シリアルの設定を確かめて」と依頼します。機器につなぎ、プロンプトが出るところまで進めます。
 4. 「機器で uname -a を動かして」のように依頼します。設定の `commands` を動かすなら、「設定のコマンドを機器で動かして」と依頼します。
@@ -27,7 +27,7 @@
 
 ## 設定
 
-設定ファイルは `<作業フォルダ>/.serial-console/config.ini` です。各項目の意味は、ファイルの中のコメントにもあります。
+設定ファイルは `<作業フォルダ>/.serial-console/config.yaml` です。各項目の意味は、ファイルの中のコメントにもあります。
 
 | 項目 | 意味 | ひな形の値 |
 | --- | --- | --- |
@@ -36,19 +36,18 @@
 | `login_user` | ログインのユーザー名。機器がログインを求めたときに使う | `root` |
 | `login_password` | ログインのパスワード | 空 |
 | `login_password_env` | パスワードを入れた環境変数の名前。その環境変数があれば、`login_password` より優先する | 空 |
-| `prompt` | シェルのプロンプトの終わりに合う正規表現 | `[#$] $` |
+| `prompt` | シェルのプロンプトの終わりに合う正規表現 | `'[#$] $'` |
 | `commands` | 上から順に動かすコマンド | 空 |
 | `command_timeout_seconds` | 1つのコマンドを待つ最長の秒数。過ぎたら Ctrl-C で止め、残りは動かさない | `30` |
 
-`commands` が2つ以上なら、`commands =` の次の行から、1行に1つずつ、行頭に空白を入れて書きます。
+`commands` が2つ以上なら、次の行から、1行に1つずつ `- ` に続けて書きます。記号で始まる値と、「: 」を含む値は、`'…'` で囲みます。
 
-```ini
-[settings]
-port = COM3
-login_password_env = DEVICE_PASSWORD
-commands =
-    /opt/my_app/my_app --selftest
-    dmesg | tail -n 20
+```yaml
+port: COM3
+login_password_env: DEVICE_PASSWORD
+commands:
+  - /opt/my_app/my_app --selftest
+  - dmesg | tail -n 20
 ```
 
 パスワードを環境変数で渡すときは、`login_password_env` に環境変数の名前を書きます。CLI を起動する前に、同じ端末でその環境変数を設定します。

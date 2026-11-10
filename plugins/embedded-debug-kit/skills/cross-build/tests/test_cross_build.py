@@ -4,7 +4,6 @@
 偽のビルドのコマンド（fake_build.py）を、既定のシェル（Windows は cmd、ほかは bash）で動かす。
 """
 
-import configparser
 import ctypes
 import importlib.util
 import io
@@ -23,7 +22,7 @@ from unittest import mock
 TESTS = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(TESTS)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "cross_build.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
+TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
 FAKE = os.path.join(TESTS, "fake_build.py")
 IS_WINDOWS = os.name == "nt"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
@@ -85,6 +84,11 @@ def tree(folder):
                   for d, dirs, files in os.walk(folder) for n in dirs + files)
 
 
+def quoted(value):
+    """YAML の '…' の形にする。コマンドに記号や「: 」があっても、そのまま読める。"""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 class Project:
     """一時的な作業フォルダ。"""
 
@@ -93,20 +97,20 @@ class Project:
         test.addCleanup(shutil.rmtree, self.dir, True)
         self.script = script
         self.data = os.path.join(self.dir, "." + os.path.basename(os.path.dirname(os.path.dirname(script))))
-        self.config = os.path.join(self.data, "config.ini")
+        self.config = os.path.join(self.data, "config.yaml")
 
     def path(self, *parts):
         return os.path.join(self.dir, *parts)
 
     def configure(self, text=None, **values):
-        """設定ファイルを書く（.gitignore は作らない）。リストは、行頭に空白を入れた行にする。"""
+        """設定ファイルを書く（.gitignore は作らない）。値は、どれも '…' で囲む。リストは「- 値」の行にする。"""
         if text is None:
-            lines = ["[settings]"]
+            lines = []
             for key, value in values.items():
                 if isinstance(value, list):
-                    lines += [key + " ="] + ["    " + v for v in value]
+                    lines += [key + ":"] + ["  - " + quoted(v) for v in value]
                 else:
-                    lines.append("{} = {}".format(key, value))
+                    lines.append("{}: {}".format(key, quoted(value)))
             text = "\n".join(lines) + "\n"
         os.makedirs(self.data, exist_ok=True)
         with open(self.config, "w", encoding="utf-8") as f:
@@ -135,7 +139,7 @@ class TemplateTest(unittest.TestCase):
             self.lines = f.read().splitlines()
 
     def comments_above(self, key):
-        i = next(n for n, line in enumerate(self.lines) if line.startswith(key + " ="))
+        i = next(n for n, line in enumerate(self.lines) if line.startswith(key + ":"))
         block = []
         while i > 0 and self.lines[i - 1].startswith("#"):
             i -= 1
@@ -143,7 +147,7 @@ class TemplateTest(unittest.TestCase):
         return block
 
     def test_every_key_has_a_comment_right_above(self):
-        keys = [line.split(" =")[0] for line in self.lines if line and line[0].isalpha()]
+        keys = [line.split(":")[0] for line in self.lines if line and line[0].isalpha()]
         self.assertEqual(tuple(keys), build.KEYS)
         for key in keys:
             self.assertTrue(self.comments_above(key), key)
@@ -155,11 +159,11 @@ class TemplateTest(unittest.TestCase):
             self.assertNotIn("（秘密）", text)
         self.assertIn("# 選べる値：auto / bash / cmd / powershell", self.comments_above("shell"))
 
-    def test_reads_with_configparser(self):
-        parser = configparser.ConfigParser(interpolation=None)
-        parser.read(TEMPLATE, encoding="utf-8-sig")
-        self.assertEqual(parser.sections(), ["settings"])
-        self.assertEqual(parser["settings"]["timeout_seconds"], "480")
+    def test_reads_as_settings(self):
+        values = {key: value for key, value, _, _ in build.read_yaml(self.lines)}
+        self.assertEqual(tuple(values), build.KEYS)
+        self.assertEqual((values["source_dir"], values["shell"], values["timeout_seconds"]), (".", "auto", "480"))
+        self.assertEqual((values["sdk_env"], values["build_command"], values["outputs"]), ("", "", ""))
 
 
 class InitTest(unittest.TestCase):
@@ -182,7 +186,7 @@ class InitTest(unittest.TestCase):
         self.assertEqual(code, 0, data)
         self.assertFalse(data["created"])
         with open(p.config, encoding="utf-8") as f:
-            self.assertEqual(f.read(), "[settings]\nbuild_command = make\n")
+            self.assertEqual(f.read(), "build_command: 'make'\n")
 
     def test_missing_workdir(self):
         p = Project(self)
@@ -199,7 +203,7 @@ class InitTest(unittest.TestCase):
         p = Project(self, os.path.join(copy, "scripts", "cross_build.py"))
         code, data = p.run("init")
         self.assertEqual(code, 0, data)
-        self.assertTrue(os.path.isfile(p.path(".my-build", "config.ini")))
+        self.assertTrue(os.path.isfile(p.path(".my-build", "config.yaml")))
         self.assertFalse(os.path.exists(p.path(".cross-build")))
 
 
@@ -309,7 +313,8 @@ class CheckTest(unittest.TestCase):
 
     def test_unreadable_config(self):
         p = Project(self)
-        for text in ("build_command = make\n", "[settings]\nmake all\n", "[settings]\na = 1\na = 2\n"):
+        for text in ("[settings]\nbuild_command = make\n", "  build_command: make\n", "a: 1\na: 2\n",
+                     "build_command: [make]\n", "outputs: app\n  - app.map\n"):
             p.configure(text)
             code, data = p.run("check")
             self.assertEqual(code, 2, (text, data))
@@ -317,7 +322,7 @@ class CheckTest(unittest.TestCase):
 
     def test_reads_bom_and_percent(self):
         p = Project(self)
-        p.configure("\ufeff[settings]\nbuild_command = {} 100%\noutputs = app\n".format(fake("say")))
+        p.configure("\ufeffbuild_command: {}\noutputs: app\n".format(quoted(fake("say") + " 100%")))
         code, data = p.run("check")
         self.assertEqual(code, 0, data)
         self.assertTrue(data["settings"]["build_command"].endswith("100%"))

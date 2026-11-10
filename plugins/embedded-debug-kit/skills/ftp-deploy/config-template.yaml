@@ -1,52 +1,51 @@
 # ftp-deploy の設定。ファイルを FTP で機器に送るときに使う。
-# 「項目 = 値」の形で書く。値を空にするときは「項目 =」とだけ書く。
-
-[settings]
+# 「項目: 値」の形で書く。値を空にするときは「項目:」とだけ書く。
+# 記号で始まる値と、「: 」を含む値は、'…' で囲む。
 
 # 機器の IP アドレスかホスト名（必須）。
 # 例：192.168.1.50
-host =
+host:
 
 # 機器の FTP サーバーのポート番号。
 # 例：21
-port = 21
+port: 21
 
 # ログインするユーザー名。空にすると anonymous でログインする。
 # 例：root
-user = root
+user: root
 
 # ログインのパスワード（秘密）。
 # ファイルに書きたくないときは空のままにして、password_env を使う。
-password =
+password:
 
 # パスワードを入れた環境変数の名前。この環境変数があれば、password より優先する。
 # 例：DEVICE_FTP_PASSWORD
-password_env =
+password_env:
 
 # パッシブモードで送るか。送る途中で止まるときは false を試す。
 # 選べる値：true / false
-passive = true
+passive: true
 
 # FTPS（TLS で暗号化した FTP）を使うか。機器の証明書は確かめない。
 # 選べる値：true / false
-tls = false
+tls: false
 
 # 送るファイル（必須）。作業フォルダからの相対パスか、絶対パスで書く。
-# files = の次の行から、1行に1つずつ、行頭に空白を入れて書く。
+# files: の次の行から、1行に1つずつ、「  - 」に続けて書く。
 # 機器では、どれも remote_dir の直下に、PC と同じ名前で置く（フォルダの構成は送らない）。
 # 例：build/my_app
-files =
+files:
 
 # 機器の送り先のフォルダ（必須）。なければ作る。区切りは / にする。
 # / で始めないと、ログインしたときのフォルダからの場所になる。
 # 例：/opt/my_app
-remote_dir =
+remote_dir:
 
 # 送ったファイルの権限。8 進数で書く。空なら変えない。
 # 機器で動かすプログラムなら書く。
 # 例：755
-file_mode =
+file_mode:
 
 # 機器の応答を待つ秒数。
 # 例：30
-timeout_seconds = 30
+timeout_seconds: 30

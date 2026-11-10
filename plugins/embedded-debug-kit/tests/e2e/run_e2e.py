@@ -37,30 +37,27 @@ TASK = (
 STOP_TASK = "作業フォルダのファイルの一覧を見て、Makefile の中身を教えてください。"
 
 CONFIGS = {
-    "cross-build": """[settings]
-source_dir = .
-build_command = make
-outputs =
-    sensor_app
-timeout_seconds = 120
+    "cross-build": """source_dir: .
+build_command: make
+outputs:
+  - sensor_app
+timeout_seconds: 120
 """,
-    "ftp-deploy": """[settings]
-host = 127.0.0.1
-port = {ftp}
-user = root
-password_env = E2E_DEVICE_PASSWORD
-files =
-    sensor_app
-remote_dir = /app
-file_mode = 755
-timeout_seconds = 20
+    "ftp-deploy": """host: 127.0.0.1
+port: {ftp}
+user: root
+password_env: E2E_DEVICE_PASSWORD
+files:
+  - sensor_app
+remote_dir: /app
+file_mode: 755
+timeout_seconds: 20
 """,
-    "serial-console": """[settings]
-port = socket://127.0.0.1:{shell}
-prompt = [#$] $
-commands =
-    ./app/sensor_app
-command_timeout_seconds = 20
+    "serial-console": """port: socket://127.0.0.1:{shell}
+prompt: '[#$] $'
+commands:
+  - ./app/sensor_app
+command_timeout_seconds: 20
 """,
 }
 
@@ -89,7 +86,7 @@ def make_workdir(base, ftp, shell):
         folder = work / f".{skill}"
         folder.mkdir()
         (folder / ".gitignore").write_text("*\n", encoding="utf-8")
-        (folder / "config.ini").write_text(text.format(ftp=ftp, shell=shell), encoding="utf-8")
+        (folder / "config.yaml").write_text(text.format(ftp=ftp, shell=shell), encoding="utf-8")
     for args in (["init", "-q"], ["add", "."], ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "commit", "-q", "-m", "fixture"]):
         subprocess.run(["git", *args], cwd=work, check=True)
     return work
