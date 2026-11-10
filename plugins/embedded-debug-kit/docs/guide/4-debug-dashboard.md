@@ -4,20 +4,13 @@
 
 ## 手順
 
-1. [統括エージェントの使い方](3-debug-orchestrator.md)の手順 1〜2（設定とコミット）を済ませます。
+1. [統括エージェントの使い方](3-debug-orchestrator.md)の手順 1〜2（スキルの設定とコミット）を済ませます。
 2. ソースのフォルダで CLI を起動し、`/embedded-debug-kit:debug-dashboard` と入力します。画面の URL が出ます。
 3. URL をブラウザーで開きます。
 4. 「設定」のタブで、「直したいこと」「合格の条件」「試行の上限」を入力します。できた依頼文をコピーします。
-5. 別のターミナルで、同じフォルダから統括エージェントを起動し、依頼文を貼り付けて送ります。
-
-   ```shell
-   copilot --agent embedded-debug-kit:debug-orchestrator
-   ```
-
+5. 別のターミナルで、統括エージェントを起動し、依頼文を貼り付けて送ります。起動のしかたは、統括エージェントの使い方の手順 3 と同じです。
 6. 「進み具合」のタブで経過を、「結果」のタブで報告と判定を見ます。
 7. 使い終わったら、手順 2 の CLI で `/embedded-debug-kit:debug-dashboard stop` と入力し、画面を終了します。
-
-Claude Code では、`/embedded-debug-kit:debug-dashboard` を `/debug-dashboard` に、`copilot` を `claude` に読み替えます。
 
 ## 実行を止める
 
@@ -26,8 +19,7 @@ Claude Code では、`/embedded-debug-kit:debug-dashboard` を `/debug-dashboard
 
 ## 記録
 
-画面を起動している間、AI への依頼と AI の報告が、`.debug-dashboard/` に残ります。
-`.debug-dashboard/` は、ソースのフォルダにできます。Git のリポジトリの中では、リポジトリの一番上のフォルダにできます。
+画面を起動している間、AI への依頼と AI の報告が、リポジトリの一番上のフォルダの `.debug-dashboard/` に残ります。
 
 ## してはいけないこと
 
