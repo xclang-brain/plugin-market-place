@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -108,6 +109,23 @@ class Flow:
         self.assertEqual((done["counts"]["done"], done["counts"]["failed"]), (6, 0))
         self.assertEqual(self.read(done["run_dir"], third, "fix.patch").count(b"+    if (buf == NULL) {"), 1,
                          "the half-done edit of the first session is not part of the fix")
+
+    def test_no_warning_for_the_conditions_ends_the_request(self):
+        agent = Agent(self.repo)
+        agent.warnings = {}  # everything is triaged: Coverity has no warning for the conditions
+        for flags in ((), ("--slots", 1), ("--review",)):  # asked in a chat, of one agent, of the orchestrator
+            done = agent.follow(self.request(*flags))
+            self.assertEqual((done["message"], done["next"]), ("条件に合う警告はありません", []))
+        out = self.top / "coverity-triage-out"
+        self.assertEqual((agent.calls, len(list(out.iterdir()))), (["coverity_search_issues"], 1), "fetched once")
+        flowlib.wait_for_copies(done["run_dir"])
+        long_ago = time.time() - 11 * 60
+        os.utime(Path(done["run_dir"]) / "issues.json", (long_ago, long_ago))
+        later = agent.follow(self.request())  # the same request later: Coverity is asked again
+        self.assertEqual((later["message"], later["next"]), ("条件に合う警告はありません", []))
+        self.assertEqual((agent.calls, len(list(out.iterdir()))), (["coverity_search_issues"] * 2, 2))
+        flowlib.wait_for_copies(later["run_dir"])
+        self.assert_repository_untouched()
 
     def work_round(self, lines: list[str]) -> None:
         """One round of stage 3: one worker per line of next, taking turns on the one queue. Each repeats

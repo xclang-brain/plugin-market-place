@@ -48,7 +48,7 @@ from job import read_json, write_bytes, write_json  # noqa: E402
 SCRIPT = Path(__file__).resolve()
 WAIT = 20  # seconds start and finish wait for a background job before they answer that it still runs
 STALE = 30 * 60  # seconds after which a claim without a save is taken from its slot
-OLD_LIST = 10 * 60  # seconds after which start says when the list of warnings was fetched
+OLD_LIST = 10 * 60  # seconds after which start says when the list was fetched, and fetches an empty one again
 BATCH = 5  # CIDs per slot and round (keeps a worker's context small)
 VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intentional": "意図的", "undetermined": "判定不能"}
 RECOMMEND = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する"}
@@ -174,6 +174,11 @@ def age(stamp: str) -> float:
     return (datetime.now() - datetime.fromisoformat(stamp)).total_seconds()
 
 
+def written(path: Path) -> float:
+    """When the file was written (0: there is no such file)."""
+    return path.stat().st_mtime if path.is_file() else 0
+
+
 def remove_work(run_dir: Path, repo: Path) -> str:
     """Delete the work copies of a run. This is cleanup: a folder that another program holds (on Windows
     also a shell that sits in it) stays, and the sentence that says so is returned."""
@@ -187,14 +192,19 @@ def remove_work(run_dir: Path, repo: Path) -> str:
 
 def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
     """The newest result folder of this repository while it is not finished, else a new one. Not
-    finished: it has no list yet, or unfinished CIDs, or (a run that processes every CID) its CIDs are
-    all saved but finish has not written the summary."""
+    finished: it has no list yet, or unfinished CIDs, or (a run that processes every CID) finish has not
+    written the summary since a CID changed last. A list without warnings is the answer to the request
+    while it is fresh: the folder stays the newest one, and a later request fetches again."""
     out = cfg["output_dir"]
     runs = sorted((p for p in out.iterdir() if (read_json(p / "run.json") or {}).get("repo") == repo.as_posix()),
                   reverse=True) if out.is_dir() else []
     if runs and not new:
         latest = Run(runs[0], starting=True)
-        open_end = latest.meta["all"] and latest.issues and not (runs[0] / "summary.md").is_file()
+        if latest.issues:
+            changed = max(written(latest.cid_dir(cid) / "state.json") for cid in latest.issues)
+            open_end = latest.meta["all"] and written(runs[0] / "summary.md") < changed
+        else:
+            open_end = time.time() - written(runs[0] / "issues.json") < OLD_LIST
         if not latest.fetch or count(latest.states())["remaining"] or open_end:
             return runs[0]
     for old in runs:
@@ -232,7 +242,10 @@ def cmd_start(args) -> dict:
 
     mode = meta()
     again = [start_command(repo, mode)]
-    listed = fetched(read_json(run_dir / "issues.json"))
+    current = Run(run_dir, starting=True)
+    listed = bool(current.fetch)
+    if listed and not current.issues:  # nothing to work on: no work copy is waited for
+        return reply(run_dir, counts=count({}), message="条件に合う警告はありません", next=[])
     deadline = time.monotonic() + WAIT
     jobs = []
     if cfg["initial_analysis"] and not listed:
@@ -271,7 +284,7 @@ def cmd_start(args) -> dict:
     elif run.fetch.get("limited") and matched:
         message = f"条件に合う警告は {matched} 件あります。設定の上限（{total} 件）まで取得しました"
     else:
-        message = f"条件に合う警告を {total} 件取得しました" if total else "条件に合う警告はありません"
+        message = f"条件に合う警告を {total} 件取得しました"
     listed_at = (run_dir / "issues.json").stat().st_mtime
     if time.time() - listed_at > OLD_LIST:
         message += f"（警告の取得: {time.strftime('%Y-%m-%d %H:%M', time.localtime(listed_at))}）"
@@ -280,7 +293,7 @@ def cmd_start(args) -> dict:
     # A run that processes every CID fetches the warning paths once, here; a chat fetches them per CID (next).
     unfinished = [cid for cid, s in states.items() if not s or s["status"] in ("working", "rework")]
     return reply(run_dir, fetch=details_call(run, unfinished) if mode["all"] else [], counts=found,
-                 message=message, next=run.steps(states) if total else [])
+                 message=message, next=run.steps(states))
 
 
 # ---- next: hand out one CID -----------------------------------------------------------------
@@ -358,6 +371,10 @@ def cmd_next(args) -> dict:
     # Before a CID is claimed: a copy that cannot be made clean must not cost a CID one of its two tries.
     repo.reset(copy, run.meta["base_revision"])
     states = run.states()
+    named = states[args.cid] if args.cid is not None else None
+    if named and named["status"] == "done" and not named.get("merged_into"):
+        # the person asks for a saved CID again: like one that was sent back, without points
+        states[args.cid] = {**named, "status": "rework", "rework": []}
 
     def free(state) -> bool:
         if state is None or state["status"] == "rework":
@@ -384,7 +401,7 @@ def cmd_next(args) -> dict:
         out = reply(run.dir, cid=cid, issue=issue, issue_file=(run.cid_dir(cid) / "issue.json").as_posix(),
                     work_dir=copy.as_posix(), result_file=(run.cid_dir(cid) / "result.json").as_posix(),
                     fetch=details_call(run, [cid]))
-        if state.get("rework"):  # sent back: the earlier fix is in the copy again, to be changed
+        if "rework" in state:  # sent back, or asked for again: the earlier fix is in the copy, to be changed
             patch = run.cid_dir(cid) / "fix.patch"
             applied = patch.is_file() and not repo.apply(copy, patch)
             out["rework"] = {"points": state["rework"], "patch_applied": applied}

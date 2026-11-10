@@ -112,17 +112,25 @@ class GitTest(Copies, Case):
 class SvnTest(Copies, Case):
     kind = "svn"
 
-    def test_base_is_the_revision_of_the_working_copy_and_more_slots_are_folder_copies(self):
-        repo = vcs.open_repo(support.make_repo("svn", self.top))
+    def test_base_is_the_highest_revision_of_the_working_copy_and_more_slots_are_folder_copies(self):
+        user = support.make_repo("svn", self.top)
+        repo = vcs.open_repo(user)
         self.assertEqual(repo.base(""), ("", "1", ""))
+        mine = b"int a(int *p)\n{\n    return p ? *p : 0;\n}\n"
+        (user / "src" / "a.c").write_bytes(mine)  # the person commits and does not update: the folder stays at 1
+        call("svn", "commit", "-q", "-m", "mine", cwd=user)
+        (user / "src" / "b.c").write_bytes(b"not committed\n")
+        self.assertEqual(call("svnversion", cwd=user).strip(), b"1:2M")
+        self.assertEqual(repo.base(""), ("", "2", ""))
         w1, w2 = self.top / "work" / "w1", self.top / "work" / "w2"
-        repo.make_copy(w1, "1")
+        repo.make_copy(w1, "2")
+        self.assertEqual((w1 / "src" / "a.c").read_bytes(), mine, "the copy has what the person has committed")
         (w1 / "src" / "a.c").write_bytes(b"changed by a worker\n")
         (self.top / "svnrepo").rename(self.top / "unreachable")  # a second checkout would fail now
-        repo.make_copy(w2, "1")
+        repo.make_copy(w2, "2")
         self.assertTrue(repo.is_copy(w2))
-        self.assertEqual((w2 / "src" / "a.c").read_bytes(), support.FILES["src/a.c"], "the copy is clean")
-        self.assertEqual(repo.diff(w2, "1"), ([], b""))
+        self.assertEqual((w2 / "src" / "a.c").read_bytes(), mine, "the copy is clean")
+        self.assertEqual(repo.diff(w2, "2"), ([], b""))
 
     def test_files_of_an_external_are_no_part_of_a_fix(self):
         url = (self.top / "svnrepo").as_uri()

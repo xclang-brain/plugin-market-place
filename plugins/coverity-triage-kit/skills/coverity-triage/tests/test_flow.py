@@ -346,6 +346,8 @@ class Flow:
         status = self.run_triage("status", "--run", run)
         self.assertEqual((status["merge_candidates"], status["review_batches"][0]["cids"]), ([], [ONE, TWO]))
         self.assertFalse(self.run_triage("review", "--run", run, "--cid", THREE, "--outcome", "pass")["ok"])
+        member = self.next(run, "--cid", THREE)  # its result is the one of the leader
+        self.assertEqual((member["cid"], member["message"]), (None, f"CID {THREE} は処置済みです"))
         self.assertFalse(self.run_triage("merge", "--run", run, "--leader", TWO, "--members", ONE)["ok"], "merged once")
         for cid in (ONE, TWO):
             self.assertTrue(self.run_triage("review", "--run", run, "--cid", cid, "--outcome", "pass")["ok"])
@@ -411,6 +413,23 @@ class Flow:
         self.assertFalse((run / "work").exists(), "the work copies are removed")
         self.assertNotEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "a finished run is not continued")
 
+    def test_the_same_request_continues_until_finish_has_run(self):
+        run = self.begin(THREE_ISSUES)  # in a chat first: one CID is saved and the summary is shown
+        self.work(self.next(run, "--cid", ONE))
+        self.assertTrue(self.run_triage("finish", "--run", run)["ok"] and (run / "summary.md").is_file())
+        agents = ("--slots", 2, "--review")
+        self.assertEqual(self.start(*agents)["run_dir"], run.as_posix())
+        self.work(self.next(run, "--slot", 1, "--batch", 1), B_EDIT)
+        self.work(self.next(run, "--slot", 2, "--batch", 1))
+        self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "pass")
+        again = self.start(*agents)  # stopped while the results are reviewed: finish has not run since the saves
+        self.assertEqual((again["run_dir"], again["fetch"]), (run.as_posix(), []), "no new folder, no new fetch")
+        self.assertIn("review --run", again["next"][0])
+        self.assertTrue((run / "work" / "w2").is_dir(), "the work copies stay")
+        for cid in (TWO, THREE):
+            self.run_triage("review", "--run", run, "--cid", cid, "--outcome", "pass")
+        self.assertIn("finish --run", self.start(*agents)["next"][0], "reviewed, not finished: continued")
+
     def test_one_named_cid_in_a_chat(self):
         run = self.begin(THREE_ISSUES)  # no --slots: stage 1
         self.assertFalse(self.next(run, "--cid", 99999)["ok"])
@@ -428,20 +447,20 @@ class Flow:
         self.assertIn("| CID | チェッカー | 場所 | 判定 | 推奨 | 確信度 | 修正コード | 逸脱コメント |", summary)
         self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 未処置 | - | - | - | - |", summary)
         self.assertNotIn("検証", summary)
-        again = self.next(run, "--cid", TWO)
-        self.assertEqual((again["ok"], again["cid"]), (True, None))
-        self.assertEqual(again["message"], f"CID {TWO} は処置済みです")
         done = self.run_triage("finish", "--run", run)  # no loop to finish: it does not refuse
         self.assertEqual((done["ok"], done["counts"]["remaining"]), (True, 2))
         self.assertTrue((run / "work" / "w1").is_dir(), "the copy stays while CIDs are left")
         self.assertEqual(self.start()["run_dir"], run.as_posix())
-        # the person has a remark on the saved result: it is sent back and handed out again
-        point = "src/b.c:3 戻り値は 2 にする"
-        self.run_triage("review", "--run", run, "--cid", TWO, "--outcome", "rework", "--point", point)
-        redo = self.next(run, "--cid", TWO)
-        self.assertEqual(redo["rework"], {"points": [point], "patch_applied": True})
-        self.assertTrue(self.work(redo, {"src/b.c": (b"return 1;", b"return 2;")})["ok"])
-        self.assertIn(b"+    return 2;", (run / "cid" / str(TWO) / "fix.patch").read_bytes())
+        # the person has a remark on the saved result, and later one more: the CID is handed out again with
+        # its earlier fix in the copy, as often as the person names it
+        for old, new in ((b"return 1;", b"return 2;"), (b"return 2;", b"return 3;")):
+            self.assertEqual(self.next(run, "--cid", TWO)["cid"], TWO)
+            redo = self.next(run, "--cid", TWO)  # asked again before it was saved: still with the earlier fix
+            self.assertEqual(redo["rework"], {"points": [], "patch_applied": True})
+            self.assertTrue(self.work(redo, {"src/b.c": (old, new)})["ok"])
+            self.assertIn(b"+    " + new, (run / "cid" / str(TWO) / "fix.patch").read_bytes())
+        self.assertEqual((self.state(run, TWO)["status"], self.state(run, TWO).get("rework")), ("done", None))
+        self.assertNotIn("検証", (run / "summary.md").read_text(encoding="utf-8"))
 
 
 class GitFlow(Flow, support.RunCase):

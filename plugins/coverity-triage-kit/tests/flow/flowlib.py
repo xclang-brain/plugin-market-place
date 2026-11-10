@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -229,6 +230,20 @@ def fresh_copy(kind: str, top: Path, patches: list[Path]) -> Path:
     for patch in patches:
         call(*(GIT + ["apply"] if kind == "git" else ["svn", "patch"]), patch, cwd=copy)
     return copy
+
+
+def wait_for_copies(run_dir: str) -> None:
+    """Wait until the background job that makes the work copies has ended. A test does it where start has
+    answered without waiting for the job, before the folder the job works in is deleted."""
+    record = Path(run_dir) / "work" / "prepare.json"
+    for _ in range(600):
+        try:
+            if json.loads(record.read_text(encoding="utf-8"))["status"] != "running":
+                return
+        except (OSError, ValueError):  # Windows: the file is being replaced at this moment
+            pass
+        time.sleep(0.1)
+    raise AssertionError(f"the job does not end: {record}")
 
 
 def remove_tree(path: Path) -> None:

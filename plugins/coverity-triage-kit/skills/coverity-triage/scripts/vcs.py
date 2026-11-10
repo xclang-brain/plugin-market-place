@@ -170,8 +170,10 @@ class Svn:
         return run(["svn", "--non-interactive", *args], cwd or self.repo, check)
 
     def base(self, branch: str) -> tuple[str, str, str]:
-        """('', the revision of the person's working copy, '')."""
-        return "", text(self.svn("info", "--show-item", "revision", ".").stdout), ""
+        """('', the highest revision in the person's working copy, ''). svnversion prints 4168, or 4123:4168M
+        for a copy of mixed revisions: a file the person has committed is newer than its folder until the
+        next svn update."""
+        return "", re.findall(r"\d+", text(run(["svnversion"], self.repo).stdout))[-1], ""
 
     @staticmethod
     def is_copy(dest: Path) -> bool:
