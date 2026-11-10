@@ -103,7 +103,7 @@ class Project(object):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, **feed)
         self.test.assertTrue(all(b < 128 for b in r.stdout), "標準出力が ASCII だけではありません")
         data = json.loads(r.stdout.decode("ascii"))
-        for key in ("ok", "message", "problems", "config", "log"):
+        for key in ("ok", "message", "problems", "config"):
             self.test.assertIn(key, data)
         return r.returncode, data
 
@@ -116,14 +116,6 @@ class Project(object):
 
     def empty(self, key):
         return self.run("set", TARGET, key, "--empty")
-
-    def log(self):
-        logs = os.path.join(self.dir, ".skill-config", "logs")
-        text = ""
-        for name in os.listdir(logs) if os.path.isdir(logs) else []:
-            with open(os.path.join(logs, name), encoding="utf-8") as fh:
-                text += fh.read()
-        return text
 
     def item(self, key):
         return next(i for i in self.show()[1]["items"] if i["key"] == key)
@@ -197,13 +189,13 @@ class ShowTest(unittest.TestCase):
         p.set("password_env", "DEVICE_PASSWORD")
         self.assertNotIn("password", p.show()[1]["missing"])
 
-    def test_missing_file_says_to_use_init(self):
+    def test_missing_file_says_to_use_setup(self):
         p = Project(self, text=None)
         code, data = p.show()
         self.assertEqual(code, 2)
         self.assertFalse(data["ok"])
         self.assertIn(TARGET, data["message"])
-        self.assertIn("init", data["message"])
+        self.assertIn("setup " + TARGET, data["message"])
         self.assertEqual(tree(p.dir), [])
 
     def test_show_creates_nothing(self):
@@ -319,10 +311,6 @@ class SetTest(unittest.TestCase):
         code, data = p.empty("password")
         self.assertEqual((code, data["value"]), (0, ""))
         self.assertIn("password:\n", p.text())
-        log = p.log()
-        self.assertNotIn(PASSWORD, log)
-        self.assertNotIn("new-secret", log)
-        self.assertIn("***", log)
 
     def test_env_name_is_written(self):
         p = Project(self)
@@ -337,7 +325,6 @@ class SetTest(unittest.TestCase):
             self.assertEqual(code, 2, bad)
             self.assertIn("環境変数の名前", data["message"])
             self.assertNotIn("S3cr3t", json.dumps(data))
-        self.assertNotIn("S3cr3t", p.log())
         self.assertEqual(p.raw(), before)
 
     def test_env_item_without_secret_pair_takes_any_value(self):
@@ -399,37 +386,93 @@ class SetTest(unittest.TestCase):
             self.assertIn(phrase, data["message"])
             self.assertEqual(data["problems"], [data["message"]])
             self.assertEqual(p.raw(), before, phrase)
-            self.assertNotIn(leak, json.dumps(data, ensure_ascii=False) + p.log())
-
-    def test_log_folder_that_cannot_be_made(self):
-        p = Project(self)
-        before = p.raw()
-        with open(os.path.join(p.dir, ".skill-config"), "w", encoding="utf-8") as fh:
-            fh.write("ファイル")
-        code, data = p.set("host", "a")
-        self.assertEqual(code, 1)
-        self.assertIn("ログ", data["message"])
-        self.assertEqual(p.raw(), before)
+            self.assertNotIn(leak, json.dumps(data, ensure_ascii=False))
 
     def test_gitignore_is_placed_before_writing(self):
         p = Project(self)
         p.set("host", "a")
-        for folder in ("." + TARGET, ".skill-config"):
-            with open(os.path.join(p.dir, folder, ".gitignore"), encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), "*\n")
-        code, data = p.set("host", "b")
-        self.assertTrue(data["log"].startswith(os.path.join(p.dir, ".skill-config", "logs")))
-        with open(data["log"], encoding="utf-8") as fh:
-            self.assertIn('host："a" → "b"', fh.read())
+        with open(os.path.join(p.folder, ".gitignore"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "*\n")
 
-    def test_renamed_copy_uses_its_own_name(self):
-        copy = os.path.join(tempfile.mkdtemp(prefix="skill-config-copy-"), "my-config")
-        self.addCleanup(shutil.rmtree, os.path.dirname(copy), True)
-        shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__"))
-        p = Project(self, script=os.path.join(copy, "scripts", "config_tool.py"))
+    def test_set_leaves_no_log(self):
+        p = Project(self)
         p.set("host", "a")
-        self.assertTrue(os.path.isdir(os.path.join(p.dir, ".my-config", "logs")))
-        self.assertFalse(os.path.exists(os.path.join(p.dir, ".skill-config")))
+        self.assertEqual(tree(p.dir), [".sample-tool", ".sample-tool/.gitignore", ".sample-tool/config.yaml"])
+
+
+class SetupTest(unittest.TestCase):
+    """setup は、隣のスキルのひな形から設定ファイルを作り、uv で依存パッケージを入れる。"""
+
+    def skills(self, templates=("alpha", "beta"), script=None):
+        """skill-config の写しと、ひな形を持つ隣のスキルを置いたフォルダを作る。"""
+        root = tempfile.mkdtemp(prefix="skill-config-skills-")
+        self.addCleanup(shutil.rmtree, root, True)
+        shutil.copytree(SKILL_DIR, os.path.join(root, "skill-config"), ignore=shutil.ignore_patterns("__pycache__"))
+        for name in templates:
+            os.makedirs(os.path.join(root, name, "assets"))
+            with open(os.path.join(root, name, "assets", "config-template.yaml"), "w", encoding="utf-8") as fh:
+                fh.write("# %s の項目（必須）。\nhost:\n" % name)
+            if script is not None:
+                os.makedirs(os.path.join(root, name, "scripts"))
+                with open(os.path.join(root, name, "scripts", "tool.py"), "w", encoding="utf-8") as fh:
+                    fh.write(script)
+        os.makedirs(os.path.join(root, "no-template"))
+        return os.path.join(root, "skill-config", "scripts", "config_tool.py")
+
+    def test_creates_config_files_from_templates(self):
+        p = Project(self, text=None, script=self.skills())
+        code, data = p.run("setup")
+        self.assertEqual(code, 0, data["message"])
+        self.assertEqual([(s["name"], s["created"], s["packages"]) for s in data["skills"]],
+                         [("alpha", True, True), ("beta", True, True)])
+        self.assertEqual(tree(p.dir), [".alpha", ".alpha/.gitignore", ".alpha/config.yaml",
+                                       ".beta", ".beta/.gitignore", ".beta/config.yaml"])
+        self.assertEqual(p.run("show", "alpha")[1]["missing"], ["host"])
+
+    def test_existing_config_is_kept(self):
+        p = Project(self, text=None, script=self.skills())
+        p.run("setup")
+        p.run("set", "alpha", "host", "--stdin", stdin=b"a")
+        code, data = p.run("setup")
+        self.assertEqual([s["created"] for s in data["skills"]], [False, False])
+        with open(os.path.join(p.dir, ".alpha", "config.yaml"), encoding="utf-8") as fh:
+            self.assertIn("host: a", fh.read())
+
+    def test_one_skill_only(self):
+        p = Project(self, text=None, script=self.skills())
+        code, data = p.run("setup", "beta")
+        self.assertEqual([s["name"] for s in data["skills"]], ["beta"])
+        self.assertEqual(tree(p.dir), [".beta", ".beta/.gitignore", ".beta/config.yaml"])
+
+    def test_skill_without_template_is_refused(self):
+        p = Project(self, text=None, script=self.skills())
+        code, data = p.run("setup", "no-template")
+        self.assertEqual(code, 2)
+        self.assertIn("alpha、beta", data["message"])
+        self.assertEqual(tree(p.dir), [])
+
+    @unittest.skipUnless(shutil.which("uv"), "uv がないので飛ばす")
+    def test_packages_are_synced_with_uv(self):
+        script = '# /// script\n# requires-python = ">=3.8"\n# dependencies = []\n# ///\nprint("ok")\n'
+        p = Project(self, text=None, script=self.skills(("alpha",), script))
+        code, data = p.run("setup")
+        self.assertEqual(code, 0, data["message"])
+        self.assertTrue(data["skills"][0]["packages"])
+
+    def test_uv_failure_is_reported(self):
+        script = '# /// script\n# dependencies = []\n# ///\n'
+        p = Project(self, text=None, script=self.skills(("alpha",), script))
+        failed = subprocess.CompletedProcess([], 1)
+        with mock.patch.object(tool, "SKILLS_DIR", os.path.dirname(os.path.dirname(os.path.dirname(p.script)))), \
+                mock.patch.object(tool.subprocess, "run", return_value=failed), \
+                mock.patch.object(tool.shutil, "which", return_value="uv"):
+            result = {"ok": False, "message": "", "problems": [], "config": None}
+            with self.assertRaises(tool.Stop) as stop:
+                tool.cmd_setup(None, p.dir, result)
+        self.assertEqual(stop.exception.code, 1)
+        self.assertIn("依存パッケージ", stop.exception.message)
+        self.assertFalse(result["skills"][0]["packages"])
+        self.assertTrue(os.path.isfile(os.path.join(p.dir, ".alpha", "config.yaml")))
 
 
 class YamlTest(unittest.TestCase):
@@ -529,14 +572,13 @@ class InputTest(unittest.TestCase):
         self.assertIn("標準入力で渡されていません", data["message"])
         self.assertEqual(p.raw(), before)
 
-    def test_unexpected_error_points_to_the_log(self):
+    def test_unexpected_error_is_reported(self):
         p = Project(self)
         with mock.patch.object(tool, "load", side_effect=RuntimeError("boom")):
             code, data = run_in_process(p, "host", "a")
         self.assertEqual(code, 1)
         self.assertIn("思わぬエラー", data["message"])
-        self.assertIn(data["log"], data["message"])
-        self.assertIn("RuntimeError", p.log())
+        self.assertIn("RuntimeError", data["message"])
 
     def test_decode_input(self):
         self.assertEqual(tool.decode_input("﻿台所\r\n".encode("utf-8"), []), "台所\r\n")
@@ -559,7 +601,7 @@ class PowerShellTest(unittest.TestCase):
 
         def quote(text):
             return "'" + text.replace("'", "''") + "'"
-        block = (block.replace("py -3 ", "& %s " % quote(sys.executable))
+        block = (block.replace("uv run ", "& %s " % quote(sys.executable))
                  .replace('"<このスキルのフォルダ>/scripts/config_tool.py"', quote(SCRIPT))
                  .replace("<スキルの名前>", TARGET).replace("<項目>", "host").replace("<値>", "二階の台所")
                  .replace("--stdin", "--stdin --workdir " + quote(p.dir)))

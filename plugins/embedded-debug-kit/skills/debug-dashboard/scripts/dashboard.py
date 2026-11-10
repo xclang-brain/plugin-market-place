@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = []
+# ///
 """Web管理画面を起動・終了し、結果を JSON 1つで標準出力に返す。
 
 使い方：dashboard.py start|stop|status [--workdir 作業フォルダ]

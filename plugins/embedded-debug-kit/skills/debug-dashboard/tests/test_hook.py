@@ -485,12 +485,12 @@ class HooksJsonTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
 
-    def test_without_python_exits_0(self):
+    def test_without_uv_exits_0(self):
         folder = os.path.dirname(BASH)
-        if any(shutil.which(name, path=folder) for name in ("py", "python3")):
+        if any(shutil.which(name, path=folder) for name in ("uv",)):
             own = temp_project(self)
             if not support.can_symlink(own):
-                self.skipTest("Python のない PATH を作れません")
+                self.skipTest("uv のない PATH を作れません")
             os.symlink(BASH, str(own / "bash"))
             folder = str(own)
         project = temp_project(self)
@@ -588,7 +588,7 @@ class CopilotHooksJsonTest(unittest.TestCase):
                 self.assertEqual(decision["permissionDecision"], "deny")
                 self.assertTrue(read_events(project)[-1]["denied"])
 
-    def test_without_python_exits_0(self):
+    def test_without_uv_exits_0(self):
         for field, shell, prefix in self.shells():
             with self.subTest(shell=shell):
                 folder = temp_project(self)  # PATH を、何もないフォルダだけにする。シェルは絶対パスで動かす
