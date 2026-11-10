@@ -36,8 +36,8 @@ REQ = re.compile(r"REQ-(\d{3})")
 REQ_RANGE = re.compile(r"REQ-(\d{3})\s*〜\s*REQ-(\d{3})")
 # プラグインの README の並び（REQ-008）：最初の2つ、その後に出てくる順
 # README は入口（5分で読める）。最初に「できること」と「使い方を選ぶ」、その後に始め方と文書の一覧（REQ-008）
-README_FIRST = ["できること", "使い方"]
-README_THEN = ["はじめる", "文書"]
+README_FIRST = ["できること", "使い始める"]
+README_THEN = ["文書"]
 README_MAX_CHARS = 6000  # 入口の文書が、くわしい手順で長くならないように
 COPILOT_GUIDE = pp.ROOT / "docs" / "guide" / "copilot-cli.md"
 CLAUDE_GUIDE = pp.ROOT / "docs" / "guide" / "claude-code.md"
@@ -217,6 +217,13 @@ class ReadmeTest(unittest.TestCase):
         for guide in (COPILOT_GUIDE, CLAUDE_GUIDE):
             self.assertTrue(guide.is_file(), f"{guide.name} がありません（REQ-008）")
             self.assertIn(f"(docs/guide/{guide.name})", self.text, f"README から {guide.name} へのリンクがありません")
+        steps = ["1-skill.md", "2-agent.md", "3-batch.md", "4-screen.md"]
+        for i, name in enumerate(steps):  # チュートリアル：README からつながり、各ステップが次のステップへつながる
+            path = pp.ROOT / "docs" / "guide" / name
+            self.assertTrue(path.is_file(), f"チュートリアルの {name} がありません（REQ-008）")
+            self.assertIn(f"(docs/guide/{name})", self.text, f"README から {name} へのリンクがありません")
+            if i + 1 < len(steps):
+                self.assertIn(f"({steps[i + 1]})", pp.read(path), f"{name} から次のステップ {steps[i + 1]} へのリンクがありません")
         copilot = pp.read(COPILOT_GUIDE)
         for word in ["--allow-tool", "--add-dir", "--experimental", "/extensions mode", "gh auth login"]:
             self.assertIn(word, copilot, f"Copilot CLI ガイドに {word} がありません（REQ-008）")
