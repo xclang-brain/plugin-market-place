@@ -3,13 +3,13 @@
 - plugin.json・mcp.json を、Agent Plugins 1.0.0 の公式の JSON Schema（schemas/ の無加工の写し）で確かめる。
   schema では表せない決まり（mcp.json の版、起動のコマンド、フォルダ、認証情報の環境変数の渡し方）も確かめる。
 - すべての SKILL.md の frontmatter（Agent Skills の決まりと設計書 3.1）、本文の長さ、SKILL.md が指すファイル、
-  references/ の目次、README・試験・試験の課題（evals/、skill-creator の形）がフォルダの中にあること。
+  references/ の目次、試験・試験の課題（evals/、skill-creator の形）がフォルダの中にあること。
 - エージェントの定義（com.github.copilot/agents/ の .md は .agent.md だけ、frontmatter の項目、統括エージェントに tools がない）。
 - Claude Code の形（同じフォルダ）：plugin.json の $schema は Agent Plugins 1.0.0 のまま（Copilot CLI が agents/ と .mcp.json を
   読まないように）。.claude-plugin/plugin.json の name と version、.mcp.json と mcp.json の対応、agents/ の .md はエージェントだけで
-  plugin-dev の決まりの frontmatter。リポジトリの2つのマーケットプレイスの名前と版、根の marketplace.json と .plugin/ がないこと。
+  plugin-dev の決まりの frontmatter。リポジトリの根に marketplace.json と .plugin/ がないこと。
   claude コマンドがあれば claude plugin validate。
-名前は、フォルダ・mcp.json と、plugin_parts.py の定数（ORCHESTRATOR など）から読みます。
+名前は、フォルダ・mcp.json と、plugin_parts.py の定数（ORCHESTRATOR、PARTS など）から読みます。
 
   python3 -m unittest discover -s tests/structure -v
 """
@@ -246,12 +246,11 @@ class SkillTest(unittest.TestCase):
                             has_toc = re.search(r"目次|Contents", head) or len(re.findall(r"\]\(#", head)) >= 2
                             self.assertTrue(has_toc, f"{pp.rel(path)}: 100行を超えるのに、先頭に目次がありません")
 
-    def test_readme_tests_and_evals_inside(self):
-        """スキルは README.md・tests/・evals/ を持つ（仕様 REQ-101）"""
+    def test_tests_and_evals_inside(self):
+        """スキルは tests/・evals/ を持つ（仕様 REQ-101）"""
         for name in self.names:
             folder = pp.SKILLS_DIR / name
             with self.subTest(skill=name):
-                self.assertTrue((folder / "README.md").is_file(), f"{name}: README.md がありません")
                 self.assertTrue(list((folder / "tests").rglob("test*.py")), f"{name}: tests/ に試験がありません")
                 self.assertTrue((folder / "evals").is_dir(), f"{name}: evals/ がありません")
 
@@ -310,15 +309,14 @@ class SkillTest(unittest.TestCase):
 class AgentTest(unittest.TestCase):
     """エージェントの定義（設計書 2.2、3.3、7）"""
 
-    def test_agents_folder_holds_only_definitions_and_readmes(self):
-        """agents/ の .md は、Copilot CLI がすべてエージェントの定義として読む。使い方は .README.markdown にする"""
+    def test_agents_folder_holds_only_definitions(self):
+        """agents/ の .md は、Copilot CLI がすべてエージェントの定義として読む"""
         if not pp.AGENTS_DIR.is_dir():
             self.skipTest("com.github.copilot/agents/ がまだありません")
         for path in pp.AGENTS_DIR.iterdir():
             with self.subTest(file=path.name):
                 self.assertTrue(path.is_file(), f"agents/ の中にフォルダ {path.name} があります")
-                self.assertTrue(path.name.endswith(pp.AGENT_SUFFIX) or path.suffix == ".markdown",
-                                f"agents/{path.name}：置けるのは <名前>.agent.md と <名前>.README.markdown だけです")
+                self.assertTrue(path.name.endswith(pp.AGENT_SUFFIX), f"agents/{path.name}：置けるのは <名前>.agent.md だけです")
 
     def test_frontmatter(self):
         files = pp.agent_files()
@@ -357,13 +355,6 @@ class AgentTest(unittest.TestCase):
                     self.assertNotIn("tools", fm, f"{path.name}: 統括エージェントに tools があります（呼んだエージェントのツールが絞られる）")
                 else:
                     self.assertIn("tools", fm, f"{path.name}: tools がありません")
-
-    def test_every_agent_has_a_readme(self):
-        """エージェントの使い方は <名前>.README.markdown（設計書 7）"""
-        for path in pp.agent_files():
-            with self.subTest(agent=path.name):
-                readme = pp.AGENTS_DIR / (pp.agent_stem(path) + pp.AGENT_README_SUFFIX)
-                self.assertTrue(readme.is_file(), f"{readme.name} がありません")
 
 
 class ClaudeCodeTest(unittest.TestCase):
@@ -486,12 +477,10 @@ class ClaudeCodeTest(unittest.TestCase):
 
 class RepositoryTest(unittest.TestCase):
     """リポジトリのマーケットプレイス。Copilot CLI は marketplace.json（根）、.plugin/、.github/plugin/、.claude-plugin/ の順に
-    最初のものを使うので、根の marketplace.json と .plugin/ を置かない。.claude-plugin/ のものは Claude Code だけが読む"""
+    最初のものを使うので、根の marketplace.json と .plugin/ を置かない"""
 
     def setUp(self):
-        self.copilot = pp.REPO_ROOT / ".github" / "plugin" / "marketplace.json"
-        self.claude = pp.REPO_ROOT / ".claude-plugin" / "marketplace.json"
-        if not self.copilot.is_file():
+        if not (pp.REPO_ROOT / ".github" / "plugin" / "marketplace.json").is_file():
             self.skipTest("リポジトリの .github/plugin/marketplace.json がありません（プラグインのフォルダだけをコピーしたとき）")
 
     def test_no_root_marketplace_and_no_plugin_folder(self):
@@ -503,25 +492,8 @@ class RepositoryTest(unittest.TestCase):
             found += [pp.rel(Path(current) / d) for d in dirs if d == ".plugin"]
         self.assertEqual(found, [], "リポジトリに .plugin/ のフォルダがあります（Copilot CLI がマーケットプレイスとして先に読む）")
 
-    def test_marketplaces_agree(self):
-        """2つのマーケットプレイスは同じ名前。このプラグインの行は、同じ版（2つのマニフェストと同じ）と source"""
-        self.assertTrue(self.claude.is_file(), "リポジトリの .claude-plugin/marketplace.json がありません")
-        copilot, claude = json.loads(pp.read(self.copilot)), json.loads(pp.read(self.claude))
-        self.assertTrue(claude.get("name"), ".claude-plugin/marketplace.json に name がありません")
-        self.assertEqual(claude.get("name"), copilot.get("name"), "2つのマーケットプレイスの name が違います")
-        self.assertTrue((claude.get("owner") or {}).get("name"), ".claude-plugin/marketplace.json に owner.name がありません")
-        version = json.loads(pp.read(pp.ROOT / "plugin.json")).get("version")
-        claude_version = (pp.load_json(pp.CLAUDE_MANIFEST) or {}).get("version")
-        self.assertEqual(claude_version, version, ".claude-plugin/plugin.json と plugin.json の version が違います")
-        for path, data in ((self.copilot, copilot), (self.claude, claude)):
-            rows = [p for p in data.get("plugins") or [] if p.get("name") == pp.PLUGIN_NAME]
-            with self.subTest(marketplace=pp.rel(path)):
-                self.assertEqual(len(rows), 1, "このプラグインの行が1つではありません")
-                self.assertEqual(rows[0].get("version"), version, "このプラグインの版が、マニフェストと違います")
-                self.assertEqual(rows[0].get("source"), f"./plugins/{pp.PLUGIN_NAME}", "このプラグインの source が違います")
-
     def test_claude_plugin_validate(self):
-        """claude コマンドがあれば、claude plugin validate でプラグインとマーケットプレイスを確かめる"""
+        """claude コマンドがあれば、claude plugin validate でプラグインを確認する"""
         claude = shutil.which("claude")
         if claude is None:
             self.skipTest("claude コマンドがないため飛ばしました")
@@ -529,16 +501,13 @@ class RepositoryTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         with tempfile.TemporaryDirectory(prefix="validate-") as tmp:
             # プラグインのフォルダで Claude Code を起動しない（.mcp.json をプロジェクトのものとして読む）
-            for target in (pp.ROOT, pp.REPO_ROOT):
-                with self.subTest(target=pp.rel(target) if target != pp.REPO_ROOT else "リポジトリ"):
-                    try:
-                        done = subprocess.run(command + ["plugin", "validate", str(target)], cwd=tmp, env=env,
-                                              capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                              timeout=180)
-                    except subprocess.TimeoutExpired:
-                        self.fail("claude plugin validate が 180 秒で終わりません")
-                    out = (done.stdout or "") + (done.stderr or "")
-                    self.assertEqual(done.returncode, 0, f"claude plugin validate が通りません：\n{out[-3000:]}")
+            try:
+                done = subprocess.run(command + ["plugin", "validate", str(pp.ROOT)], cwd=tmp, env=env,
+                                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+            except subprocess.TimeoutExpired:
+                self.fail("claude plugin validate が 180 秒で終わりません")
+            out = (done.stdout or "") + (done.stderr or "")
+            self.assertEqual(done.returncode, 0, f"claude plugin validate が通りません：\n{out[-3000:]}")
 
 
 class NamedPartsTest(unittest.TestCase):
@@ -550,6 +519,8 @@ class NamedPartsTest(unittest.TestCase):
                 self.assertTrue(path.is_file(), f"{pp.rel(path)} がありません")
         for path in [pp.RUN_SCRIPT, pp.GUI_SCRIPT, pp.APPLY_SCRIPT]:
             self.assertTrue(path.is_file(), f"{pp.rel(path)} がありません")
+        for place in pp.PARTS.values():
+            self.assertTrue((pp.ROOT / place).is_dir(), f"{place} がありません")
 
 
 class SchemaToolTest(unittest.TestCase):

@@ -12,7 +12,7 @@
 
 ## 必要なもの
 
-- AI のエージェント（GitHub Copilot CLI、Claude Code など、スキルを読めるもの）
+- AI のエージェント（GitHub Copilot CLI など、スキルを読めるもの）
 - 比べる警告の結果（`result.json` の形か文）と、読むコード
 - スクリプトを動かすときは [uv](https://docs.astral.sh/uv/)（Python と、形の確かめに使う jsonschema は uv が用意します）
 
@@ -20,7 +20,7 @@
 
 このフォルダだけを、次のどこかにコピーします。フォルダの名前を変えても動きます。
 
-- 作業フォルダの `.github/skills/triage-integration/`（Claude Code なら `.claude/skills/triage-integration/`）
+- 作業フォルダの `.github/skills/triage-integration/`
 - `~/.copilot/skills/triage-integration/`
 
 ## 呼び方

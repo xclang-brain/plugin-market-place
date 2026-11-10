@@ -2,7 +2,7 @@
 
 - 写し（設計書 4.17）：取り決めのファイル（データ・持ち主のスクリプト・共通の試験のデータ）は、持ち主のものと、
   ほかの部品の写しが同じバイト列。写しは、部品のフォルダの中を「ファイルの名前」で探す（表に書いた部品のほかに
-  同じ名前のファイルを持つ部品も、写しとして確かめる）。表の「写しを持つ部品」に写しがなければ、理由を書いて飛ばす。
+  同じ名前のファイルを持つ部品も、写しとして確かめる）。表の「写しを持つ部品」に写しがなければ、不合格にする。
   スクリプトの写しは、写す側が読み込んで使い（自分で書き直さない）、要るライブラリを写す側が持ち、
   探すデータ（assets/ のファイル）を写す側も同じ場所に持つ。
 - 中身：plan.schema.json の中の結果の定義が、result.schema.json の $defs と同じ。評価基準 C-01〜C-28 の分け方（4.6）。
@@ -15,8 +15,7 @@
   一括実行のコマンドが受け付けて作業を始める。真偽の調査のスクリプトが issue-<CID>.json を読める。
   MCP サーバーの確認の文字列が、反映の計画のファイルのバイト列から決まる（計画のファイルの case を MCP サーバーで）。
 
-部品は、役割の名前で表に書き、docs/parts.md の「## 今の部品」の表で今の名前に直す。
-ないものは、理由を書いて飛ばす。
+コンポーネントは、役割の名前で表に書く。役割とフォルダの対応は、tests/structure/plugin_parts.py の PARTS にある。
 
   python3 -m unittest discover -s tests/contracts -v
 環境変数：SKIP_SLOW_TESTS=1 で、部品を動かして確かめる試験を飛ばす。
@@ -44,7 +43,7 @@ sys.path.insert(0, str(TESTS / "structure"))
 import plugin_parts as pp  # noqa: E402
 
 # 取り決めのファイル（設計書 4.17 の表）。ここだけに、取り決めのファイルの名前を書く。
-# （持ち主のフォルダの中のパス, 持ち主の役割, 写しを持つ部品の役割）。役割の名前は docs/parts.md の「今の部品」の表と同じ。
+# （持ち主のフォルダの中のパス, 持ち主の役割, 写しを持つ部品の役割）。役割の名前は plugin_parts.py の PARTS と同じ。
 # 写しの置き場所：データは assets/、スクリプトは scripts/（MCP サーバーはパッケージ src/<パッケージ>/）、
 # 共通の試験のデータは assets/contract/（MCP サーバーは tests/contract/）。
 CONTRACTS = [
@@ -93,18 +92,14 @@ IMPORT_NAMES = {"pyyaml": "yaml", "beautifulsoup4": "bs4", "pillow": "PIL"}
 # ---------------------------------------------------------------------------
 
 def part_folder(role):
-    """役割 → 今の部品のフォルダ（docs/parts.md の表）。表にない・フォルダがないときは None"""
-    for row in pp.current_parts():
-        if row["role"] == role:
-            folder = pp.ROOT / row["place"]
-            return folder if folder.is_dir() else None
-    return None
+    """役割 → コンポーネントのフォルダ（plugin_parts.py の PARTS）"""
+    return pp.ROOT / pp.PARTS[role]
 
 
 def role_of(folder):
-    for row in pp.current_parts():
-        if (pp.ROOT / row["place"]).resolve() == Path(folder).resolve():
-            return row["role"]
+    for role, place in pp.PARTS.items():
+        if (pp.ROOT / place).resolve() == Path(folder).resolve():
+            return role
     return None
 
 
@@ -151,10 +146,7 @@ def copies_in(folder, contract):
 
 def owner_copy(contract, role):
     """持ち主のファイル（持ち主のフォルダの決まった場所）。なければ None"""
-    folder = part_folder(role)
-    if folder is None:
-        return None
-    path = folder / contract
+    path = part_folder(role) / contract
     return path if path.is_file() else None
 
 
@@ -267,24 +259,11 @@ def import_module(path, label):
 class CopiesTest(unittest.TestCase):
     """設計書 4.17：写しは持ち主と同じバイト列。決まった部品が写しを持ち、使う"""
 
-    def test_replace_doc_names_the_roles(self):
-        if not pp.REPLACE_DOC.is_file():
-            self.skipTest("docs/parts.md がまだありません")
-        roles = {row["role"] for row in pp.current_parts()}
-        needed = {role for _, owner, holders in CONTRACTS for role in [owner] + holders}
-        self.assertEqual(sorted(needed - roles), [], "docs/parts.md の「今の部品」の表に、取り決めの役割がありません")
-
     def test_owners_have_their_files(self):
-        problems, checked = [], 0
+        problems = []
         for contract, owner, _ in CONTRACTS:
-            folder = part_folder(owner)
-            if folder is None:
-                continue
-            checked += 1
             if owner_copy(contract, owner) is None:
-                problems.append(f"持ち主（{owner}：{pp.rel(folder)}）に {contract} がありません")
-        if not checked:
-            self.skipTest("取り決めの持ち主の部品がまだありません")
+                problems.append(f"持ち主（{owner}：{pp.rel(part_folder(owner))}）に {contract} がありません")
         self.assertEqual(problems, [], "取り決めの持ち主のファイルがありません（設計書 4.17）：\n" + "\n".join(problems))
 
     def test_every_copy_is_identical(self):
@@ -301,22 +280,19 @@ class CopiesTest(unittest.TestCase):
                     checked += 1
                     if path.read_bytes() != canonical.read_bytes():
                         problems.append(f"{pp.rel(path)} が {pp.rel(canonical)}（持ち主：{owner}）と違います")
-        if not checked:
-            self.skipTest("写しがまだありません")
+        self.assertTrue(checked, "写しがありません")
         self.assertEqual(problems, [], "取り決めの写しが、持ち主のものと違います（持ち主のファイルをそのままコピーしてください。"
                                        "元のファイルを直したら、写しも同じ内容にする）：\n" + "\n".join(problems))
 
     def test_holders_have_their_copies(self):
-        """設計書 4.17 の「写しを持つ部品」が写しを持つ。まだない写しは、理由を書いて飛ばす（ほかの人が作っている途中のことがある）"""
+        """設計書 4.17 の「写しを持つ部品」が写しを持つ"""
         for contract, owner, holders in CONTRACTS:
             for holder in holders:
                 with self.subTest(contract=contract, holder=holder):
                     folder = part_folder(holder)
-                    if folder is None:
-                        self.skipTest(f"{holder} の部品がまだありません")
-                    if not copies_in(folder, contract):
-                        self.skipTest(f"{holder}（{pp.rel(folder)}）に {expected_place(folder, contract)} の写しがまだありません"
-                                      f"（持ち主：{owner}。持ち主のファイルをそのままコピーしてください）")
+                    self.assertTrue(copies_in(folder, contract),
+                                    f"{holder}（{pp.rel(folder)}）に {expected_place(folder, contract)} の写しがありません"
+                                    f"（持ち主：{owner}。持ち主のファイルをそのままコピーしてください）")
 
     def test_copies_are_listed(self):
         """同じ名前のファイルを持つ部品は、表（設計書 4.17）の持ち主か写しを持つ部品"""
@@ -609,8 +585,7 @@ class ClaudeCopilotParityTest(unittest.TestCase):
 
     def setUp(self):
         self.names = pp.agent_names()
-        if not self.names or not pp.CLAUDE_AGENTS_DIR.is_dir():
-            self.skipTest("どちらかのエージェントの定義がまだありません")
+        self.assertTrue(self.names and pp.CLAUDE_AGENTS_DIR.is_dir(), "どちらかのエージェントの定義がありません")
 
     def pair(self, name):
         claude = pp.frontmatter(pp.claude_agent_path(name))
@@ -1010,9 +985,8 @@ class WriterReaderTest(unittest.TestCase):
         """MCP サーバーが output_dir に書いた issue-<CID>.json を、真偽の調査のスクリプトが読み、★ の行を出す（設計書 4.4、4.17）"""
         self.need()
         folder = part_folder("真偽の調査")
-        scripts = sorted(pp.entry_scripts(folder)) if folder else []
-        if len(scripts) != 1:
-            self.skipTest("真偽の調査のスクリプト（scripts/ の直下の .py が1つ）がまだありません")
+        scripts = sorted(pp.entry_scripts(folder))
+        self.assertEqual(len(scripts), 1, "真偽の調査のスクリプト（scripts/ の直下の .py が1つ）がありません")
         repo = self.make_repo()
         out = Path(tempfile.mkdtemp(prefix="details-", dir=self.tmp))
         client = self.client(repo)

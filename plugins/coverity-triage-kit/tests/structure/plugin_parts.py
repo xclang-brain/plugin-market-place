@@ -5,10 +5,10 @@
 - MCP サーバー：mcp-servers/ の下のフォルダと、mcp.json の mcpServers の鍵（登録名）。
   ツールの名前は、MCP サーバーのソースの @….tool の付いた関数から読む
 - エージェント：com.github.copilot/agents/<名前>.agent.md（Copilot CLI）と、agents/<名前>.md（Claude Code。同じ名前の組）
-- テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト）：
-  このファイルの定数（ORCHESTRATOR など）。ここに書いたものがなければ、テストは不合格になります
-- 部品の組：エージェントの「## 使う部品」の表
-- 役割と今の名前の対応：docs/parts.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
+- テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト、
+  役割ごとのスキルと MCP サーバー）：このファイルの定数（ORCHESTRATOR、PARTS など）。ここに書いたものがなければ、
+  テストは不合格になります
+- エージェントが使うコンポーネント：エージェントの「## 使う部品」の表
 - 設定の項目：設計書 4.1 の config.yaml の表（取り決め）
 
 structure・independence・contracts・docs の試験が、このファイルを読み込む。
@@ -35,8 +35,6 @@ AGENTS_DIR = COPILOT_DIR / "agents"
 DOCS_DIR = ROOT / "docs"
 SPEC = DOCS_DIR / "specs" / "requirements.md"
 DESIGN = DOCS_DIR / "design" / "design.md"
-REPLACE_DOC = DOCS_DIR / "parts.md"
-GUIDE_DIR = DOCS_DIR / "guide"
 SCHEMAS_DIR = TESTS / "structure" / "schemas" / "agent-plugins-1.0.0"
 # Claude Code の形（同じフォルダに置く。Copilot CLI は、plugin.json の $schema が Agent Plugins 1.0.0 なら読まない）
 CLAUDE_MANIFEST = ROOT / ".claude-plugin" / "plugin.json"
@@ -46,19 +44,27 @@ CLAUDE_AGENT_SUFFIX = ".md"
 REPO_ROOT = ROOT.parents[1]
 
 AGENT_SUFFIX = ".agent.md"
-AGENT_README_SUFFIX = ".README.markdown"
 PARTS_HEADING = "使う部品"
 PARTS_HEADER = ["役割", "部品", "使うとき"]
-CURRENT_PARTS_HEADING = "今の部品"
-CURRENT_PARTS_HEADER = ["役割", "段階", "部品", "置き場所"]
-# 役割の言葉（設計書 4.13 の取り決め）
-ROLE_WORDS = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合役"}
 # テストが名前で指定するコンポーネント
 ORCHESTRATOR = "triage-orchestrator"
 ROLES = {"worker": "triage-worker", "reviewer": "triage-reviewer", "integrator": "triage-integrator"}
 RUN_SCRIPT = SKILLS_DIR / "coverity-run" / "scripts" / "run.py"
 GUI_SCRIPT = SKILLS_DIR / "coverity-gui" / "scripts" / "gui.py"
 APPLY_SCRIPT = SKILLS_DIR / "coverity-apply" / "scripts" / "apply.py"
+# 役割 → フォルダ（取り決めのテストが役割で指定するスキルと MCP サーバー）
+PARTS = {
+    "真偽の調査": "skills/triage-investigation",
+    "逸脱コメント": "skills/deviation-comment",
+    "結果の記録": "skills/triage-report",
+    "結果の確かめ": "skills/triage-review",
+    "同じ原因の統合": "skills/triage-integration",
+    "準備": "skills/coverity-setup",
+    "一括実行": "skills/coverity-run",
+    "反映": "skills/coverity-apply",
+    "結果と設定の画面": "skills/coverity-gui",
+    "Coverity との通信": "mcp-servers/coverity-connect",
+}
 
 TEXT_SUFFIXES = {
     ".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".mjs", ".js", ".cjs",
@@ -105,12 +111,6 @@ def text_files(folder: Path):
         if path.suffix.lower() in TEXT_SUFFIXES:
             files.append(path)
     return files
-
-
-def copy_ignore(directory, names):
-    """shutil.copytree の ignore：作られたもの（__pycache__、.venv、evals/results/ など）はコピーしない"""
-    in_evals = Path(directory).name == "evals"
-    return [n for n in names if n in SKIP_DIR_NAMES - {"vendor"} or n.endswith(".pyc") or (in_evals and n == "results")]
 
 
 # ---------------------------------------------------------------------------
@@ -191,85 +191,18 @@ def _decorated_tools(tree):
     return names
 
 
-def _server_names(tree):
-    """FastMCP("名前") の名前"""
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            fname = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-            if fname in ("FastMCP", "MCPServer", "Server") and node.args:
-                first = node.args[0]
-                if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                    names.add(first.value)
-    return names
-
-
-def console_scripts(folder: Path):
-    """pyproject.toml の [project.scripts] の名前"""
-    path = folder / "pyproject.toml"
-    if not path.is_file():
-        return set()
-    text = read(path)
-    try:
-        import tomllib  # Python 3.11 から
-        data = tomllib.loads(text)
-        return set((data.get("project") or {}).get("scripts") or {})
-    except ImportError:
-        m = re.search(r"(?ms)^\[project\.scripts\]\s*\n(.*?)(?=^\[|\Z)", text)
-        if not m:
-            return set()
-        return set(re.findall(r'(?m)^\s*"?([A-Za-z0-9_.\-]+)"?\s*=', m.group(1)))
-    except ValueError:
-        return set()
-
-
-def mcp_identifiers(folder: Path):
-    """MCP サーバーのフォルダの、ほかの部品が書いてはいけない名前：ツール・サーバー（serverInfo）・起動のコマンド"""
-    tools, servers = set(), set()
-    for path in sorted(folder.rglob("*.py")):
-        if skipped(path, folder) or "tests" in path.relative_to(folder).parts:
-            continue
-        try:
-            tree = ast.parse(read(path))
-        except SyntaxError:
-            continue
-        tools |= _decorated_tools(tree)
-        servers |= _server_names(tree)
-    return {"tools": tools, "servers": servers, "scripts": console_scripts(folder)}
-
-
 @functools.lru_cache(maxsize=None)
-def mcp_names():
-    """MCP サーバーを指す名前（フォルダの名前・登録名）と、その中身の名前（ツール・serverInfo・起動のコマンド）。
-    返す値：{フォルダか登録名: {"folder": Path|None, "names": set, "inner": set}}"""
-    out = {}
-    regs = mcp_registrations()
-    folders = {p.resolve(): p for p in mcp_dirs()}
-    for name, folder in regs.items():
-        resolved = folder.resolve() if folder else None
-        entry = out.setdefault(name, {"folder": folders.get(resolved, folder), "names": set(), "inner": set()})
-        entry["names"].add(name)
-        if resolved in folders:
-            entry["names"].add(folders[resolved].name)
-    for resolved, folder in folders.items():
-        if not any((e["folder"] and e["folder"].resolve() == resolved) for e in out.values()):
-            out[folder.name] = {"folder": folder, "names": {folder.name}, "inner": set()}
-    for entry in out.values():
-        folder = entry["folder"]
-        if folder and folder.is_dir():
-            ids = mcp_identifiers(folder)
-            entry["inner"] = ids["tools"] | ids["servers"] | ids["scripts"]
-            entry["tools"] = ids["tools"]
-        else:
-            entry["tools"] = set()
-    return out
-
-
 def all_mcp_tool_names():
+    """MCP サーバーのツールの名前（mcp-servers/ の下のソースの、ツールとして登録した関数）"""
     names = set()
-    for entry in mcp_names().values():
-        names |= entry["tools"]
+    for folder in mcp_dirs():
+        for path in sorted(folder.rglob("*.py")):
+            if skipped(path, folder) or "tests" in path.relative_to(folder).parts:
+                continue
+            try:
+                names |= _decorated_tools(ast.parse(read(path)))
+            except SyntaxError:
+                continue
     return names
 
 
@@ -441,23 +374,6 @@ def entry_scripts(skill_dir: Path):
     return {p.name for p in folder.glob("*.py") if p.is_file()}
 
 
-def script_owners():
-    """スクリプトの名前 → それを持つスキルの名前の集まり"""
-    owners = {}
-    for skill in skill_dirs():
-        for script in entry_scripts(skill):
-            owners.setdefault(script, set()).add(skill.name)
-    return owners
-
-
-def all_part_names():
-    """すべての部品の名前（スキル・エージェント・MCP サーバーのフォルダと登録名）"""
-    names = set(skill_names()) | set(agent_names())
-    for entry in mcp_names().values():
-        names |= entry["names"]
-    return names
-
-
 # ---------------------------------------------------------------------------
 # Markdown
 # ---------------------------------------------------------------------------
@@ -551,17 +467,6 @@ def parts_table(text: str, heading: str = PARTS_HEADING, header=None):
     if not out:
         return None, f"「## {heading}」の表に行がありません"
     return out, None
-
-
-def current_parts():
-    """docs/parts.md の「## 今の部品」の表：[{role, stage, name, place}]。読めなければ []"""
-    if not REPLACE_DOC.is_file():
-        return []
-    rows, _ = parts_table(read(REPLACE_DOC), CURRENT_PARTS_HEADING, CURRENT_PARTS_HEADER)
-    out = []
-    for role, stage, name, place in rows or []:
-        out.append({"role": role, "stage": stage, "name": name, "place": place.strip("`").rstrip("/")})
-    return out
 
 
 def heading_slugs(path: Path):
@@ -735,11 +640,6 @@ def name_token(word: str):
     return token(word, ignore_case=False)
 
 
-def script_token(name: str):
-    """スクリプトの名前（run.py など）。プラグインの tests/ の下の同じ名前のファイル（tests/run.py）は数えない"""
-    return re.compile(r"(?<![A-Za-z0-9_\-.])(?<!tests/)(?<!tests\\)" + re.escape(name) + r"(?![A-Za-z0-9_])")
-
-
 def hits_in_text(label: str, text: str, patterns):
     found = []
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -747,10 +647,6 @@ def hits_in_text(label: str, text: str, patterns):
             if pattern.search(line):
                 found.append(f"{label}:{lineno}: 「{word}」 … {line.strip()[:140]}")
     return found
-
-
-def hits(path: Path, patterns):
-    return hits_in_text(rel(path), read(path), patterns)
 
 
 # ---------------------------------------------------------------------------
@@ -785,25 +681,6 @@ def _tables(text: str):
             tables.append((header, rows))
             header, rows = None, []
     return tables
-
-
-def config_keys():
-    """設計書 4.1 の config.yaml の項目。(「節.項目」の並び, 項目の名前の並び)"""
-    dotted, leaves = set(), set()
-    for cells in _config_table_rows():
-        prefix = None
-        for item in [c.strip().strip("`").strip() for c in cells[0].split("/")]:
-            if not item:
-                continue
-            if "." in item:
-                prefix, leaf = item.split(".", 1)
-                dotted.add(item)
-            else:
-                leaf = item
-                if prefix:
-                    dotted.add(f"{prefix}.{leaf}")
-            leaves.add(leaf)
-    return sorted(dotted), sorted(leaves)
 
 
 def output_dir_default():

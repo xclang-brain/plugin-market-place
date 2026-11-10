@@ -26,7 +26,6 @@ Coverity には何も書き込みません。
 
 - 作業フォルダの `.github/skills/code-fix/`（GitHub Copilot CLI）
 - `~/.copilot/skills/code-fix/`（GitHub Copilot CLI、すべての作業フォルダ）
-- 作業フォルダの `.claude/skills/code-fix/`（Claude Code）
 
 ## 呼び方
 

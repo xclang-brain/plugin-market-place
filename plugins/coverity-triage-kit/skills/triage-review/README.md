@@ -16,7 +16,7 @@
 
 ## 必要なもの
 
-- AI のエージェント（GitHub Copilot CLI、Claude Code など、スキルを読めるもの）
+- AI のエージェント（GitHub Copilot CLI など、スキルを読めるもの）
 - 確かめるコード（リポジトリか、解析したリビジョンのコピー）
 - スクリプトを動かすときは [uv](https://docs.astral.sh/uv/)（Python と、形の確かめに使う jsonschema は uv が用意します）
 
@@ -24,7 +24,7 @@
 
 このフォルダだけを、次のどこかにコピーします。フォルダの名前を変えても動きます。
 
-- 作業フォルダの `.github/skills/triage-review/`（Claude Code なら `.claude/skills/triage-review/`）
+- 作業フォルダの `.github/skills/triage-review/`
 - `~/.copilot/skills/triage-review/`
 
 ## 呼び方

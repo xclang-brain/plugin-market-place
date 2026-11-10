@@ -11,14 +11,14 @@ Coverity の警告1件（またはグループ1つ）を調べた結果を、決
 
 ## 必要なもの
 
-- AI のエージェント（GitHub Copilot CLI、Claude Code など、スキルを読めるもの）
+- AI のエージェント（GitHub Copilot CLI など、スキルを読めるもの）
 - スクリプトを動かすときは [uv](https://docs.astral.sh/uv/)（Python と、形の確かめに使う jsonschema は uv が用意します）
 
 ## 置き方
 
 このフォルダだけを、次のどこかにコピーします。フォルダの名前を変えても動きます。
 
-- 作業フォルダの `.github/skills/triage-report/`（Claude Code なら `.claude/skills/triage-report/`）
+- 作業フォルダの `.github/skills/triage-report/`
 - `~/.copilot/skills/triage-report/`
 
 ## 呼び方

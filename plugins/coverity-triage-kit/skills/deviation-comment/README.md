@@ -14,14 +14,14 @@ Coverity の警告を「直さない」ときに登録する逸脱コメント�
 
 ## 必要なもの
 
-- AI のエージェント（GitHub Copilot CLI、Claude Code など、スキルを読めるもの）
+- AI のエージェント（GitHub Copilot CLI など、スキルを読めるもの）
 - スクリプトを動かすときは [uv](https://docs.astral.sh/uv/)（Python は uv が用意します。追加のライブラリは要りません）
 
 ## 置き方
 
 このフォルダだけを、次のどこかにコピーします。フォルダの名前を変えても動きます。
 
-- 作業フォルダの `.github/skills/deviation-comment/`（Claude Code なら `.claude/skills/deviation-comment/`）
+- 作業フォルダの `.github/skills/deviation-comment/`
 - `~/.copilot/skills/deviation-comment/`
 
 ## 呼び方

@@ -28,7 +28,6 @@ Coverity の警告1件（または同じ原因の数件）が、本物のバグ�
 
 - 作業フォルダの `.github/skills/triage-investigation/`（GitHub Copilot CLI）
 - `~/.copilot/skills/triage-investigation/`（GitHub Copilot CLI、すべての作業フォルダ）
-- 作業フォルダの `.claude/skills/triage-investigation/`（Claude Code）
 
 ## 呼び方
 

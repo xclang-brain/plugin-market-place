@@ -1,8 +1,8 @@
 """Tests for the EVAL harnesses (no model is called): evalkit, run_mcp_eval, stage2, stage3.
 
 Run from the plugin folder:  python3 -m unittest discover -s tests/eval -p "test_*.py"
-Stand-ins for claude are small Python scripts. Tests that need git, uv or the plugin's parts skip
-with a reason when those are not there (e.g. when only tests/eval is copied somewhere else).
+Stand-ins for claude are small Python scripts. Tests that need git or uv skip with a reason when
+those are not there.
 """
 
 from __future__ import annotations
@@ -33,8 +33,6 @@ ENV = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
 ENV.pop("CLAUDECODE", None)
 HAS_GIT = shutil.which("git") is not None
 HAS_UV = shutil.which("uv") is not None
-HAS_PARTS = bool(ek.current_parts(ROOT)) and (ROOT / "mcp.json").is_file()
-HAS_CLAUDE_FORM = (ROOT / ".claude-plugin" / "plugin.json").is_file() and (ROOT / ".mcp.json").is_file()
 PLUGIN = ek.ADAPTER.FORMAT_PLUGIN
 
 
@@ -97,43 +95,12 @@ class EvalkitTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def make_doc(self) -> Path:
-        root = self.base / "plugin"
-        write(root / "docs" / "parts.md", """
-            # コンポーネント一覧
-
-            ## 今の部品
-
-            | 役割 | 段階 | 部品 | 置き場所 |
-            | --- | --- | --- | --- |
-            | 調べ | 1 | `probe` | `skills/probe/` |
-            | ない | 1 | `ghost` | `skills/ghost/` |
-
-            ## ほか
-            """)
-        (root / "skills" / "probe").mkdir(parents=True)
-        return root
-
     def test_parts_by_role(self):
-        root = self.make_doc()
-        rows = ek.current_parts(root)
-        self.assertEqual([r["name"] for r in rows], ["probe", "ghost"])
-        got = ek.part("調べ", root)
-        self.assertEqual(got["name"], "probe")
-        self.assertEqual(got["path"], (root / "skills" / "probe").resolve())
-        with self.assertRaises(ek.EvalError):
-            ek.part("ない", root)  # listed, but the folder is missing
+        for role, (name, _) in ek.PARTS.items():
+            self.assertEqual(ek.part(role, ROOT)["name"], name)  # raises when the part is not in the plugin
         with self.assertRaises(ek.EvalError) as cm:
-            ek.part("どこにもない", root)
+            ek.part("作業役", self.base / "nothing")
         self.assertTrue(cm.exception.problems)
-        with self.assertRaises(ek.EvalError):
-            ek.part("調べ", self.base / "nothing")
-
-    @unittest.skipUnless(HAS_PARTS, "プラグインの部品の表がない（tests/eval だけをコピーしたとき）")
-    def test_real_parts_table_has_the_roles_the_harnesses_use(self):
-        roles = {r["role"] for r in ek.current_parts(ROOT)}
-        for role in ("作業役", "統括", "検証役", "統合役", "一括実行", "逸脱コメント", "結果の記録"):
-            self.assertIn(role, roles)
 
     def test_out_dir_outside_the_plugin(self):
         with self.assertRaises(ek.EvalError):
@@ -357,7 +324,6 @@ class McpEvalTest(unittest.TestCase):
         self.assertIn("### 課題 2", report)
         self.assertIn("N/A", report)
 
-    @unittest.skipUnless(HAS_PARTS, "プラグインの mcp.json と MCP サーバーがない")
     def test_end_to_end_with_a_stand_in(self):
         xml = write(self.base / "e.xml", """
             <evaluation>
@@ -542,7 +508,7 @@ class Stage2Test(unittest.TestCase):
         self.assertEqual(stage2.make_parser().parse_args([]).format, ek.ADAPTER.FORMAT_CONVERTED)
         self.assertEqual(stage2.make_parser().parse_args(["--format", PLUGIN]).format, PLUGIN)
 
-    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    @unittest.skipUnless(HAS_GIT and HAS_UV, "git か uv がない")
     def test_build_only_with_the_claude_plugin(self):
         out = self.base / "out"
         proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage2" / "run_stage2.py"),
@@ -595,7 +561,7 @@ class Stage2Test(unittest.TestCase):
                 self.assertIn("ファイルは変えないで", c["prompt"])
         self.assertTrue(any(len(c["cids"]) > 1 for c in data["cases"]), "a group case")
 
-    @unittest.skipUnless(HAS_PARTS and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    @unittest.skipUnless(HAS_GIT and HAS_UV, "git か uv がない")
     def test_brief_case_end_to_end_with_a_stand_in(self):
         claude = fake_claude_script(self.base, """
             import re
@@ -642,7 +608,7 @@ class Stage2Test(unittest.TestCase):
         self.assertTrue((out / "report.md").is_file())
         self.assertEqual(ek.working_changes(out / "brief-20003" / "repo"), [], ".claude/ is hidden from git status")
 
-    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    @unittest.skipUnless(HAS_GIT and HAS_UV, "git か uv がない")
     def test_brief_case_with_the_claude_plugin_and_a_stand_in(self):
         claude = fake_claude_script(self.base, """
             import re
@@ -809,7 +775,7 @@ class Stage3Test(unittest.TestCase):
                          "a limited run skips the conclusions and the group")
         self.assertFalse(stage3.sample_checks(run, {"items": []}, {})[0]["ok"], "no items")
 
-    @unittest.skipUnless(HAS_PARTS and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    @unittest.skipUnless(HAS_GIT and HAS_UV, "git か uv がない")
     def test_build_only(self):
         out = self.base / "out"
         proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage3" / "run_stage3.py"),
@@ -842,7 +808,7 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual(stage3.orchestrator_definition(PLUGIN, part, self.base), (self.base / "agents" / "o-agent.md").resolve())
         self.assertEqual(stage3.make_parser().parse_args(["--format", PLUGIN]).format, PLUGIN)
 
-    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    @unittest.skipUnless(HAS_GIT and HAS_UV, "git か uv がない")
     def test_build_only_with_the_claude_plugin(self):
         out = self.base / "out"
         proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage3" / "run_stage3.py"),
@@ -886,7 +852,7 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual({a["name"]: a["model"] for a in record["agents"]},
                          {n: ("claude-haiku-5-5" if n == orchestrator else "inherit") for n in roles})
 
-    @unittest.skipUnless(HAS_PARTS and HAS_CLAUDE_FORM and HAS_GIT and HAS_UV, "プラグインの部品・git・uv のどれかがない")
+    @unittest.skipUnless(HAS_GIT and HAS_UV, "git か uv がない")
     def test_build_only_bare_with_the_claude_plugin(self):
         out = self.base / "out"
         proc = subprocess.run(["uv", "run", "--native-tls", "--quiet", str(HERE / "stage3" / "run_stage3.py"),

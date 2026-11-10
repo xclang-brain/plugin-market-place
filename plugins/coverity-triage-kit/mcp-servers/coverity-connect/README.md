@@ -111,17 +111,6 @@ Copilot CLI は、MCP サーバーに PATH のほかの環境変数を渡しま�
 }
 ```
 
-### Claude Code
-
-```text
-# Windows（PowerShell）
-claude mcp add --transport stdio coverity-connect -- uv run --native-tls --frozen --quiet --directory "C:/tools/coverity-connect" coverity-connect-mcp
-# Linux（bash）
-claude mcp add --transport stdio coverity-connect -- uv run --native-tls --frozen --quiet --directory "/home/me/tools/coverity-connect" coverity-connect-mcp
-```
-
-プロジェクトの `.mcp.json` に書くときは、`"env": {"COV_USER": "${COV_USER:-}", "COV_AUTH_KEY": "${COV_AUTH_KEY:-}", "HTTPS_PROXY": "${HTTPS_PROXY:-}", "NO_PROXY": "${NO_PROXY:-}"}` を添えます（`${名前:-}` と書くと、ない変数は空になります。`${名前}` のままだと、ない変数は文字のまま残ります）。
-
 ## 設定
 
 設定は次のどちらかで渡します。

@@ -30,7 +30,6 @@ Coverity のチェッカーごとの見方をまとめた資料のスキルで�
 
 - 作業フォルダの `.github/skills/checker-knowledge/`（GitHub Copilot CLI）
 - `~/.copilot/skills/checker-knowledge/`（GitHub Copilot CLI、すべての作業フォルダ）
-- 作業フォルダの `.claude/skills/checker-knowledge/`（Claude Code）
 
 ## 呼び方
 

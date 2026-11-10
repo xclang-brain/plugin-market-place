@@ -1001,7 +1001,7 @@ def build_plugin(args: argparse.Namespace) -> dict:
     plugin = manifest["name"]
     dest = Path(args.plugin_dir).resolve() if getattr(args, "plugin_dir", None) else (ws.parent / "claude-plugin").resolve()
     if _inside(dest, root):
-        raise AdapterError(f"プラグインを作る場所が、元のプラグインのフォルダの中です。外の場所にしてください: {dest}")
+        raise AdapterError(f"プラグインを作る場所が、コピー元のフォルダ（プラグイン本体）の中です。外の場所にしてください: {dest}")
     if _inside(dest, ws) or _inside(ws, dest):
         raise AdapterError(f"プラグインを作る場所と作業フォルダは、別のところにしてください（作業フォルダの中や上は不可）: {dest}")
     _fresh_plugin_dir(dest)

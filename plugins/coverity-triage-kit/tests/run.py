@@ -4,12 +4,12 @@
   python3 tests/run.py                  すべて動かし、まとめを出す（Windows は py -3 tests/run.py）
   python3 tests/run.py --list           動かせる試験の名前を出す
   python3 tests/run.py --only docs      名前を選んで動かす（何回でも付けられる。parts は部品の試験すべて）
-  python3 tests/run.py --skip-slow      時間のかかる試験（コピーして動かす独立性の試験、結合の試験）を飛ばす
+  python3 tests/run.py --skip-slow      時間のかかる試験（結合の試験、画面の試験）を飛ばす
   python3 tests/run.py -v               すべての記録を出す
 
 動かすもの（この順）：
-  1. 部品ごとの試験：skills/<名前>/tests/ と mcp-servers/<名前>/tests/。部品のフォルダで、その部品の
-     README に書いた動かし方で動かす。決まり：フォルダに pyproject.toml があれば uv のプロジェクトとして
+  1. 部品ごとの試験：skills/<名前>/tests/ と mcp-servers/<名前>/tests/。部品のフォルダで動かす。
+     決まり：フォルダに pyproject.toml があれば uv のプロジェクトとして
        uv run --native-tls --frozen --quiet --directory <フォルダ> python -m unittest discover -s tests -v
      なければ
        python -m unittest discover -s tests -v
@@ -45,7 +45,7 @@ ROOT = TESTS.parent
 RESULTS = TESTS / "results" / "latest.json"
 MIN_PYTHON = (3, 10)
 TAIL_LINES = 80
-TIMEOUTS = {"part": 900, "independence": 3600}
+TIMEOUTS = {"part": 900}
 DEFAULT_TIMEOUT = 900
 PLUGIN_SUITES = ["structure", "contracts", "independence", "integration", "ui", "docs", "eval"]
 SLOW_SUITES = {"integration", "ui"}
@@ -54,7 +54,7 @@ ALLOWED_LEFTOVERS = ("tests/results/",)
 
 
 # ---------------------------------------------------------------------------
-# 部品の試験の動かし方（tests/independence も、これを使う）
+# 部品の試験の動かし方
 # ---------------------------------------------------------------------------
 
 def part_dirs(root=ROOT):

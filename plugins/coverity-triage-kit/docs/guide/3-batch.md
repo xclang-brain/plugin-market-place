@@ -96,7 +96,7 @@ AI が、反映する内容を件数と ID で表示します。
 
 ## 次のステップ
 
-- 夜間などに無人で実行したい → 途中で許可の確認に止まらないよう、[事前に許可を設定します](operation.md#一括トリアージの前にツールを許可しておく)。
+- 夜間などに無人で実行したい → 途中で許可の確認に止まらないよう、[事前にツールを許可します](#無人で実行する)。
 - 画面で進み具合を見たい、設定を画面で変えたい → [ステップ4](4-screen.md)
 
 ---
@@ -108,4 +108,15 @@ AI が、反映する内容を件数と ID で表示します。
 - **精度を上げるオプション**：別の AI による結果の検証、同じ原因の警告の統合、修正案のビルド確認を追加できます。`/coverity-setup` で「検証も使いたい」のように頼むと設定できます。時間は長くなります。
 - **プロジェクト固有の知識を教える**：`.coverity-triage/knowledge.md` に「fatal_error() は戻らない」のような事実や方針を書いておくと、AI が調査の前に読みます。
 - **svn の場合**：「修正」は、ブランチの push の代わりに、作業コピーへ差分を適用します。コミットは人が行います。
-- 仕組みの詳しい説明は、[統括エージェントの README](../../com.github.copilot/agents/triage-orchestrator.README.markdown) にあります。
+
+### 無人で実行する
+
+夜間などに無人で実行する場合は、次のように許可を指定して Copilot CLI を起動してから、`/coverity-run` を実行します。出力先がリポジトリの外にあるため、許可を指定しないと、書き込みのたびに Copilot CLI の許可確認で止まります。
+
+```text
+copilot --add-dir "<出力先>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect(coverity_check_connection)' --allow-tool 'coverity-connect(coverity_search_issues)' --allow-tool 'coverity-connect(coverity_get_issue_details)' --allow-tool 'coverity-connect(coverity_preview_triage)'
+```
+
+`<出力先>` の既定は、リポジトリと同じ階層の `coverity-triage-out` です。`/coverity-run` も、開始前に実際のパスを入れたコマンドを表示します。
+
+> **Coverity に書き込むツール（`coverity_update_triage`）は、事前に許可しないでください。** サーバー名だけの `--allow-tool 'coverity-connect'` と、すべてを許可する `--allow-all-tools` も、書き込むツールまで許可するので使いません。書き込みは `/coverity-apply` の実行時に、必ず確認が出ます。

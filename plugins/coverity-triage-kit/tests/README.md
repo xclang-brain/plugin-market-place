@@ -29,9 +29,9 @@ python3 tests/run.py
 | --- | --- |
 | `--list` | 試験の組の名前を出す |
 | `--only <名前>` | その組だけを動かす。何回でも付けられる。`parts` は部品ごとの試験すべて。部品は `skills/<名前>` か、フォルダの名前でも選べる |
-| `--skip-slow` | 時間のかかる試験を飛ばす（部品をコピーして動かす独立性の試験、部品を動かす取り決めの試験、結合の試験、画面の試験） |
+| `--skip-slow` | 時間のかかる試験を飛ばす（部品を動かす取り決めの試験、結合の試験、画面の試験） |
 | `--jobs <数>` | 部品ごとの試験を同時にいくつ動かすか（既定は CPU の数。4 まで） |
-| `--timeout <秒>` | 1つの組の時間の上限（既定は 900 秒。独立性の試験は 3600 秒） |
+| `--timeout <秒>` | 1つの組の時間の上限（既定は 900 秒） |
 | `--results <ファイル>` | 結果の JSON の置き場所 |
 | `-v` | すべての記録を出す（既定では、不合格の組の記録の終わりの 80 行だけ） |
 
@@ -62,15 +62,15 @@ python3 tests/run.py --only docs --only structure
 | 名前 | 置き場所 | 確かめること |
 | --- | --- | --- |
 | 部品ごと | `skills/<名前>/tests/`、`mcp-servers/<名前>/tests/` | スクリプトとツールの振る舞い。部品のフォルダだけでも動く |
-| `structure` | `tests/structure/` | `plugin.json`・`mcp.json` を公式の schema で（`plugin.json` の `$schema` は Agent Plugins 1.0.0 のまま。なくなると Copilot CLI が `agents/` と `.mcp.json` も読む）。SKILL.md の frontmatter・長さ・指すファイル・目次、`evals/` の形。エージェントの定義の形。Claude Code の形：`.claude-plugin/plugin.json` の name と version が `plugin.json` と同じ、`.mcp.json` が `mcp.json` と同じサーバー（`${CLAUDE_PLUGIN_ROOT}`、env は `${名前:-}`）、`agents/` はエージェントの `.md` だけで plugin-dev の決まりの frontmatter。リポジトリの2つのマーケットプレイス（`.github/plugin/`、`.claude-plugin/`）の名前と版、根の `marketplace.json` と `.plugin/` がないこと。`claude` があれば `claude plugin validate`（ないときは飛ばす） |
-| `contracts` | `tests/contracts/` | 設計書 4.17 の写し（データ・持ち主のスクリプト・共通の試験のデータ）が、持ち主と同じバイト列。写しは部品の中をファイルの名前で探す（まだない写しは理由を書いて飛ばす）。写したスクリプトを写す側が使い、要るライブラリを持つ。Claude Code と Copilot CLI のエージェントの定義が、同じ名前・同じ「使う部品」の表・同じ見出しの並び・同じ報告の形で、ツールの言葉と tools だけが読み替えたもの（Skill・Agent・AskUserQuestion・Bash と skill・task・ask_user・シェル）。Claude Code の統括エージェントは tools を書かず、Edit・Write と書き戻しのツール（2つの名前の形）を外す。書き戻しのツールは、どのエージェントの tools にもない。tools と disallowedTools の MCP のツールは、表の MCP サーバーのもので、2つの名前の形をどちらも書く。書き戻しのツールが見つからないときは、飛ばさずに不合格にする（守りが黙って外れないように）。MCP サーバーが偽の Coverity で書いたファイルを、一括実行と真偽の調査のスクリプトが受け付ける。確認の文字列（計画のファイルは MCP サーバーのツールで、entries は確認の文字列の関数で） |
-| `independence` | `tests/independence/` | 1段階目の部品に、ほかの部品の名前・プラグインの名前・外を指すパスがない（`output_dir` の既定の値 `../coverity-triage-out` だけは許す。英語の言葉は単語として数え、`uv.lock` は見ない）。部品のフォルダだけをコピーして（スキルは名前を変えたコピーも）試験が通る。エージェント（Copilot CLI と Claude Code の両方）は名前を表にだけ書く（Claude Code の frontmatter の name・tools・disallowedTools の行は見ない）。tools と disallowedTools の MCP のツールは、表にある MCP サーバーのもの。2段階目と3段階目の組が名前で閉じている（Copilot CLI の形の `.github/agents`・`.github/skills` と、Claude Code の形の `.claude/agents`・`.claude/skills`・手で登録した MCP サーバーの両方に取り出して）。上の段の文書に下の段の中身がない。一括実行が実際に書いた指示ファイル（作業・確かめ・作り直し・統合）と頼みの文に、部品の名前がない |
+| `structure` | `tests/structure/` | `plugin.json`・`mcp.json` を公式の schema で（`plugin.json` の `$schema` は Agent Plugins 1.0.0 のまま。なくなると Copilot CLI が `agents/` と `.mcp.json` も読む）。SKILL.md の frontmatter・長さ・指すファイル・目次、`evals/` の形。エージェントの定義の形。Claude Code の形：`.claude-plugin/plugin.json` の name と version が `plugin.json` と同じ、`.mcp.json` が `mcp.json` と同じサーバー（`${CLAUDE_PLUGIN_ROOT}`、env は `${名前:-}`）、`agents/` はエージェントの `.md` だけで plugin-dev の決まりの frontmatter。リポジトリの根に `marketplace.json` と `.plugin/` がないこと。`claude` があれば `claude plugin validate`（ないときは飛ばす） |
+| `contracts` | `tests/contracts/` | 設計書 4.17 の写し（データ・持ち主のスクリプト・共通の試験のデータ）が、持ち主と同じバイト列。写しは部品の中をファイルの名前で探す（写しがなければ不合格にする）。写したスクリプトを写す側が使い、要るライブラリを持つ。Claude Code と Copilot CLI のエージェントの定義が、同じ名前・同じ「使う部品」の表・同じ見出しの並び・同じ報告の形で、ツールの言葉と tools だけが読み替えたもの（Skill・Agent・AskUserQuestion・Bash と skill・task・ask_user・シェル）。Claude Code の統括エージェントは tools を書かず、Edit・Write と書き戻しのツール（2つの名前の形）を外す。書き戻しのツールは、どのエージェントの tools にもない。tools と disallowedTools の MCP のツールは、表の MCP サーバーのもので、2つの名前の形をどちらも書く。書き戻しのツールが見つからないときは、飛ばさずに不合格にする（守りが黙って外れないように）。MCP サーバーが偽の Coverity で書いたファイルを、一括実行と真偽の調査のスクリプトが受け付ける。確認の文字列（計画のファイルは MCP サーバーのツールで、entries は確認の文字列の関数で） |
+| `independence` | `tests/independence/` | 1段階目のコンポーネントに、上の段階の言葉と、外を指すパスがない（`output_dir` の既定の値 `../coverity-triage-out` だけは許す）。エージェント（Copilot CLI と Claude Code の両方）は、自分の名前を書かず、tools と disallowedTools の MCP のツールは、表にある MCP サーバーのもの。作業エージェントは3段階目の言葉を書かない。一括実行が実際に書いた指示ファイル（作業・検証・作り直し・統合）は、実行フォルダかリポジトリの中だけを指す |
 | `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合。一括のトリアージを、モデルを使わずに最後まで流す（`test_flow.py`：模擬の Coverity の5件の警告、MCP サーバーでの取得、決まった振る舞いの偽のエージェント、一覧、反映の確認の文字列、書き戻し、修正のブランチの push） |
 | `ui` | `tests/ui/` | 結果と設定の画面を、Playwright の Chromium で（幅 390 px と 1280 px、ライトとダーク）。タブが出る、横にはみ出さない、ダークで読める、一覧で選んだ承認と詳細で直した逸脱コメントが `approvals.json` に保存され、反映がそれを読む、サーバを止められる |
-| `docs` | `tests/docs/` | 版の一致（2つのマニフェストと2つのマーケットプレイスも）、`docs/parts.md` の表が今の部品と合う、README の並びと「Claude Code で使う」の節、変更履歴の 0.2.0、リンク。前もって許可するしかた（プラグインの README、エージェントの README のすべて）：`--allowedTools` の行と ``` で囲んだ行に、書き戻しのツール・サーバーの名前だけの許可・`*` がなく、`--allowedTools` の行は読むツールをすべて並べる。書いた `mcp__plugin_<プラグイン>_<登録名>__<ツール>` が、プラグインの名前・`.mcp.json` の登録名・MCP サーバーのツール（ソースと、サーバーの README の「## ツール」）と合う |
+| `docs` | `tests/docs/` | 版の一致（2つのマニフェスト、仕様書、設計書、変更履歴、リポジトリの Copilot CLI のマーケットプレイスと README）、README の並び、リンク |
 | `eval` | `tests/eval/` | EVAL の道具の、モデルを使わない試験 |
 
-コンポーネントは、フォルダ・`mcp.json`・「使う部品」の表・[コンポーネント一覧](../docs/parts.md) の「今の部品」の表から読みます。テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト）は、`tests/structure/plugin_parts.py` の定数に書いてあります。そこに書いたコンポーネントがないときは、不合格になります。書き戻しのツールは、MCP サーバーのソースの `destructiveHint=True` から見つけます（名前付きの引数、`annotations={"destructiveHint": True}` の辞書、変数に作ってから渡すもの）。
+コンポーネントは、フォルダ・`mcp.json`・「使う部品」の表から読みます。テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト、役割ごとのスキルと MCP サーバー）は、`tests/structure/plugin_parts.py` の定数に書いてあります。そこに書いたコンポーネントがないときは、不合格になります。書き戻しのツールは、MCP サーバーのソースの `destructiveHint=True` から見つけます（名前付きの引数、`annotations={"destructiveHint": True}` の辞書、変数に作ってから渡すもの）。
 
 ### モデルを使わずに流す一括のトリアージ（`tests/integration/flowlib.py`）
 
@@ -87,7 +87,7 @@ python3 tests/run.py --only docs --only structure
 
 ### 部品の試験の動かし方の決まり
 
-`tests/run.py` と独立性の試験は、部品の試験を、部品のフォルダで次のように動かします。部品の README にも同じ動かし方を書きます。
+`tests/run.py` は、部品の試験を、部品のフォルダで次のように動かします。
 
 - フォルダに `pyproject.toml` があるとき（MCP サーバー）：uv のプロジェクトとして動かす。
 
@@ -106,7 +106,6 @@ python3 tests/run.py --only docs --only structure
 
 部品の試験が守ること：
 
-- そのフォルダだけを別の場所にコピーしても通る（プラグインの `tests/` やほかの部品を読まない）。スキルは、フォルダの名前を変えて（SKILL.md の `name` も変えて）コピーしても通る。
 - リポジトリの中にファイルを残さない（一時フォルダを使う）。`tests/run.py` は `PYTHONDONTWRITEBYTECODE=1` を付け、uv の環境（`UV_PROJECT_ENVIRONMENT`）を一時フォルダにする。試験の後にリポジトリに残ったもの（`__pycache__`、`.venv` など）があれば、「後片付け」として不合格にする。
 - 速く終わる（1つの部品で 90 秒ほどまで）。時間のかかる試験は、環境変数 `SKIP_SLOW_TESTS=1` のときに飛ばす。
 
@@ -116,7 +115,6 @@ python3 tests/run.py --only docs --only structure
 | --- | --- |
 | `SKIP_SLOW_TESTS` | `1` なら時間のかかる試験を飛ばす（`--skip-slow`） |
 | `TESTS_JOBS` | 同時に動かす数（`--jobs`） |
-| `TESTS_PART_TIMEOUT` | 独立性の試験で、コピーした部品の試験の時間の上限（秒。既定 900） |
 
 ### CI
 

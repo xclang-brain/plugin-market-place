@@ -1,8 +1,7 @@
 # coverity-triage-kit の、モデルを使わない試験を、Windows と Linux のマシンで動かす。
 # 利用者の PC は Windows なので、どの試験も windows-latest でも動かす。
 # Linux は ubuntu-24.04 に固定する（ubuntu-latest の版が変わっても、同じ環境で試すため）。
-# 部品の名前は書かない。試験は tests/run.py が、skills/ と mcp-servers/ の下のフォルダから見つけて、
-# その部品の README に書いた動かし方で動かす。部品を足す・消す・置き換えても、この定義は直さずに済む。
+# 部品の名前は書かない。試験は tests/run.py が、skills/ と mcp-servers/ の下のフォルダから見つけて動かす。
 # tests/run.py が知っている試験の組は、どれもどこかのジョブの --only に入れる（checks のジョブの最初で確かめる）。
 name: coverity-triage-kit
 
@@ -97,7 +96,6 @@ jobs:
       # pyyaml と jsonschema がないと飛ばされる。CI では入れて、飛ばさずに動かす
       - name: 試験のプロセスで使うライブラリを入れる
         run: python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
-      # 独立性の試験は、部品のフォルダだけを別の場所にコピーして、その部品の試験も動かす
       - name: プラグイン全体の試験
         run: python tests/run.py --only structure --only contracts --only independence --only integration --only docs --only eval
 

@@ -38,6 +38,16 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | [3. まとめてトリアージして、反映する](docs/guide/3-batch.md) | 条件に合う警告を一括で処理し、画面で確認して反映する | 複数件の一括処理（3段階目） | 30分〜 |
 | [4. 画面で進み具合と結果を確認する](docs/guide/4-screen.md) | `/coverity-gui` で画面を開き、進み具合を見て、警告ごとに修正か逸脱かを選ぶ | 3の確認と選択を、画面で行う（4段階目） | 10分 |
 
+## 必要なもの
+
+| 必要なもの | 確認方法 |
+| --- | --- |
+| GitHub Copilot CLI | `copilot --version` |
+| uv（Python と必要なライブラリを自動で用意するツール） | `uv --version` |
+| git または svn | `git --version` / `svn --version` |
+| Coverity Connect のアカウントと認証キー | ブラウザーで Coverity にログインできること |
+| `cov-build`・`cov-analyze`・`cov-commit-defects`（最初に解析も行う場合だけ） | `/coverity-setup`（最初の解析を使う設定のとき、コマンドが PATH にあるかを確認します） |
+
 ## 日常の使い方（チュートリアルを終えた人向け）
 
 ```text
@@ -59,14 +69,13 @@ Coverity Connect の警告を AI がトリアージし、警告ごとに「修�
 | --- | --- |
 | 使い方を覚える | チュートリアル：[ステップ1](docs/guide/1-skill.md) → [2](docs/guide/2-agent.md) → [3](docs/guide/3-batch.md) → [4](docs/guide/4-screen.md) |
 | 対象の警告を絞り込む、設定を変える | [条件の指定](docs/guide/conditions.md) |
-| 無人で実行する、トラブルに対処する | [運用ガイド](docs/guide/operation.md) |
-| 個々の機能を詳しく知る | [作業エージェント](com.github.copilot/agents/triage-worker.README.markdown)・[統括エージェント](com.github.copilot/agents/triage-orchestrator.README.markdown)・各スキルの README（[skills/](skills/)）・[MCP サーバー](mcp-servers/coverity-connect/README.md) |
+| 無人で実行する | [ステップ3の「無人で実行する」](docs/guide/3-batch.md#無人で実行する) |
+| 個々の機能を詳しく知る | 各スキルのフォルダ（[skills/](skills/)）・[MCP サーバー](mcp-servers/coverity-connect/README.md) |
 | 変更点を確認する | [変更履歴](CHANGELOG.md) |
-| 開発に参加する | [憲章](docs/constitution.md)・[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[コンポーネント一覧](docs/parts.md)・[テスト](tests/README.md) |
+| 開発に参加する | [憲章](docs/constitution.md)・[仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[テスト](tests/README.md) |
 
 ## 補足
 
 - AI が行うのは提案までです。作業中のソースコードと Coverity は、あなたが承認して反映するまで変更されません。
 - 4つの段階は、それぞれ単独で使えます。たとえば、スキルだけ、エージェントだけを取り出して使うこともできます。
-- Claude Code でも、1〜3段階目を同じように使えます（4段階目は Copilot CLI だけ）。`claude plugin marketplace add xclang-brain/plugin-market-place` と `claude plugin install coverity-triage-kit@plugin-market-place` でインストールします。起動方法と、無人実行のための許可は、[統括エージェントの README](com.github.copilot/agents/triage-orchestrator.README.markdown) の「Claude Code で使う」にあります。
 - MIT License です（[LICENSE](LICENSE)）。

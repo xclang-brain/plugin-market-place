@@ -176,7 +176,7 @@ Claude Code の定義（`agents/<名前>.md`）から、表の部品をたどっ
 - 写すもの：エージェントの定義（変えずに。`--agent-model` と `--main-model` のときだけ `model` の行を替える）、表のスキル（`skills/<名前>/`）、表の MCP サーバー（元と同じ場所。`mcp-servers/<名前>/`）。どの表にもないスキルは写しません。
 - `.claude-plugin/plugin.json`：元のマニフェストの写し（名前と版は同じ。場所を指すキー `skills` などは外す）。
 - `.mcp.json`：元の `.mcp.json` の登録（`${CLAUDE_PLUGIN_ROOT}` のまま）に、偽の Coverity の環境変数と `--mcp-env` を足したもの。表に MCP サーバーがなければ作りません。
-- 一時のプラグインの場所は `--plugin-dir`（既定は作業フォルダの隣の `claude-plugin`）。元のプラグインのフォルダの中、作業フォルダの中と上は断ります。
+- 一時のプラグインの場所は `--plugin-dir`（既定は作業フォルダの隣の `claude-plugin`）。コピー元のフォルダ（プラグイン本体）の中、作業フォルダの中と上は断ります。
 - 作ったフォルダには、印のファイル `.claude-eval-plugin`（中身は `{"made_by": "claude_adapter"}`）を置きます。次に作るときは、この印のあるフォルダだけを空にしてから作り直します。印のないフォルダは、空でなければ断り、何も消しません（`.claude-plugin/plugin.json` のある本物のプラグインのフォルダも同じです）。
 - 作業フォルダには、コマンド（`.claude/eval/command.json`）だけを書きます（エージェントとスキルは、プラグインから読まれる）。
 

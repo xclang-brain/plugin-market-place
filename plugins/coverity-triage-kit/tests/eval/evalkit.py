@@ -7,8 +7,7 @@
 
 The harnesses (run_mcp_eval.py, stage2/, stage3/) use this module for:
 
-- part names by role, read from the "## 今の部品" table of docs/parts.md (no part name is
-  written in the harnesses);
+- part names by role (the PARTS table below; no part name is written in the harnesses);
 - the result folder (outside the plugin folder; default $TMPDIR/<plugin>-evals/<stage>/<time>);
 - running ``claude -p`` with ``--output-format stream-json --verbose``: the transcript is saved
   line by line, the process tree is killed on timeout, and ``CLAUDECODE`` is dropped so it also
@@ -43,10 +42,17 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 PLUGIN_ROOT = HERE.parents[1] if len(HERE.parents) > 1 else HERE
 SAMPLE = HERE.parent / "fixtures" / "sample"  # sample-target/ (C code and a fake Coverity) and expected.yaml
-REPLACE_DOC = Path("docs") / "parts.md"
-CURRENT_PARTS_HEADING = "今の部品"
-CURRENT_PARTS_HEADER = ["役割", "段階", "部品", "置き場所"]
-AGENT_SUFFIX = ".agent.md"
+# The parts the harnesses name by role: role -> (name, place in the plugin folder).
+PARTS = {
+    "作業役": ("triage-worker", "com.github.copilot/agents/triage-worker.agent.md"),
+    "統括": ("triage-orchestrator", "com.github.copilot/agents/triage-orchestrator.agent.md"),
+    "検証役": ("triage-reviewer", "com.github.copilot/agents/triage-reviewer.agent.md"),
+    "統合役": ("triage-integrator", "com.github.copilot/agents/triage-integrator.agent.md"),
+    "一括実行": ("coverity-run", "skills/coverity-run"),
+    "逸脱コメント": ("deviation-comment", "skills/deviation-comment"),
+    "結果の記録": ("triage-report", "skills/triage-report"),
+    "Coverity との通信": ("coverity-connect", "mcp-servers/coverity-connect"),
+}
 
 
 def load_module(name: str, path: Path):
@@ -89,50 +95,14 @@ def progress(tag: str, message: str) -> None:
 # --------------------------------------------------------------------------- parts by role
 
 
-def current_parts(root: Path = PLUGIN_ROOT) -> list[dict]:
-    """Rows of the "## 今の部品" table of docs/parts.md: [{role, stage, name, place}]."""
-    doc = Path(root) / REPLACE_DOC
-    if not doc.is_file():
-        return []
-    lines = doc.read_text(encoding="utf-8-sig").replace("\r\n", "\n").split("\n")
-    start = next((i + 1 for i, line in enumerate(lines)
-                  if re.match(r"^##\s+" + re.escape(CURRENT_PARTS_HEADING) + r"\s*$", line)), None)
-    if start is None:
-        return []
-    table: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("#"):
-            break
-        if line.strip().startswith("|"):
-            table.append(line)
-        elif table:
-            break
-    if len(table) < 3 or ADAPTER._row_cells(table[0]) != CURRENT_PARTS_HEADER:
-        return []
-    rows = []
-    for line in table[2:]:
-        cells = ADAPTER._row_cells(line)
-        if len(cells) != 4:
-            continue
-        rows.append({"role": cells[0], "stage": cells[1], "name": cells[2].strip("`"),
-                     "place": cells[3].strip("`").rstrip("/")})
-    return rows
-
-
 def part(role: str, root: Path = PLUGIN_ROOT) -> dict:
-    """The current part of a role: {role, name, path}. Raises EvalError when it is not there."""
-    rows = current_parts(root)
-    if not rows:
-        raise EvalError(f"部品の表がありません: {Path(root) / REPLACE_DOC} の「## {CURRENT_PARTS_HEADING}」",
+    """The part of a role: {role, name, path}. Raises EvalError when it is not there."""
+    name, place = PARTS[role]
+    path = (Path(root) / place).resolve()
+    if not path.exists():
+        raise EvalError(f"役割「{role}」のコンポーネント {name} がありません: {path}",
                         ["プラグインのフォルダで動かすか、--plugin-root で渡します"])
-    for row in rows:
-        if row["role"] == role:
-            path = (Path(root) / row["place"]).resolve()
-            if not path.exists():
-                raise EvalError(f"役割「{role}」の部品 {row['name']} がありません: {path}")
-            return {"role": role, "name": row["name"], "path": path}
-    raise EvalError(f"役割「{role}」の部品が、部品の表にありません",
-                    [f"表にある役割: {'、'.join(r['role'] for r in rows)}"])
+    return {"role": role, "name": name, "path": path}
 
 
 # --------------------------------------------------------------------------- files and folders
