@@ -1,23 +1,7 @@
 # embedded-debug-kit
 
-組み込み機器で動く C/C++ プログラムの不具合を、AI が実機で試しながら直すプラグインです。
-AI が、ソースを直し、ビルドし、機器に送り、機器で動かして、結果を確かめます。
-
-## 使い方
-
-AI に任せる範囲に合わせて、4つの段階から選びます。
-
-| 段階 | できること | 使い方 |
-| --- | --- | --- |
-| 1 | プログラムをビルドする | [cross-build](docs/guide/1-cross-build.md) |
-| 1 | ファイルを機器に送る | [ftp-deploy](docs/guide/1-ftp-deploy.md) |
-| 1 | 機器でコマンドを動かす | [serial-console](docs/guide/1-serial-console.md) |
-| 1 | 上の3つの設定を、AI の質問に答えて済ませる | [skill-config](docs/guide/1-skill-config.md) |
-| 2 | 不具合の調査と修正を、AI に任せる | [作業エージェント](docs/guide/2-device-debugger.md) |
-| 3 | 修正を任せ、直ったかを別の AI に判定させる | [統括エージェント](docs/guide/3-debug-orchestrator.md) |
-| 4 | 3段階目の進み具合と結果を、ブラウザーで見る | [Web管理画面](docs/guide/4-debug-dashboard.md) |
-
-1段階目の4つをスキル、2段階目の AI を作業エージェントと呼びます。どちらも、[自分で作ったものに置き換える](docs/guide/5-replace-parts.md)ことができます。
+組み込み機器で動く C/C++ プログラムの不具合を、AI が直すプラグインです。
+AI は、ソースを直し、ビルドし、機器に送って動かし、結果を確かめます。
 
 ## 必要なもの
 
@@ -37,7 +21,23 @@ copilot plugin install embedded-debug-kit@plugin-market-place
 
 Claude Code では、`copilot` を `claude` に読み替えます。
 
+## 使い方
+
+AI に任せる範囲に合わせて、4つの段階から選びます。
+
+| 段階 | できること | 使い方 |
+| --- | --- | --- |
+| 1 | プログラムをビルドする | [cross-build](docs/guide/1-cross-build.md) |
+| 1 | ファイルを機器に送る | [ftp-deploy](docs/guide/1-ftp-deploy.md) |
+| 1 | 機器でコマンドを動かす | [serial-console](docs/guide/1-serial-console.md) |
+| 1 | 上の3つの設定を、AI の質問に答えて済ませる | [skill-config](docs/guide/1-skill-config.md) |
+| 2 | 不具合の調査と修正を、AI に任せる | [作業エージェント](docs/guide/2-device-debugger.md) |
+| 3 | 修正を任せ、直ったかを別の AI に判定させる | [統括エージェント](docs/guide/3-debug-orchestrator.md) |
+| 4 | 3段階目の進み具合と結果を、ブラウザーで見る | [Web管理画面](docs/guide/4-debug-dashboard.md) |
+
+1段階目の4つをスキル、2段階目の AI を作業エージェントと呼びます。どちらも、[自分で作ったものに置き換える](docs/guide/5-replace-parts.md)ことができます。
+
 ## してはいけないこと
 
-- コミットしていない変更があるフォルダで、2・3段階目を使わないでください。AI がソースを書き換えます。
+- ソースに、コミットしていない変更を残したまま、2段階目以降を使わないでください。AI がソースを書き換えるので、AI の変更と区別できなくなります。
 - パスワードをチャットに書かないでください。環境変数か設定ファイルで渡します。

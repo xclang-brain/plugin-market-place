@@ -4,23 +4,30 @@
 
 ## 手順
 
-1. ソースのフォルダで CLI を起動し、`/embedded-debug-kit:debug-dashboard` と入力します。画面の URL が出ます。
-2. URL をブラウザーで開きます。
-3. 「設定」のタブで、「直したいこと」「合格の条件」「試行の上限」を入力します。できた依頼文をコピーします。
-4. 別のターミナルで、同じフォルダから統括エージェントを起動し、依頼文を貼り付けて送ります。起動のしかたは、[統括エージェントの使い方](3-debug-orchestrator.md)にあります。
-5. 「進み具合」のタブで経過を、「結果」のタブで報告と判定を見ます。
-6. 使い終わったら、手順 1 の CLI で `/embedded-debug-kit:debug-dashboard stop` と入力し、画面を終了します。
+1. [統括エージェントの使い方](3-debug-orchestrator.md)の手順 1〜2（設定とコミット）を済ませます。
+2. ソースのフォルダで CLI を起動し、`/embedded-debug-kit:debug-dashboard` と入力します。画面の URL が出ます。
+3. URL をブラウザーで開きます。
+4. 「設定」のタブで、「直したいこと」「合格の条件」「試行の上限」を入力します。できた依頼文をコピーします。
+5. 別のターミナルで、同じフォルダから統括エージェントを起動し、依頼文を貼り付けて送ります。
 
-Claude Code では、`/embedded-debug-kit:debug-dashboard` を `/debug-dashboard` に読み替えます。
+   ```shell
+   copilot --agent embedded-debug-kit:debug-orchestrator
+   ```
+
+6. 「進み具合」のタブで経過を、「結果」のタブで報告と判定を見ます。
+7. 使い終わったら、手順 2 の CLI で `/embedded-debug-kit:debug-dashboard stop` と入力し、画面を終了します。
+
+Claude Code では、`/embedded-debug-kit:debug-dashboard` を `/debug-dashboard` に、`copilot` を `claude` に読み替えます。
 
 ## 実行を止める
 
 「進み具合」のタブの「実行を止める」を押します。
-統括エージェントは、動かしているコマンドが終わると止まり、そこまでの結果を報告します。
+統括エージェントは、実行中のコマンドが終わった時点で止まり、そこまでの結果を報告します。
 
 ## 記録
 
-画面を動かしている間、AI への依頼と、AI の報告が、ソースのフォルダの `.debug-dashboard/` に記録されます。Git のリポジトリでは、一番上のフォルダにできます。
+画面を起動している間、AI への依頼と AI の報告が、`.debug-dashboard/` に残ります。
+`.debug-dashboard/` は、ソースのフォルダにできます。Git のリポジトリの中では、リポジトリの一番上のフォルダにできます。
 
 ## してはいけないこと
 
