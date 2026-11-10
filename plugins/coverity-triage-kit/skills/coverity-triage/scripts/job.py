@@ -112,7 +112,10 @@ def _spawn(run_dir: Path, kind: str, args: dict) -> subprocess.Popen:
     """Start the job as a process that keeps running after this command has answered."""
     log = run_dir / FILES[kind][1]
     log.parent.mkdir(parents=True, exist_ok=True)
-    log.unlink(missing_ok=True)
+    try:
+        log.unlink(missing_ok=True)
+    except PermissionError:  # Windows: a process an earlier build left behind still holds the log
+        log.write_bytes(b"")
     command = [sys.executable, str(Path(__file__).resolve()), str(run_dir), kind, json.dumps(args)]
     with open(log, "ab") as out:
         common = {"stdin": subprocess.DEVNULL, "stdout": out, "stderr": subprocess.STDOUT, "cwd": str(run_dir),
@@ -128,27 +131,27 @@ def _spawn(run_dir: Path, kind: str, args: dict) -> subprocess.Popen:
 
 
 def ensure(run_dir: Path, kind: str, args: dict, deadline: float) -> dict:
-    """The status of the job for these arguments. It is started when it has not run with them; then this
-    waits until it has ended or ``deadline`` (time.monotonic) has passed. A failure is reported once:
-    the next call starts the job again."""
-    path = run_dir / FILES[kind][0]
-    status, proc = read(run_dir, kind), None
-    if status is None or (status["status"] != "running" and status.get("args") != args):
-        path.unlink(missing_ok=True)
-        status, proc = None, _spawn(run_dir, kind, args)
-    while status is None or status["status"] == "running":
-        ended = proc is not None and proc.poll() is not None
-        if ended and status is None and read(run_dir, kind) is None:
-            status = {"status": "failed", "error": "バックグラウンドの処理を開始できませんでした"}
-            break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(0.2)
+    """The status of the job for these arguments. It is started when it has not run with them (after a
+    job of this kind that still runs with other arguments has ended); then this waits until it has ended
+    or ``deadline`` (time.monotonic) has passed. A failure is reported once: the next call starts the job
+    again."""
+    path, log = run_dir / FILES[kind][0], (run_dir / FILES[kind][1]).as_posix()
+    while True:
         status = read(run_dir, kind)
-    status = {**(status or {"status": "running"}), "log": (run_dir / FILES[kind][1]).as_posix()}
+        if status is None or (status["status"] != "running" and status.get("args") != args):
+            path.unlink(missing_ok=True)
+            proc = _spawn(run_dir, kind, args)
+            while read(run_dir, kind) is None:  # until the job has written its first record
+                if proc.poll() is not None and read(run_dir, kind) is None:
+                    return {"status": "failed", "error": "バックグラウンドの処理を開始できませんでした", "log": log}
+                time.sleep(0.05)
+        elif status["status"] != "running" or time.monotonic() >= deadline:
+            break
+        else:
+            time.sleep(0.2)
     if status["status"] == "failed":
         path.unlink(missing_ok=True)
-    return status
+    return {**status, "log": log}
 
 
 # ---- the job's side -------------------------------------------------------------------------

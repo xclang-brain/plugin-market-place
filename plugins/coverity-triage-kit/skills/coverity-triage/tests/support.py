@@ -1,10 +1,12 @@
 """Helpers of the unit tests: throwaway git and svn repositories, the settings file, and driving triage.py.
 
 Everything is made below one temporary folder. A test for svn skips only when the svn command is missing.
+Run the tests with ``python -B`` (tests/run.py does): nothing is left in the skill folder then.
 """
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -12,7 +14,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import vcs  # noqa: E402
@@ -21,7 +22,7 @@ GIT = ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "-c",
 SJIS = "// 日本語のコメント\r\nint s(void)\r\n{\r\n    return 0;\r\n}\r\n".encode("cp932")
 FILES = {"src/a.c": b"int a(int *p)\n{\n    return *p;\n}\n", "src/b.c": b"int b(void)\n{\n    return 0;\n}\n",
          "src/sjis.c": SJIS}
-FIX_COMMENT = "本物の不具合。src/a.c:3 で p を NULL のまま参照するが、呼び出し元の main.c:10 は診断の出力だけで使用している。"
+FIX_COMMENT = "本物のバグ。src/a.c:3 で p を NULL のまま参照するが、呼び出し元の main.c:10 は診断の出力だけで使用している。"
 KEEP_COMMENT = "誤検知。src/b.c:2 で長さを確認してから src/b.c:3 で返しており、範囲外は参照しない。"
 
 
@@ -40,7 +41,8 @@ def triage(*args, env=None) -> dict:
     """Run one command of triage.py: it must exit 0 and print exactly one JSON object in UTF-8."""
     proc = subprocess.run([*command(), *map(str, args)], capture_output=True, env=env, timeout=300)
     if proc.returncode != 0:
-        raise AssertionError(f"triage.py {args[0]}: exit {proc.returncode}\n{proc.stdout.decode()}\n{proc.stderr.decode()}")
+        raise AssertionError(f"triage.py {args[0]}: exit {proc.returncode}\n{proc.stdout.decode()}\n"
+                             f"{proc.stderr.decode()}")
     return json.loads(proc.stdout.decode("utf-8"))
 
 
@@ -96,16 +98,16 @@ def issue(cid: int, file: str = "src/a.c", line: int = 3, checker: str = "NULL_R
 
 
 def result(cid: int, with_fix: bool = True, **over) -> dict:
-    """A result.json that passes the checks: with a fix, or with the reason why there is none."""
+    """A result.json as a worker writes it, that passes the checks: with a fix, or with the reason why
+    there is none."""
     data = {"cid": cid, "verdict": "true_bug", "summary": "NULL のまま参照する経路があります",
             "evidence": [{"file": "src/a.c", "line": 3, "note": "p を確認せずに参照しています"}],
             "recommendation": "fix", "confidence": "high", "fix": {"summary": "NULL のときは 0 を返します"},
-            "deviation": {"comment": FIX_COMMENT, "classification": "Bug", "action": "Ignore", "severity": "Minor"}}
+            "deviation": {"comment": FIX_COMMENT}}
     if not with_fix:
         del data["fix"]
         data.update(verdict="false_positive", recommendation="deviation", no_fix_reason="コードに問題がないため",
-                    deviation={"comment": KEEP_COMMENT, "classification": "False Positive", "action": "Ignore",
-                               "severity": "Unspecified"})
+                    deviation={"comment": KEEP_COMMENT})
     return {**data, **over}
 
 
@@ -113,10 +115,11 @@ def stub(folder: Path, name: str, source: str) -> None:
     """A tiny command <name> written in Python (Windows starts it through a .cmd wrapper)."""
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{name}.py").write_text(source, encoding="utf-8")
-    if os.name == "nt":
-        (folder / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+    if os.name == "nt":  # cmd.exe reads a .cmd file in the console code page, also the path of Python in it
+        (folder / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="oem")
     else:
-        (folder / name).write_text(f"#!/bin/sh\nexec '{sys.executable}' '{folder / name}.py' \"$@\"\n", encoding="utf-8")
+        (folder / name).write_text(f"#!/bin/sh\nexec '{sys.executable}' '{folder / name}.py' \"$@\"\n",
+                                   encoding="utf-8")
         (folder / name).chmod(0o755)
 
 
@@ -142,31 +145,39 @@ class RunCase(unittest.TestCase):
     def run_triage(self, *args) -> dict:
         return triage(*args, env=self.env)
 
+    def follow(self, line: str) -> dict:
+        """Run a command line that a reply gave under next."""
+        return self.run_triage(*shlex.split(line.split('triage.py" ', 1)[1]))
+
     def start(self, *flags) -> dict:
-        """start, asked again while the background job runs."""
+        """start, asked again while it answers that a background job runs."""
         while True:
             out = self.run_triage("start", "--repo", self.repo, *flags)
-            if not out.get("wait"):
+            if not (out["ok"] and "log" in out):
                 return out
 
     def begin(self, issues: list, *flags, **fetch) -> Path:
         """start, put the fetched list where start said, start again. Returns the run folder."""
         out = self.start(*flags)
-        self.assertTrue(out["need_fetch"], out)
+        self.assertEqual([call["tool"] for call in out["fetch"]], ["coverity_search_issues"], out)
         Path(out["fetch"][0]["arguments"]["output_file"]).write_text(
             json.dumps({"stream": "app-main", "issues": issues, **fetch}), encoding="utf-8")
-        self.assertFalse(self.start(*flags)["need_fetch"])
+        self.assertIn("counts", self.start(*flags))
         return Path(out["run_dir"])
 
     def work(self, given: dict, edits: dict | None = None, with_fix: bool | None = None, **over) -> dict:
         """What a worker does with the reply of next: edit the work copy, write result.json, save.
         ``edits``: {file: (old, new) or the new bytes}; {} changes nothing and writes a result without a fix."""
-        for name, change in (edits if edits is not None else {"src/a.c": (b"return *p;", b"return p ? *p : 0;")}).items():
+        if edits is None:
+            edits = {"src/a.c": (b"return *p;", b"return p ? *p : 0;")}
+        for name, change in edits.items():
             path = Path(given["work_dir"]) / name
             path.write_bytes(path.read_bytes().replace(*change) if isinstance(change, tuple) else change)
         data = result(given["cid"], edits != {} if with_fix is None else with_fix, **over)
         Path(given["result_file"]).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        return self.run_triage("save", "--run", given["run_dir"], "--cid", given["cid"], "--slot", given["slot"])
+        return self.follow(given["next"][0])
 
-    def state(self, run: Path, cid: int) -> dict:
-        return json.loads((run / "cid" / str(cid) / "state.json").read_text(encoding="utf-8"))
+    def read(self, run: Path, cid: int, name: str = "state.json") -> dict:
+        return json.loads((run / "cid" / str(cid) / name).read_text(encoding="utf-8"))
+
+    state = read

@@ -1,11 +1,11 @@
 schema_version: "1.1"
 name: true-bug-resource-leak
 expected_outcome: |
+  スキルのコマンド（start、next --cid 20002、save）で処置し、結果フォルダーに result.json と fix.patch を保存する。
   load_table() は、fread で 256 バイトを読み込めなかったとき（src/loader.c の 17〜18 行）、fopen で開いた fp を閉じずに
   LOADER_ERR_SHORT を返す。呼び出し元 calib_init()（src/calib.c:9）は 256 バイトより短いファイルも渡しうるので、
-  判定は本物のバグ（true_bug）、推奨は修正、確信度は高。Coverity の絶対パス /var/build/fw/src/loader.c は src/loader.c に読み替える。
+  判定は本物のバグ（true_bug）、推奨は修正（fix）、確信度は高（high）。根拠のパスは src/loader.c（Coverity の絶対パスではない）。
   修正コードは、その分岐で返す前に fp を閉じる最小の差分（ファイルの書き方 (void)fclose(fp); とタブのインデントに合わせる）。
-  逸脱コメントは「本物の不具合。」で始まり、問題にならないとは書かない。Classification は Bug、Action は Ignore、Severity は Major。
-  設定ファイルがないので、ファイルは変更せず、修正コードと逸脱コメントの両方をチャットで示す。
+  逸脱コメントは「本物のバグ。」で始まり、問題にならないとは書かない。修正は作業用コピーに書き、作業フォルダーのファイルは変更しない。
 context:
-  scaffold_script: place-files.sh
+  scaffold_script: ../scaffold.py

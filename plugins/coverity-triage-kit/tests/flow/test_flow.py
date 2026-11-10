@@ -1,21 +1,20 @@
-"""A triage as an agent drives it, on a git and on an svn copy of the sample (tests/fixtures/sample).
+"""A triage as agents drive it, on a git and on an svn copy of the sample (tests/fixtures/sample).
 
 No model: flowlib.Agent is a scripted agent. It begins with the one command line an agent takes from
 SKILL.md and then runs what the replies say, so the command line of triage.py is all this test knows of
-the skill. The svn half is skipped only where the svn command is not installed; in CI that is a failure.
+the skill. What one command does alone is tested in skills/coverity-triage/tests. The svn half is skipped
+only where the svn command is not installed; in CI that is a failure.
 """
 
 import json
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.dont_write_bytecode = True  # nothing is left in the repository
-import flowlib  # noqa: E402
-from flowlib import CIDS, Agent  # noqa: E402
+import flowlib
+from flowlib import CIDS, Agent
 
 
 def handed(cid: int):
@@ -40,13 +39,11 @@ class Case(unittest.TestCase):
         """The first command line of a request."""
         return flowlib.command("start", "--repo", f'"{self.repo.as_posix()}"', *flags)
 
-    def chat(self, agent: Agent, cid: int) -> dict:
-        """Stage 1 up to 「CID <cid> を処置して」: fetch the list, then the reply of next for the named CID."""
-        ready = agent.follow(self.request(), stop=lambda reply: reply.get("need_fetch") is False)
-        return agent.run(agent.act(ready) + f" --cid {cid}")
-
     def read(self, run_dir, cid: int, name: str) -> bytes:
         return (Path(run_dir) / "cid" / str(cid) / name).read_bytes()
+
+    def state(self, run_dir, cid: int) -> dict:
+        return json.loads(self.read(run_dir, cid, "state.json"))
 
     def assert_repository_untouched(self):
         self.assertEqual(flowlib.user_tree(self.kind, self.repo), self.before, "the person's repository has changed")
@@ -55,27 +52,12 @@ class Case(unittest.TestCase):
 class Flow:
     """The scenarios; GitFlow and SvnFlow below run them."""
 
-    def test_stage_1_one_named_cid_in_a_chat(self):
-        agent = Agent(self.repo)
-        given = self.chat(agent, 20003)
-        self.assertEqual(agent.calls, ["coverity_search_issues", "coverity_get_issue_details"])
-        self.assertEqual((given["cid"], given["issue"]["file"]), (20003, "src/reader.c"))
-        saved = agent.run(agent.act(given))
-        self.assertTrue(saved["ok"], saved)
-        run = Path(saved["run_dir"])
-        self.assertEqual(run.parent, self.top / "coverity-triage-out", "the result folder is outside the repository")
-        result = json.loads(self.read(run, 20003, "result.json"))
-        self.assertEqual((result["recommendation"], result["deviation"]["classification"]), ("fix", "Bug"))
-        self.assertTrue(result["deviation"]["comment"].startswith("本物の不具合。src/reader.c:49 "))
-        self.assertEqual(Path(saved["patch_file"]), run / "cid" / "20003" / "fix.patch")
-        self.assertIn(b"+    if (buf == NULL) {", self.read(run, 20003, "fix.patch"))
-        self.assertEqual((saved["counts"]["done"], saved["counts"]["remaining"]), (1, 5))
-        self.assert_repository_untouched()
-
     def test_stage_2_one_agent_processes_every_cid_to_the_end(self):
         agent = Agent(self.repo)
         given = agent.follow(self.request("--slots", 1), stop=handed(CIDS[-1]))
+        self.assertEqual(agent.calls, ["coverity_search_issues", "coverity_get_issue_details"])
         run = Path(given["run_dir"])
+        self.assertEqual(run.parent, self.top / "coverity-triage-out", "the result folder is outside the repository")
         early = agent.run(flowlib.command("finish", "--run", f'"{run.as_posix()}"'))  # the last CID is not saved yet
         self.assertEqual((early["ok"], early.get("pending")), (False, CIDS[-1:]))
         self.assertIn("未処置の CID が 1 件あります", early["error"])
@@ -83,7 +65,7 @@ class Flow:
 
         done = agent.follow(agent.act(given))
         self.assertEqual(agent.worked, CIDS, "every CID once, in the order of the list")
-        self.assertEqual(done["counts"], {"total": 6, "pending": 0, "working": 0, "done": 6, "failed": 0, "remaining": 0})
+        self.assertEqual((done["counts"]["done"], done["counts"]["remaining"]), (6, 0))
         summary = Path(done["summary_file"]).read_text(encoding="utf-8")
         self.assertIn(done["table"], summary)
         for cid in CIDS:  # both outputs for every CID: in its section and in its row of the table
@@ -97,11 +79,15 @@ class Flow:
                 for line in flowlib.added_lines(cid):  # the fix is in the patch, and the patch is shown
                     self.assertIn(b"+" + line, self.read(run, cid, "fix.patch"))
                     self.assertIn("+" + line.decode("utf-8").rstrip(), section)
-                self.assertTrue(row.endswith(f"| 修正を取り込む | 高 | - | - | src/reader.c | {comment} |"), row)
+                self.assertTrue(row.endswith(f"| 修正を取り込む | 高 | src/reader.c | {comment} |"), row)
+                self.assertEqual(result["deviation"]["classification"], "Bug")
             else:
                 self.assertFalse((run / "cid" / str(cid) / "fix.patch").exists())
                 self.assertIn("### 修正コード\n\n修正コードはありません。理由: ", section)
-                self.assertTrue(row.endswith(f"| 逸脱コメントを登録する | 高 | - | - | なし | {comment} |"), row)
+                self.assertTrue(row.endswith(f"| 逸脱コメントを登録する | 高 | なし | {comment} |"), row)
+        fixes = [run / "cid" / str(cid) / "fix.patch" for cid in (20001, 20003, 20004)]
+        fixed = (flowlib.fresh_copy(self.kind, self.top, fixes) / "src" / "reader.c").read_bytes()
+        self.assertTrue(all(flowlib.FIXES[cid][1] in fixed for cid in (20001, 20003, 20004)), "the patches apply")
         self.assertFalse((run / "work").exists(), "the work copies are removed")
         self.assert_repository_untouched()
 
@@ -114,7 +100,7 @@ class Flow:
         done = second.follow(self.request("--slots", 1))
         resumed, again = second.replies[:2]
         self.assertEqual(resumed["run_dir"], given["run_dir"])
-        self.assertIn("前回の続きから進めます（残り 4 件）", resumed["message"])
+        self.assertEqual(resumed["message"], "前回の続きから進めます（残り 4 件）")
         self.assertEqual(second.calls, [], "the list is not fetched again")
         self.assertEqual((again["cid"], again["work_dir"]), (third, given["work_dir"]))
         self.assertIn("もう一度処置します", again["message"])
@@ -123,39 +109,83 @@ class Flow:
         self.assertEqual(self.read(done["run_dir"], third, "fix.patch").count(b"+    if (buf == NULL) {"), 1,
                          "the half-done edit of the first session is not part of the fix")
 
-    def test_fixes_in_crlf_and_shift_jis_files_apply_to_a_fresh_copy(self):
-        agent = Agent(self.repo, flowlib.ENCODED)
-        done = agent.follow(self.request("--slots", 1))
-        self.assertEqual(agent.worked, list(flowlib.ENCODED))
-        patches = [Path(done["run_dir"]) / "cid" / str(cid) / "fix.patch" for cid in flowlib.ENCODED]
-        copy = flowlib.fresh_copy(self.kind, self.top, patches)
-        for (cid, warning), patch in zip(flowlib.ENCODED.items(), patches):
-            name = warning["file"]
-            for line in flowlib.added_lines(cid):  # the patch has the bytes of the file: cp932, CRLF
-                self.assertIn(b"+" + line, patch.read_bytes())
-            self.assertEqual((copy / name).read_bytes(), flowlib.ENCODED_FILES[name].replace(*flowlib.FIXES[cid]), name)
-            self.assertEqual((self.repo / name).read_bytes(), flowlib.ENCODED_FILES[name])
-        self.assertIn("+    /* 未設定のときは 0 を返す */", Path(done["summary_file"]).read_text(encoding="utf-8"))
+    def work_round(self, lines: list[str]) -> None:
+        """One round of stage 3: one worker per line of next, taking turns on the one queue. Each repeats
+        next and save until next answers that the worker has nothing more to do."""
+        workers = {line: Agent(self.repo) for line in lines}
+        while workers:
+            for line, worker in list(workers.items()):
+                given = worker.run(line)
+                if given["cid"] is None:
+                    self.assertEqual(given["next"], [], "the worker reports to the agent that sent it")
+                    del workers[line]
+                else:
+                    saved = worker.run(worker.act(given))
+                    self.assertEqual((saved["ok"], saved["next"]), (True, [line]), saved)
+
+    def review_round(self, lead: Agent, run: Path, rework: dict) -> list[int]:
+        """The reviewers of stage 3: every batch of status, one result after the other. Each looks at the
+        result, the patch and its clean copy, and records the outcome with the review line of status."""
+        status = lead.run(flowlib.command("status", "--run", f'"{run.as_posix()}"'))
+        line, reviewed = status["next"][0].split(" [")[0], []
+        for batch in status["review_batches"]:
+            clean = (Path(batch["work_dir"]) / "src" / "reader.c").read_bytes()
+            self.assertEqual(clean, (self.repo / "src" / "reader.c").read_bytes(), "a reviewer reads a clean copy")
+            for cid in batch["cids"]:
+                self.assertIn("deviation", json.loads(self.read(run, cid, "result.json")))
+                point = rework.pop(cid, None)
+                outcome = f'rework --point "{point}"' if point else "pass"
+                done = Agent(self.repo).run(line.replace("<CID>", str(cid)).replace("<pass|flag|rework>", outcome))
+                self.assertTrue(done["ok"], done)
+                reviewed.append(cid)
+        return reviewed
+
+    def test_stage_3_workers_in_parallel_one_cause_merged_every_result_reviewed(self):
+        lead = Agent(self.repo)  # the orchestrator: start with review, slots as the settings say (3)
+        ready = lead.follow(self.request("--review"), stop=lambda reply: "counts" in reply)
+        run, lines = Path(ready["run_dir"]), ready["next"]
+        self.assertEqual([line.split(" next ")[1] for line in lines],
+                         [f'--run "{run.as_posix()}" --slot {k} --batch 1' for k in (1, 2, 3)])
+        lead.act(ready)  # the warning paths of all CIDs, once
+        self.assertEqual(lead.calls, ["coverity_search_issues", "coverity_get_issue_details"])
+        status_line = flowlib.command("status", "--run", f'"{run.as_posix()}"')
+
+        killed = Agent(self.repo)  # the worker of slot 2 takes a CID, edits, and is gone
+        lost = killed.run(lines[1])
+        killed.edit(lost)
+        self.work_round([lines[0], lines[2]])
+        status = lead.run(status_line)
+        self.assertEqual((status["counts"]["done"], status["counts"]["working"]), (5, 1))
+        self.work_round(status["next"])  # asked again while CIDs are left: slot 2 gets its CID once more
+        self.assertEqual((self.state(run, lost["cid"])["status"], self.state(run, lost["cid"])["tries"]), ("done", 2))
+        self.assertEqual({self.state(run, cid)["slot"] for cid in CIDS}, {1, 2, 3}, "three slots, one queue")
+
+        status = lead.run(status_line)  # the integrator: three CIDs have one cause, no fix covers all three
+        self.assertEqual(status["merge_candidates"],
+                         [{"cids": [20004, 20005, 20006], "reason": "同じチェッカーと関数"}])
+        merge = status["merge_command"].replace("<CID>", "20004").replace("<CID,CID>", "20005,20006")
+        merged = lead.run(merge.replace("[--rework]", '--rework --point "src/reader.c:58 同じ変換が3行にある"'))
+        self.assertTrue(merged["ok"], merged)
+        self.work_round(lead.run(status_line)["next"])  # the leader goes back to a worker: one fix for all
+        for cid in (20004, 20005, 20006):
+            self.assertIn(b"+" + flowlib.FIXES[cid][1], self.read(run, 20004, "fix.patch"))
+
+        early = lead.run(flowlib.command("finish", "--run", f'"{run.as_posix()}"'))
+        self.assertEqual((early["ok"], early.get("unreviewed")), (False, [20001, 20002, 20003, 20004]))
+        point = "src/reader.c:20 fclose の戻り値を使用しないことを明示する"
+        self.assertEqual(sorted(self.review_round(lead, run, {20001: point})), [20001, 20002, 20003, 20004])
+        self.work_round(lead.run(status_line)["next"])  # sent back once, with the earlier fix in the copy
+        self.assertIn(b"+        (void)fclose(fp);", self.read(run, 20001, "fix.patch"))
+        self.assertEqual(self.review_round(lead, run, {}), [20001], "the new result is reviewed again")
+
+        done = lead.follow(status_line)  # nothing is left: status leads to finish
+        self.assertEqual((done["counts"]["done"], done["counts"]["remaining"]), (6, 0))
+        rows = done["table"].splitlines()[2:]
+        self.assertEqual([row.split(" | ")[0] for row in rows],
+                         ["| 20001", "| 20002", "| 20003", "| 20004（同じ原因: 20005, 20006）"], "one row per cause")
+        self.assertTrue(all(" | 高 | 合格 | " in row for row in rows), rows)
+        self.assertFalse((run / "work").exists())
         self.assert_repository_untouched()
-
-    def test_a_result_without_the_deviation_comment_is_refused(self):
-        agent = Agent(self.repo)
-        given = self.chat(agent, 20001)
-        agent.edit(given)  # the fix is made, but the second output is missing
-        bad = agent.result(given)
-        del bad["deviation"]["comment"]
-        flowlib.write_json(Path(given["result_file"]), bad)
-        refused = agent.run(given["next"][0])
-        self.assertFalse(refused["ok"])
-        self.assertIn("deviation.comment: 逸脱コメントが空です", "\n".join(refused["problems"]))
-        self.assertIn("problems を修正してから", refused["error"])
-        self.assertEqual(refused["next"], given["next"], "the same save line again")
-        self.assertFalse((Path(given["run_dir"]) / "cid" / "20001" / "fix.patch").exists())
-
-        flowlib.write_json(Path(given["result_file"]), agent.result(given))  # corrected; the fix is still in the copy
-        saved = agent.run(refused["next"][0])
-        self.assertTrue(saved["ok"], saved)
-        self.assertIn(b"+        fclose(fp);", self.read(saved["run_dir"], 20001, "fix.patch"))
 
 
 class GitFlow(Flow, Case):

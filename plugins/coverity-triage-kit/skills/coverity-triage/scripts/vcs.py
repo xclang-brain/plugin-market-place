@@ -18,8 +18,11 @@ from pathlib import Path
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 QUIET_GIT = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+# Variables that would make git work on another repository than the one of the folder it runs in.
+GIT_PLACE = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 FETCH_TIMEOUT = 120
-# The patch must not depend on the person's git settings (prefixes, colours, external or text-converting diffs).
+# The patch must not depend on the person's git settings (prefixes, colours, external or
+# text-converting diffs).
 GIT_DIFF = ("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "--cached", "--binary",
             "--full-index", "--no-color", "--no-ext-diff", "--no-textconv")
 
@@ -45,6 +48,8 @@ def run(args: list[str], cwd: Path, check: bool = True, timeout: float | None = 
         proc = subprocess.run(args, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, capture_output=True,
                               timeout=timeout, creationflags=NO_WINDOW)
     except FileNotFoundError:
+        if not Path(cwd).is_dir():
+            raise VcsError(f"フォルダーがありません: {Path(cwd).as_posix()}") from None
         raise VcsError(f"{args[0]} コマンドが見つかりません。インストールして、PATH を設定してください") from None
     except subprocess.TimeoutExpired:
         raise VcsError(f"{' '.join(args[:3])} が {timeout:.0f} 秒以内に終了しませんでした") from None
@@ -79,8 +84,14 @@ class Git:
         self.repo = repo
 
     def git(self, *args: str, cwd: Path | None = None, check: bool = True, timeout: float | None = None):
+        """Run git in the person's repository, or in the work copy ``cwd``. In a copy git must never
+        fall back to a repository above it (the result folder may lie inside the person's repository):
+        a copy that lost its .git file is an error, not the person's working tree."""
+        env = {k: v for k, v in os.environ.items() if k not in GIT_PLACE}
+        if cwd is not None:
+            env["GIT_CEILING_DIRECTORIES"] = str(cwd.parent)
         return run(["git", "-c", "core.longpaths=true", *args], cwd or self.repo, check, timeout,
-                   {**os.environ, **QUIET_GIT})
+                   {**env, **QUIET_GIT})
 
     def _commit(self, ref: str) -> str:
         return text(self.git("rev-parse", "--verify", "--quiet", ref + "^{commit}", check=False).stdout)
@@ -119,8 +130,12 @@ class Git:
         self.git("worktree", "add", "--detach", "--force", str(dest), revision)
 
     def reset(self, dest: Path, revision: str) -> None:
-        self.git("reset", "--quiet", "--hard", revision, cwd=dest)
-        self.git("clean", "-q", "-f", "-d", "-x", cwd=dest)
+        try:
+            self.git("reset", "--quiet", "--hard", revision, cwd=dest)
+            self.git("clean", "-q", "-f", "-d", "-x", cwd=dest)
+        except VcsError:  # a lock left by a git command that was killed, a lost .git file: a new copy
+            self.remove(dest)
+            self.make_copy(dest, revision)
 
     def diff(self, dest: Path, revision: str) -> tuple[list[str], bytes]:
         """(changed files, patch bytes) of everything changed in the copy since ``revision``."""
@@ -128,6 +143,11 @@ class Git:
         names = self.git("diff", "--cached", "--name-only", "-z", revision, cwd=dest).stdout
         files = sorted(name.decode("utf-8", "replace") for name in names.split(b"\0") if name)
         return files, self.git(*GIT_DIFF, revision, cwd=dest).stdout
+
+    def original(self, dest: Path, revision: str, rel: str) -> bytes | None:
+        """The bytes a file has in a clean copy (line ends as git checks them out); None: no such file."""
+        proc = self.git("cat-file", "--filters", f"{revision}:{rel}", cwd=dest, check=False)
+        return proc.stdout if proc.returncode == 0 else None
 
     def apply(self, dest: Path, patch: Path) -> str:
         """Apply a patch to the copy. '' when it applied, else the reason (nothing is changed then)."""
@@ -172,18 +192,26 @@ class Svn:
         self.svn("checkout", "--quiet", "-r", revision, url, str(dest))
 
     def _status(self, dest: Path, *extra: str) -> list[tuple[str, str]]:
-        """[(state, path)] from ``svn status --xml`` (the text form garbles non-ASCII names on Windows)."""
+        """[(state, path with /)] from ``svn status --xml`` (the text form garbles non-ASCII names on
+        Windows). The files of an svn:externals folder are listed too, after the folder ("external")."""
         root = ET.fromstring(self.svn("status", "--xml", *extra, cwd=dest).stdout)
         found = []
         for entry in root.iter("entry"):
             state = entry.find("wc-status")
             if state is not None and entry.get("path") not in (None, "", "."):
-                found.append((state.get("item", ""), entry.get("path")))
+                found.append((state.get("item", ""), entry.get("path").replace("\\", "/")))
         return found
 
     def reset(self, dest: Path, revision: str) -> None:
-        self.svn("revert", "--quiet", "-R", ".", cwd=dest)
-        for state, rel in self._status(dest, "--no-ignore"):
+        revert = ("revert", "--quiet", "-R")  # a path ends with @: a name with an @ is not read as a revision
+        if self.svn(*revert, ".", cwd=dest, check=False).returncode != 0:
+            self.svn("cleanup", cwd=dest)  # a lock left by an svn command that was killed
+            self.svn(*revert, ".", cwd=dest)
+        status = self._status(dest, "--no-ignore")
+        external = [rel for state, rel in status if state == "external"]
+        for rel in external:  # revert does not go into them
+            self.svn(*revert, rel + "@", cwd=dest)
+        for state, rel in self._status(dest, "--no-ignore") if external else status:
             if state in ("unversioned", "ignored"):
                 target = dest / rel
                 if target.is_dir() and not target.is_symlink():
@@ -192,14 +220,25 @@ class Svn:
                     target.unlink(missing_ok=True)
 
     def diff(self, dest: Path, revision: str) -> tuple[list[str], bytes]:
+        status = self._status(dest)
+        external = tuple(rel + "/" for state, rel in status if state == "external")
+        foreign = [rel for _state, rel in status if rel.startswith(external)] if external else []
+        if foreign:  # svn diff leaves them out: such a change would silently be no part of the fix
+            raise VcsError(f"{'、'.join(foreign)} は svn:externals で取り込んだ別の場所のファイルのため、"
+                           "修正コードに含められません。このファイルの変更を元に戻してください")
         self.svn("add", "--quiet", "--force", ".", cwd=dest)
-        for state, rel in self._status(dest):
+        for state, rel in status:
             if state == "missing":
-                self.svn("delete", "--quiet", rel, cwd=dest)
-        files = sorted(rel.replace("\\", "/") for state, rel in self._status(dest)
+                self.svn("delete", "--quiet", rel + "@", cwd=dest)
+        files = sorted(rel for state, rel in self._status(dest)
                        if state in ("modified", "added", "deleted", "replaced") and not (dest / rel).is_dir())
         # --force: a Shift_JIS source that svn took for a binary file is still written as a text diff
         return files, self.svn("diff", "--internal-diff", "--force", cwd=dest).stdout if files else b""
+
+    def original(self, dest: Path, revision: str, rel: str) -> bytes | None:
+        """The bytes a file has in a clean copy (line ends as svn checks them out); None: no such file."""
+        proc = self.svn("cat", rel + "@BASE", cwd=dest, check=False)
+        return proc.stdout if proc.returncode == 0 else None
 
     def apply(self, dest: Path, patch: Path) -> str:
         for dry in (("--dry-run",), ()):  # svn patch applies what it can: look first, so that nothing is half applied

@@ -3,6 +3,9 @@
 The agent has what a real agent has. It runs the command lines the script prints under ``next``, plays the
 MCP tools a reply asks for from the fake warnings of the sample, edits files in the work copy the script
 names and writes result.json. Nothing of the plugin is imported: the command line is the contract.
+
+The two MCP tools are played here, in the file layout the skill reads. The server in mcp-servers/ is not
+part of this test yet: it still writes another layout (it is rebuilt in a later step).
 """
 
 from __future__ import annotations
@@ -36,17 +39,6 @@ WARNINGS = {w["cid"]: w for w in load(TARGET / ".coverity-triage" / "fake-issues
 CIDS = list(WARNINGS)
 EXPECTED = load(SAMPLE / "expected.yaml")["items"]
 
-# Two more files, as Windows projects have them: CRLF line ends, and Shift_JIS (cp932). One warning each.
-ENCODED_FILES = {
-    "src/crlf.c": b"int twice(const int *p)\r\n{\r\n    return *p * 2;\r\n}\r\n",
-    "src/sjis.c": "/* 上限の温度を返す */\r\nint limit(const int *p)\r\n{\r\n    return *p;\r\n}\r\n".encode(
-        "cp932"),
-}
-ENCODED = {cid: {"cid": cid, "checker": "FORWARD_NULL", "file": name, "line": line, "function": function,
-                 "impact": "High", "checker_description": "NULL の可能性がある値を参照しています。", "events": []}
-           for cid, name, line, function in ((20007, "src/crlf.c", 3, "twice"),
-                                             (20008, "src/sjis.c", 4, "limit"))}
-
 # The fix of the scripted agent per CID: (bytes of the reported file, what it writes in their place).
 FIXES = {
     20001: (b"BUF_SIZE, fp) == NULL) {\n", b"BUF_SIZE, fp) == NULL) {\n        fclose(fp);\n"),
@@ -54,16 +46,14 @@ FIXES = {
     20004: (b"    unsigned char a = value;\n", b"    unsigned char a = (unsigned char)value;\n"),
     20005: (b"    unsigned char b = value + 1;\n", b"    unsigned char b = (unsigned char)(value + 1);\n"),
     20006: (b"    unsigned char c = value + 2;\n", b"    unsigned char c = (unsigned char)(value + 2);\n"),
-    20007: (b"    return *p * 2;\r\n", b"    return (p != 0) ? *p * 2 : 0;\r\n"),
-    20008: ("    return *p;\r\n".encode("cp932"),
-            "    /* 未設定のときは 0 を返す */\r\n    return (p != 0) ? *p : 0;\r\n".encode("cp932")),
 }
-# recommendation -> verdict, Classification and Action for Coverity, the deviation comment
+# What it changes when a CID comes back with its earlier fix in the copy: after a review, and as the
+# leader of the CIDs with one cause (one fix for all of them).
+REWORKS = {20001: [(b"        fclose(fp);\n", b"        (void)fclose(fp);\n")], 20004: [FIXES[20005], FIXES[20006]]}
+# recommendation -> verdict, the deviation comment
 CONCLUSIONS = {
-    "fix": ("true_bug", "Bug", "Fix Required",
-            "本物の不具合。{place} の {function} で、{checker} が指摘する経路を通る。"),
-    "deviation": ("false_positive", "False Positive", "Ignore",
-                  "誤検知。{place} の {function} は、呼び出し元が引数を検証してから呼び出す。"),
+    "fix": ("true_bug", "本物のバグ。{place} の {function} で、{checker} が指摘する経路を通る。"),
+    "deviation": ("false_positive", "誤検知。{place} の {function} は、呼び出し元が引数を検証してから呼び出す。"),
 }
 
 
@@ -86,8 +76,8 @@ def write_json(path: Path, data) -> None:
 class Agent:
     """One session of the scripted agent in the person's repository."""
 
-    def __init__(self, repo: Path, warnings: dict = WARNINGS):
-        self.repo, self.warnings = repo, warnings
+    def __init__(self, repo: Path):
+        self.repo, self.warnings = repo, WARNINGS
         self.replies, self.calls, self.worked = [], [], []  # every reply, the tools called, the CIDs worked on
 
     def run(self, line: str) -> dict:
@@ -96,7 +86,8 @@ class Agent:
                               timeout=120)
         try:
             reply = json.loads(proc.stdout.decode("utf-8"))
-            good = proc.returncode == 0 and isinstance(reply["ok"], bool) and all(isinstance(n, str) for n in reply["next"])
+            good = proc.returncode == 0 and isinstance(reply["ok"], bool) and all(
+                isinstance(n, str) for n in reply["next"])
         except (ValueError, KeyError, TypeError):
             good = False
         if not good:
@@ -150,25 +141,28 @@ class Agent:
         cid, issue = given["cid"], given["issue"]
         expected = EXPECTED.get(str(cid)) or {"recommendation": "fix",
                                               "reason": self.warnings[cid]["checker_description"]}
-        verdict, classification, action, comment = CONCLUSIONS[expected["recommendation"]]
+        verdict, comment = CONCLUSIONS[expected["recommendation"]]
         place = f"{issue['file']}:{issue['line']}"
         other = {"fix": {"summary": "指摘された経路を通らないようにします"}} if verdict == "true_bug" else {
             "no_fix_reason": "コードに問題がないため"}
         return {"cid": cid, "verdict": verdict, "summary": expected["reason"],
                 "evidence": [{"file": issue["file"], "line": issue["line"], "note": expected["reason"]}],
                 "recommendation": expected["recommendation"], "confidence": "high", **other,
-                "deviation": {"comment": comment.format(place=place, **issue), "classification": classification,
-                              "action": action, "severity": "Major"}}
+                "deviation": {"comment": comment.format(place=place, **issue)}}
 
     def edit(self, given: dict) -> None:
-        """Make the fix in the work copy. The file must be the committed one: in a copy that was not reset
-        for this CID the fix of an earlier try would still be there."""
-        old, new = FIXES[given["cid"]]
+        """Make the fix in the work copy. The file must be what the reply says: the committed one, or for a
+        CID that was sent back the one with its earlier fix. In a copy that was not reset for this CID the
+        fix of another try would still be there."""
+        rework = given.get("rework")
+        changes = REWORKS[given["cid"]] if rework and rework["patch_applied"] else [FIXES[given["cid"]]]
         path = Path(given["work_dir"]) / given["issue"]["file"]
         data = path.read_bytes()
-        if data.count(old) != 1 or new in data:
-            raise AssertionError(f"CID {given['cid']}: {path} is not the committed file")
-        path.write_bytes(data.replace(old, new))
+        for old, new in changes:
+            if data.count(old) != 1 or new in data:
+                raise AssertionError(f"CID {given['cid']}: {path} is not the expected file")
+            data = data.replace(old, new)
+        path.write_bytes(data)
 
     def work(self, given: dict) -> None:
         """What a worker does with the CID that next handed out: read the warning, fix, write the result."""
@@ -192,8 +186,8 @@ def call(*args, cwd: Path) -> bytes:
 
 
 def make_repo(kind: str, top: Path) -> Path:
-    """The sample and the two encoded files as the person's repository with one commit: <top>/repo
-    (svn: a working copy of the repository <top>/svnrepo)."""
+    """The sample as the person's repository with one commit: <top>/repo (svn: a working copy of the
+    repository <top>/svnrepo)."""
     repo = top / "repo"
     if kind == "svn":
         call("svnadmin", "create", top / "svnrepo", cwd=top)
@@ -201,7 +195,6 @@ def make_repo(kind: str, top: Path) -> Path:
     # LF in the repository, also where git checked the sample out with CRLF (Windows)
     files = {path.relative_to(TARGET).as_posix(): path.read_bytes().replace(b"\r\n", b"\n")
              for path in TARGET.rglob("*") if path.is_file()}
-    files.update(ENCODED_FILES)
     files[".coverity-triage/config.yaml"] = CONFIG.encode("utf-8")
     for name, data in files.items():
         (repo / name).parent.mkdir(parents=True, exist_ok=True)

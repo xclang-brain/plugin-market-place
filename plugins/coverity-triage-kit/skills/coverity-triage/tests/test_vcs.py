@@ -59,6 +59,19 @@ class Copies:
         repo.remove(self.top / "work")
         self.assertFalse((self.top / "work").exists())
         self.assertEqual(support.user_tree(self.kind, self.top / "repo"), b"")
+        with self.assertRaisesRegex(vcs.VcsError, "フォルダーがありません"):  # not: the command is not installed
+            repo.diff(w1, revision)
+
+    def test_a_deleted_file_with_an_at_sign_and_the_clean_bytes_of_a_file(self):
+        repo = vcs.open_repo(support.make_repo(self.kind, self.top, {**support.FILES, "src/icon@2x.c": b"int i;\n"}))
+        revision, copy = repo.base("")[1], self.top / "work" / "w1"
+        repo.make_copy(copy, revision)
+        (copy / "src" / "icon@2x.c").unlink()
+        (copy / "src" / "sjis.c").write_bytes(b"changed\n")
+        self.assertEqual(repo.diff(copy, revision)[0], ["src/icon@2x.c", "src/sjis.c"])
+        self.assertEqual(repo.original(copy, revision, "src/sjis.c"), support.SJIS)
+        self.assertEqual(repo.original(copy, revision, "src/icon@2x.c"), b"int i;\n")
+        self.assertIsNone(repo.original(copy, revision, "src/none.c"))
 
 
 class GitTest(Copies, Case):
@@ -110,6 +123,31 @@ class SvnTest(Copies, Case):
         self.assertTrue(repo.is_copy(w2))
         self.assertEqual((w2 / "src" / "a.c").read_bytes(), support.FILES["src/a.c"], "the copy is clean")
         self.assertEqual(repo.diff(w2, "1"), ([], b""))
+
+    def test_files_of_an_external_are_no_part_of_a_fix(self):
+        url = (self.top / "svnrepo").as_uri()
+        call("svnadmin", "create", self.top / "svnrepo", cwd=self.top)
+        call("svn", "mkdir", "-q", "-m", "folders", f"{url}/proj", f"{url}/lib", cwd=self.top)
+        for name, files in (("lib", {"util.c": b"int u;\n"}), ("proj", {"src/a.c": b"int a;\n"})):
+            call("svn", "checkout", "-q", f"{url}/{name}", self.top / name, cwd=self.top)
+            support.write(self.top / name, files)
+            call("svn", "add", "-q", "--force", ".", cwd=self.top / name)
+            if name == "proj":
+                call("svn", "propset", "-q", "svn:externals", "^/lib lib", ".", cwd=self.top / name)
+            call("svn", "commit", "-q", "-m", name, cwd=self.top / name)
+        call("svn", "update", "-q", cwd=self.top / "proj")
+        repo, copy = vcs.open_repo(self.top / "proj"), self.top / "work" / "w1"
+        revision = repo.base("")[1]
+        repo.make_copy(copy, revision)
+        support.write(copy, {"lib/util.c": b"int u2;\n", "lib/new.c": b"int n;\n", "src/a.c": b"int a2;\n"})
+        with self.assertRaisesRegex(vcs.VcsError, "lib/new.c、lib/util.c は svn:externals で取り込んだ別の場所のファイル"):
+            repo.diff(copy, revision)
+        repo.reset(copy, revision)  # also inside the external
+        self.assertEqual((copy / "lib" / "util.c").read_bytes(), b"int u;\n")
+        self.assertFalse((copy / "lib" / "new.c").exists())
+        self.assertEqual(repo.original(copy, revision, "lib/util.c"), b"int u;\n", "it can be read and be evidence")
+        (copy / "src" / "a.c").write_bytes(b"int a2;\n")
+        self.assertEqual(repo.diff(copy, revision)[0], ["src/a.c"])
 
 
 if __name__ == "__main__":

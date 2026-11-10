@@ -9,13 +9,15 @@
   start   --repo <repo> [--slots N] [--review] [--new]      create or continue the result folder
   next    --run <dir> [--slot K] [--batch R] [--cid N]      hand out the next CID to work on
   save    --run <dir> --cid N [--slot K]                    check result.json and store the fix as fix.patch
-  review  --run <dir> --cid N --outcome pass|flag|rework|unverified [--point "file:line text"].. [--cap high|medium|low]
+  review  --run <dir> --cid N --outcome pass|flag|rework|unverified [--point "file:line text"]..
+          [--cap high|medium|low]
   merge   --run <dir> --leader N --members A,B [--rework] [--point "text"]..
-  status  --run <dir>                                       counts, slots, merge candidates, review batches
+  status  --run <dir>                                       counts, merge candidates, review batches
   finish  --run <dir>                                       refuse unfinished work, write summary.md
 
 Every command prints one JSON object (UTF-8): ``ok``, ``run_dir`` and, under ``next``, the full command
-lines of the next step, so that an agent that lost its context continues from the output alone.
+lines of the next step, so that an agent that lost its context continues from the output alone. ``fetch``
+lists the tools to call before that step. ``message`` is a sentence for the person.
 ``"ok": false`` comes with a Japanese ``error`` (and ``problems``) that says what to correct.
 
 The folder is the state. A CID of issues.json without cid/<CID>/state.json is pending. ``next`` wins a
@@ -25,6 +27,7 @@ CID by the exclusive creation of work/claims/<CID>.<try>; only the winner writes
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -43,15 +46,15 @@ import vcs  # noqa: E402
 from job import read_json, write_bytes, write_json  # noqa: E402
 
 SCRIPT = Path(__file__).resolve()
-WAIT = 20  # seconds start and finish wait for a background job before they answer "wait"
+WAIT = 20  # seconds start and finish wait for a background job before they answer that it still runs
 STALE = 30 * 60  # seconds after which a claim without a save is taken from its slot
+OLD_LIST = 10 * 60  # seconds after which start says when the list of warnings was fetched
 BATCH = 5  # CIDs per slot and round (keeps a worker's context small)
 VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intentional": "意図的", "undetermined": "判定不能"}
 RECOMMEND = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する"}
 LEVEL = {"high": "高", "medium": "中", "low": "低"}
 REVIEW = {"pass": "合格", "flag": "要確認", "rework": "差し戻し", "unverified": "未検証"}
-BUILD = {"ok": "成功", "failed": "失敗", "not_applied": "適用できず"}
-HEADERS = ["CID", "チェッカー", "場所", "判定", "推奨", "確信度", "検証", "ビルド", "修正コード", "逸脱コメント"]
+BUILD = {"ok": "成功", "failed": "失敗", "not_applied": "適用できず", "unknown": "不明"}
 
 
 class Problem(Exception):
@@ -76,8 +79,8 @@ def command(name: str, run_dir: Path | None, *extra) -> str:
 
 
 def start_command(repo: Path, mode: dict) -> str:
-    return command("start", None, "--repo", f'"{repo.as_posix()}"', *(["--slots", mode["slots"]] if mode["all"] else []),
-                   *(["--review"] if mode["review"] else []))
+    return command("start", None, "--repo", f'"{repo.as_posix()}"',
+                   *(["--slots", mode["slots"]] if mode["all"] else []), *(["--review"] if mode["review"] else []))
 
 
 def reply(run_dir: Path, **fields) -> dict:
@@ -171,22 +174,31 @@ def age(stamp: str) -> float:
     return (datetime.now() - datetime.fromisoformat(stamp)).total_seconds()
 
 
-def remove_work(run_dir: Path, repo: Path) -> None:
-    if (run_dir / "work").is_dir():
-        vcs.open_repo(repo).remove(run_dir / "work")
+def remove_work(run_dir: Path, repo: Path) -> str:
+    """Delete the work copies of a run. This is cleanup: a folder that another program holds (on Windows
+    also a shell that sits in it) stays, and the sentence that says so is returned."""
+    try:
+        if (run_dir / "work").is_dir():
+            vcs.open_repo(repo).remove(run_dir / "work")
+    except vcs.VcsError as exc:
+        return str(exc)
+    return ""
 
 
 def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
-    """The newest result folder of this repository while it has unfinished CIDs, else a new one."""
+    """The newest result folder of this repository while it is not finished, else a new one. Not
+    finished: it has no list yet, or unfinished CIDs, or (a run that processes every CID) its CIDs are
+    all saved but finish has not written the summary."""
     out = cfg["output_dir"]
     runs = sorted((p for p in out.iterdir() if (read_json(p / "run.json") or {}).get("repo") == repo.as_posix()),
                   reverse=True) if out.is_dir() else []
     if runs and not new:
         latest = Run(runs[0], starting=True)
-        if not latest.fetch or count(latest.states())["remaining"]:
+        open_end = latest.meta["all"] and latest.issues and not (runs[0] / "summary.md").is_file()
+        if not latest.fetch or count(latest.states())["remaining"] or open_end:
             return runs[0]
     for old in runs:
-        remove_work(old, repo)
+        remove_work(old, repo)  # what cannot be deleted now is tried again with the next new folder
     while True:
         run_dir = out / time.strftime("%Y%m%d-%H%M%S")
         try:
@@ -195,8 +207,7 @@ def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
         except FileExistsError:
             time.sleep(0.3)
     write_json(run_dir / "run.json", {"repo": repo.as_posix(), "vcs": kind, "base_branch": "", "base_revision": "",
-                                      "stream": cfg["stream"], "slots": 1, "review": False, "all": False,
-                                      "created_at": job.now()})
+                                      "stream": cfg["stream"], "slots": 1, "review": False, "all": False})
     return run_dir
 
 
@@ -208,50 +219,68 @@ def need_command(cfg: dict, option: str) -> None:
 def cmd_start(args) -> dict:
     repo = Path(args.repo).resolve()
     cfg = settings(repo)
-    kind = vcs.open_repo(repo).kind
-    slots = args.slots or (cfg["parallel"] if args.review else 1)
-    mode = {"slots": slots, "review": args.review, "all": args.slots is not None or args.review}
+    opened = vcs.open_repo(repo)
+    run_dir = find_run(repo, cfg, opened.kind, args.new)
+
+    def meta() -> dict:
+        """run.json with the mode of this request. The mode of a run only grows: a request in a chat
+        does not take the guards (every CID, review) from a run that an agent has started."""
+        old = read_json(run_dir / "run.json")
+        slots = args.slots or (cfg["parallel"] if args.review else 1)
+        return {**old, "slots": max(old["slots"], slots), "review": old["review"] or args.review,
+                "all": old["all"] or args.slots is not None or args.review}
+
+    mode = meta()
     again = [start_command(repo, mode)]
-    run_dir = find_run(repo, cfg, kind, args.new)
-    meta = {**read_json(run_dir / "run.json"), **mode}
-    write_json(run_dir / "run.json", meta)
+    listed = fetched(read_json(run_dir / "issues.json"))
     deadline = time.monotonic() + WAIT
     jobs = []
-    if cfg["initial_analysis"] and not fetched(read_json(run_dir / "issues.json")):
+    if cfg["initial_analysis"] and not listed:
         need_command(cfg, "build.initial_analysis")
-        jobs.append(("analyze", "最初の解析と登録", {"repo": str(repo), "command": cfg["command"], "url": cfg["url"],
-                                             "analyze_args": cfg["analyze_args"], "stream": cfg["stream"]}))
-    jobs.append(("prepare", "作業用コピーの準備", {"repo": str(repo), "slots": slots, "base_branch": cfg["base_branch"]}))
-    for name, label, job_args in jobs:
-        status = job.ensure(run_dir, name, job_args, deadline)
-        if status["status"] == "running":
-            return reply(run_dir, wait=True, message=f"{label}を実行しています。next のコマンドをもう一度実行してください",
-                         log=status["log"], next=again)
+        jobs.append(("analyze", "最初の解析と登録", "最初の解析と登録を実行しています", deadline,
+                     {"repo": str(repo), "command": cfg["command"], "url": cfg["url"],
+                      "analyze_args": cfg["analyze_args"], "stream": cfg["stream"]}))
+    made = job.read(run_dir, "prepare")
+    if made and made["status"] == "done" and not all(opened.is_copy(run_dir / "work" / f"w{k}")
+                                                     for k in range(1, mode["slots"] + 1)):
+        (run_dir / "work" / "prepare.json").unlink(missing_ok=True)  # a copy was lost: the job makes it again
+    # The copies are not needed to fetch the list: without the list the job is started and not waited for.
+    jobs.append(("prepare", "作業用コピーの準備", "作業用コピーを準備しています", deadline if listed else 0,
+                 {"repo": str(repo), "slots": mode["slots"], "base_branch": cfg["base_branch"]}))
+    for name, label, running, until, job_args in jobs:
+        status = job.ensure(run_dir, name, job_args, until)
         if status["status"] == "failed":
             raise Problem(f"{label}が失敗しました: {status['error']}", run_dir=run_dir.as_posix(), log=status["log"],
                           next=again)
-    if not meta["base_revision"]:
-        meta.update(base_branch=status["base_branch"], base_revision=status["base_revision"])
-        write_json(run_dir / "run.json", meta)
-    run = Run(run_dir, starting=True)
-    if not run.fetch:
-        fetch = {"tool": "coverity_search_issues",
-                 "arguments": {"repo_root": repo.as_posix(), "output_file": (run_dir / "issues.json").as_posix()}}
-        return reply(run_dir, wait=False, need_fetch=True, fetch=[fetch], next=again,
-                     message="警告の一覧がまだありません。fetch のツールを呼び出して取得してから、next のコマンドを実行してください")
+        if status["status"] == "running" and until:
+            return reply(run_dir, message=running, log=status["log"], next=again)
+    if not listed:
+        search = {"tool": "coverity_search_issues",
+                  "arguments": {"repo_root": repo.as_posix(), "output_file": (run_dir / "issues.json").as_posix()}}
+        return reply(run_dir, fetch=[search], next=again)
+    mode = meta()
+    if not mode["base_revision"]:
+        mode.update(base_branch=status["base_branch"], base_revision=status["base_revision"])
+    write_json(run_dir / "run.json", mode)
+    run = Run(run_dir)
     states = run.states()
     found = count(states)
     total, matched = found["total"], run.fetch.get("total_matched")
-    message = f"{total} 件の警告を処置します" if total else "条件に合う警告はありません"
     if found["done"] + found["failed"]:
         message = f"前回の続きから進めます（残り {found['remaining']} 件）"
-    if run.fetch.get("limited") and matched:
-        message += f"。条件に合う警告は {matched} 件あります。設定の上限（{total} 件）まで取得しました"
-    fetch = details_call(run, [cid for cid, s in states.items() if not s or s["status"] in ("working", "rework")])
-    if fetch:
-        message += "。fetch のツールを呼び出して警告の経路を取得してから、next のコマンドを実行してください"
-    return reply(run_dir, wait=False, need_fetch=False, fetch=fetch, counts=found, slots=slots,
-                 note=status.get("note", ""), message=message, next=run.steps(states) if total else [])
+    elif run.fetch.get("limited") and matched:
+        message = f"条件に合う警告は {matched} 件あります。設定の上限（{total} 件）まで取得しました"
+    else:
+        message = f"条件に合う警告を {total} 件取得しました" if total else "条件に合う警告はありません"
+    listed_at = (run_dir / "issues.json").stat().st_mtime
+    if time.time() - listed_at > OLD_LIST:
+        message += f"（警告の取得: {time.strftime('%Y-%m-%d %H:%M', time.localtime(listed_at))}）"
+    if status.get("note"):
+        message += f"。{status['note']}"
+    # A run that processes every CID fetches the warning paths once, here; a chat fetches them per CID (next).
+    unfinished = [cid for cid, s in states.items() if not s or s["status"] in ("working", "rework")]
+    return reply(run_dir, fetch=details_call(run, unfinished) if mode["all"] else [], counts=found,
+                 message=message, next=run.steps(states) if total else [])
 
 
 # ---- next: hand out one CID -----------------------------------------------------------------
@@ -307,26 +336,35 @@ def map_path(copy: Path, path: str) -> str:
 def details_call(run: Run, cids: list[int]) -> list[dict]:
     """The tool call that fetches the warning paths (cid/<CID>/issue.json) that are not in the folder yet."""
     missing = [cid for cid in cids if not (run.cid_dir(cid) / "issue.json").is_file()]
-    return [{"tool": "coverity_get_issue_details", "arguments": {
-        "repo_root": run.repo.as_posix(), "cids": missing, "output_dir": (run.dir / "cid").as_posix()}}] if missing else []
+    arguments = {"repo_root": run.repo.as_posix(), "cids": missing, "output_dir": (run.dir / "cid").as_posix()}
+    return [{"tool": "coverity_get_issue_details", "arguments": arguments}] if missing else []
+
+
+def work_copy(run: Run, slot: int):
+    """(the repository, the work copy of the slot). start makes a copy that is missing or damaged again."""
+    repo, copy = vcs.open_repo(run.repo), run.copy(slot)
+    if not repo.is_copy(copy):
+        raise Problem(f"作業用コピーがありません: {copy.as_posix()}。next のコマンド（start）を実行してください",
+                      next=[start_command(run.repo, run.meta)])
+    return repo, copy
 
 
 def cmd_next(args) -> dict:
     run = Run(args.run)
-    slot, batch, copy = args.slot, args.batch, run.copy(args.slot)
-    repo = vcs.open_repo(run.repo)
-    if not repo.is_copy(copy):
-        raise Problem(f"スロット {slot} の作業用コピーがありません。next のコマンド（start）を実行してください",
-                      next=[start_command(run.repo, run.meta)])
+    slot, batch = args.slot, args.batch
+    repo, copy = work_copy(run, slot)
     if args.cid is not None and args.cid not in run.issues:
         raise Problem(f"CID {args.cid} は取得した警告の一覧にありません")
+    # Before a CID is claimed: a copy that cannot be made clean must not cost a CID one of its two tries.
+    repo.reset(copy, run.meta["base_revision"])
     states = run.states()
 
     def free(state) -> bool:
         if state is None or state["status"] == "rework":
             return True
-        return state["status"] == "working" and (state["slot"] == slot or state["slot"] > run.meta["slots"]
-                                                 or age(state["claimed_at"]) > STALE)
+        if state["status"] == "failed":
+            return args.cid is not None  # the person asks for this CID: once more
+        return state["status"] == "working" and (state["slot"] == slot or age(state["claimed_at"]) > STALE)
 
     def own(cid) -> bool:  # the CID this slot was given and did not save comes first
         return bool(states[cid]) and states[cid]["status"] == "working" and states[cid]["slot"] == slot
@@ -337,34 +375,33 @@ def cmd_next(args) -> dict:
         if not free(states[cid]):
             continue
         state = claim(run, cid, states[cid], slot, batch)
+        if state and state["status"] == "failed" and args.cid is not None:
+            state = claim(run, cid, state, slot, batch)  # the person asks for this CID: it is not refused
         if state is None or state["status"] != "working":
             states[cid] = state or states[cid]
             continue
-        base = run.meta["base_revision"]
-        repo.reset(copy, base)
         issue = {**run.issues[cid], "file": map_path(copy, run.issues[cid].get("file", ""))}
-        out = reply(run.dir, cid=cid, slot=slot, repo=run.repo.as_posix(), issue=issue,
-                    issue_file=(run.cid_dir(cid) / "issue.json").as_posix(), work_dir=copy.as_posix(),
-                    result_file=(run.cid_dir(cid) / "result.json").as_posix(), fetch=details_call(run, [cid]))
+        out = reply(run.dir, cid=cid, issue=issue, issue_file=(run.cid_dir(cid) / "issue.json").as_posix(),
+                    work_dir=copy.as_posix(), result_file=(run.cid_dir(cid) / "result.json").as_posix(),
+                    fetch=details_call(run, [cid]))
         if state.get("rework"):  # sent back: the earlier fix is in the copy again, to be changed
             patch = run.cid_dir(cid) / "fix.patch"
             applied = patch.is_file() and not repo.apply(copy, patch)
             out["rework"] = {"points": state["rework"], "patch_applied": applied}
-        out["message"] = (f"CID {cid} を処置してください。work_dir のファイルを修正し、result_file に結果を書いてから、"
-                          "next のコマンドを実行してください")
         if state["retry"]:
-            out["message"] += "（前回は結果が保存されなかったため、もう一度処置します）"
+            out["message"] = f"CID {cid} は、前回の結果が保存されていないため、もう一度処置します"
         out["next"] = [command("save", run.dir, "--cid", cid, "--slot", slot)]
         return out
     found = count(states)
     if args.cid is not None:
-        state = read_json(run.cid_dir(args.cid) / "state.json") or {}
-        message = f"CID {args.cid} は" + {"done": "処置済みです", "failed": f"処置できませんでした: {state.get('error')}"}.get(
-            state.get("status"), "ほかのスロットが処置中です")
+        done = (read_json(run.cid_dir(args.cid) / "state.json") or {}).get("status") == "done"
+        message = f"CID {args.cid} は" + ("処置済みです" if done else "ほかのエージェントが処置中です")
     elif batch is not None:
-        message = "この依頼で処置する CID は以上です。結果を報告してください"
+        message = "この依頼で処置する CID は以上です"
+    elif found["remaining"]:
+        message = f"ほかのエージェントが処置中の CID が {found['working']} 件あります"
     else:
-        message = f"ほかのスロットが処置中の CID が {found['working']} 件あります" if found["remaining"] else "未処置の CID はありません"
+        message = "未処置の CID はありません"
     return reply(run.dir, cid=None, done=True, counts=found, message=message,
                  next=[] if batch is not None else [command("finish", run.dir)])
 
@@ -374,48 +411,68 @@ def cmd_next(args) -> dict:
 
 def cmd_save(args) -> dict:
     run = Run(args.run)
-    cid, slot = args.cid, args.slot
-    state = read_json(run.cid_dir(cid) / "state.json")
+    cid, slot, folder = args.cid, args.slot, run.cid_dir(args.cid)
+    state = read_json(folder / "state.json")
     if not state or state["status"] != "working" or state["slot"] != slot:
-        raise Problem(f"CID {cid} は、スロット {slot} が処置中の CID ではありません。next で受け取った CID を保存してください",
+        raise Problem(f"CID {cid} は処置中ではありません。next のコマンドで CID を受け取ってから保存してください",
                       next=[command("next", run.dir, "--slot", slot)])
-    folder, copy, base = run.cid_dir(cid), run.copy(slot), run.meta["base_revision"]
-    repo = vcs.open_repo(run.repo)
+    repo, copy = work_copy(run, slot)
+    base = run.meta["base_revision"]
     files, patch = [], b""
     try:
         result = json.loads((folder / "result.json").read_bytes().decode("utf-8-sig"))
         problems = checks.check_result(result, cid)
+        if not problems:
+            files, patch = repo.diff(copy, base)
     except FileNotFoundError:
         problems = [f"result.json がありません: {(folder / 'result.json').as_posix()}"]
     except ValueError as exc:
         problems = [f"result.json を UTF-8 の JSON として読み取れません（{exc}）"]
+    except vcs.VcsError as exc:
+        problems = [str(exc)]
     if not problems:
-        files, patch = repo.diff(copy, base)
         if result.get("fix") and not patch:
             problems.append(f"fix がありますが、work_dir のファイルが変更されていません: {copy.as_posix()}")
         if patch and not result.get("fix"):
             problems.append("work_dir のファイルが変更されていますが、fix がありません。fix.summary を記入するか、変更を元に戻してください")
-        for n, item in enumerate(result["evidence"]):
+        for rel in files:
+            before = repo.original(copy, base, rel)
+            if before is not None and (copy / rel).is_file():
+                problems += checks.check_form(rel, before, (copy / rel).read_bytes())
+        for n, item in enumerate(result["evidence"]):  # a place in the code before the fix
             rel = item["file"]
-            if Path(rel).is_absolute() or not ((copy / rel).is_file() or rel in files):
-                problems.append(f"evidence[{n}].file: {rel} が work_dir にありません。リポジトリからの相対パスで記入してください")
+            inside = not Path(rel).is_absolute() and ".." not in Path(rel).parts
+            before = repo.original(copy, base, rel) if inside else None
+            if before is None:
+                problems.append(f"evidence[{n}].file: {rel} が work_dir にありません。"
+                                "リポジトリの最上位からの相対パス（区切りは /）で記入してください")
+            elif item["line"] > len(before.splitlines()):
+                problems.append(f"evidence[{n}].line: {rel} は {len(before.splitlines())} 行までです。"
+                                "修正前のコードでの行を記入してください")
     if problems:
         return {**reply(run.dir, cid=cid, result_file=(folder / "result.json").as_posix(), work_dir=copy.as_posix(),
                         problems=problems, next=[command("save", run.dir, "--cid", cid, "--slot", slot)]),
-                "ok": False, "error": "結果に修正が必要な項目があります。problems を修正してから、next のコマンドを実行してください"}
+                "ok": False, "error": "結果に不備があります。problems の内容を訂正して、もう一度保存してください"}
+    result["deviation"].update(checks.coverity_fields(result, run.issues[cid].get("impact")))
+    write_json(folder / "result.json", result)
     if patch:
         write_bytes(folder / "fix.patch", patch)
     else:
         (folder / "fix.patch").unlink(missing_ok=True)
     kept = {k: v for k, v in state.items() if k not in ("rework", "retry", "review", "error")}
-    run.put(cid, {**kept, "status": "done", "files": files, "confidence": result["confidence"], "saved_at": job.now()})
-    repo.reset(copy, base)
+    run.put(cid, {**kept, "status": "done", "files": files, "confidence": result["confidence"]})
+    try:
+        repo.reset(copy, base)  # a clean copy for whoever reads it next
+    except vcs.VcsError:
+        pass  # the result is stored; next makes the copy clean before it hands out a CID
     if not run.meta["all"]:
         summarize(run)
     states = run.states()
-    more = [command("next", run.dir, "--slot", slot, *(["--batch", state["batch"]] if state.get("batch") else []))]
+    batch = ["--batch", state["batch"]] if state.get("batch") else []
+    more = batch or count(states)["remaining"]  # a worker of a round asks next until it answers done
     return reply(run.dir, cid=cid, files=files, patch_file=(folder / "fix.patch").as_posix() if patch else None,
-                 counts=count(states), next=more if state.get("batch") or count(states)["remaining"] else run.steps(states))
+                 counts=count(states),
+                 next=[command("next", run.dir, "--slot", slot, *batch)] if more else run.steps(states))
 
 
 def cmd_review(args) -> dict:
@@ -429,9 +486,7 @@ def cmd_review(args) -> dict:
         raise Problem("検証の記録に修正が必要な項目があります", problems=problems)
     # one rework only: a second one is stored as "flag" (要確認)
     outcome = "flag" if args.outcome == "rework" and state.get("reworked") else args.outcome
-    round_ = (read_json(folder / "review.json") or {}).get("round", 0) + 1
-    write_json(folder / "review.json", {"outcome": outcome, "points": args.point, "confidence_cap": args.cap,
-                                        "round": round_})
+    write_json(folder / "review.json", {"outcome": outcome, "points": args.point, "confidence_cap": args.cap})
     worker = (read_json(folder / "result.json") or {}).get("confidence")
     state.update(review=outcome, confidence=checks.lower_confidence(worker, args.cap))
     if outcome == "rework":
@@ -459,7 +514,8 @@ def cmd_merge(args) -> dict:
     if args.rework:  # no member's fix covers all: one worker makes one fix and one comment for all
         leader.pop("review", None)
         leader.update(status="rework", rework=[
-            f"CID {', '.join(map(str, members))} と同じ原因です。すべての CID を解消する修正と逸脱コメントを1つ作成してください", *args.point])
+            f"CID {', '.join(map(str, members))} と同じ原因です。"
+            "すべての CID の警告を解消する修正と逸脱コメントを1つ作成してください", *args.point])
     run.put(args.leader, leader)
     return reply(run.dir, leader=args.leader, members=members, rework=args.rework, next=[command("status", run.dir)])
 
@@ -499,34 +555,33 @@ def cmd_status(args) -> dict:
     run = Run(args.run)
     states = run.states()
     slots = run.meta["slots"]
-    in_progress = [{"slot": s["slot"], "cid": cid, "minutes": int(age(s["claimed_at"]) // 60)}
-                   for cid, s in states.items() if s and s["status"] == "working"]
     todo = unreviewed(states) if run.meta["review"] else []
     batches = [{"slot": k + 1, "work_dir": run.copy(k + 1).as_posix(), "cids": todo[k::slots]}
                for k in range(slots) if todo[k::slots]]
     single = [cid for cid, s in states.items()
               if s and s["status"] == "done" and not s.get("merged_into") and not s.get("members")]
     merge = command("merge", run.dir, "--leader", "<CID>", "--members", "<CID,CID>", "[--rework]")
-    return reply(run.dir, counts=count(states), in_progress=in_progress, cid_dir=(run.dir / "cid").as_posix(),
-                 merge_candidates=merge_candidates(run, single), merge_command=merge, review_batches=batches,
-                 next=run.steps(states))
+    return reply(run.dir, counts=count(states), merge_candidates=merge_candidates(run, single), merge_command=merge,
+                 review_batches=batches, next=run.steps(states))
 
 
 def summarize(run: Run) -> str:
     """Write summary.md: every fetched CID, and both outputs (fix code, deviation comment) of every
-    finished one. Returns the table."""
+    finished one. The review and the build check are shown when the run has them. Returns the table."""
     states = run.states()
     built = read_json(run.dir / "build.json") or {}
-    built = built.get("cids", {}) if built.get("status") == "done" else {}
+    built = built.get("cids", {}) if built.get("status") == "done" else None
+    shown = [name for name, has in (("検証", run.meta["review"]), ("ビルド", built is not None)) if has]
+    headers = ["CID", "チェッカー", "場所", "判定", "推奨", "確信度", *shown, "修正コード", "逸脱コメント"]
     rows, sections = [], []
     for cid, issue in run.issues.items():
         state = states[cid]
         place = f"{issue.get('file', '')}:{issue.get('line', '')}"
         lead = [str(cid), str(issue.get("checker", "")), place]
         if state is None or state["status"] in ("working", "rework"):
-            rows.append([*lead, "未処置", *["-"] * 6])
+            rows.append([*lead, "未処置", *["-"] * (len(headers) - 4)])
         elif state["status"] == "failed":
-            rows.append([*lead, "失敗", *["-"] * 6])
+            rows.append([*lead, "失敗", *["-"] * (len(headers) - 4)])
             sections.append(f"## CID {cid}（{lead[1]}、{place}）\n\n処置できませんでした: {state.get('error', '')}\n")
         if state is None or state["status"] != "done" or state.get("merged_into"):
             continue
@@ -536,24 +591,26 @@ def summarize(run: Run) -> str:
         points = (read_json(run.cid_dir(cid) / "review.json") or {}).get("points") or []
         if state.get("members"):
             lead[0] += f"（同じ原因: {', '.join(map(str, state['members']))}）"
-        labels = [VERDICT.get(result.get("verdict"), "-"), RECOMMEND.get(result.get("recommendation"), "-"),
-                  LEVEL.get(state.get("confidence"), "-"), REVIEW.get(state.get("review"), "-"),
-                  BUILD.get(built.get(str(cid)), "-")]
-        rows.append([*lead, *labels, ", ".join(state.get("files") or []) or "なし", str(deviation.get("comment", ""))])
+        verdict, level = VERDICT.get(result.get("verdict"), "-"), LEVEL.get(state.get("confidence"), "-")
+        recommend = RECOMMEND.get(result.get("recommendation"), "-")
+        checked = {"検証": REVIEW.get(state.get("review"), "-"), "ビルド": BUILD.get((built or {}).get(str(cid)), "-")}
+        rows.append([*lead, verdict, recommend, level, *(checked[name] for name in shown),
+                     ", ".join(state.get("files") or []) or "なし", str(deviation.get("comment", ""))])
         if patch.is_file():
-            fix = [str((result.get("fix") or {}).get("summary", "")), "", "````diff", vcs.text(patch.read_bytes()), "````"]
+            fix = [str((result.get("fix") or {}).get("summary", "")), "", "````diff", vcs.text(patch.read_bytes()),
+                   "````"]
         else:
             fix = [f"修正コードはありません。理由: {result.get('no_fix_reason', '')}"]
         sections.append("\n".join([
-            f"## CID {lead[0]}（{lead[1]}、{place}）", "", f"- 判定: {labels[0]}（確信度: {labels[2]}）",
-            f"- 推奨: {labels[1]}", f"- 概要: {result.get('summary', '')}", f"- 検証: {labels[3]}",
-            *[f"  - {p}" for p in points], f"- ビルド: {labels[4]}", "", "根拠:",
+            f"## CID {lead[0]}（{lead[1]}、{place}）", "", f"- 判定: {verdict}（確信度: {level}）",
+            f"- 推奨: {recommend}", f"- 概要: {result.get('summary', '')}",
+            *[f"- {name}: {checked[name]}" for name in shown], *[f"- 検証の指摘: {p}" for p in points], "", "根拠:",
             *[f"- {e.get('file')}:{e.get('line')} {e.get('note')}" for e in result.get("evidence") or []], "",
             "### 修正コード", "", *fix, "", "### 逸脱コメント", "", str(deviation.get("comment", "")), "",
             f"Classification: {deviation.get('classification')}／Action: {deviation.get('action')}／"
             f"Severity: {deviation.get('severity')}", ""]))
     table = "\n".join("| " + " | ".join(c.replace("|", "\\|").replace("\n", " ") for c in row) + " |"
-                      for row in [HEADERS, ["---"] * len(HEADERS), *rows])
+                      for row in [headers, ["---"] * len(headers), *rows])
     found = count(states)
     head = ["# Coverity の警告の処置結果", "", f"- リポジトリ: {run.meta['repo']}", f"- ストリーム: {run.meta['stream']}",
             f"- 警告: {found['total']} 件（処置済み {found['done']} 件、失敗 {found['failed']} 件、未処置 {found['remaining']} 件）"]
@@ -575,21 +632,25 @@ def cmd_finish(args) -> dict:
     if run.meta["review"] and unreviewed(states):
         raise Problem(f"検証されていない CID が {len(unreviewed(states))} 件あります。検証してから finish を実行してください",
                       unreviewed=unreviewed(states), next=[command("status", run.dir)])
-    fixes = [{"cid": cid, "files": s["files"]} for cid, s in states.items()
-             if s and s["status"] == "done" and not s.get("merged_into") and (run.cid_dir(cid) / "fix.patch").is_file()]
+    fixes = []
+    for cid, state in states.items():
+        patch = run.cid_dir(cid) / "fix.patch"
+        if state and state["status"] == "done" and not state.get("merged_into") and patch.is_file():
+            digest = hashlib.sha256(patch.read_bytes()).hexdigest()  # a fix that was made again is built again
+            fixes.append({"cid": cid, "files": state["files"], "sha256": digest})
     if cfg["check_fixes"] and fixes:
         need_command(cfg, "build.check_fixes")
         status = job.ensure(run.dir, "build", {"repo": str(run.repo), "base_revision": run.meta["base_revision"],
                                                "command": cfg["command"], "fixes": fixes}, time.monotonic() + WAIT)
         if status["status"] == "running":
-            return reply(run.dir, wait=True, message="修正を適用してビルドしています。next のコマンドをもう一度実行してください",
-                         log=status["log"], next=[command("finish", run.dir)])
+            return reply(run.dir, message="修正を適用してビルドしています", log=status["log"],
+                         next=[command("finish", run.dir)])
         if status["status"] == "failed":
-            raise Problem(f"ビルドでの確認を実行できませんでした: {status['error']}", log=status["log"])
+            raise Problem(f"修正のビルド確認を実行できませんでした: {status['error']}", log=status["log"])
     table = summarize(run)
-    if not found["remaining"]:
-        remove_work(run.dir, run.repo)
-    return reply(run.dir, wait=False, counts=found, summary_file=(run.dir / "summary.md").as_posix(), table=table, next=[])
+    left = remove_work(run.dir, run.repo) if not found["remaining"] else ""
+    return reply(run.dir, counts=found, summary_file=(run.dir / "summary.md").as_posix(), table=table,
+                 **({"message": f"作業用コピーが残っています。{left}"} if left else {}), next=[])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -618,8 +679,9 @@ def main(argv: list[str] | None = None) -> int:
     args, code = None, 0
     try:
         args = parser.parse_args(argv)
-        if args.command != "start":
-            args.run = Path(args.run).resolve()
+        place = "repo" if args.command == "start" else "run"
+        setattr(args, place, Path(getattr(args, place)).resolve())
+        os.chdir(SCRIPT.parent)  # Windows cannot delete a work copy that is the current folder of a process
         out = globals()[f"cmd_{args.command}"](args)
     except Problem as exc:
         out = {"ok": False, "error": str(exc), **exc.fields}
@@ -632,7 +694,8 @@ def main(argv: list[str] | None = None) -> int:
     if run_dir:
         out = {"ok": out["ok"], "run_dir": Path(run_dir).as_posix(), **out}
         if Path(run_dir, "run.json").is_file():  # log.txt: one line per command
-            what = " ".join(f"{k}={getattr(args, k)}" for k in ("slot", "cid", "leader", "outcome") if getattr(args, k, None))
+            what = " ".join(f"{k}={getattr(args, k)}" for k in ("slot", "cid", "leader", "outcome")
+                            if getattr(args, k, None))
             with open(Path(run_dir, "log.txt"), "a", encoding="utf-8", newline="\n") as log:
                 log.write(f"{job.now()} {args.command} {what} -> {'ok' if out['ok'] else out['error']}\n")
     sys.stdout.buffer.write((json.dumps(out, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))

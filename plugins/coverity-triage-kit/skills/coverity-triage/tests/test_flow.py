@@ -1,13 +1,22 @@
 """start, next, save, review, merge, status and finish on a git and on an svn repository."""
 
+import argparse
+import contextlib
 import json
+import os
+import shutil
+import sqlite3
+import sys
+import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import support
 from support import issue
+import vcs
 
 ONE, TWO, THREE = 20001, 20002, 20003
 THREE_ISSUES = [issue(ONE, function="a"), issue(TWO, "src/b.c", checker="DEADCODE"), issue(THREE, function="a")]
@@ -20,39 +29,62 @@ class Flow:
     def next(self, run, *args) -> dict:
         return self.run_triage("next", "--run", run, *args)
 
-    def test_start_creates_the_run_folder_and_continues_it(self):
-        first = self.start()
+    def meta(self, run) -> dict:
+        return json.loads((run / "run.json").read_text(encoding="utf-8"))
+
+    def test_start_asks_for_the_list_first_and_continues_the_folder(self):
+        first = self.run_triage("start", "--repo", self.repo)  # answered at once: the copies are made meanwhile
         run = Path(first["run_dir"])
-        self.assertTrue(first["ok"] and first["need_fetch"] and not first["wait"])
         self.assertEqual(run.parent, self.top / "coverity-triage-out")
         self.assertEqual(first["fetch"], [{"tool": "coverity_search_issues", "arguments": {
             "repo_root": self.repo.as_posix(), "output_file": (run / "issues.json").as_posix()}}])
         self.assertIn(f'start --repo "{self.repo.as_posix()}"', first["next"][0])
-        meta = json.loads((run / "run.json").read_text(encoding="utf-8"))
-        self.assertEqual({k: meta[k] for k in ("repo", "vcs", "stream", "slots", "review", "all")},
-                         {"repo": self.repo.as_posix(), "vcs": self.kind, "stream": "app-main", "slots": 1,
-                          "review": False, "all": False})
-        self.assertTrue(meta["base_revision"] and (run / "work" / "w1" / "src" / "a.c").is_file())
+        self.assertNotIn("message", first)
         self.assertEqual(self.start()["run_dir"], first["run_dir"], "a folder without the list is continued")
         early = self.next(run)
         self.assertEqual((early["ok"], early["error"][:13]), (False, "警告の一覧がまだありません"))
         self.assertIn("start --repo", early["next"][0])
 
         (run / "issues.json").write_text(json.dumps({"issues": THREE_ISSUES, "total_matched": 137, "limited": True}))
-        again = self.start("--slots", 1)
-        self.assertEqual((again["run_dir"], again["counts"]["total"], again["counts"]["pending"]), (first["run_dir"], 3, 3))
-        self.assertIn("条件に合う警告は 137 件あります。設定の上限（3 件）まで取得しました", again["message"])
-        self.assertEqual(again["fetch"], [{"tool": "coverity_get_issue_details", "arguments": {  # the warning paths
-            "repo_root": self.repo.as_posix(), "cids": [ONE, TWO, THREE], "output_dir": (run / "cid").as_posix()}}])
-        self.assertIn(f'next --run "{run.as_posix()}" --slot 1', again["next"][0])
-        self.assertTrue(json.loads((run / "run.json").read_text(encoding="utf-8"))["all"])
-        self.work(self.next(run))
-        self.assertIn("前回の続きから進めます（残り 2 件）", self.start("--slots", 1)["message"])
+        ready = self.start()
+        self.assertEqual((ready["run_dir"], ready["counts"]["total"], ready["counts"]["pending"]),
+                         (first["run_dir"], 3, 3))
+        self.assertEqual(ready["message"], "条件に合う警告は 137 件あります。設定の上限（3 件）まで取得しました")
+        self.assertEqual(ready["fetch"], [], "in a chat the warning paths are fetched per CID")
+        self.assertIn(f'next --run "{run.as_posix()}" --slot 1', ready["next"][0])
+        self.assertEqual({k: v for k, v in self.meta(run).items() if k != "base_revision"}, {
+            "repo": self.repo.as_posix(), "vcs": self.kind, "stream": "app-main", "slots": 1, "review": False,
+            "all": False, "base_branch": "main" if self.kind == "git" else ""})
+        self.assertTrue(self.meta(run)["base_revision"] and (run / "work" / "w1" / "src" / "a.c").is_file())
 
+        every = self.start("--slots", 1)
+        self.assertEqual(every["fetch"], [{"tool": "coverity_get_issue_details", "arguments": {  # the warning paths
+            "repo_root": self.repo.as_posix(), "cids": [ONE, TWO, THREE], "output_dir": (run / "cid").as_posix()}}])
+        self.work(self.next(run))
+        self.assertEqual(self.start("--slots", 1)["message"], "前回の続きから進めます（残り 2 件）")
         other = self.start("--new")
         self.assertNotEqual(other["run_dir"], first["run_dir"])
-        self.assertTrue(other["need_fetch"])
+        self.assertEqual(other["fetch"][0]["tool"], "coverity_search_issues")
         self.assertFalse((run / "work").exists(), "the copies of the earlier run are removed")
+
+    def test_the_mode_of_a_run_only_grows(self):
+        run = self.begin(THREE_ISSUES, "--slots", 2, "--review")
+        self.work(self.next(run, "--slot", 1))
+        self.assertEqual(self.next(run, "--slot", 2)["cid"], TWO)
+        plain = self.start()  # a request in a chat while the agents work
+        self.assertEqual({k: self.meta(run)[k] for k in ("slots", "review", "all")},
+                         {"slots": 2, "review": True, "all": True})
+        self.assertEqual(len(plain["next"]), 2, "the lines of both slots")
+        self.assertEqual(self.next(run, "--slot", 1)["cid"], THREE, "the CID of slot 2 stays with slot 2")
+        refused = self.run_triage("finish", "--run", run)
+        self.assertEqual((refused["ok"], refused["pending"]), (False, [TWO, THREE]))
+        self.assertEqual(self.run_triage("status", "--run", run)["review_batches"][0]["cids"], [ONE])
+
+    def test_an_old_list_is_shown_with_the_time_it_was_fetched(self):
+        run = self.begin(THREE_ISSUES)
+        fetched = datetime.now() - timedelta(hours=3)
+        os.utime(run / "issues.json", (fetched.timestamp(), fetched.timestamp()))
+        self.assertEqual(self.start()["message"], f"条件に合う警告を 3 件取得しました（警告の取得: {fetched:%Y-%m-%d %H:%M}）")
 
     def test_next_hands_out_every_cid_once_and_save_stores_the_fix(self):
         run = self.begin(THREE_ISSUES, "--slots", 1)
@@ -70,8 +102,9 @@ class Flow:
                              ((cid_dir / "issue.json").as_posix(), (cid_dir / "result.json").as_posix(),
                               (run / "work" / "w1").as_posix()))
             self.assertEqual(given["fetch"], [] if given["cid"] == TWO else [{  # only when issue.json is missing
-                "tool": "coverity_get_issue_details", "arguments": {"repo_root": self.repo.as_posix(), "cids": [given["cid"]],
-                                                                    "output_dir": (run / "cid").as_posix()}}])
+                "tool": "coverity_get_issue_details", "arguments": {
+                    "repo_root": self.repo.as_posix(), "cids": [given["cid"]],
+                    "output_dir": (run / "cid").as_posix()}}])
             self.assertIn(f"save --run \"{run.as_posix()}\" --cid {given['cid']} --slot 1", given["next"][0])
             saved = self.work(given, B_EDIT if given["cid"] == TWO else None)
             self.assertTrue(saved["ok"], saved)
@@ -82,8 +115,24 @@ class Flow:
         self.assertEqual(self.state(run, ONE)["status"], "done")
         self.assertIn(b"return p ? *p : 0;", (run / "cid" / str(ONE) / "fix.patch").read_bytes())
         self.assertEqual(support.user_tree(self.kind, self.repo), before, "the person's files are not touched")
-        self.assertEqual((run / "work" / "w1" / "src" / "a.c").read_bytes(), support.FILES["src/a.c"], "the copy is clean again")
+        self.assertEqual((run / "work" / "w1" / "src" / "a.c").read_bytes(), support.FILES["src/a.c"], "a clean copy")
         self.assertEqual(len((run / "log.txt").read_text(encoding="utf-8").splitlines()), 9, "one line per command")
+        # every CID is saved, but the run was not finished: the same request leads to finish, not to a new fetch
+        again = self.start("--slots", 1)
+        self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), "前回の続きから進めます（残り 0 件）"))
+        self.assertIn("finish --run", again["next"][0])
+
+    def test_save_fills_in_the_values_for_coverity(self):
+        run = self.begin([issue(ONE), issue(TWO), {**issue(THREE), "impact": "Low"}])
+        fixed = "本物のバグ。最新のコードでは a()（src/a.c:3）で NULL を確認してから参照しており、解消されている。"
+        self.work(self.next(run), deviation={"comment": support.FIX_COMMENT, "action": "Fix Required"})
+        self.work(self.next(run), {})
+        self.work(self.next(run), {}, verdict="true_bug", deviation={"comment": fixed})  # fixed in the latest code
+        self.assertEqual([self.read(run, cid, "result.json")["deviation"] for cid in (ONE, TWO, THREE)], [
+            {"comment": support.FIX_COMMENT, "classification": "Bug", "action": "Ignore", "severity": "Major"},
+            {"comment": support.KEEP_COMMENT, "classification": "False Positive", "action": "Ignore",
+             "severity": "Unspecified"},
+            {"comment": fixed, "classification": "Bug", "action": "Fix Submitted", "severity": "Minor"}])
 
     def test_slots_in_parallel_processes_get_every_cid_exactly_once(self):
         cids = list(range(30001, 30010))
@@ -129,8 +178,7 @@ class Flow:
         run = self.begin(THREE_ISSUES, "--slots", 2)
         self.assertEqual(self.next(run, "--slot", 1)["cid"], ONE)
         again = self.next(run, "--slot", 1)  # the slot asks again without a save: its claim was lost
-        self.assertEqual(again["cid"], ONE)
-        self.assertIn("もう一度", again["message"])
+        self.assertEqual((again["cid"], again["message"]), (ONE, f"CID {ONE} は、前回の結果が保存されていないため、もう一度処置します"))
         self.assertEqual(self.next(run, "--slot", 1)["cid"], TWO, "handed out twice without a save: failed")
         failed = self.state(run, ONE)
         self.assertEqual(failed["status"], "failed")
@@ -138,19 +186,23 @@ class Flow:
 
         state_file = run / "cid" / str(TWO) / "state.json"
         self.assertEqual(self.next(run, "--slot", 2)["cid"], THREE, "a fresh claim of another slot is kept")
-        old = {**self.state(run, TWO), "claimed_at": (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds")}
-        state_file.write_text(json.dumps(old), encoding="utf-8")
+        long_ago = (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds")
+        state_file.write_text(json.dumps({**self.state(run, TWO), "claimed_at": long_ago}), encoding="utf-8")
         taken = self.next(run, "--slot", 2)  # older than 30 minutes: any slot takes it (its own THREE comes first)
         self.assertEqual(taken["cid"], THREE)
         self.work(taken)
         taken = self.next(run, "--slot", 2)
         self.assertEqual((taken["cid"], self.state(run, TWO)["slot"]), (TWO, 2))
-        late = self.work({**taken, "slot": 1}, B_EDIT)  # the slot that lost the claim cannot save any more
+        late = self.run_triage("save", "--run", run, "--cid", TWO, "--slot", 1)  # the slot that lost the claim
         self.assertFalse(late["ok"])
-        self.assertIn("スロット 1 が処置中の CID ではありません", late["error"])
+        self.assertIn(f"CID {TWO} は処置中ではありません", late["error"])
         status = self.run_triage("status", "--run", run)
-        self.assertEqual(status["counts"], {"total": 3, "pending": 0, "working": 1, "done": 1, "failed": 1, "remaining": 1})
-        self.assertEqual(status["in_progress"], [{"slot": 2, "cid": TWO, "minutes": 0}])
+        self.assertEqual(status["counts"],
+                         {"total": 3, "pending": 0, "working": 1, "done": 1, "failed": 1, "remaining": 1})
+        self.assertEqual(self.next(run, "--slot", 2)["cid"], None, "TWO fails too; a loop gets no failed CID again")
+        named = self.next(run, "--slot", 2, "--cid", ONE)  # a person asks for the failed CID: once more
+        self.assertEqual((named["cid"], self.work(named)["ok"], self.state(run, ONE)["status"]), (ONE, True, "done"))
+        self.assertNotIn("error", self.state(run, ONE))
 
     def test_save_rejects_a_bad_result_and_a_bad_comment(self):
         run = self.begin(THREE_ISSUES, "--slots", 1)
@@ -159,22 +211,28 @@ class Flow:
         missing = self.run_triage("save", "--run", run, "--cid", ONE)
         self.assertFalse(missing["ok"])
         self.assertIn("result.json がありません", missing["problems"][0])
-        bad_comment = {"comment": "おそらく問題ない。" + "あ" * 200, "classification": "Bug", "action": "Ignore", "severity": "Minor"}
-        bad = self.work(given, evidence=[], confidence="certain", deviation=bad_comment)
+        bad = self.work(given, evidence=[], confidence="certain", verdict=["true_bug"],
+                        deviation={"comment": "おそらく問題ない。" + "あ" * 200})
         problems = "\n".join(bad["problems"])
-        self.assertFalse(bad["ok"])
-        for expected in ("evidence: 根拠を1件以上", "confidence:", "deviation.comment: 200 文字以内", "「おそらく」",
-                         "のいずれかで始めてください"):
+        self.assertEqual((bad["ok"], bad["error"]), (False, "結果に不備があります。problems の内容を訂正して、もう一度保存してください"))
+        for expected in ("evidence: 根拠を1件以上", "confidence:", "verdict:", "deviation.comment: 200 文字以内",
+                         "「おそらく」", "のいずれか）で始めてください"):
             self.assertIn(expected, problems)
         self.assertIn(f"save --run \"{run.as_posix()}\" --cid {ONE}", bad["next"][0])
         self.assertEqual(self.state(run, ONE)["status"], "working")
         self.assertFalse((cid_dir / "fix.patch").exists())
         self.assertIn("return p ? *p : 0;", (Path(given["work_dir"]) / "src" / "a.c").read_text(), "the work is kept")
 
-        elsewhere = self.work(given, {}, fix={"summary": "直しました"}, no_fix_reason=None,
-                              evidence=[{"file": "/build/src/a.c", "line": 3, "note": "x"}])
         self.assertIn("work_dir のファイルが変更されていますが、fix がありません", "\n".join(self.work(given, {})["problems"]))
-        self.assertIn("evidence[0].file: /build/src/a.c が work_dir にありません", "\n".join(elsewhere["problems"]))
+        outside = Path(given["work_dir"]).parent.parent / "note.c"  # evidence is a place in the code before the fix
+        outside.write_bytes(b"int n;\n")
+        places = [{"file": name, "line": line, "note": "x"} for name, line in (
+            ("/build/src/a.c", 3), ("../../note.c", 1), ("src/none.c", 1), ("src/a.c", 5), ("src/a.c", 4))]
+        elsewhere = "\n".join(self.work(given, {}, with_fix=True, evidence=places)["problems"])
+        for expected in ("evidence[0].file: /build/src/a.c が work_dir にありません", "evidence[1].file: ../../note.c が",
+                         "evidence[2].file: src/none.c が", "evidence[3].line: src/a.c は 4 行までです"):
+            self.assertIn(expected, elsewhere)
+        self.assertNotIn("evidence[4]", elsewhere)
         self.assertTrue(self.work(given)["ok"])
         unchanged = self.work(self.next(run), {}, fix={"summary": "直しました"}, no_fix_reason=None)
         self.assertIn("work_dir のファイルが変更されていません", "\n".join(unchanged["problems"]))
@@ -182,9 +240,20 @@ class Flow:
     def test_patch_keeps_shift_jis_and_crlf(self):
         run = self.begin([issue(ONE), issue(TWO, "src/sjis.c", 4)], "--slots", 1)
         given = self.next(run, "--cid", TWO)
+        evidence = [{"file": "src/sjis.c", "line": 4, "note": "戻り値が違います"}]
+        fixed = support.SJIS.decode("cp932").replace("return 0;", "return 1;")
+        for data, problem in (  # a fix that a text tool saved in its own form is refused
+                (fixed.encode("utf-8"), "src/sjis.c: 文字コードが変わっています（修正前: UTF-8 以外（Shift_JIS など）、修正後: UTF-8）"),
+                (fixed.replace("\r\n", "\n").encode("cp932"), "src/sjis.c: 改行コードが変わっています（修正前: CRLF、修正後: LF）"),
+                (fixed.replace("1;\r\n", "1;\n").encode("cp932"), "修正後: CRLF と LF の混在）")):
+            refused = self.work(given, {"src/sjis.c": data}, evidence=evidence)
+            self.assertEqual((refused["ok"], len(refused["problems"])), (False, 1), refused)
+            self.assertIn(problem, refused["problems"][0])
+        (Path(given["work_dir"]) / "src" / "sjis.c").write_bytes(support.SJIS)
+
         new_line = "    return 1; // 修正\r\n".encode("cp932")
-        saved = self.work(given, {"src/sjis.c": (b"    return 0;\r\n", new_line), "src/new.c": "// 新規\r\nint n;\r\n".encode("cp932")},
-                          evidence=[{"file": "src/sjis.c", "line": 4, "note": "戻り値が違います"}])
+        saved = self.work(given, {"src/sjis.c": (b"    return 0;\r\n", new_line),
+                                  "src/new.c": "// 新規\r\nint n;\r\n".encode("cp932")}, evidence=evidence)
         self.assertTrue(saved["ok"], saved)
         self.assertEqual(saved["files"], ["src/new.c", "src/sjis.c"])
         patch = Path(saved["patch_file"])
@@ -196,6 +265,37 @@ class Flow:
         self.assertEqual((copy / "src" / "new.c").read_bytes(), "// 新規\r\nint n;\r\n".encode("cp932"))
         self.assertEqual((self.repo / "src" / "sjis.c").read_bytes(), support.SJIS)
 
+    def lock(self, copy: Path) -> None:
+        """What a git or svn command leaves in a copy when it is killed."""
+        if self.kind == "git":
+            (self.repo / ".git" / "worktrees" / copy.name / "index.lock").write_bytes(b"")
+        else:
+            with contextlib.closing(sqlite3.connect(copy / ".svn" / "wc.db")) as db:
+                db.execute("insert into wc_lock (wc_id, local_dir_relpath, locked_levels) values (1, '', -1)")
+                db.commit()
+
+    def test_a_copy_that_is_locked_or_lost_is_made_usable_again(self):
+        run = self.begin(THREE_ISSUES, "--slots", 1)
+        copy = run / "work" / "w1"
+        self.lock(copy)
+        given = self.next(run)
+        self.assertEqual((given["cid"], self.state(run, ONE)["tries"]), (ONE, 1), "the lock costs the CID no try")
+        self.assertTrue(self.work(given)["ok"])
+
+        vcs.remove_tree(copy)  # the copy is gone, the record of the job that made it still says done
+        lost = self.next(run)
+        self.assertEqual((lost["ok"], lost["error"]), (False, f"作業用コピーがありません: {copy.as_posix()}。"
+                                                              "next のコマンド（start）を実行してください"))
+        self.assertFalse((run / "cid" / str(TWO) / "state.json").exists(), "no CID is claimed")
+        self.assertIn("start --repo", lost["next"][0])
+        self.assertIn("next --run", self.start("--slots", 1)["next"][0])  # start makes the copy again
+        given = self.next(run)
+        self.assertEqual((given["cid"], (copy / "src" / "b.c").is_file()), (TWO, True))
+        vcs.remove_tree(copy)
+        gone = self.work(given, {})
+        self.assertFalse(gone["ok"])
+        self.assertIn("作業用コピーがありません", gone["error"])
+
     def test_rework_after_review_once(self):
         run = self.begin(THREE_ISSUES[:1], "--slots", 1, "--review")
         self.work(self.next(run, "--batch", 1))
@@ -203,7 +303,8 @@ class Flow:
         self.assertFalse(refused["ok"])
         self.assertIn("1件以上", refused["problems"][0])
         point = "src/a.c:3 NULL のときに 0 を返すと、呼び出し元がエラーを検出できない"
-        sent = self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "rework", "--point", point, "--cap", "medium")
+        review = ("review", "--run", run, "--cid", ONE, "--outcome", "rework", "--point", point, "--cap")
+        sent = self.run_triage(*review, "medium")
         self.assertEqual((sent["outcome"], sent["confidence"]), ("rework", "medium"))
         state = self.state(run, ONE)
         self.assertEqual((state["status"], state["reworked"], state["rework"]), ("rework", True, [point]))
@@ -211,20 +312,21 @@ class Flow:
 
         given = self.next(run, "--batch", 2)
         self.assertEqual(given["rework"], {"points": [point], "patch_applied": True})
-        self.assertIn(b"return p ? *p : 0;", (Path(given["work_dir"]) / "src" / "a.c").read_bytes(), "the earlier fix is in the copy")
+        self.assertIn(b"return p ? *p : 0;", (Path(given["work_dir"]) / "src" / "a.c").read_bytes(), "the earlier fix")
         self.assertTrue(self.work(given, {"src/a.c": (b"return p ? *p : 0;", b"return p ? *p : -1;")})["ok"])
         self.assertIn(b"+    return p ? *p : -1;", (run / "cid" / str(ONE) / "fix.patch").read_bytes())
         self.assertNotIn("review", self.state(run, ONE), "the new result needs a new review")
         self.assertFalse(self.run_triage("finish", "--run", run)["ok"])
 
-        second = self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "rework", "--point", point, "--cap", "low")
+        second = self.run_triage(*review, "low")
         self.assertEqual((second["outcome"], second["confidence"]), ("flag", "low"), "a second rework is stored as 要確認")
-        review = json.loads((run / "cid" / str(ONE) / "review.json").read_text(encoding="utf-8"))
-        self.assertEqual(review, {"outcome": "flag", "points": [point], "confidence_cap": "low", "round": 2})
+        self.assertEqual(self.read(run, ONE, "review.json"),
+                         {"outcome": "flag", "points": [point], "confidence_cap": "low"})
         self.assertEqual(self.state(run, ONE)["status"], "done")
         done = self.run_triage("finish", "--run", run)
         self.assertTrue(done["ok"], done)
         self.assertIn("| 低 | 要確認 |", done["table"])
+        self.assertIn(f"- 検証: 要確認\n- 検証の指摘: {point}\n", (run / "summary.md").read_text(encoding="utf-8"))
 
     def test_merge_of_cids_with_one_cause(self):
         run = self.begin(THREE_ISSUES, "--slots", 1, "--review")
@@ -233,7 +335,8 @@ class Flow:
         status = self.run_triage("status", "--run", run)
         self.assertEqual(status["merge_candidates"], [{"cids": [ONE, THREE], "reason": "同じチェッカーと関数"}])
         self.assertIn("merge --run", status["merge_command"])
-        self.assertEqual(status["review_batches"], [{"slot": 1, "work_dir": (run / "work" / "w1").as_posix(), "cids": [ONE, TWO, THREE]}])
+        self.assertEqual(status["review_batches"], [{"slot": 1, "work_dir": (run / "work" / "w1").as_posix(),
+                                                     "cids": [ONE, TWO, THREE]}])
         self.assertIn("review --run", status["next"][0])
         self.assertFalse(self.run_triage("merge", "--run", run, "--leader", ONE, "--members", "99999")["ok"])
 
@@ -243,7 +346,7 @@ class Flow:
         status = self.run_triage("status", "--run", run)
         self.assertEqual((status["merge_candidates"], status["review_batches"][0]["cids"]), ([], [ONE, TWO]))
         self.assertFalse(self.run_triage("review", "--run", run, "--cid", THREE, "--outcome", "pass")["ok"])
-        self.assertFalse(self.run_triage("merge", "--run", run, "--leader", TWO, "--members", str(ONE))["ok"], "merged once")
+        self.assertFalse(self.run_triage("merge", "--run", run, "--leader", TWO, "--members", ONE)["ok"], "merged once")
         for cid in (ONE, TWO):
             self.assertTrue(self.run_triage("review", "--run", run, "--cid", cid, "--outcome", "pass")["ok"])
         done = self.run_triage("finish", "--run", run)
@@ -257,10 +360,11 @@ class Flow:
         self.work(self.next(run, "--batch", 1), {"src/a.c": (b"return *p;", b"return p ? *p : 1;")})
         status = self.run_triage("status", "--run", run)
         self.assertEqual(status["merge_candidates"], [{"cids": [ONE, TWO], "reason": "修正が同じ行を変更"}])
-        self.run_triage("merge", "--run", run, "--leader", ONE, "--members", TWO, "--rework", "--point", "src/a.c:3 両方を解消する")
+        self.run_triage("merge", "--run", run, "--leader", ONE, "--members", TWO, "--rework",
+                        "--point", "src/a.c:3 両方を解消する")
         given = self.next(run, "--batch", 2)
         self.assertEqual(given["cid"], ONE)
-        self.assertIn(f"CID {TWO} と同じ原因です", given["rework"]["points"][0])
+        self.assertIn(f"CID {TWO} と同じ原因です。すべての CID の警告を解消する修正", given["rework"]["points"][0])
         self.assertEqual(given["rework"]["points"][1:], ["src/a.c:3 両方を解消する"])
         self.assertTrue(self.work(given, {}, with_fix=True)["ok"], "the earlier fix was applied and is kept")
         self.assertEqual(self.state(run, ONE)["members"], [TWO])
@@ -280,6 +384,7 @@ class Flow:
         self.assertEqual((refused["ok"], refused["unreviewed"]), (False, [ONE, TWO]))
         self.assertIn("検証されていない CID が 2 件あります", refused["error"])
         self.assertFalse((run / "summary.md").exists())
+        self.assertEqual(self.start("--slots", 1, "--review")["run_dir"], run.as_posix(), "not reviewed: continued")
         self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "pass")
         self.run_triage("review", "--run", run, "--cid", TWO, "--outcome", "unverified")
 
@@ -294,13 +399,15 @@ class Flow:
             self.assertIn("### 逸脱コメント\n\n" + comment, section)
         self.assertIn("NULL のときは 0 を返します\n\n````diff", one)
         self.assertIn("+    return p ? *p : 0;", one)
-        self.assertIn("Classification: Bug／Action: Ignore／Severity: Minor", one)
+        self.assertIn("Classification: Bug／Action: Ignore／Severity: Major", one)
         self.assertIn("- 判定: 本物のバグ（確信度: 高）\n- 推奨: 修正を取り込む", one)
         self.assertIn("修正コードはありません。理由: コードに問題がないため", two)
         self.assertIn("処置できませんでした: 処置を2回開始しましたが", three)
-        self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 本物のバグ | 修正を取り込む | 高 | 合格 | - | src/a.c | {support.FIX_COMMENT} |", summary)
-        self.assertIn(f"| 誤検知 | 逸脱コメントを登録する | 高 | 未検証 | - | なし | {support.KEEP_COMMENT} |", summary)
-        self.assertIn(f"| {THREE} | NULL_RETURNS | src/a.c:3 | 失敗 |", summary)
+        self.assertIn("| CID | チェッカー | 場所 | 判定 | 推奨 | 確信度 | 検証 | 修正コード | 逸脱コメント |", summary)
+        self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 本物のバグ | 修正を取り込む | 高 | 合格 | src/a.c | "
+                      f"{support.FIX_COMMENT} |", summary)
+        self.assertIn(f"| 誤検知 | 逸脱コメントを登録する | 高 | 未検証 | なし | {support.KEEP_COMMENT} |", summary)
+        self.assertIn(f"| {THREE} | NULL_RETURNS | src/a.c:3 | 失敗 | - | - | - | - | - |", summary)
         self.assertFalse((run / "work").exists(), "the work copies are removed")
         self.assertNotEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "a finished run is not continued")
 
@@ -308,11 +415,19 @@ class Flow:
         run = self.begin(THREE_ISSUES)  # no --slots: stage 1
         self.assertFalse(self.next(run, "--cid", 99999)["ok"])
         given = self.next(run, "--cid", TWO)
-        self.assertEqual((given["cid"], given["slot"]), (TWO, 1))
+        self.assertEqual(given["cid"], TWO)
+        self.assertTrue(given["next"][0].endswith(f"save --run \"{run.as_posix()}\" --cid {TWO} --slot 1"))
+        self.assertNotIn("message", given)
+        again = [self.next(run, "--cid", TWO) for _ in range(4)]  # a person asks again and again: never refused
+        self.assertEqual([reply["cid"] for reply in again], [TWO] * 4)
+        self.assertIn("もう一度処置します", again[0]["message"])
+        given = again[-1]
         self.assertTrue(self.work(given, B_EDIT)["ok"])
         summary = (run / "summary.md").read_text(encoding="utf-8")  # written by save
         self.assertIn(f"## CID {TWO}（DEADCODE、src/b.c:3）", summary)
-        self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 未処置 |", summary)
+        self.assertIn("| CID | チェッカー | 場所 | 判定 | 推奨 | 確信度 | 修正コード | 逸脱コメント |", summary)
+        self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 未処置 | - | - | - | - |", summary)
+        self.assertNotIn("検証", summary)
         again = self.next(run, "--cid", TWO)
         self.assertEqual((again["ok"], again["cid"]), (True, None))
         self.assertEqual(again["message"], f"CID {TWO} は処置済みです")
@@ -320,14 +435,93 @@ class Flow:
         self.assertEqual((done["ok"], done["counts"]["remaining"]), (True, 2))
         self.assertTrue((run / "work" / "w1").is_dir(), "the copy stays while CIDs are left")
         self.assertEqual(self.start()["run_dir"], run.as_posix())
+        # the person has a remark on the saved result: it is sent back and handed out again
+        point = "src/b.c:3 戻り値は 2 にする"
+        self.run_triage("review", "--run", run, "--cid", TWO, "--outcome", "rework", "--point", point)
+        redo = self.next(run, "--cid", TWO)
+        self.assertEqual(redo["rework"], {"points": [point], "patch_applied": True})
+        self.assertTrue(self.work(redo, {"src/b.c": (b"return 1;", b"return 2;")})["ok"])
+        self.assertIn(b"+    return 2;", (run / "cid" / str(TWO) / "fix.patch").read_bytes())
 
 
 class GitFlow(Flow, support.RunCase):
     kind = "git"
 
+    def test_a_copy_inside_the_repository_never_stands_for_the_repository(self):
+        self.configure("output_dir: out\n")  # the result folder lies inside the person's repository
+        run = self.begin(THREE_ISSUES, "--slots", 1)
+        given = self.next(run)
+        support.write(self.repo, {"src/b.c": b"int b(void)\n{\n    return 42;\n}\n", "notes.txt": b"mine\n"})
+
+        def person() -> tuple:  # what the person has: the commit, the changed and the new files
+            return (support.call(*support.GIT, "rev-parse", "HEAD", cwd=self.repo), support.user_tree("git", self.repo),
+                    (self.repo / "src" / "b.c").read_bytes(), (self.repo / "notes.txt").read_bytes())
+
+        before = person()
+        (Path(given["work_dir"]) / ".git").unlink()  # a damaged copy: git would use the repository above it
+        refused = self.work(given)
+        self.assertFalse(refused["ok"])
+        self.assertIn("作業用コピーがありません", refused["error"])
+        self.assertFalse((run / "cid" / str(ONE) / "fix.patch").exists())
+        self.assertEqual(person(), before)
+        # start makes the copy again; variables that point git at the person's repository change nothing
+        self.env = {**os.environ, "GIT_DIR": str(self.repo / ".git"), "GIT_WORK_TREE": str(self.repo)}
+        self.assertIn("next --run", self.start("--slots", 1)["next"][0])
+        self.assertTrue(self.work(self.next(run))["ok"])
+        self.assertEqual((self.state(run, ONE)["files"], person()), (["src/a.c"], before))
+
 
 class SvnFlow(Flow, support.RunCase):
     kind = "svn"
+
+
+class CleanupTest(support.RunCase):
+    """Work that is done is not lost when the cleanup after it fails. In this process, so that it can fail."""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            import triage
+        except ImportError:
+            self.skipTest("この Python に PyYAML がありません")
+        self.triage = triage
+
+    def test_a_work_folder_that_cannot_be_deleted_and_a_copy_that_cannot_be_reset(self):
+        run = self.begin(THREE_ISSUES[:1], "--slots", 1)
+        given = self.run_triage("next", "--run", run)
+        Path(given["work_dir"], "src", "a.c").write_bytes(b"int a(int *p)\n{\n    return p ? *p : 0;\n}\n")
+        Path(given["result_file"]).write_text(json.dumps(support.result(ONE), ensure_ascii=False), encoding="utf-8")
+        args = argparse.Namespace(run=run, cid=ONE, slot=1)
+        with mock.patch.object(vcs.Git, "reset", side_effect=vcs.VcsError("index.lock")):
+            saved = self.triage.cmd_save(args)  # the result is stored before the copy is made clean
+        self.assertEqual((saved["ok"], saved["files"], self.state(run, ONE)["status"]), (True, ["src/a.c"], "done"))
+        held = vcs.VcsError("フォルダーを削除できませんでした。ほかのプログラムが使用している可能性があります: w1")
+        with mock.patch.object(vcs, "remove_tree", side_effect=held):
+            done = self.triage.cmd_finish(args)
+            self.assertEqual((done["ok"], done["message"]), (True, f"作業用コピーが残っています。{held}"))
+            self.assertIn(f"| {ONE} |", done["table"])
+            other = self.triage.find_run(self.repo, self.triage.settings(self.repo), "git", False)
+        self.assertTrue(other != run and other.is_dir() and (run / "work").is_dir(), "the next fetch is not stopped")
+
+
+class EvalCasesTest(unittest.TestCase):
+
+    def test_the_scaffold_puts_every_case_on_the_path_of_a_real_request(self):
+        if not shutil.which("uv"):
+            self.skipTest("uv がありません")
+        evals = support.SCRIPTS.parent / "evals"
+        cases = sorted(p for p in evals.iterdir() if p.is_dir())
+        self.assertEqual(len(cases), 2)
+        for case in cases:
+            top = Path(tempfile.mkdtemp(prefix="triage-test-")).resolve()
+            self.addCleanup(vcs.remove_tree, top)
+            run = support.call(sys.executable, evals / "scaffold.py", case, top / "work", cwd=top).decode().strip()
+            cid = json.loads((case / "warning.json").read_text(encoding="utf-8"))["cid"]
+            while "counts" not in support.triage("start", "--repo", top / "work"):
+                pass
+            given = support.triage("next", "--run", run, "--cid", cid)
+            self.assertEqual((given["cid"], given["fetch"]), (cid, []), "no Coverity server is needed")
+            self.assertTrue((Path(given["work_dir"]) / given["issue"]["file"]).is_file(), given["issue"])
 
 
 class ErrorsTest(support.RunCase):

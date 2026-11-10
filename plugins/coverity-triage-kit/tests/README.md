@@ -64,7 +64,7 @@ python3 tests/run.py --only docs --only structure
 | 部品ごと | `skills/<名前>/tests/`、`mcp-servers/<名前>/tests/` | スクリプトとツールの振る舞い。部品のフォルダだけでも動く |
 | `structure` | `tests/structure/` | マニフェスト（`plugin.json`、`.claude-plugin/plugin.json`、`mcp.json`、`.mcp.json`）が正しく、互いに一致する。バージョンが、2つのマニフェスト、リポジトリの `.github/plugin/marketplace.json`、`CHANGELOG.md` で同じ。すべての `skills/<名前>/SKILL.md` の frontmatter（`name` はフォルダー名と同じ、`description` がある、使えるキーは `name`・`description`・`allowed-tools`・`disable-model-invocation`）。すべてのエージェントの frontmatter。Claude Code のエージェント（`agents/<名前>.md`）と Copilot CLI のエージェント（`com.github.copilot/agents/<名前>.agent.md`）が、同じ名前、同じ見出し、同じコードブロックで、ツールの呼び名と `tools` だけが対応するものに置き換わっている |
 | `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合。一括のトリアージを、モデルを使わずに最後まで流す（`test_flow.py`：模擬の Coverity の5件の警告、MCP サーバーでの取得、決まった振る舞いの偽のエージェント、一覧、反映の確認の文字列、書き戻し、修正のブランチの push） |
-| `flow` | `tests/flow/` | `skills/coverity-triage` の処置の流れを、エージェントの代わりのスクリプトで、git と svn の両方で実行します。スクリプトは、`triage.py` が `next` に出力するコマンドをそのまま実行し、作業用コピーのファイルを修正して `result.json` を書きます。リポジトリと警告の一覧は `tests/fixtures/sample/` です。確認する内容：CID 1件の処置（1段階目）、全件の処置と `summary.md`（2段階目）、中断した後の再開、CRLF と Shift_JIS のファイルの修正が新しいチェックアウトに適用できること、逸脱コメントのない結果を `save` が受け付けないこと |
+| `flow` | `tests/flow/` | `skills/coverity-triage` の処置の流れを、エージェントの代わりのスクリプトで、git と svn の両方で実行します。スクリプトは、`triage.py` が `next` に出力するコマンドをそのまま実行し、作業用コピーのファイルを修正して `result.json` を書きます。リポジトリと警告の一覧は `tests/fixtures/sample/` です。確認する内容：全件の処置と `summary.md`、修正が新しいチェックアウトに適用できること（2段階目）、中断した後の再開、3つのスロットでの並列の処置・途中で終了した処置の再開・同じ原因の CID の統合・検証と差し戻し（3段階目）。コマンド1つずつの動作は、スキルの試験（`skills/coverity-triage/tests/`）で確認します。MCP サーバーのツール2つは、このスクリプトが代わりにファイルを書きます（サーバーを作り直した後で、実際のサーバーに置き換えます） |
 | `ui` | `tests/ui/` | 結果と設定の画面を、Playwright の Chromium で（幅 390 px と 1280 px、ライトとダーク）。タブが出る、横にはみ出さない、ダークで読める、一覧で選んだ承認と詳細で直した逸脱コメントが `approvals.json` に保存され、反映がそれを読む、サーバを止められる |
 | `docs` | `tests/docs/` | `README.md` と `docs/guide/*.md` の相対リンクが、実在するファイルと見出しを指す |
 | `eval` | `tests/eval/` | EVAL の道具の、モデルを使わない試験 |
@@ -96,9 +96,9 @@ python3 tests/run.py --only docs --only structure
 
   ```text
   # Windows（PowerShell）
-  py -3 -m unittest discover -s tests -v
+  py -3 -B -m unittest discover -s tests -v
   # Linux（bash）
-  python3 -m unittest discover -s tests -v
+  python3 -B -m unittest discover -s tests -v
   ```
 
 部品の試験が守ること：
@@ -137,5 +137,6 @@ python3 tests/run.py --only docs --only structure
 | 2〜3 | `tests/eval/` | [EVAL の道具](eval/README.md) のとおり。`claude_adapter.py` が、Copilot CLI の部品を Claude Code の形に置き換えて動かす（設計書 9.3） |
 
 - 作業の場所は、リポジトリの外にします。
+- `skills/coverity-triage/evals/` の課題は、`python3 skills/coverity-triage/evals/scaffold.py <課題のフォルダー> <作業フォルダー>` で作業フォルダーを用意してから、`prompt.md` の依頼を与えます。作業フォルダーが git のリポジトリになり、設定ファイルと、課題の警告（`warning.json`）を取得済みの結果フォルダーができます。採点基準は、結果フォルダーの `cid/<CID>/result.json` と `fix.patch` を確認します。
 - Claude Code では確かめられないこと（Copilot CLI の許可の確認、サブエージェントの ask_user など）は、設計書 9.4 の表で、Copilot CLI で手で確かめ、版と日付を書きます。
 - 部品を変えたら、その部品の EVAL を動かし直します。
