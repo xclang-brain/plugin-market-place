@@ -1,8 +1,0 @@
-# 見本の設定（偽の Coverity のデータを使う）
-coverity:
-  url: https://coverity.example.co.jp:8443
-  api: fake
-  fake_data: fake-issues.yaml
-vcs:
-  type: git
-  base_branch: main

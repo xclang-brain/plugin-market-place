@@ -1,11 +1,12 @@
 """プラグイン全体の試験が使う道具（標準ライブラリだけ。Python 3.10 以上）。
 
-部品の名前は、ここにも書かない。名前は、次のところから読む（憲章 第25条3項）。
+名前は、次のところから読みます。
 - スキル：skills/ の下の、SKILL.md があるフォルダ（フォルダの名前がスキルの名前）
 - MCP サーバー：mcp-servers/ の下のフォルダと、mcp.json の mcpServers の鍵（登録名）。
   ツールの名前は、MCP サーバーのソースの @….tool の付いた関数から読む
 - エージェント：com.github.copilot/agents/<名前>.agent.md（Copilot CLI）と、agents/<名前>.md（Claude Code。同じ名前の組）
-- プラグイン全体のスキルと役割：エクステンションの defaults.json（pluginSkills・roles・orchestrator）
+- テストが名前で指定するコンポーネント（統括エージェント、役割ごとのエージェント、一括実行・画面・反映のスクリプト、
+  他のコンポーネントを名前で使うスキル）：このファイルの定数（ORCHESTRATOR など）。ここに書いたものがなければ、テストは不合格になります
 - 部品の組：エージェントとプラグイン全体のスキルの「## 使う部品」の表
 - 役割と今の名前の対応：docs/parts.md の「## 今の部品」の表（開発者向けの、ただ1つの対応表）
 - 設定の項目：設計書 4.1 の config.yaml の表（取り決め）
@@ -31,9 +32,6 @@ SKILLS_DIR = ROOT / "skills"
 MCP_DIR = ROOT / "mcp-servers"
 COPILOT_DIR = ROOT / "com.github.copilot"
 AGENTS_DIR = COPILOT_DIR / "agents"
-EXTENSIONS_DIR = COPILOT_DIR / "extensions"
-EXT_DIR = EXTENSIONS_DIR / PLUGIN_NAME
-DEFAULTS = EXT_DIR / "defaults.json"
 DOCS_DIR = ROOT / "docs"
 SPEC = DOCS_DIR / "specs" / "requirements.md"
 DESIGN = DOCS_DIR / "design" / "design.md"
@@ -55,6 +53,13 @@ CURRENT_PARTS_HEADING = "今の部品"
 CURRENT_PARTS_HEADER = ["役割", "段階", "部品", "置き場所"]
 # 役割の言葉（設計書 4.13 の取り決め）
 ROLE_WORDS = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合役"}
+# テストが名前で指定するコンポーネント
+ORCHESTRATOR = "triage-orchestrator"
+ROLES = {"worker": "triage-worker", "reviewer": "triage-reviewer", "integrator": "triage-integrator"}
+RUN_SCRIPT = SKILLS_DIR / "coverity-run" / "scripts" / "run.py"
+GUI_SCRIPT = SKILLS_DIR / "coverity-gui" / "scripts" / "gui.py"
+APPLY_SCRIPT = SKILLS_DIR / "coverity-apply" / "scripts" / "apply.py"
+PLUGIN_SKILLS = ["coverity-help", "coverity-selftest"]  # 他のコンポーネントを名前で使うスキル（1段階目に数えません）
 
 TEXT_SUFFIXES = {
     ".md", ".markdown", ".py", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".mjs", ".js", ".cjs",
@@ -429,28 +434,8 @@ def without_frontmatter_keys(text: str, keys=CLAUDE_NAME_KEYS) -> str:
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
-def defaults():
-    data = load_json(DEFAULTS) if DEFAULTS.is_file() else None
-    return data if isinstance(data, dict) else None
-
-
-def id_stem(agent_id: str) -> str:
-    """「<プラグイン>:<名前>」の <名前>"""
-    return str(agent_id).split(":")[-1]
-
-
-def plugin_skill_names():
-    """プラグイン全体のスキル（4段階目）。defaults.json の pluginSkills。defaults.json がなければ、
-    SKILL.md に「## 使う部品」の節があるスキル"""
-    data = defaults()
-    if data is not None and isinstance(data.get("pluginSkills"), list):
-        return sorted(str(n) for n in data["pluginSkills"])
-    return sorted(n for n in skill_names() if section(read(SKILLS_DIR / n / "SKILL.md"), PARTS_HEADING) is not None)
-
-
 def stage1_skill_names():
-    plugin = set(plugin_skill_names())
-    return [n for n in skill_names() if n not in plugin]
+    return [n for n in skill_names() if n not in PLUGIN_SKILLS]
 
 
 def entry_scripts(skill_dir: Path):
@@ -834,33 +819,6 @@ def output_dir_default():
             if m:
                 return m.group(1)
     return None
-
-
-def design_defaults_block():
-    """設計書の defaults.json の例（JSON）。読めなければ {}"""
-    if not DESIGN.is_file():
-        return {}
-    text = read(DESIGN)
-    m = re.search(r"(?ms)^#{2,4} [^\n]*defaults\.json[^\n]*\n(.*?)(?=^#{2,4} )", text)
-    if not m:
-        return {}
-    block = re.search(r"(?ms)^```json\s*\n(.*?)^```", m.group(1))
-    if not block:
-        return {}
-    try:
-        return json.loads(block.group(1))
-    except ValueError:
-        return {}
-
-
-def contract_command_scripts():
-    """取り決めのコマンド（defaults.json の …Command）のスクリプトの名前（run.py など）"""
-    names = set()
-    for data in (design_defaults_block(), defaults() or {}):
-        for key, value in data.items():
-            if key.endswith("Command") and isinstance(value, str):
-                names.add(Path(value).name)
-    return names
 
 
 # ---------------------------------------------------------------------------

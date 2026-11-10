@@ -8,7 +8,7 @@ test checks the saved files: the approval chosen in the list and the deviation c
 are in approvals.json, which still fits its schema, and the apply step reads them. The server is stopped at
 the end with the stop command.
 
-Skipped with the reason when Node.js, Playwright, uv, git or a part is missing.
+Skipped with the reason when Node.js, Playwright, uv or git is missing (in CI that fails). A missing part fails.
 """
 
 from __future__ import annotations
@@ -53,15 +53,13 @@ def skip_reason() -> str | None:
     reason = fl.prerequisites()
     if reason:
         return reason
-    if fl.command_script("guiCommand") is None:
-        return "結果と設定の画面のコマンド（defaults.json の guiCommand）がまだありません"
     if NODE is None:
-        return "Node.js がありません"
+        return fl.missing_tool("Node.js がありません")
     state = browser_state()
     if not state.get("playwright"):
-        return "Playwright がありません（npm install --prefix tests --no-save --no-package-lock playwright で入れると動きます）"
+        return fl.missing_tool("Playwright がありません（npm install --prefix tests --no-save --no-package-lock playwright で入れると動きます）")
     if not state.get("chromium"):
-        return "Playwright の Chromium がありません（npx --prefix tests playwright install chromium で入れると動きます）"
+        return fl.missing_tool("Playwright の Chromium がありません（npx --prefix tests playwright install chromium で入れると動きます）")
     return None
 
 
@@ -88,7 +86,7 @@ class GuiScreenTest(unittest.TestCase):
         cls.env = fl.base_env(cls.tmp)
         cls.env.update(TMPDIR=str(cls.tmp), TEMP=str(cls.tmp), TMP=str(cls.tmp), GUI_STATE_DIR=str(cls.tmp / "gui-state"),
                        GUI_IDLE_SECONDS="120")
-        cls.gui_py = fl.command_script("guiCommand")
+        cls.gui_py = pp.GUI_SCRIPT
         cls.started = False
         try:
             cls.make_run()
@@ -106,7 +104,7 @@ class GuiScreenTest(unittest.TestCase):
         fl.write_settings(cls.repo, cls.tmp / "out", cls.settings_url, extra_coverity="  api: fake\n", env=cls.env)
         cls.cids = {w["key"]: 40001 + n for n, w in enumerate(fl.WARNINGS)}
         issues = fl.offline_files(cls.tmp / "fetched", cls.cids, revision)
-        run_py = fl.command_script("runCommand")
+        run_py = pp.RUN_SCRIPT
         created = fl.run_script(run_py, "new-run", "--repo", str(cls.repo), "--issues-file", str(issues), env=cls.env, cwd=cls.repo)
         cls.run_dir = Path(created["run_dir"])
         # one item reviewed as "flag" (its confidence is capped), so the screen shows a review mark
@@ -187,7 +185,7 @@ class GuiScreenTest(unittest.TestCase):
         report = self.browse()
         self.assertIsNone(report.get("fatal"), report.get("fatal"))
         approvals = json.loads((self.run_dir / "approvals.json").read_text(encoding="utf-8"))
-        schema = fl.command_script("runCommand").parents[1] / "assets" / "approvals.schema.json"
+        schema = pp.RUN_SCRIPT.parents[1] / "assets" / "approvals.schema.json"
         if schema.is_file():
             self.assertEqual(pp.schema_errors(approvals, json.loads(schema.read_text(encoding="utf-8"))), [],
                              "画面が書いた approvals.json が approvals.schema.json に合いません")
@@ -197,10 +195,7 @@ class GuiScreenTest(unittest.TestCase):
         deviation = approvals["items"][str(self.cids["C"])]
         self.assertEqual(deviation["decision"], "deviation")
         self.assertEqual((deviation.get("deviation") or {}).get("comment"), COMMENT)
-        apply_py = fl.skill_script("applySkill")
-        if apply_py is None:
-            self.skipTest("反映のスクリプトがまだありません")
-        preview = fl.run_script(apply_py, "preview", "--run", str(self.run_dir), env=self.env, cwd=self.repo)
+        preview = fl.run_script(pp.APPLY_SCRIPT, "preview", "--run", str(self.run_dir), env=self.env, cwd=self.repo)
         plan = json.loads(Path(preview["plan_file"]).read_text(encoding="utf-8"))
         self.assertEqual([e["comment"] for e in plan["triage"]], [COMMENT], "反映が、画面で直した逸脱コメントを使いません")
         self.assertEqual([e["id"] for e in plan["reject"]], [group], "反映が、画面で選んだ却下を使いません")

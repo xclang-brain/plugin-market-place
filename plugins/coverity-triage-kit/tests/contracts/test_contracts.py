@@ -7,8 +7,6 @@
   探すデータ（assets/ のファイル）を写す側も同じ場所に持つ。
 - 中身：plan.schema.json の中の結果の定義が、result.schema.json の $defs と同じ。評価基準 C-01〜C-28 の分け方（4.6）。
   確認の文字列の試験のデータが、4.10 の決まりと、持ち主の確認の文字列の関数（とその写し）で計算した値と合う。
-- defaults.json：役割（roles）と統括エージェント（orchestrator）が、統括エージェントの「使う部品」の表と、役割の言葉に合う。
-  コマンドの場所とスキルがある。
 - エージェントの2つの形（Claude Code の agents/<名前>.md と Copilot CLI の .agent.md）：同じ名前、同じ「使う部品」の表、
   同じ見出しの並び、同じ報告の形。ツールの言葉と tools は読み替えたもの（Skill・Agent・AskUserQuestion・Bash と
   skill・task・ask_user・シェル）。Claude Code の統括エージェントは tools を書かず、Edit・Write と書き戻しのツール
@@ -17,7 +15,7 @@
   一括実行のコマンドが受け付けて作業を始める。真偽の調査のスクリプトが issue-<CID>.json を読める。
   MCP サーバーの確認の文字列が、反映の計画のファイルのバイト列から決まる（計画のファイルの case を MCP サーバーで）。
 
-部品の名前は書かない。部品は、役割の名前で表に書き、docs/parts.md の「## 今の部品」の表で今の名前に直す。
+部品は、役割の名前で表に書き、docs/parts.md の「## 今の部品」の表で今の名前に直す。
 ないものは、理由を書いて飛ばす。
 
   python3 -m unittest discover -s tests/contracts -v
@@ -582,71 +580,6 @@ def _walk(node):
             yield from _walk(value)
 
 
-class DefaultsTest(unittest.TestCase):
-    """defaults.json（設計書 8.4）と、統括エージェントの表と役割の言葉"""
-
-    def setUp(self):
-        self.data = pp.defaults()
-        if self.data is None:
-            self.skipTest("defaults.json がまだありません")
-
-    def orchestrator_rows(self):
-        stem = pp.id_stem(self.data.get("orchestrator", ""))
-        path = pp.agent_path(stem)
-        if not path.is_file():
-            self.skipTest("統括エージェントの定義がまだありません")
-        rows, error = pp.parts_table(pp.frontmatter(path)[1])
-        self.assertIsNone(error, error)
-        return rows
-
-    def test_keys(self):
-        for key in ["orchestrator", "roles", "runCommand", "guiCommand", "applySkill", "setupSkill", "pluginSkills", "port", "issueRepo"]:
-            self.assertIn(key, self.data, f"defaults.json に {key} がありません")
-        self.assertEqual(sorted(self.data["roles"]), sorted(pp.ROLE_WORDS), "roles は worker・reviewer・integrator です")
-        for agent_id in [self.data["orchestrator"], *self.data["roles"].values()]:
-            with self.subTest(agent=agent_id):
-                self.assertTrue(str(agent_id).startswith(pp.PLUGIN_NAME + ":"), f"{agent_id} は「{pp.PLUGIN_NAME}:<名前>」の形にします")
-                self.assertTrue(pp.agent_path(pp.id_stem(agent_id)).is_file(), f"{agent_id} の定義がありません")
-
-    def test_agent_ids_name_both_definitions(self):
-        """defaults.json のエージェントの id は、Copilot CLI の定義と Claude Code の定義の両方にある
-        （Claude Code でも、プラグインのエージェントは「<プラグイン>:<名前>」になる）"""
-        for agent_id in [self.data["orchestrator"], *self.data["roles"].values()]:
-            stem = pp.id_stem(agent_id)
-            with self.subTest(agent=agent_id):
-                self.assertIn(stem, pp.agent_names(), f"{agent_id} の Copilot CLI の定義がありません")
-                if pp.CLAUDE_AGENTS_DIR.is_dir():
-                    self.assertIn(stem, pp.claude_agent_names(), f"{agent_id} の Claude Code の定義（agents/{stem}.md）がありません")
-
-    def test_commands_and_skills_exist(self):
-        for key in ("runCommand", "guiCommand"):
-            with self.subTest(key=key):
-                path = pp.ROOT / self.data[key]
-                self.assertTrue(path.is_file(), f"defaults.json の {key}（{self.data[key]}）がありません")
-                self.assertEqual(path.parent.name, "scripts")
-                self.assertEqual(path.parent.parent.parent, pp.SKILLS_DIR, f"{key} はスキルのスクリプトを指します")
-        for name in [self.data["applySkill"], self.data["setupSkill"], *self.data["pluginSkills"]]:
-            with self.subTest(skill=name):
-                self.assertTrue((pp.SKILLS_DIR / name / "SKILL.md").is_file(), f"defaults.json のスキル {name} がありません")
-
-    def test_roles_match_the_orchestrator_table(self):
-        """roles の名前は、統括エージェントの表のエージェントと同じ。その行の役割に、役割の言葉がある"""
-        rows = self.orchestrator_rows()
-        agents = {row[1]: row[0] for row in rows if pp.agent_path(row[1]).is_file()}
-        roles = {pp.id_stem(v): k for k, v in self.data["roles"].items()}
-        self.assertEqual(sorted(agents), sorted(roles), "統括エージェントの表のエージェントと、defaults.json の roles が違います")
-        for name, role in roles.items():
-            with self.subTest(role=role):
-                self.assertIn(pp.ROLE_WORDS[role], agents.get(name, ""), f"統括エージェントの表の {name} の役割に「{pp.ROLE_WORDS[role]}」がありません")
-
-    def test_commands_belong_to_the_orchestrator_table(self):
-        """統括エージェントが使うスキル（一括実行・画面・反映・準備）は、その表にある"""
-        names = {row[1] for row in self.orchestrator_rows()}
-        used = {Path(self.data["runCommand"]).parent.parent.name, Path(self.data["guiCommand"]).parent.parent.name,
-                self.data["applySkill"], self.data["setupSkill"]}
-        self.assertEqual(sorted(used - names), [], "defaults.json のスキルが、統括エージェントの表にありません")
-
-
 # ---------------------------------------------------------------------------
 # Claude Code と Copilot CLI のエージェントの定義
 # ---------------------------------------------------------------------------
@@ -752,13 +685,7 @@ class ClaudeCopilotParityTest(unittest.TestCase):
 
     def test_orchestrator_cannot_edit_or_write_back(self):
         """Claude Code の統括エージェントは tools を書かず、disallowedTools で Edit・Write と、書き戻しのツール（2つの名前の形）を外す"""
-        data = pp.defaults()
-        if data is None or not data.get("orchestrator"):
-            self.skipTest("defaults.json がまだないため、統括エージェントが分かりません")
-        path = pp.claude_agent_path(pp.id_stem(data["orchestrator"]))
-        if not path.is_file():
-            self.skipTest("Claude Code の統括エージェントがまだありません")
-        fm, _, problem = pp.frontmatter(path)
+        fm, _, problem = pp.frontmatter(pp.claude_agent_path(pp.ORCHESTRATOR))
         self.assertIsNone(problem, problem)
         self.assertNotIn("tools", fm, "統括エージェントに tools があります（呼んだエージェントのツールが絞られる）")
         disallowed = set(pp.tool_list(fm.get("disallowedTools")))
@@ -798,32 +725,6 @@ class ClaudeCopilotParityTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 書く部品と読む部品（部品を動かす）
 # ---------------------------------------------------------------------------
-
-class StallRuleTest(unittest.TestCase):
-    """一括実行の status と、結果と設定の画面の監視で、「止まっているかもしれない」の決まりが同じ（憲章 第25条5項）"""
-
-    NAMES = ("STALL_SECONDS", "INITIAL_STALL_SECONDS", "SCRIPT_STAGES")
-
-    def constants(self, path):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        found = {}
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                if node.targets[0].id in self.NAMES:
-                    found[node.targets[0].id] = ast.literal_eval(node.value)
-        return found
-
-    def test_same_stall_rule(self):
-        run, gui = part_folder("一括実行"), part_folder("結果と設定の画面")
-        if run is None or gui is None:
-            self.skipTest("一括実行か結果と設定の画面の部品がありません")
-        a = self.constants(run / "scripts" / "runlib" / "views.py")
-        b = self.constants(gui / "scripts" / "guilib" / "monitor.py")
-        if set(a) != set(self.NAMES) or set(b) != set(self.NAMES):
-            self.skipTest("部品が、この決まりを別の形で持っています")
-        self.assertEqual({k: tuple(v) if isinstance(v, (list, tuple)) else v for k, v in a.items()},
-                         {k: tuple(v) if isinstance(v, (list, tuple)) else v for k, v in b.items()})
-
 
 class McpClient:
     """MCP サーバーと stdio で話す小さなクライアント（JSON-RPC 2.0、1行に1つ）"""
@@ -1136,14 +1037,11 @@ class WriterReaderTest(unittest.TestCase):
         self.assertIn("strlen(line)", text, "警告の行のコードがありません")
 
     def run_command(self):
-        """一括実行のコマンド（defaults.json の runCommand）。なければ飛ばす"""
+        """一括実行のコマンド"""
         self.need()
-        data = pp.defaults()
-        if data is None or not (pp.ROOT / data.get("runCommand", "")).is_file():
-            self.skipTest("一括実行のコマンド（defaults.json の runCommand）がまだありません")
         if shutil.which("git") is None:
             self.skipTest("git がありません")
-        return pp.ROOT / data["runCommand"]
+        return pp.RUN_SCRIPT
 
     def flow(self, offline):
         """MCP サーバー（偽の Coverity）と一括実行のコマンドで、作業（launch）が始まるところまで進める。

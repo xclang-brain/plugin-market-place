@@ -9,7 +9,7 @@
   読まないように）。.claude-plugin/plugin.json の name と version、.mcp.json と mcp.json の対応、agents/ の .md はエージェントだけで
   plugin-dev の決まりの frontmatter。リポジトリの2つのマーケットプレイスの名前と版、根の marketplace.json と .plugin/ がないこと。
   claude コマンドがあれば claude plugin validate。
-部品の名前は書かない。フォルダ・mcp.json・defaults.json から読む。
+名前は、フォルダ・mcp.json と、plugin_parts.py の定数（ORCHESTRATOR など）から読みます。
 
   python3 -m unittest discover -s tests/structure -v
 """
@@ -145,14 +145,9 @@ class ManifestTest(unittest.TestCase):
             extra = sorted(p.name for p in pp.CLAUDE_MANIFEST.parent.iterdir() if p.name != pp.CLAUDE_MANIFEST.name)
             self.assertEqual(extra, [], ".claude-plugin/ には plugin.json だけを置きます")
         if pp.COPILOT_DIR.is_dir():
-            allowed = {"agents", "commands", "rules", "hooks", "extensions", "lsp.json"}
+            allowed = {"agents", "commands", "rules", "hooks", "lsp.json"}
             extra = sorted(p.name for p in pp.COPILOT_DIR.iterdir() if p.name not in allowed)
             self.assertEqual(extra, [], "com.github.copilot/ の下に、決まりにないものがあります")
-        if pp.EXTENSIONS_DIR.is_dir():
-            for ext in (p for p in pp.EXTENSIONS_DIR.iterdir() if p.is_dir()):
-                with self.subTest(extension=ext.name):
-                    self.assertTrue(any((ext / f"extension.{s}").is_file() for s in ("mjs", "cjs", "js")),
-                                    f"{pp.rel(ext)} に extension.mjs がありません")
 
 
 class SkillTest(unittest.TestCase):
@@ -352,17 +347,13 @@ class AgentTest(unittest.TestCase):
                 self.assertLessEqual(len(body), 30000, f"{path.name}: 本文が長すぎます")
 
     def test_tools_line_except_orchestrator(self):
-        """統括エージェント（defaults.json の orchestrator）は tools を書かない。ほかのエージェントは tools を書く（設計書 3.3）"""
-        data = pp.defaults()
-        if data is None or not data.get("orchestrator"):
-            self.skipTest("defaults.json がまだないため、統括エージェントが分かりません")
-        orchestrator = pp.id_stem(data["orchestrator"])
+        """統括エージェントは tools を書かない。ほかのエージェントは tools を書く（設計書 3.3）"""
         for path in pp.agent_files():
             with self.subTest(agent=path.name):
                 fm, _, problem = pp.frontmatter(path)
                 if problem:
                     continue
-                if pp.agent_stem(path) == orchestrator:
+                if pp.agent_stem(path) == pp.ORCHESTRATOR:
                     self.assertNotIn("tools", fm, f"{path.name}: 統括エージェントに tools があります（呼んだエージェントのツールが絞られる）")
                 else:
                     self.assertIn("tools", fm, f"{path.name}: tools がありません")
@@ -482,16 +473,12 @@ class ClaudeCodeTest(unittest.TestCase):
 
     def test_tools_line_except_orchestrator(self):
         """統括エージェントは tools を書かない（呼んだエージェントのツールが絞られないように）。ほかのエージェントは書く"""
-        data = pp.defaults()
-        if data is None or not data.get("orchestrator"):
-            self.skipTest("defaults.json がまだないため、統括エージェントが分かりません")
-        orchestrator = pp.id_stem(data["orchestrator"])
         for path in pp.claude_agent_files():
             with self.subTest(agent=path.name):
                 fm, _, problem = pp.frontmatter(path)
                 if problem:
                     continue
-                if path.stem == orchestrator:
+                if path.stem == pp.ORCHESTRATOR:
                     self.assertNotIn("tools", fm, f"{path.name}: 統括エージェントに tools があります")
                 else:
                     self.assertIn("tools", fm, f"{path.name}: tools がありません")
@@ -552,6 +539,17 @@ class RepositoryTest(unittest.TestCase):
                         self.fail("claude plugin validate が 180 秒で終わりません")
                     out = (done.stdout or "") + (done.stderr or "")
                     self.assertEqual(done.returncode, 0, f"claude plugin validate が通りません：\n{out[-3000:]}")
+
+
+class NamedPartsTest(unittest.TestCase):
+    """テストが名前で指定するコンポーネント（plugin_parts.py の定数）が、すべてあること"""
+
+    def test_named_parts_exist(self):
+        for name in [pp.ORCHESTRATOR, *pp.ROLES.values()]:
+            for path in (pp.agent_path(name), pp.claude_agent_path(name)):
+                self.assertTrue(path.is_file(), f"{pp.rel(path)} がありません")
+        for path in [pp.RUN_SCRIPT, pp.GUI_SCRIPT, pp.APPLY_SCRIPT, *(skill_md(n) for n in pp.PLUGIN_SKILLS)]:
+            self.assertTrue(path.is_file(), f"{pp.rel(path)} がありません")
 
 
 class SchemaToolTest(unittest.TestCase):

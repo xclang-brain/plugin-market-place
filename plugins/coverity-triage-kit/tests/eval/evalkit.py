@@ -5,10 +5,10 @@
 # ///
 """Shared helpers of the EVAL harnesses (design 9.2, 9.3). Standard library only.
 
-The harnesses (run_mcp_eval.py, stage2/, stage3/, stage4/) use this module for:
+The harnesses (run_mcp_eval.py, stage2/, stage3/) use this module for:
 
 - part names by role, read from the "## 今の部品" table of docs/parts.md (no part name is
-  written in the harnesses; contract names such as the extension tool name are fine);
+  written in the harnesses);
 - the result folder (outside the plugin folder; default $TMPDIR/<plugin>-evals/<stage>/<time>);
 - running ``claude -p`` with ``--output-format stream-json --verbose``: the transcript is saved
   line by line, the process tree is killed on timeout, and ``CLAUDECODE`` is dropped so it also
@@ -529,7 +529,7 @@ def tag_content(text: str | None, tag: str) -> str | None:
 
 
 def mcp_tool_name(server: str, tool: str) -> str:
-    """How Claude Code names an MCP tool (Copilot CLI shows extension tools without a prefix)."""
+    """How Claude Code names an MCP tool."""
     return f"mcp__{server}__{tool}"
 
 

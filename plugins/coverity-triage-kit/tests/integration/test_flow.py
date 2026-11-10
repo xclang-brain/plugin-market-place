@@ -14,8 +14,8 @@ with different checkers (the integrator merges them). The test does what the orc
    refused and nothing is written to the emulator, the right one writes, a second write writes nothing new,
    apply-code pushes the fix branches to the bare remote (and does not push again).
 
-The parts are found through defaults.json and mcp.json; the test is skipped when uv, git, the emulator or a
-part is missing. It takes about a minute.
+The scripts are named in tests/structure/plugin_parts.py, the MCP server in mcp.json. The test is skipped when uv
+or git is missing (in CI that fails); a missing part fails. It takes about a minute.
 """
 
 from __future__ import annotations
@@ -46,14 +46,10 @@ pp = fl.pp
 def skip_reason() -> str | None:
     if os.environ.get("SKIP_SLOW_TESTS") == "1":
         return "SKIP_SLOW_TESTS=1 のため飛ばしました"
-    reason = fl.prerequisites() or emu_support.available()
-    if reason:
-        return reason
-    if fl.mcp_command() is None or fl.mcp_folder() is None:
-        return "mcp.json に MCP サーバーがまだありません"
-    if fl.skill_script("applySkill") is None:
-        return "反映のスクリプト（defaults.json の applySkill）がまだありません"
-    return None
+    missing = emu_support.available()
+    if missing or fl.mcp_command() is None or fl.mcp_folder() is None:
+        raise AssertionError(missing or "mcp.json に MCP サーバーがありません")
+    return fl.prerequisites()
 
 
 SKIP = skip_reason()
@@ -78,14 +74,15 @@ class FlowTest(unittest.TestCase):
     def prepare(cls) -> None:
         cls.env = fl.base_env(cls.tmp)
         cls.env.update(TMPDIR=str(cls.tmp), TEMP=str(cls.tmp), TMP=str(cls.tmp))
-        cls.run_py = fl.command_script("runCommand")
-        cls.apply_py = fl.skill_script("applySkill")
+        cls.run_py = pp.RUN_SCRIPT
+        cls.apply_py = pp.APPLY_SCRIPT
         # the MCP server's packages, once, in a temporary environment
         venv = cls.tmp / "mcp-venv"
         sync = subprocess.run([fl.UV, "sync", "--native-tls", "--frozen", "--quiet", "--directory", str(fl.mcp_folder())],
                               env=dict(cls.env, UV_PROJECT_ENVIRONMENT=str(venv)), capture_output=True, timeout=600)
         if sync.returncode != 0:
-            raise unittest.SkipTest("MCP サーバーのライブラリを用意できません: " + sync.stderr.decode("utf-8", "replace")[-400:])
+            raise unittest.SkipTest(fl.missing_tool("MCP サーバーのライブラリを用意できません: "
+                                                    + sync.stderr.decode("utf-8", "replace")[-400:]))
         # the emulator and the warnings of the analyzed revision
         cls.emu = emu_support.Emulator(cls.tmp / "emu")
         cls.emu.admin("POST", "seed", emu_support.SEED)
@@ -168,8 +165,7 @@ class FlowTest(unittest.TestCase):
                                                          "cids": action["cids"], "output_dir": action["output_dir"]})
 
     def schema(self, name: str) -> dict[str, Any] | None:
-        folder = fl.command_script("runCommand").parents[1]
-        path = folder / "assets" / name
+        path = pp.RUN_SCRIPT.parents[1] / "assets" / name
         return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
     def valid(self, data: Any, name: str, label: str) -> None:

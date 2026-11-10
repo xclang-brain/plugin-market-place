@@ -15,7 +15,6 @@
        python -m unittest discover -s tests -v
   2. tests/structure、tests/contracts、tests/independence、tests/integration、tests/ui、tests/docs、tests/eval（Python の unittest。
      ui は結果と設定の画面を Playwright のブラウザーで確かめる。Node.js か Playwright がなければ、理由を書いて飛ばす）
-  3. tests/extension（node --test）
 
 結果は tests/results/latest.json にも書く（git に入れない）。終了コード：0 すべて合格（飛ばしたものはあってよい）、
 1 不合格がある、2 要る道具がない（何も動かさない）。
@@ -45,7 +44,6 @@ TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
 RESULTS = TESTS / "results" / "latest.json"
 MIN_PYTHON = (3, 10)
-MIN_NODE = 22
 TAIL_LINES = 80
 TIMEOUTS = {"part": 900, "independence": 3600}
 DEFAULT_TIMEOUT = 900
@@ -144,7 +142,7 @@ def kill_tree(proc):
         pass
 
 
-def run_command(command, cwd, env, timeout, encoding=None):
+def run_command(command, cwd, env, timeout):
     """コマンドを動かし、(終了コード（時間切れは None）, 出力, 秒) を返す。
     出力は一時ファイルで受ける（切り離して動く孫のプロセスが出力をつかんでいても、待たずに済む）"""
     started = time.monotonic()
@@ -170,7 +168,7 @@ def run_command(command, cwd, env, timeout, encoding=None):
                 pass
             code, timed_out = None, True
         out.seek(0)
-        text = out.read().decode(encoding or output_encoding(), errors="replace")
+        text = out.read().decode(output_encoding(), errors="replace")
     if timed_out:
         text += "\n{} 秒たっても終わらないため、止めました。".format(timeout)
     return code, text, time.monotonic() - started
@@ -242,48 +240,14 @@ def unittest_reasons(out, limit=12):
     return reasons
 
 
-def tap_counts(out, code):
-    def count(label):
-        m = re.search(r"^# {} (\d+)".format(label), out, re.M)
-        return int(m.group(1)) if m else 0
-
-    total = count("tests")
-    bad = count("fail") + count("cancelled")
-    if code != 0 and bad == 0:
-        bad = 1
-    return total, bad, count("skipped") + count("todo")
-
-
-def tap_reasons(out, limit=12):
-    reasons = []
-    lines = out.splitlines()
-    for i, line in enumerate(lines):
-        m = re.match(r"^\s*not ok \d+ - (.*)$", line)
-        if not m:
-            continue
-        why = ""
-        for follow in lines[i + 1:i + 30]:
-            e = re.match(r"^\s*error:\s*(.*)$", follow)
-            if e:
-                why = e.group(1).strip().strip("'\"|-") or ""
-                if not why:
-                    idx = lines.index(follow)
-                    why = lines[idx + 1].strip() if idx + 1 < len(lines) else ""
-                break
-        reasons.append("{} — {}".format(m.group(1).strip(), why[:300]))
-        if len(reasons) >= limit:
-            break
-    return reasons
-
-
 # ---------------------------------------------------------------------------
 # 試験の組
 # ---------------------------------------------------------------------------
 
 class Suite:
-    def __init__(self, name, kind, cwd=None, command=None, folder=None, parser="unittest", needs=()):
+    def __init__(self, name, kind, cwd=None, command=None, folder=None, needs=()):
         self.name, self.kind, self.cwd, self.command, self.folder = name, kind, cwd, command, folder
-        self.parser, self.needs = parser, set(needs)
+        self.needs = set(needs)
 
 
 def plugin_suite(name):
@@ -292,18 +256,9 @@ def plugin_suite(name):
         return None
     needs = {"python"} if name in ("structure", "docs", "eval") else {"python", "uv", "git"}
     if name == "ui":
-        needs |= {"browser"}  # Node.js and Playwright: optional (the suite skips without them)
+        needs |= {"browser"}  # Node.js and Playwright: optional (the suite skips without them; in CI it fails)
     return Suite(name, "plugin", ROOT, [sys.executable, "-m", "unittest", "discover", "-s", str(folder), "-t", str(folder), "-v"],
                  folder, needs=needs)
-
-
-def extension_suite():
-    folder = TESTS / "extension"
-    files = sorted(p for p in folder.rglob("*.test.mjs") if "node_modules" not in p.parts) if folder.is_dir() else []
-    if not files:
-        return None
-    return Suite("extension", "plugin", ROOT, ["node", "--test", "--test-reporter=tap"] + [str(f) for f in files],
-                 folder, parser="tap", needs={"node"})
 
 
 def all_suites():
@@ -315,7 +270,6 @@ def all_suites():
     for name in PLUGIN_SUITES:
         suite = plugin_suite(name)
         suites.append(suite or Suite(name, "plugin"))
-    suites.append(extension_suite() or Suite("extension", "plugin"))
     return suites
 
 
@@ -368,7 +322,6 @@ INSTALL_HINTS = {
     "uv": "uv を入れてください。Windows（PowerShell）：powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"　"
           "Linux（bash）：curl -LsSf https://astral.sh/uv/install.sh | sh",
     "git": "git を入れてください（https://git-scm.com/downloads）",
-    "node": "Node.js {} 以上を入れてください（https://nodejs.org/）".format(MIN_NODE),
 }
 
 
@@ -381,24 +334,20 @@ def check_prerequisites(needs):
         item["found"] = False
         missing.append("python")
     required.append(item)
-    for name, command, need, ok in (
-            ("uv", ["uv", "--version"], "あること", lambda v: True),
-            ("git", ["git", "--version"], "あること", lambda v: True),
-            ("node", ["node", "--version"], ">={}".format(MIN_NODE), lambda v: v is not None and v[0] >= MIN_NODE)):
+    for name in ("uv", "git"):
         if name not in needs:
             continue
-        exe, version = version_of(command)
-        found = exe is not None and ok(version)
-        required.append({"name": name, "need": need, "found": found, "path": exe,
+        exe, version = version_of([name, "--version"])
+        required.append({"name": name, "need": "あること", "found": exe is not None, "path": exe,
                          "version": ".".join(map(str, version)) if version else None})
-        if not found:
+        if exe is None:
             missing.append(name)
     for name, command in (("svn", ["svn", "--version", "--quiet"]), ("cppcheck", ["cppcheck", "--version"])):
         exe, version = version_of(command)
         optional.append({"name": name, "found": exe is not None, "path": exe,
                          "version": ".".join(map(str, version)) if version else None,
                          "note": "なければ、それを使う試験は飛ばされます"})
-    if needs & {"node", "browser"}:
+    if "browser" in needs:
         optional.append({"name": "playwright", "found": playwright_available(),
                          "note": "なければ、画面をブラウザーで確かめる試験は飛ばされます"})
     return {"ok": not missing, "required": required, "optional": optional, "missing": missing}
@@ -467,19 +416,14 @@ def run_suite(suite, args, uv_root):
         extra["SKIP_SLOW_TESTS"] = "1"
     timeout = args.timeout or TIMEOUTS.get(suite.name if suite.kind == "plugin" else "part", DEFAULT_TIMEOUT)
     command = list(suite.command)
-    if command[0] in ("uv", "node"):
-        command[0] = shutil.which(command[0]) or command[0]
-    encoding = "utf-8" if suite.parser == "tap" else None
-    code, out, seconds = run_command(command, suite.cwd, test_env(extra), timeout, encoding)
-    if suite.parser == "tap":
-        total, bad, skipped = tap_counts(out, code)
-        reasons = tap_reasons(out) if bad else []
-    else:
-        root = suite.folder / "tests" if suite.kind == "part" else suite.folder
-        total, bad, skipped = unittest_counts(out, code, suite_modules(root) if root else None)
-        reasons = unittest_reasons(out) if bad else []
-        if bad == 0 and total == 0:
-            bad, reasons = 1, ["試験が1つも動きませんでした"]
+    if command[0] == "uv":
+        command[0] = shutil.which("uv") or "uv"
+    code, out, seconds = run_command(command, suite.cwd, test_env(extra), timeout)
+    root = suite.folder / "tests" if suite.kind == "part" else suite.folder
+    total, bad, skipped = unittest_counts(out, code, suite_modules(root) if root else None)
+    reasons = unittest_reasons(out) if bad else []
+    if bad == 0 and total == 0:
+        bad, reasons = 1, ["試験が1つも動きませんでした"]
     if bad and not reasons:
         reasons = [line.strip() for line in out.strip().splitlines()[-3:]] or ["終了コード {}".format(code)]
     result.update(status="failed" if bad else "passed", total=total, failed=bad, skipped=skipped,
@@ -533,7 +477,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="coverity-triage-kit の、モデルを使わない試験をすべて動かす")
     parser.add_argument("--only", action="append", default=[], metavar="名前",
                         help="動かす試験（parts、skills/<名前>、<部品の名前>、structure、contracts、independence、"
-                             "integration、ui、docs、eval、extension）。何回でも付けられる")
+                             "integration、ui、docs、eval）。何回でも付けられる")
     parser.add_argument("--skip-slow", action="store_true", help="時間のかかる試験を飛ばす")
     parser.add_argument("--list", action="store_true", help="試験の名前を出して終わる")
     parser.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),

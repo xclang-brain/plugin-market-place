@@ -27,9 +27,7 @@ For each variant:
 
 Variants: ``default`` (review and integration off, the design defaults) and ``full`` (both on), run when no
 ``--variant`` is given; ``bare`` (only with ``--variant bare``) has the default settings and the bare request
-「Coverity の警告をトリアージしてください。…」 with no filter and no limit. Those are also the words of the screen's
-entry skill, which Claude Code loads too, so ``bare`` adds that skill to the copied parts and checks that the batch
-run still starts (the batch-run skill is loaded and its new-run is called; every variant checks this).
+「Coverity の警告をトリアージしてください。…」 with no filter and no limit.
 
   uv run --native-tls --quiet tests/eval/stage3/run_stage3.py [--format copilot-converted|claude-plugin]
         [--variant default|full|bare]... [--limit N]
@@ -57,7 +55,6 @@ TAG = "stage3"
 ROLE_ORCHESTRATOR = "統括"
 ROLE_SELFTEST = "自己診断"
 ROLE_RUN = "一括実行"
-ROLE_SCREEN = "画面の入口"
 ROLES = {"worker": "作業役", "reviewer": "検証役", "integrator": "統合役"}
 BARE = "bare"
 VARIANTS = {"default": {"review": False, "integration": False}, "full": {"review": True, "integration": True},
@@ -67,7 +64,7 @@ DEFAULT_FILTER = "all.yaml"
 PROMPT = "Coverity の警告を、条件ファイル {filter} で、すべてトリアージしてください。途中で質問せず、最後まで進めてください。"
 # With --limit, the batch-run skill's own phrase for a limit (「N 件だけ」) instead of 「すべて」.
 PROMPT_LIMIT = "Coverity の警告を、条件ファイル {filter} で、{limit} 件だけトリアージしてください。途中で質問せず、最後まで進めてください。"
-# The bare variant: no filter, no limit (the same words call the screen's entry skill).
+# The bare variant: no filter, no limit.
 PROMPT_BARE = "Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。"
 RUN_DIR_RE = re.compile(r"^[0-9]{8}-[0-9]{6}(-[0-9]+)?$")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -250,13 +247,11 @@ def run_variant(variant: str, args: argparse.Namespace, ctx: dict) -> dict:
     sample = prepare_sample(ctx["selftest_script"], vdir, variant)
     repo, output_dir = sample["repo"], sample["output_dir"]
     venv = vdir / "mcp-venv"
-    # bare: the screen's entry skill is there too, as in an installed plugin (its trigger is the bare request)
-    extra = [str(ctx["screen_skill"])] if variant == BARE and ctx.get("screen_skill") else None
     build = ek.ADAPTER.build(adapter_args(
         workspace=str(repo), parts_from_table=str(ctx["definition"]), plugin_root=str(ctx["root"]),
         output_dir=str(output_dir), fake_data=str(repo / ".coverity-triage" / "fake-issues.yaml"),
         mcp_env=[f"UV_PROJECT_ENVIRONMENT={venv}"], model=ctx["model"], agent_model=args.agent_model,
-        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin"), skill=extra,
+        claude_bin=args.claude_bin, format=args.format, plugin_dir=str(vdir / "claude-plugin"),
         # claude-plugin: --model also goes into the copied orchestrator's model line, so the run does not
         # depend on whether claude's --model or the main agent's own model wins.
         main_model=ctx["model"] if args.format == ek.ADAPTER.FORMAT_PLUGIN else None,
@@ -382,8 +377,8 @@ def make_parser() -> argparse.ArgumentParser:
                    help="copilot-converted（Copilot CLI の定義を置き換える。既定）か claude-plugin"
                         "（Claude Code の定義を一時のプラグインに写し、--plugin-dir で動かす）")
     p.add_argument("--variant", action="append", choices=sorted(VARIANTS),
-                   help="default（確かめと統合なし）、full（両方あり）か bare（default の設定で、条件のない頼みの文。"
-                        "画面の入口のスキルも置く）。何度でも。既定は default と full")
+                   help="default（確かめと統合なし）、full（両方あり）か bare（default の設定で、条件のない頼みの文）。"
+                        "何度でも。既定は default と full")
     p.add_argument("--limit", type=int, help="調べる件数の上限（頼みの文を「N 件だけ」にする。試しは 1）")
     p.add_argument("--model", help="統括エージェント（メイン）のモデル（既定はその定義の claude-* のモデル。"
                                    "claude-plugin では定義の model のまま。付けたときは、写した統括の model の行もこれに替える）")
@@ -412,12 +407,6 @@ def run(args: argparse.Namespace) -> dict:
     run_skill = ek.part(ROLE_RUN, root)["name"]
     role_names = {role: ek.part(word, root)["name"] for role, word in ROLES.items()}
     variants = list(args.variant or DEFAULT_VARIANTS)
-    screen_skill = None
-    if BARE in variants:
-        try:
-            screen_skill = ek.part(ROLE_SCREEN, root)["path"]
-        except ek.EvalError:
-            screen_skill = None  # a plugin without the screen: the bare request alone
     out = ek.prepare_out(args.out, "stage3", root)
     tools = ek.copy_tree(selftest["path"], out / "tools" / selftest["path"].name)
     selftest_script = tools / "scripts" / "selftest.py"
@@ -437,7 +426,7 @@ def run(args: argparse.Namespace) -> dict:
         shown_model = model or "（claude の既定）"
     collected = ek.ADAPTER.collect_parts(definition, ek.ADAPTER.Layout(root, flavor="claude" if plugin else "copilot"))
     ctx = {"root": root, "out": out, "orchestrator": orchestrator, "definition": definition,
-           "selftest_script": selftest_script, "run_skill": run_skill, "screen_skill": screen_skill,
+           "selftest_script": selftest_script, "run_skill": run_skill,
            "expected": expected, "model": model, "role_names": role_names,
            "run_script": lambda build: (Path(build["skills"][run_skill]) / "scripts" / "run.py") if run_skill in build["skills"] else None}
     meta = {"started_at": datetime.now().isoformat(timespec="seconds"), "format": args.format,

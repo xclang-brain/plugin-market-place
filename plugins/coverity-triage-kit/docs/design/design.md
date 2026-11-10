@@ -4,16 +4,15 @@
 利用者から見た振る舞いは [仕様書](../specs/requirements.md) にある。
 
 - バージョン：0.2.0
-- この設計書は、部品を役割で呼ぶ（「一括実行のスキル」など）。今の部品の名前との対応は、開発者向けの [コンポーネント一覧](../parts.md) にだけある。名前を書くのは、取り決めの名前（MCP サーバーの登録名、ツールの名前、`defaults.json`）だけにする。
+- この設計書は、部品を役割で呼ぶ（「一括実行のスキル」など）。今の部品の名前との対応は、開発者向けの [コンポーネント一覧](../parts.md) にだけある。名前を書くのは、取り決めの名前（MCP サーバーの登録名、ツールの名前）だけにする。
 
 ## 1. 基本の考え方
 
 > **部品は、それぞれのフォルダだけで仕事ができる。部品どうしは、決まった形のファイルとコマンドと自然な文だけでつながる。**
 
-- 部品は4つの段階に分かれる（2章の図）。下の段階は上の段階を知らない。上の段階は、下の段階の部品を、「使う部品」の表と設定のデータでだけ名前で参照する。
+- 部品は4つの段階に分かれる（2章の図）。下の段階は上の段階を知らない。上の段階は、下の段階の部品を、「使う部品」の表でだけ名前で参照する。
 - 判断の要らない決まった処理（実行フォルダ、グループ分け、作業用のコピー、差分、一覧、反映、形の確かめ）は、スクリプトが受け持つ。判断（真偽、修正のコード、逸脱コメント、同じ原因か、確かめの合否）は、エージェントがスキルの手順で行う。Coverity との通信は、MCP サーバーだけが受け持つ。
 - 一括の処理の順番は、スクリプトの状態機械が決める（Anthropic「Building effective agents」の workflow。予測できる流れはコードで決める）。統括エージェントは、その指示に従ってエージェントを呼ぶ（orchestrator-workers）。作業と確かめは evaluator-optimizer の形（作業 → 確かめ → 作り直し）で回す。
-- 4段階目のエクステンションは、3段階目を外から動かし、見るだけの層である。3段階目の部品は、エクステンションのツールを使わない。
 
 元のプラグインとの主な違い：
 
@@ -29,9 +28,8 @@
 
 ```mermaid
 flowchart TB
-    subgraph L4["4段階目　画面とプラグイン全体"]
-        EXT["［エクステンション］Web管理画面<br/>開始の設定・監視・止める・結果・Issue"]
-        ENT["［スキル］画面の入口・困ったとき・自己診断<br/>（使う部品の表で下の部品を名前で使う）"]
+    subgraph L4["4段階目　プラグイン全体"]
+        ENT["［スキル］困ったとき・自己診断<br/>（使う部品の表で下の部品を名前で使う）"]
     end
     subgraph L3["3段階目　一括のトリアージ"]
         ORC["［エージェント］統括エージェント<br/>一括実行のスキルの指示に従い、エージェントを呼ぶ<br/>（ファイルは直さない）"]
@@ -50,8 +48,6 @@ flowchart TB
     RUN[("［データ］実行フォルダ<br/>&lt;output_dir&gt;/&lt;日時&gt;/")]
     COV[["［プラグインの外］Coverity Connect"]]
 
-    ENT -- "開く" --> EXT
-    EXT -- "実行を作り、統括エージェントを始める。状態をコマンドで読む" --> L3
     ORC -- "指示ファイル（自然な文）" --> WRK
     ORC --> REV
     ORC --> INT
@@ -70,8 +66,7 @@ flowchart TB
 | 1 | MCP サーバー | `mcp-servers/<名前>/` | Coverity Connect と、データの取り決め（4.1〜4.4、4.10）だけ |
 | 2 | 作業エージェント | `agents/<名前>.md`（Claude Code）と `com.github.copilot/agents/<名前>.agent.md`（Copilot CLI） | 使う部品の名前と役割（「使う部品」の表） |
 | 3 | 統括・検証・統合のエージェント | `agents/<名前>.md` と `com.github.copilot/agents/<名前>.agent.md` | 使う部品の名前と役割（表） |
-| 4 | エクステンション | `com.github.copilot/extensions/coverity-triage-kit/` | エージェントとスキルの名前とコマンドの場所（`defaults.json` にだけ）、一括実行と画面のコマンドの出力の形（4.12、4.16）、役のエージェントの定義の `model:` の行（場所は `defaults.json` の `agentDir`） |
-| 4 | プラグイン全体のスキル（画面の入口・困ったとき・自己診断） | `skills/<名前>/`（`defaults.json` の `pluginSkills` に名前がある） | 使う部品の名前と役割（SKILL.md の「使う部品」の表）、エクステンションのツールの名前（画面の入口だけ） |
+| 4 | プラグイン全体のスキル（困ったとき・自己診断） | `skills/<名前>/` | 使う部品の名前と役割（SKILL.md の「使う部品」の表） |
 
 ### 2.2 プラグインのフォルダ
 
@@ -85,7 +80,6 @@ coverity-triage-kit/
   skills/<名前>/                   スキル（SKILL.md、README.md、scripts/、references/、assets/、tests/、evals/）。両方のツールが使う
   agents/                          Claude Code のエージェントの定義（<名前>.md）だけ
   com.github.copilot/agents/       Copilot CLI のエージェントの定義（<名前>.agent.md）と、両方の形の使い方（<名前>.README.markdown）
-  com.github.copilot/extensions/coverity-triage-kit/   エクステンション（4段階目。Copilot CLI だけ）
   tests/                           プラグイン全体の試験
 ```
 
@@ -101,22 +95,22 @@ coverity-triage-kit/
 
 1つのフォルダを、Copilot CLI と Claude Code の両方のプラグインにする。スキルと MCP サーバーは同じものを使い、エージェントの定義とマニフェストと MCP サーバーの登録だけを、ツールごとに持つ。
 
-- Copilot CLI：`plugin.json` の `$schema` が `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json` のとき、プラグインを Agent Plugins の形として読む。この形では、`skills/`、`mcp.json`（`${PLUGIN_ROOT}`）、`com.github.copilot/` の下（agents、extensions など）だけを読む。1.0.80 からは、この形のプラグインの `agents/`、`.mcp.json`、`hooks/`、`commands/`、`.claude-plugin/` を読まない。
+- Copilot CLI：`plugin.json` の `$schema` が `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json` のとき、プラグインを Agent Plugins の形として読む。この形では、`skills/`、`mcp.json`（`${PLUGIN_ROOT}`）、`com.github.copilot/` の下（agents など）だけを読む。1.0.80 からは、この形のプラグインの `agents/`、`.mcp.json`、`hooks/`、`commands/`、`.claude-plugin/` を読まない。
 - Claude Code：`.claude-plugin/plugin.json`、`agents/*.md`、`skills/*/SKILL.md`、`.mcp.json`（`${CLAUDE_PLUGIN_ROOT}`）を読む。`plugin.json`、`mcp.json`、`com.github.copilot/` は読まない（2.1.319 で確認）。
 
 | ファイル | Copilot CLI | Claude Code |
 | --- | --- | --- |
 | `plugin.json`、`mcp.json` | 読む | 読まない |
 | `.claude-plugin/plugin.json`、`.mcp.json`、`agents/` | 読まない（Agent Plugins の形のとき） | 読む |
-| `skills/` | 読む | 読む（すべてのスキル。4段階目の画面の入口も） |
-| `com.github.copilot/`（エージェント、エクステンション） | 読む | 読まない |
+| `skills/` | 読む | 読む（すべてのスキル） |
+| `com.github.copilot/`（エージェント） | 読む | 読まない |
 
 守り（どれかが崩れると、片方のツールが、もう片方の部品を読んでしまう）：
 
 - `plugin.json` の `$schema` を消さない。消えると、Copilot CLI は古い形として読み、`agents/` と `.mcp.json` を読む。構造の試験が `$schema` を確かめる。
 - リポジトリの一番上に `marketplace.json` と `.plugin/` を置かない。Copilot CLI は、`marketplace.json`（一番上）、`.plugin/marketplace.json`、`.github/plugin/marketplace.json`、`.claude-plugin/marketplace.json` の最初にあるものを使うので、Copilot CLI の一覧は `.github/plugin/marketplace.json` のままにする。`.claude-plugin/marketplace.json` は Claude Code だけが読む。2つの一覧のマーケットプレイスの名前は同じにする。
 - スキルの `allowed-tools` は、Copilot CLI の書き方（`shell(uv run:*)`）だけにする。Copilot CLI は、知らない書き方があるとスキルを使うたびに警告を出すため。Claude Code では `Bash(uv run *)` を、利用者が前もって許可する（3.5、README）。`allowed-tools` を持つスキルは、Claude Code が使う前に毎回確認するので、`Skill(<プラグイン>:*)` も前もって許可する。
-- Claude Code は、`skills/` のすべてのスキルを読む（マニフェストの `skills` は、読む所を足すだけで、減らせない。2.1.319 で確認）。画面の入口のスキルも読まれるが、エクステンションのツールがないので、画面を開かず、作業を始めない。Claude Code で動いているときは、Copilot CLI の3つの原因（REQ-402）を示さず、Web管理画面は Copilot CLI だけの機能であることと、3段階目の2つの始め方（統括エージェントを `claude --agent <プラグイン>:<名前>` で起動する、一括実行のスキルを `/` で呼ぶ）を、呼び方だけ伝える（REQ-009）。
+- Claude Code は、`skills/` のすべてのスキルを読む（マニフェストの `skills` は、読む所を足すだけで、減らせない。2.1.319 で確認）。
 - 開発のときに、プラグインのフォルダを作業フォルダにして、どちらのツールも起動しない。どちらも `.mcp.json` をそのフォルダの MCP サーバーの登録として読み、`${CLAUDE_PLUGIN_ROOT}` が展開されないまま、動かない登録が1つ増える。
 
 Claude Code での名前（2.1.319 で確認）：
@@ -126,8 +120,6 @@ Claude Code での名前（2.1.319 で確認）：
 | エージェント | `<プラグイン>:<名前>`（`claude --agent <プラグイン>:<名前>` で会話の主役にできる） |
 | スキル | `<プラグイン>:<名前>`（`/<プラグイン>:<名前>`。スキルが `name` を持ち、ほかに同じ名前がなければ `/<名前>` でも呼べる） |
 | MCP サーバー | `plugin:<プラグイン>:<登録名>`。ツールは `mcp__plugin_<プラグイン>_<登録名>__<ツール>`。部品を取り出して手で登録したときは `mcp__<登録名>__<ツール>` |
-
-4段階目（エクステンションと Web管理画面）は Copilot CLI だけである。Claude Code では1〜3段階目を使う（REQ-009）。
 
 ## 3. 部品の作りの決まり
 
@@ -216,7 +208,6 @@ Claude Code での名前（2.1.319 で確認）：
   - 反映（反映のスキル）は、書き戻すツールを前もって許可しないので、そのときに確認が出る。
   - 書き戻すツールと、サーバーの名前だけの `mcp__plugin_<プラグイン>_<登録名>` は示さない。スキルの `allowed-tools` は Copilot CLI の書き方なので（2.3）、Claude Code では `uv` を前もって許可しないと、毎回確認が出る。
 - 作業・検証・統合のエージェントは、3段階目ではコマンドを使わない（指示ファイルがそう決める）。確かめは一括実行のスクリプトが行う（4.12）。
-- 4段階目：エクステンションは許可の求めに答えない（元のプラグインと同じ。見て画面に出すだけ）。準備の画面と入口のスキルの注意に、上の手順を示す。
 
 ## 4. 部品の間の取り決め
 
@@ -444,20 +435,20 @@ issues-found.jsonl       統括エージェントが書き残した課題（1行
 
 JSON Schema：一括実行の `assets/run.schema.json`（上の項目だけを決め、ほかは許す。いつも書く項目だけを必須にする）。読む部品に同じ写し。反映したかどうかは `run.json` に書かない（反映が `apply-code.result.json` に書き、画面はそれを読む）。
 
-### 4.12 一括実行のコマンド（統括エージェントとエクステンションが使う）
+### 4.12 一括実行のコマンド（統括エージェントが使う）
 
 `uv run --native-tls --quiet "<一括実行のスキルのフォルダ>/scripts/run.py" <コマンド> …`。頼みの文にコマンドの場所が書かれていれば、それを使う（同じ名前のスキルがほかにあっても、同じ版のスクリプトを使うため）。`tool_version` が `run.json` と違うスクリプトでは、その実行フォルダを変えない（`ok: false`）。
 
 | コマンド | 使う部品 | 出力の主な項目 |
 | --- | --- | --- |
-| `settings --repo R` | 統括、エクステンション | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）、条件ファイルの名前の一覧 `filters[]` と既定の `default_filter`、設定の問題 `problems[]`、認証情報を入れる環境変数の名前 `secret_envs[]`（値は出さない。呼んだ側が、見せる文の中の値を伏せるのに使う）。読むだけ |
-| `runs --repo R` | 統括、エクステンション | `runs[{run_id, run_dir, created_at, filter_name, counts, unfinished, has_summary, foreign}]` |
-| `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N] [--issues-file F] [--mcp-tool <読むツール>]… [--client copilot\|claude-code]` | 統括、エクステンション | `run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps`（`--mcp-tool` の読むツールだけを前もって許可する案内。`--client` の形で書く。既定は `copilot`。書き戻すツールは入れない） |
+| `settings --repo R` | 統括 | 設定の今の値（`max_rework`、`review`、`integration`、`initial`、`verify`、`max_items`、`parallel`、`output_dir`）、条件ファイルの名前の一覧 `filters[]` と既定の `default_filter`、設定の問題 `problems[]`、認証情報を入れる環境変数の名前 `secret_envs[]`（値は出さない。呼んだ側が、見せる文の中の値を伏せるのに使う）。読むだけ |
+| `runs --repo R` | 統括 | `runs[{run_id, run_dir, created_at, filter_name, counts, unfinished, has_summary, foreign}]` |
+| `new-run --repo R [--filter F] [--impact X]… [--checker X]… [--status X]… [--classification X]… [--action X]… [--limit N] [--verify none\|build\|build+analyze] [--initial\|--no-initial] [--review\|--no-review] [--integration\|--no-integration] [--max-rework N] [--issues-file F] [--mcp-tool <読むツール>]… [--client copilot\|claude-code]` | 統括 | `run_dir, repo_root, work_dir, limit, initial, review, integration, max_rework, permission_steps`（`--mcp-tool` の読むツールだけを前もって許可する案内。`--client` の形で書く。既定は `copilot`。書き戻すツールは入れない） |
 | `resume --run D [--mcp-tool …]… [--client copilot\|claude-code]` | 統括 | `run_dir, counts, permission_steps` |
 | `tick --run D [--finished T] [--failed T --reason R] [--wait S]` | 統括 | 下の「tick の出力」 |
-| `status --run D` | 統括、エクステンション | 下の「status の出力」。読むだけで、鍵を取らない |
-| `summary --run D` | 統括、エクステンション | `summary_html, counts{warnings, items, groups, fix, deviation, low, error, unprocessed}, approvals_counts{fix, deviation, reject, none, changed}, results[{id, cids, checker, recommendation, confidence, judgement, summary, approval, detail}], unprocessed[{id, reason}], run_checks[], criteria[], criteria_results[], say[]`。終わった実行では何度動かしてもよい（作業用のコピーは、未処理の作業がないときだけ消す） |
-| `stop --run D` | 統括、エクステンション | 切り離した処理（初回解析・ビルド）を止め、`run.json` に `stopped` を書く。`stopped_jobs[]`、`unstopped[{name, pid, how}]` |
+| `status --run D` | 統括 | 下の「status の出力」。読むだけで、鍵を取らない |
+| `summary --run D` | 統括 | `summary_html, counts{warnings, items, groups, fix, deviation, low, error, unprocessed}, approvals_counts{fix, deviation, reject, none, changed}, results[{id, cids, checker, recommendation, confidence, judgement, summary, approval, detail}], unprocessed[{id, reason}], run_checks[], criteria[], criteria_results[], say[]`。終わった実行では何度動かしてもよい（作業用のコピーは、未処理の作業がないときだけ消す） |
+| `stop --run D` | 統括 | 切り離した処理（初回解析・ビルド）を止め、`run.json` に `stopped` を書く。`stopped_jobs[]`、`unstopped[{name, pid, how}]` |
 | `note-issue --run D (--title T --body B \| --stdin)` | 統括 | `issues_found`（件数） |
 | `initial-status --run D` | 統括 | 初回解析の段と進み |
 
@@ -533,18 +524,6 @@ status の出力（画面のため。読むだけ）：
 | 作業 `items/<ID>/brief.md` | 警告の情報（CID、チェッカー、Impact、ファイルと行、関数、警告経路と前後のコード。問題の起きる行に ★）、読むコードのフォルダ（解析したリビジョンのコピーか、リポジトリ）、直すフォルダ（作業用のコピー）、結果のファイルと形（`schemas/result.schema.json`）、進み具合のファイルと段、プロジェクトの知識のファイル、守ること（コマンドは使わない。直すのは直すフォルダ・結果・進み具合だけ）、返す形（1行：「<ID>: <修正／逸脱>を推奨（確信度 <高/中/低>）— <要約>」）。作り直しのときは「確かめの指摘（直すこと）」、統合のときは「統合の指示」、形の直しのときは「結果ファイルの直すこと」の節を足す |
 | 確かめ `agents/reviewer/<ID>.md` | 確かめる作業の結果のファイル、差分、読むコード、評価基準（`schemas/criteria.json` の `scope: item` のもの）、スクリプトが見つけた点、書くファイル（`review.json`）と形、守ること（結果と差分を直さない。コマンドは使わない）、返す形 |
 | 統合 `agents/integrator/brief.md` | 候補の組、それぞれの結果と差分、書くファイル（`integration/plan.json`）と形、守ること、返す形 |
-
-### 4.15 エクステンションと統括エージェント（4段階目）
-
-エクステンションは、`new-run` で作った実行フォルダで統括エージェントを始める。頼みの文のひな形は、エクステンションの `core/messages.mjs` にだけある。頼みの文に書くこと：
-
-- 実行フォルダ（新しく作らず、再開の確認も始める前の質問もせず、tick から進める）
-- 一括実行のコマンドの場所（絶対パス）
-- 役割ごとのエージェントの id（`defaults.json` から）
-- 利用者には質問しないこと。許可は利用者がチャットで答えること
-- 終わったら課題を `note-issue` で書き残し、1行で返すこと
-
-統括エージェントの定義には、エクステンションとの決まりを書かない（頼みの文の中身として受け取る）。頼みの文に、利用者の頼みの文そのものは入れない（条件は画面で決まっている）。
 
 ### 4.16 結果と設定の画面のコマンド（結果と設定の画面のスキルが持ち主）
 
@@ -623,7 +602,6 @@ status の出力（画面のため。読むだけ）：
 
 | 役割 | すること |
 | --- | --- |
-| 画面の入口 | エクステンションのツール `coverity-triage-kit_open` に頼みの文をそのまま渡し、URL と4つの注意を示す。ツールがなければ、Copilot CLI では3つの原因と直し方を示し、Claude Code では、Web管理画面は Copilot CLI だけであることと、3段階目の2つの始め方を伝える（2.3）。自分で作業をしない。終わりの知らせで開き直さない |
 | 困ったとき | 使い方の全体の説明（`references/`。Claude Code での使い方も）、点検（道具・設定・環境変数・実行の様子）、画面を開く（表の画面のスキル）、接続の確かめ（表の MCP サーバー） |
 | 自己診断 | ①道具とエージェント（表のエージェントがあり、役割の言葉を持つか。Copilot CLI か Claude Code かを記録し、Claude Code では Web管理画面の確かめを skip にする） ②見本のリポジトリ（`assets/`）で、偽の Coverity で一括実行と反映を流し、間違った確認の文字列が断られることと、結果が期待と合うことを確かめる ③社内の Coverity を読むだけで確かめる ④ビルドの試し。伏せ字の `report.md` |
 
@@ -643,82 +621,6 @@ status の出力（画面のため。読むだけ）：
 - 統合役：書いてよいのは `integration/plan.json` と進み具合だけ。
 - 各エージェントの使い方は `<名前>.README.markdown`（Copilot CLI と Claude Code の両方の使い方と、取り出し方）。
 
-## 8. エクステンション（4段階目）
-
-元のプラグインのエクステンションの画面の部品（画面の作り、見た目、記録、止め方、Issue の起票、立ち直り）を引き継ぎ、動かし方を次のように変える。追加のパッケージは使わない。
-
-### 8.1 流れ
-
-1. 画面の入口のスキルが `coverity-triage-kit_open(requestText)` を呼ぶ。エクステンションは、サーバーを起動し（127.0.0.1、既定 8731、使われていれば空いている番号、URL に合言葉 `?k=`）、`run.py settings` で画面の最初の値を作り、頼みの文から条件の言い方を拾い（REQ-405）、URL と注意の文（`core/messages.mjs`）を返す。実行中なら、今の URL と BUSY の文を返す。`run.py runs` を1回動かして、uv の用意を済ませる。
-2. 画面で開始すると、エクステンションは：
-   1. 統括エージェントのモデルは `startAgent` の `model` で、作業・検証・統合のモデルと思考の深さは `rpc.tools.updateSubagentSettings`（`defaults.json` の id）で、この会話の中だけ上書きする。終わったら上書きを消す（この会話のほかのエージェントの指定も消えるので、開始の前に知らせる）。
-   2. `run.py new-run` を動かす（画面の条件ファイル・Impact・件数・初回解析・繰り返しの上限を引数にし、`--review` を付ける）。失敗したら準備に戻し、理由を示す。
-   3. 統括エージェントを、4.15 の頼みの文で始める（`rpc.tasks.startAgent`、バックグラウンド）。
-3. 実行中は、`run.py status` を、前の呼び出しが終わってから次を呼ぶ（重ねない）。状態が変わっているあいだは2秒ごと、変わらないときと画面が見られていないときは5秒ごと。10秒で打ち切り、プロセスの木を止める。Copilot CLI のイベントから、エージェントの状態・確認の待ち・課題を作る。
-4. 統括エージェントが、`status.finished` が偽のまま止まったら（止めるボタンのときを除く）、同じ実行フォルダで、続きからの頼みの文で始め直す（2回まで。REQ-415）。
-5. 統括エージェントが終わり、実行が終わっていれば（`finished`）、`summary` を動かして、その出力と `status` から結果の画面を作る（一覧は作り直されるが、中身は同じ）。止めた実行と途中で終わった実行では `summary` を動かさず（作業用のコピーを残し、続きからできるように）、`status` から作る。結果と設定の画面へのリンクは、4.16 のコマンドを `--no-browser` で動かして作る。
-6. 課題は、イベントから機械的に分かるものと、`status.issues_found`（統括エージェントが書いたもの）から作る。止めた実行と途中で終わった実行では、機械的に分かるものだけ。
-
-### 8.2 見せ方
-
-| 画面の項目 | もと |
-| --- | --- |
-| 役割ごとの枠（統括1、作業 `parallel` 枠、検証1、統合1）と、今の担当・状態・実際のモデル | イベント（サブエージェントの開始・終了・失敗）。役割は `defaults.json` の id（全体か `:` の後ろ）で決める。担当は task の説明（`launch.description`）。終わったものは「これまでのエージェント」 |
-| 計画・実行・評価 | `status.stage`：初回解析・取得・経路・作業・統合・ビルドでの検証は実行、確かめは評価（検証役が動いていれば評価）。tick のあいだで段の作業がないときは計画 |
-| 作業ごとの様子・エラー・最近の動き・初回解析・全体の進み | `status` |
-| 検証の結果（評価基準ごと） | `criteria.json` の文（`status` と `summary` が返す id ごとの合否）。`scope: item` は警告ごとの `findings` から、基準ごとの合格・不合格の件数と警告ごとの合否。`scope: run` は `run_checks` |
-| 件数・一覧・処理できなかった作業 | `summary`（`counts`、`approvals_counts`、`results`、`unprocessed`） |
-| 詳細レポートと差分、承認の画面へのリンク | 4.16 の URL（確信度のいちばん低い1件に `&item=<ID>`） |
-
-終わった理由：
-
-| 理由 | 決め方 |
-| --- | --- |
-| すべて合格した | `finished`、作業がすべて done、確かめがすべて pass、実行ごとの基準（`run_checks`）に不合格がない、エラーと未処理がない（条件に合う警告がないときも。「条件に合う警告はなかった」を添える） |
-| 上限の回数に達した | `finished`、要確認（flag）・未検証・エラー・未処理の作業がある、または実行ごとの基準に不合格がある（その数や基準の ID を添える） |
-| ユーザーが止めた | 止めるボタン |
-| 途中で終わった | 一括実行が続けられなかった（tick の error）／統括エージェントが途中で終えた（始め直しの上限を超えた）／統括エージェントの失敗／チャットからの中断／AI クレジットの上限／`/clear` で切れた／エクステンションの再起動 |
-
-止めきれなかったエージェントや処理があれば、理由に添える。
-
-### 8.3 守り（onPreToolUse）
-
-- 止めた実行のエージェント（木のすべて）のツールは、すべて拒む。
-- この実行の統括エージェント（`startAgent` で始めた id）には、次だけを許す：読む・探すツール（view、grep、glob、rg）、エージェントのツール（task、read_agent、list_agents、write_agent）、skill、Coverity との通信の読むツール、シェル（この実行の `run.py` か、画面の `gui.py` を動かすときだけ）。
-  - シェルは、引用符の外に `; & | < >`、バッククォート、`$(`、改行がない1つのコマンドだけを許す。引用符の中（C のコードやエラーの文）は問わない。ただし `"…"` の中のバッククォートと `$(` は拒む。入力を渡す形は `echo '<JSON>' | uv run … "<run.py>" <コマンド> … --stdin` の1つだけを許す。
-  - Coverity の読むツールは、名前だけか、`coverityServer` の登録名で修飾した名前（`<登録名>/…`、`<登録名>-…`、`mcp__<登録名>__…` など）だけを許す。ほかのサーバーの同じ名前のツールは拒む。
-- 検証役のほかのエージェントが `items/*/review.json` を書くのを拒む。
-- メインの会話のエージェントと、この実行の外のエージェントは拒まない（チャットのほかの作業を止めない）。
-- フックは例外を投げない。拒む理由は「Denied by preToolUse hook: <理由>」でモデルに返る。
-- 許可の求め（`onPermissionRequest`）は見るだけで、いつも `{kind: "no-result"}` を返す。
-- 記録のツール `coverity-triage-kit_open` は `skipPermission: true`。失敗は `{textResultForLlm, resultType: "failure"}` で返し、例外を投げない。
-- 止めるとき：統括エージェントを取り消し、木のツールを拒み、`run.py stop` で切り離した処理を止める。8秒で止まらないものは「止まっていないエージェント」と止め方（チャットで Esc を2回押すか、Copilot CLI を終える）を示す。
-- 記録は `<COPILOT_HOME または ~/.copilot>/plugin-data/coverity-triage-kit/runs/<日時>-<id>/`（log.jsonl、result.json、alive、issues/）。20件まで残す。`/clear` などで読み込み直したときの立ち直りは、元のプラグインと同じ。
-
-### 8.4 `defaults.json`
-
-エージェントとスキルの名前とコマンドの場所は、ここにだけ書く。
-
-```json
-{"orchestrator": "coverity-triage-kit:triage-orchestrator",
- "roles": {"worker": "coverity-triage-kit:triage-worker", "reviewer": "coverity-triage-kit:triage-reviewer",
-           "integrator": "coverity-triage-kit:triage-integrator"},
- "runCommand": "skills/coverity-run/scripts/run.py",
- "guiCommand": "skills/coverity-gui/scripts/gui.py",
- "applySkill": "coverity-apply", "setupSkill": "coverity-setup",
- "pluginSkills": ["coverity-triage-screen", "coverity-help", "coverity-selftest"],
- "port": 8731, "issueRepo": "xclang-brain/plugin-market-place",
- "agentDir": "com.github.copilot/agents", "coverityServer": "coverity-connect",
- "coverityReadTools": ["coverity_check_connection", "coverity_search_issues", "coverity_get_issue_details",
-                       "coverity_preview_triage"]}
-```
-
-- `roles` と `orchestrator` の `:` の後ろは、統括エージェントの「使う部品」の表の名前と同じ（`tests/contracts/` で確かめる）。
-- コマンドの場所は、プラグインのフォルダからの相対パス。
-- `coverityReadTools` は、守り（8.3）で統括エージェントに許す、Coverity との通信の読むツールの名前。`coverityServer` は、その MCP サーバーの登録名で、守りの照合と、`new-run --mcp-name`（許可の案内の起動のコマンド）に使う。
-- `agentDir` は、役のエージェントの定義のフォルダ（プラグインのフォルダからの相対パス）。画面は、その定義の `model:` を読んで、役ごとの既定のモデルの候補にする（REQ-404）。定義がなければ候補なしとして、今のモデルを使う。
-- Issue の起票先は `issueRepo`。起票には `gh` とログインが要る。起票できないときは、案を並べ、手順（`gh` を入れて `gh auth login`、起票先のリポジトリに書き込めること）を示す。
-
 ## 9. 試験
 
 プラグインのフォルダで `python3 tests/run.py`（Windows は `py -3 tests/run.py`）。モデルを使わない試験をすべて動かし、合否を `tests/results/`（git に入れない）にも書く。試験は、リポジトリの中に `__pycache__`・`.venv`・結果のファイルを残さない。
@@ -731,10 +633,9 @@ status の出力（画面のため。読むだけ）：
 | スキル | `skills/<名前>/tests/` | スクリプトの振る舞い。フォルダだけでも動く |
 | MCP サーバー | `mcp-servers/<名前>/tests/` | ツール（偽の通信・偽の Coverity）、stdio での始まり（`server/discover` → `initialize` → ツール）。フォルダだけでも動く |
 | 模擬の Coverity との結合 | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（REST v2・SOAP v9、`tests/coverity_emulator/`）。一括実行の流れを、決まった振る舞いの偽のエージェントで最後まで流し、反映（偽の Coverity への書き戻し）まで確かめる |
-| 取り決め | `tests/contracts/` | 4.17 の写しが同じ。書く部品の出力を、読む部品が受け付ける。`defaults.json` と統括エージェントの表と役割の言葉が合う |
-| 独立性 | `tests/independence/` | 1段階目の部品のフォルダに、ほかの部品の名前・プラグインの名前・外を指すパスがない。部品を1つずつ別の場所にコピー（名前を変えたコピーも）して、その試験が通る。エージェントの定義（2つの形とも）は、部品の名前を表にだけ書き、`tools`・`disallowedTools` の MCP のツールは表の MCP サーバーのものだけ。エージェントの README の取り出しのコピーの一覧（Copilot CLI と Claude Code の両方）が、表からたどった部品と同じ。2段階目の組（作業エージェントと表の部品）と3段階目の組（エージェントの表をたどった部品）が、名前で閉じている。上の段の文書に下の段の中身がない。部品の名前は、フォルダ・`mcp.json`・`defaults.json`・表から読む（試験に書かない） |
-| エクステンション | `tests/extension/` | 偽の SDK と偽のコマンドで、開く・開始・状態・止める・守り・始め直し・終わった理由・課題・起票・画面のサーバー。作業エージェントの名前を替えても動く。偽の DOM と Playwright で画面（幅 390 px、ライトとダーク） |
-| 文書 | `tests/docs/` | 版の一致（`plugin.json`、`.claude-plugin/plugin.json`、仕様書、設計書、変更履歴、2つのマーケットプレイスの一覧、リポジトリの README）、要求の番号の追跡（10章）、仕様書と設計書に部品の名前がない（取り決めの名前を除く）。プラグインの README の「Claude Code で使う」（入れ方、段階ごとの呼び方、4段階目は Copilot CLI だけ、前もって許可するしかた）と、エージェントの README の「Claude Code で使う」 |
+| 取り決め | `tests/contracts/` | 4.17 の写しが同じ。書く部品の出力を、読む部品が受け付ける |
+| 独立性 | `tests/independence/` | 1段階目の部品のフォルダに、ほかの部品の名前・プラグインの名前・外を指すパスがない。部品を1つずつ別の場所にコピー（名前を変えたコピーも）して、その試験が通る。エージェントの定義（2つの形とも）は、部品の名前を表にだけ書き、`tools`・`disallowedTools` の MCP のツールは表の MCP サーバーのものだけ。エージェントの README の取り出しのコピーの一覧（Copilot CLI と Claude Code の両方）が、表からたどった部品と同じ。2段階目の組（作業エージェントと表の部品）と3段階目の組（エージェントの表をたどった部品）が、名前で閉じている。上の段の文書に下の段の中身がない |
+| 文書 | `tests/docs/` | 版の一致（`plugin.json`、`.claude-plugin/plugin.json`、仕様書、設計書、変更履歴、2つのマーケットプレイスの一覧、リポジトリの README）。プラグインの README の「Claude Code で使う」（入れ方、段階ごとの呼び方、4段階目は Copilot CLI だけ、前もって許可するしかた）と、エージェントの README の「Claude Code で使う」 |
 
 ### 9.2 EVAL（実際のモデル。CI では動かさない）
 
@@ -744,7 +645,6 @@ status の出力（画面のため。読むだけ）：
 | 1（MCP） | `mcp-servers/<名前>/evals/`（mcp-builder の形の `evaluation.xml` と、フォルダの中の偽の Coverity のデータ） | `tests/eval/run_mcp_eval.py` が、Claude Code に MCP サーバーだけを渡して答えさせ、文字列で照合する |
 | 2 | `tests/eval/stage2/` | 作業エージェントとその表の部品だけを取り出し、偽の Coverity で1件のトリアージをさせる。Claude Code の定義は `--format claude-plugin`（一時のプラグインとして動かす。9.3）で、Copilot CLI の定義の文は `--format copilot-converted`（Claude Code の形に置き換える。9.3）で確かめる。利用者と話す道筋（足りない情報を聞く、直す前に同意を得る）は、Agent SDK で質問に決まった答えを返して動かす（できないときは手動の確認） |
 | 3 | `tests/eval/stage3/` | 3段階目の部品だけを取り出し、統括エージェントをメインにして、偽の Coverity で一括のトリアージをさせる。2つの形は2段階目と同じ（Claude Code の定義は `--format claude-plugin`、Copilot CLI の定義は `--format copilot-converted`。9.3） |
-| 4 | `tests/eval/stage4/` | 画面の入口：Claude Code に入口のスキルと偽の `_open` を渡し、頼みの言い方ごとに入口が選ばれるか（一括実行のスキルのコマンドを打ったときは選ばれないか）を確かめる。画面の流れは、偽の SDK で統括エージェントのイベントを流す試験（9.1）と、Copilot CLI での手動の確認 |
 
 ### 9.3 Claude Code で試すとき
 
@@ -755,7 +655,7 @@ status の出力（画面のため。読むだけ）：
 - Copilot CLI の定義の文を Claude Code で確かめるときは、試験の道具（`tests/eval/claude_adapter.py`）が Claude Code の形に置き換える。tools の読み替え：read → Read・Glob・Grep、search → Grep・Glob、edit → Edit・Write、execute → Bash、agent → Agent、skill → Skill、ask_user → AskUserQuestion、`<登録名>/<ツール>` → `mcp__<登録名>__<ツール>`。frontmatter に `skills:`（表のスキル）を足す。本文は変えず、先頭に読み替えの1段落を足す。動かし方は、`claude -p --agent <名前> --agents <変換した JSON> --mcp-config <EVAL の mcp.json> --strict-mcp-config --setting-sources project --permission-mode acceptEdits --allowedTools "Bash(uv run:*)" Skill "mcp__<登録名>__*" --add-dir <output_dir>`（この形の許可は、前のまま変えない）。
 - Claude Code のメインの会話（`--agent`）は Agent のツールを持ち、サブエージェントもさらにサブエージェントを呼べる（3段まで。2.1.319 で確認）。3段階目は、統括エージェントをメイン（`--agent`）にする。呼んだエージェントは裏で動くことがあり、結果は後から知らせとして届く。
 - Claude Code 2.1.319 の既定のツールには Glob と Grep がないので、置き換えた定義（`--format copilot-converted`）で動かすときは、`--tools` に、使うエージェントの組み込みのツールを合わせたものを渡す。エージェントのツールは、始まりの記録では `Task` と出る。`claude -p` では AskUserQuestion は出ない（サブエージェントにもないことがある）。Claude Code の中から動かすときは、環境変数 `CLAUDECODE` を外す。
-- Claude Code で確かめられないもの：Copilot CLI の ask_user がサブエージェントにないこと、`com.github.copilot/agents/` の `.md` の読み込み、エクステンション、モデルの名前、Copilot CLI の許可の確認。これらは 9.4。
+- Claude Code で確かめられないもの：Copilot CLI の ask_user がサブエージェントにないこと、`com.github.copilot/agents/` の `.md` の読み込み、モデルの名前、Copilot CLI の許可の確認。これらは 9.4。
 
 ### 9.4 Copilot CLI で実測すること
 
@@ -763,17 +663,12 @@ status の出力（画面のため。読むだけ）：
 
 | 確かめること | 版 | 日付 | 結果 |
 | --- | --- | --- | --- |
-| `startAgent` で始めた、`tools` のない統括エージェントから呼んだ作業役が、`edit` で結果のファイルを書ける | | | 未確認 |
-| `startAgent` で始めたエージェントに ask_user があるか | | | 未確認 |
 | `task` に、プラグインのエージェントの名前を、プラグインの名前なし・ありのどちらで渡せるか | | | 未確認 |
 | サブエージェントで skill ツールが使え、Base directory が示されるか | | | 未確認 |
 | エージェントの `tools` での MCP のツールの書き方（`<登録名>/<ツール>`） | | | 未確認 |
 | uv のキャッシュがないときの初めての起動で、`server/discover` の後に `initialize` で始まるか | | | 未確認 |
 | プラグインの `mcp.json` の `env` の `${…}` が展開されるか | | | 未確認 |
 | プラグインのスキルを `/<スキル>` と `/<プラグイン>:<スキル>` のどちらで呼べるか | | | 未確認 |
-| 画面の入口が、頼みの言い方ごとに選ばれるか（一括実行のスキルのコマンドと分かれるか） | | | 未確認 |
-| `updateSubagentSettings` の上書きが、統括エージェントが呼ぶエージェントに効くか | | | 未確認 |
-| Windows で `run.py status` を2秒ごとに動かしたときの時間 | | | 未確認 |
 | 夜通しの実行で、始めた後に許可の確認が出ないか（3.5 の手順の後） | | | 未確認 |
 
 ### 9.5 Claude Code で実測したこと
@@ -802,11 +697,11 @@ Claude Code 2.1.319、2026-11-09 に確かめた（憲章 第5条3項）。新�
 | --- | --- | --- |
 | REQ-001 | 1、2.1、8 | `tests/independence/`、EVAL 3 |
 | REQ-002 | 2.2、3.1、3.2、3.3 | `tests/independence/`（コピーして試験）、EVAL 2・3 |
-| REQ-003 | 2.1、3.1、3.3、8.4 | `tests/independence/`、`tests/contracts/` |
+| REQ-003 | 2.1、3.1、3.3 | `tests/independence/`、`tests/contracts/` |
 | REQ-004 | 4、4.17 | `tests/contracts/`、`tests/integration/` |
 | REQ-005 | 3.2、3.4 | 各部品の試験（CI の Windows） |
 | REQ-006 | 2.1、3.1 | `tests/independence/`、`tests/docs/` |
-| REQ-007 | 2.2、5、8.3、8.4 | `tests/independence/` |
+| REQ-007 | 2.2、5 | `tests/independence/` |
 | REQ-008 | 3.5 | `tests/docs/` |
 | REQ-009 | 2.2、2.3、3.3、3.5、4.12、6、9.3、9.5 | `tests/structure/`、`tests/docs/`、`tests/independence/`、EVAL 2・3（Claude Code） |
 | REQ-101 | 3.1 | `tests/structure/`、`tests/independence/` |
@@ -819,11 +714,6 @@ Claude Code 2.1.319、2026-11-09 に確かめた（憲章 第5条3項）。新�
 | REQ-121〜REQ-126 | 3.1、6 | 各スキルの試験、EVAL 1（スキル） |
 | REQ-201〜REQ-205 | 3.3、7 | `tests/independence/`、`tests/structure/`、EVAL 2 |
 | REQ-301〜REQ-310 | 3.5、4.12〜4.14、7 | 一括実行の試験、`tests/integration/`、EVAL 3 |
-| REQ-401・REQ-402 | 6、8.1 | 画面の入口の試験、EVAL 4 |
-| REQ-403〜REQ-407 | 8.1、8.4 | `tests/extension/` |
-| REQ-411〜REQ-415 | 8.1〜8.3 | `tests/extension/` |
-| REQ-421・REQ-422 | 8.1、8.2 | `tests/extension/` |
-| REQ-423 | 8 | `tests/extension/`（Playwright） |
 | REQ-501〜REQ-506 | 4.5〜4.7、6 | 手順のスキルの試験、EVAL 1〜3 |
 | REQ-507 | 4.11 | 一括実行の試験、`tests/integration/` |
 | REQ-508 | 4.9、4.10 | 反映の試験、MCP サーバーの試験、`tests/integration/` |

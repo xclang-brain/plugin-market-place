@@ -65,10 +65,5 @@ copilot --add-dir "<出力先>" --allow-tool 'shell(uv:*)' --allow-tool write --
 
 | 症状 | 原因と対処 |
 | --- | --- |
-| 「Coverity の警告をトリアージして」と頼んでも、Web管理画面の URL が表示されない | エクステンションが読み込まれていません。①試験的機能が無効：`copilot --experimental` で起動し直す。②読み込み時の確認を拒否した：Copilot CLI を再起動して許可する。③`/extensions mode` が Disabled：Load & Augment に戻す |
 | 意図しないスキルが使われる | 同名のスキルが他にも入っていないかを `/skills list` で確認する |
 | Coverity に接続できない、設定のエラーが出る | `/coverity-help` に症状を伝える。`/coverity-selftest` で診断できる |
-
-## 改善の Issue を起票する
-
-Web管理画面の終了後の画面には、実行中に見つかった課題と、このプラグインへの改善 Issue の案が表示されます。案ごとの承認ボタンを押したものだけが、GitHub（xclang-brain/plugin-market-place）に起票されます。起票には `gh` コマンドのインストールと `gh auth login` が必要です。

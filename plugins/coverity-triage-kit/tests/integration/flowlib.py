@@ -2,7 +2,7 @@
 
 - a tiny C repository with five Coverity-like warnings (one group of two, one pair with one cause, one
   deviation) and what is true about each of them;
-- the batch run's commands (found through the extension's defaults.json, never by name);
+- the batch run's commands (the scripts named in tests/structure/plugin_parts.py);
 - scripted fake agents that do what the instruction files (briefs) ask: the worker makes a real, minimal
   fix in its work copy and writes result.json, the reviewer writes review.json, the integrator writes
   integration/plan.json;
@@ -11,7 +11,6 @@
   to the fake agents).
 
 Used by tests/integration/test_flow.py, tests/independence (the briefs name no part) and tests/ui.
-Part names are not written here: they are read from the tree (tests/structure/plugin_parts.py).
 """
 
 from __future__ import annotations
@@ -246,36 +245,6 @@ def git(repo: Path, *args: str, env: dict[str, str]) -> str:
     if proc.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr.decode('utf-8', 'replace')}")
     return proc.stdout.decode("utf-8", "replace").strip()
-
-
-def defaults() -> dict[str, Any]:
-    return pp.defaults() or {}
-
-
-def command_script(key: str) -> Path | None:
-    """A command of defaults.json (runCommand, guiCommand), or None."""
-    value = defaults().get(key)
-    path = PLUGIN / value if isinstance(value, str) else None
-    return path if path is not None and path.is_file() else None
-
-
-def skill_entry(folder: Path) -> Path | None:
-    """The script a skill's SKILL.md tells to run (the most named scripts/<name>.py that exists), or None."""
-    skill = Path(folder) / "SKILL.md"
-    if not skill.is_file():
-        return None
-    names = re.findall(r"scripts/([A-Za-z0-9_\-]+\.py)", pp.read(skill))
-    names = [n for n in names if (Path(folder) / "scripts" / n).is_file()]
-    if not names:
-        return None
-    best = max(dict.fromkeys(names), key=names.count)
-    return Path(folder) / "scripts" / best
-
-
-def skill_script(key: str) -> Path | None:
-    """The entry script of a skill named in defaults.json (applySkill, setupSkill), or None."""
-    name = defaults().get(key)
-    return skill_entry(pp.SKILLS_DIR / name) if isinstance(name, str) else None
 
 
 class CommandError(AssertionError):
@@ -714,12 +683,13 @@ class Orchestrator:
         return [a for a in self.actions if a.get("type") == "launch" and (role is None or a.get("role") == role)]
 
 
+def missing_tool(reason: str | None) -> str | None:
+    """A missing tool skips the tests on a developer's PC. In CI (CI=true) it fails them."""
+    if reason and os.environ.get("CI") == "true":
+        raise AssertionError(reason)
+    return reason
+
+
 def prerequisites() -> str | None:
-    """Why the flow cannot run here, or None."""
-    if UV is None:
-        return "uv がありません"
-    if GIT is None:
-        return "git がありません"
-    if command_script("runCommand") is None:
-        return "一括実行のコマンド（defaults.json の runCommand）がまだありません"
-    return None
+    """The tool the flow needs and this PC does not have, or None."""
+    return missing_tool("uv がありません" if UV is None else "git がありません" if GIT is None else None)

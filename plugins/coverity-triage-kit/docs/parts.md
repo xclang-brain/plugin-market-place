@@ -1,6 +1,6 @@
 # コンポーネント一覧（開発者向け）
 
-coverity-triage-kit を構成するスキル、MCP サーバー、エージェント、エクステンションの一覧です。
+coverity-triage-kit を構成するスキル、MCP サーバー、エージェントの一覧です。
 
 [仕様書](specs/requirements.md) と [設計書](design/design.md) は、コンポーネントを名前ではなく役割で呼びます。役割と実際の名前の対応は、この表だけに書きます。テスト（`tests/`）も、この表から名前を読み取ります。
 
@@ -24,12 +24,10 @@ coverity-triage-kit を構成するスキル、MCP サーバー、エージェ�
 | 統括 | 3 | `triage-orchestrator` | `com.github.copilot/agents/triage-orchestrator.agent.md` |
 | 検証役 | 3 | `triage-reviewer` | `com.github.copilot/agents/triage-reviewer.agent.md` |
 | 統合役 | 3 | `triage-integrator` | `com.github.copilot/agents/triage-integrator.agent.md` |
-| 画面の入口 | 4 | `coverity-triage-screen` | `skills/coverity-triage-screen/` |
 | 困ったとき | 4 | `coverity-help` | `skills/coverity-help/` |
 | 自己診断 | 4 | `coverity-selftest` | `skills/coverity-selftest/` |
-| エクステンション | 4 | `coverity-triage-kit` | `com.github.copilot/extensions/coverity-triage-kit/` |
 
 - 段階は、そのコンポーネントが単独で使える最も下の段階です。どの段階も、それより上の段階のコンポーネントなしで使えます。
 - エージェントは、Claude Code 用（`agents/<名前>.md`）と Copilot CLI 用（`com.github.copilot/agents/<名前>.agent.md`）の2つの定義を持ちます。表には Copilot CLI 用の場所を書いています。
-- MCP サーバーの登録名（`coverity-connect`）、ツール名（`coverity_…`）、エクステンションのツール名（`coverity-triage-kit_open`）は、他のコンポーネントから参照される名前です（設計書の5章、8.1）。変更すると、参照している側も直す必要があります。
+- MCP サーバーの登録名（`coverity-connect`）とツール名（`coverity_…`）は、他のコンポーネントから参照される名前です（設計書の5章）。変更すると、参照している側も直す必要があります。
 - 複数のコンポーネントが同じファイル（スキーマ、共通のスクリプト）の写しを持っています。元のファイルを直したら、写しも同じ内容にします。写しの一致は `tests/contracts/` が確認します。

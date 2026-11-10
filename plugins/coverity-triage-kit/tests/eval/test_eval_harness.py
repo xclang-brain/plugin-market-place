@@ -1,4 +1,4 @@
-"""Tests for the EVAL harnesses (no model is called): evalkit, run_mcp_eval, stage2, stage3, stage4.
+"""Tests for the EVAL harnesses (no model is called): evalkit, run_mcp_eval, stage2, stage3.
 
 Run from the plugin folder:  python3 -m unittest discover -s tests/eval -p "test_*.py"
 Stand-ins for claude are small Python scripts. Tests that need git, uv or the plugin's parts skip
@@ -27,7 +27,6 @@ ek.ADAPTER.VERBOSE = False
 mcp_eval = ek.load_module("run_mcp_eval_under_test", HERE / "run_mcp_eval.py")
 stage2 = ek.load_module("run_stage2_under_test", HERE / "stage2" / "run_stage2.py")
 stage3 = ek.load_module("run_stage3_under_test", HERE / "stage3" / "run_stage3.py")
-stage4 = ek.load_module("run_stage4_under_test", HERE / "stage4" / "run_stage4.py")
 
 ROOT = ek.PLUGIN_ROOT
 ENV = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
@@ -133,8 +132,7 @@ class EvalkitTest(unittest.TestCase):
     @unittest.skipUnless(HAS_PARTS, "プラグインの部品の表がない（tests/eval だけをコピーしたとき）")
     def test_real_parts_table_has_the_roles_the_harnesses_use(self):
         roles = {r["role"] for r in ek.current_parts(ROOT)}
-        for role in ("作業役", "統括", "検証役", "統合役", "自己診断", "一括実行", "画面の入口", "困ったとき",
-                     "逸脱コメント", "結果の記録"):
+        for role in ("作業役", "統括", "検証役", "統合役", "自己診断", "一括実行", "困ったとき", "逸脱コメント", "結果の記録"):
             self.assertIn(role, roles)
 
     def test_out_dir_outside_the_plugin(self):
@@ -269,12 +267,19 @@ class EvalkitTest(unittest.TestCase):
         ek.exclude_in_git(repo, ".claude/")
         self.assertEqual(ek.working_changes(repo), [])
 
-    def test_mcp_list_tools_with_the_stand_in_server(self):
-        config_file = ek.write_json(self.base / "c.json", {"tool": "kit_open", "log": str(self.base / "calls.jsonl")})
-        listed = ek.mcp_list_tools({"command": sys.executable,
-                                    "args": [str(stage4.SERVER_SCRIPT), "--config", str(config_file)]}, timeout=60)
+    def test_mcp_list_tools_with_a_stand_in_server(self):
+        server = write(self.base / "server.py", """
+            import json, sys
+            for line in sys.stdin:
+                msg = json.loads(line)
+                result = {"initialize": {"serverInfo": {"name": "stand-in"}},
+                          "tools/list": {"tools": [{"name": "kit_search"}]}}.get(msg.get("method"))
+                if result is not None:
+                    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+            """)
+        listed = ek.mcp_list_tools({"command": sys.executable, "args": [str(server)]}, timeout=60)
         self.assertTrue(listed["ok"], listed)
-        self.assertEqual([t["name"] for t in listed["tools"]], ["kit_open"])
+        self.assertEqual([t["name"] for t in listed["tools"]], ["kit_search"])
         bad = ek.mcp_list_tools({"command": sys.executable, "args": ["-c", "import sys; sys.exit(0)"]}, timeout=20)
         self.assertFalse(bad["ok"])
 
@@ -872,8 +877,6 @@ class Stage3Test(unittest.TestCase):
             self.assertEqual([b for a, b in zip(old, new) if a != b], [want],
                              "--model goes into the main agent's model line, --agent-model into the others'")
         self.assertIn(ek.part("一括実行", ROOT)["name"], {p.name for p in (plugin_dir / "skills").iterdir()})
-        self.assertNotIn(ek.part("画面の入口", ROOT)["name"], {p.name for p in (plugin_dir / "skills").iterdir()},
-                         "a skill named in no table is not copied")
         repo = Path(variant["cwd"])
         self.assertFalse(ek.inside(plugin_dir, repo))
         output_dir = Path(argv[argv.index("--add-dir") + 1])
@@ -901,8 +904,6 @@ class Stage3Test(unittest.TestCase):
         self.assertEqual(argv[argv.index("--agent") + 1], f"{plugin_name}:{ek.part('統括', ROOT)['name']}")
         skills = {p.name for p in (Path(variant["plugin_dir"]) / "skills").iterdir()}
         self.assertIn(ek.part("一括実行", ROOT)["name"], skills)
-        self.assertIn(ek.part("画面の入口", ROOT)["name"], skills,
-                      "bare: the skill whose trigger is the same request is there, as in an installed plugin")
         record = json.loads((out / "bare" / "variant.json").read_text(encoding="utf-8"))
         self.assertEqual(record["options"], {"review": False, "integration": False})
         self.assertIsNone(record["filter"])
@@ -910,164 +911,6 @@ class Stage3Test(unittest.TestCase):
         config = (Path(variant["cwd"]) / ".coverity-triage" / "config.yaml").read_text(encoding="utf-8")
         self.assertIn("review: false", config)
         self.assertIn("integration: false", config)
-
-
-class Stage4Test(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name).resolve()  # a long path on Windows, like the code returns
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def talk(self, config: Path, messages: list[dict]) -> list[dict]:
-        data = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages).encode("utf-8") + b"not json\n"
-        proc = subprocess.run([sys.executable, str(stage4.SERVER_SCRIPT), "--config", str(config)], input=data,
-                              capture_output=True, env=ENV, timeout=60)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        return [json.loads(line) for line in proc.stdout.decode("utf-8").splitlines() if line.strip()]
-
-    def test_stand_in_server(self):
-        log = self.base / "calls.jsonl"
-        config = ek.write_json(self.base / "c.json", {"tool": "kit_open", "description": "画面を開く", "url": "http://u/",
-                                                      "notices": ["注意その1"], "log": str(log)})
-        replies = self.talk(config, [
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
-            {"jsonrpc": "2.0", "method": "notifications/initialized"},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "kit_open", "arguments": {"requestText": "頼み"}}},
-            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "other", "arguments": {}}},
-            {"jsonrpc": "2.0", "id": 5, "method": "resources/list"},
-            {"jsonrpc": "2.0", "id": 6, "method": "ping"},
-        ])
-        by_id = {r.get("id"): r for r in replies}
-        self.assertEqual(by_id[1]["result"]["protocolVersion"], "2025-03-26")
-        tool = by_id[2]["result"]["tools"][0]
-        self.assertEqual((tool["name"], tool["inputSchema"]["required"]), ("kit_open", ["requestText"]))
-        text = by_id[3]["result"]["content"][0]["text"]
-        self.assertIn("http://u/", text)
-        self.assertIn("- 注意その1", text)
-        self.assertTrue(by_id[4]["result"]["isError"])
-        self.assertEqual(by_id[5]["error"]["code"], -32601)
-        self.assertEqual(by_id[6]["result"], {})
-        self.assertEqual(by_id[None]["error"]["code"], -32700)
-        calls = stage4.read_calls(log)
-        self.assertEqual([c["arguments"] for c in calls], [{"requestText": "頼み"}])
-
-    def test_extension_texts(self):
-        texts, source = stage4.extension_texts(self.base / "no-plugin")
-        self.assertEqual(texts, stage4.FALLBACK_TEXTS)
-        if not (HAS_PARTS and shutil.which("node")):
-            self.skipTest("node かエクステンションがない")
-        texts, source = stage4.extension_texts(ROOT)
-        self.assertTrue(source.endswith("messages.mjs"), source)
-        self.assertIn("requestText", texts["description"])
-        self.assertEqual(len(texts["notices"]), 4)
-
-    def summary_for(self, events):
-        return ek.summarize([event_init()] + events)
-
-    def test_analyze_routes(self):
-        names = {"screen": "entry", "run": "batch", "help": "helper"}
-        tool = "kit_open"
-        full = ek.mcp_tool_name(stage4.SERVER_NAME, tool)
-        good_text = f"開きました {stage4.FAKE_URL}\n- 開始を押す\n- /clear しない\n- このチャットで答える\n- README にある"
-        summary = self.summary_for([event_tool("s", "Skill", {"skill": "entry"}), event_tool("o", full, {"requestText": "頼み"}),
-                                    event_final(good_text)])
-        calls = [{"arguments": {"requestText": "頼み"}}]
-        checks = stage4.analyze({"prompt": "頼み", "expect": "open"}, fake_run([]), summary, calls, tool, names)
-        self.assertTrue(all(c["ok"] for c in checks), checks)
-        reworded = stage4.analyze({"prompt": "頼み", "expect": "open"}, fake_run([]), summary,
-                                  [{"arguments": {"requestText": "頼みです"}}], tool, names)
-        self.assertFalse({c["id"]: c for c in reworded}["request_text_exact"]["ok"])
-        worked = self.summary_for([event_tool("o", full, {"requestText": "頼み"}), event_tool("b", "Bash", {"command": "uv run x"}),
-                                   event_final(good_text)])
-        checks = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "open"}, fake_run([]), worked, calls, tool, names)}
-        self.assertFalse(checks["no_work"]["ok"])
-        self.assertFalse(checks["entry_skill_used"]["ok"])
-        not_open = stage4.analyze({"prompt": "/batch High だけ", "expect": "not_open", "expect_skill": "{run}"}, fake_run([]),
-                                  self.summary_for([event_tool("s", "Skill", {"skill": "batch"}), event_final("始めます")]),
-                                  [], tool, names)
-        self.assertTrue(ek.verdict_of(not_open))
-        self.assertTrue({c["id"]: c for c in not_open}["expected_skill"]["ok"])
-        opened = stage4.analyze({"prompt": "CID 1", "expect": "not_open"}, fake_run([]), summary, calls, tool, names)
-        self.assertFalse(ek.verdict_of(opened))
-        causes = ("画面のツールがありません。1. copilot --experimental で起動。2. 読み込みの確認を断った。"
-                  "3. /extensions mode が Disabled。")
-        missing = stage4.analyze({"prompt": "頼み", "expect": "no_tool", "expect_skill": "{screen}"}, fake_run([]),
-                                 self.summary_for([event_tool("s", "Skill", {"skill": "entry"}), event_final(causes)]),
-                                 [], tool, names)
-        self.assertTrue(all(c["ok"] for c in missing), missing)
-        two = stage4.analyze({"prompt": "頼み", "expect": "no_tool"}, fake_run([]),
-                             self.summary_for([event_final("--experimental で起動してください")]), [], tool, names)
-        self.assertFalse({c["id"]: c for c in two}["three_causes"]["ok"])
-
-    def test_analyze_no_tool_in_claude_code(self):
-        names = {"screen": "entry", "run": "batch", "help": "helper"}
-        tool = "kit_open"
-        good = ("Claude Code には Web管理画面がありません。Web管理画面は GitHub Copilot CLI の機能です。"
-                "claude --agent kit:lead で起動して「High だけトリアージして」と頼むか、/kit:batch で呼んでください。")
-        ok = stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude", "expect_skill": "{screen}"}, fake_run([]),
-                            self.summary_for([event_tool("s", "Skill", {"skill": "entry"}), event_final(good)]),
-                            [], tool, names)
-        self.assertTrue(all(c["ok"] for c in ok), ok)
-        self.assertEqual({c["id"] for c in ok} >= {"claude_code_ways", "no_copilot_causes", "no_work", "expected_skill"}, True)
-        plain_slash = stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
-                                     self.summary_for([event_final(good.replace("/kit:batch", "/batch"))]), [], tool, names)
-        self.assertTrue({c["id"]: c for c in plain_slash}["claude_code_ways"]["ok"], "/<名前> without the plugin name counts")
-        causes = good + " または copilot --experimental で起動し、/extensions mode を確かめてください。"
-        listed = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
-                                                     self.summary_for([event_final(causes)]), [], tool, names)}
-        self.assertFalse(listed["no_copilot_causes"]["ok"])
-        self.assertIn("試験的な機能", listed["no_copilot_causes"]["detail"])
-        for missing, word in (("claude --agent kit:lead で起動して", "claude --agent"), ("GitHub Copilot CLI の機能です。", "Copilot CLI"),
-                              ("/kit:batch で呼んでください", "/batch")):
-            with self.subTest(word=word):
-                got = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
-                                                          self.summary_for([event_final(good.replace(missing, ""))]),
-                                                          [], tool, names)}
-                self.assertFalse(got["claude_code_ways"]["ok"])
-                self.assertIn(word, got["claude_code_ways"]["detail"])
-        worked = {c["id"]: c for c in stage4.analyze({"prompt": "頼み", "expect": "no_tool_claude"}, fake_run([]),
-                                                     self.summary_for([event_tool("a", "Agent", {"subagent_type": "kit:lead"}),
-                                                                       event_final(good)]), [], tool, names)}
-        self.assertFalse(worked["no_work"]["ok"])
-
-    def test_cases_file(self):
-        data = json.loads((HERE / "stage4" / "cases.json").read_text(encoding="utf-8"))
-        expects = [c["expect"] for c in data["cases"]]
-        self.assertGreaterEqual(len(expects), 6)
-        self.assertEqual(set(expects), {"open", "not_open", "no_tool", "no_tool_claude"})
-        self.assertTrue(any(c["prompt"].startswith("/{run}") for c in data["cases"]))
-        self.assertTrue(all(c.get("mcp", True) is False for c in data["cases"] if c["expect"] in stage4.NO_TOOL_EXPECTS))
-        # stage 4 runs in Claude Code: the three Copilot CLI causes are expected only when the user says Copilot CLI
-        for case in data["cases"]:
-            if case["expect"] == "no_tool":
-                self.assertIn("Copilot CLI", case["prompt"], case["name"])
-            if case["expect"] == "no_tool_claude":
-                self.assertIn("Claude Code", case["prompt"], case["name"])
-                self.assertNotIn("Copilot", case["prompt"], case["name"])
-
-    @unittest.skipUnless(HAS_PARTS and HAS_GIT, "プラグインの部品か git がない")
-    def test_build_only(self):
-        out = self.base / "out"
-        proc = subprocess.run([sys.executable, str(HERE / "stage4" / "run_stage4.py"), "--build-only", "--out", str(out)],
-                              capture_output=True, env=ENV, timeout=300)
-        self.assertEqual(proc.returncode, 0, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")[-2000:])
-        data = json.loads(proc.stdout.decode("utf-8"))
-        run_name = ek.part("一括実行", ROOT)["name"]
-        commands = {c["name"]: c["command"] for c in data["cases"]}
-        self.assertEqual(commands["run-command"][2], f"/{run_name} High だけ")
-        argv = commands["triage"]
-        self.assertEqual(argv[argv.index("--allowedTools") + 1: argv.index("--allowedTools") + 3],
-                         ["Skill", ek.mcp_tool_name(stage4.SERVER_NAME, "*")])
-        self.assertNotIn("Bash(", " ".join(argv), "commands are not allowed")
-        servers = json.loads((out / "tool-missing" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
-        self.assertEqual(servers, {})
-        servers = json.loads((out / "triage" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
-        self.assertEqual(list(servers), [stage4.SERVER_NAME])
-        skills = sorted(p.name for p in (out / "ws" / ".claude" / "skills").iterdir())
-        self.assertEqual(skills, sorted({ek.part(r, ROOT)["name"] for r in ("画面の入口", "一括実行", "困ったとき")}))
 
 
 if __name__ == "__main__":

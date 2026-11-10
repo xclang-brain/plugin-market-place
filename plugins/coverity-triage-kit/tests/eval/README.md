@@ -16,14 +16,13 @@ EVAL は、部品を Claude Code で `claude -p` で動かします（設計書 
 | 1（MCP サーバー） | `run_mcp_eval.py` | mcp-builder の `evaluation.xml` の問いに、MCP サーバーのツールだけで答えられるか |
 | 2（作業エージェント） | `stage2/run_stage2.py`、`stage2/cases.json` | 作業エージェントと、その表の部品だけで、1件（1グループ）のトリアージを最後までできるか |
 | 3（一括のトリアージ） | `stage3/run_stage3.py` | 統括エージェントが、偽の Coverity の見本の警告をすべてトリアージできるか |
-| 4（画面の入口） | `stage4/run_stage4.py`、`stage4/cases.json`、`stage4/fake_open_server.py` | 頼みの言い方ごとに、画面の入口が選ばれるか（選ばれるべきでないときは選ばれないか） |
 | 共通 | `claude_adapter.py`、`evalkit.py` | 部品の置き換えと写し、`claude -p` の起動と記録の読み取り |
 
 1段階目のスキルの EVAL は、各スキルの `evals/`（skill-creator の形）です。ここにはありません。
 
 ## 用意するもの
 
-- Claude Code（`claude`）、uv、git、Python 3.10 以上。4段階目は、エクステンションの文を読むのに Node.js を使います（なければ写しの文を使います）。
+- Claude Code（`claude`）、uv、git、Python 3.10 以上。
 - 動かす場所は、どれもプラグインのフォルダです。
 - 結果は、既定では `<一時フォルダ>/coverity-triage-kit-evals/<段階>/<日時>/` にできます（`--out` で変えられます。プラグインのフォルダの中は断ります）。作業フォルダ・見本のリポジトリ・記録は、すべてそこにできます。
 - Claude Code の中から動かしても動きます（環境変数 `CLAUDECODE` を外して起動します）。
@@ -91,27 +90,10 @@ uv run --native-tls --quiet tests/eval/stage3/run_stage3.py --format claude-plug
 - `claude-plugin` では、統括エージェントと、表でたどれるエージェント（`agents/<名前>.md`）・スキル・MCP サーバーを、そのまま `<out>/<変種>/claude-plugin/` に写し、`--plugin-dir <out>/<変種>/claude-plugin --agent <プラグイン>:<統括>` で動かします。どの表にもないスキルは写しません（Claude Code は、プラグインの `skills/` のスキルをすべて読むため）。
 - `claude-plugin` で `--model` を付けたときは、`claude` の `--model` に渡すだけでなく、写した統括エージェントの定義の `model` の行もそれに替えます（`--agent` で動かすメインのエージェントに、`--model` と定義の `model` のどちらが効くかによらず、そのモデルで動くようにするため）。ほかのエージェントの `model` の行は、`--agent-model` のときだけ替えます。
 - 変種：`default`（確かめと統合なし。設定の既定）と `full`（両方あり）。`--variant` で選びます（既定は両方）。
-- `bare` は `--variant bare` のときだけ動きます。条件のない頼み「Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。」で、設定は `default` と同じです。画面の入口のスキルも写すので、入れたプラグインと同じスキルがそろいます（入口のスキルの決まりが、統括エージェントの一括の実行を止めないかを確かめるため）。`--limit` とは一緒に使えません。
+- `bare` は `--variant bare` のときだけ動きます。条件のない頼み「Coverity の警告をトリアージしてください。途中で質問せず、最後まで進めてください。」で、設定は `default` と同じです。`--limit` とは一緒に使えません。
 - どの変種でも、一括実行のスキルを読んだこと（`run_skill_loaded`）と、`new-run` を動かしたこと（`new_run_called`）を確かめます。
 - 確かめ：自己診断の `check-run`（2-2〜2-6：最後まで進む、すべての作業が終わる、推奨が想定と合う、グループ、成果物と作業中のファイル）、`summary.html` と `approvals.json`、すべての作業の `result.json`、確かめありなら `review.json`、利用者のリポジトリが変わらない、役のエージェントだけを呼んだ、統括エージェントがファイルを書いていない、実行フォルダが1つ。件数・推奨の一致・時間・ターン・費用も記録します。
 - 主なオプション：`--format F`、`--limit N`（頼みの文を「N 件だけ」にする。試しは 1）、`--model M`（統括。既定はその定義の claude のモデル。`claude-plugin` では定義の `model`。付けたときは、写した統括の `model` の行も替える）、`--agent-model M`（ほかのエージェント。既定は各定義のモデル。`claude-plugin` では、写した定義の `model` の行を替える。統括は `--model` が先）、`--tools-from-definitions`（`claude-plugin` で `--tools` を付ける。既定は付けない）、`--timeout S`（既定 45 分）、`--max-budget-usd X`、`--build-only`。
-
-### 4段階目：画面の入口
-
-```text
-# Windows（PowerShell）
-py -3 tests/eval/stage4/run_stage4.py
-# Linux（bash）
-python3 tests/eval/stage4/run_stage4.py
-```
-
-- 作業フォルダ（見本のリポジトリ）の `.claude/skills/` に、画面の入口・一括実行・困ったときのスキルをコピーします。画面を開くツールは、`fake_open_server.py`（stdio の MCP サーバー）が代わりをします。呼ばれるたびに記録（`calls.jsonl`）に書き、偽の URL と注意の文を返します。ツールの説明と注意の文は、エクステンションの `core/messages.mjs` から読みます。
-- 使えるツールは Read・Glob・Grep・Skill・Bash で、許可するのは Skill と画面のツールだけです。コマンドは断られます（試みたことは記録に残ります）。
-- 課題（`stage4/cases.json`）：「Coverity の警告をトリアージして」「未処理の Coverity 警告を調べて修正案と逸脱コメントを作って」「Coverity の警告を画面で見ながらトリアージしたい」（画面を開く。`requestText` が頼みの文と同じ）、「/<一括実行のスキル> High だけ」「CID 12345 が本物か調べて」（画面を開かない）、画面のツールがないときの2つ：「GitHub Copilot CLI でプラグインを入れて使っています。Coverity の警告をトリアージして」（`no_tool`。Copilot CLI の3つの原因を示し、作業を始めない）と「Claude Code にプラグインを入れました。Coverity の警告をトリアージして」（`no_tool_claude`。Web管理画面は Copilot CLI の機能であること、`claude --agent` と `/<一括実行のスキル>` の呼び方を示し、3つの原因は示さず、作業を始めない）。
-- 4段階目は `claude -p`（Claude Code）で動くので、画面の入口のスキルは「Claude Code で動いているとき」の答え方をします。Copilot CLI の3つの原因を確かめる課題は、利用者が Copilot CLI で使っていると頼みの文で言います（スキルは、利用者が言ったツールに従います）。
-- **名前の読み替え**：Claude Code では、このツールは `mcp__extension__coverity-triage-kit_open` に見えます。Copilot CLI では、エクステンションのツールは `coverity-triage-kit_open` のままです。回数と `requestText` は、サーバーの記録で数えます。
-- 読んだスキルは、Skill のツールの呼び出しと、ツールの引数に出るスキルのフォルダ（`.claude/skills/<名前>/`）から数えます。`/<スキル>` で始まる頼みは、`claude -p` の記録に展開が出ないので、始まりの知らせのスラッシュコマンドにその名前があれば、読んだものとします。
-- 主なオプション：`--only`、`--model M`（既定 `claude-sonnet-5-5`）、`--timeout S`（既定 240 秒）、`--build-only`。
 
 ### 結果の読み方
 
@@ -128,7 +110,6 @@ python3 tests/eval/stage4/run_stage4.py
 | 2 | 1課題（`brief-20003`） | 40 秒 | $0.012 |
 | 3 | 見本のすべて（6 件の警告、4 作業、`default`） | 150 秒 | $0.08 |
 | 3 | 1件だけ（`--limit 1`） | 70 秒 | $0.03 |
-| 4 | 1つの言い方 | 10 秒 | $0.004 |
 
 ## Claude Code で再現しないこと
 
@@ -136,9 +117,7 @@ python3 tests/eval/stage4/run_stage4.py
 
 - ask_user（AskUserQuestion）：`claude -p` には、メインのエージェントにもありません。そのため、2段階目の「足りない情報を聞く」「直す前に同意を得る」道筋は、ここでは動きません（頼みの文を、質問の要らない形にしてあります）。作業エージェントは「ほかのエージェントからの依頼」として動きます。
 - Claude Code では、サブエージェントとして始めた作業エージェントにも AskUserQuestion がないので、差分を「案」として返すだけです。差分を示し、同意を得てから直す道筋は、`claude --agent coverity-triage-kit:triage-worker` で起動した会話（`-p` なし）で、手で確かめます。
-- 3段階目の始め方：ここでは、統括エージェントをメイン（`--agent`）にします（Copilot CLI では、エクステンションが `startAgent` で始めます）。
 - Copilot CLI での、`com.github.copilot/agents/` の `.md` の読み込み、プラグインの名前の付いたエージェントとスキルの呼び方、`mcp.json` の `${…}` の展開。Claude Code での同じこと（`agents/`、`<プラグイン>:<名前>`、`.mcp.json` の `${CLAUDE_PLUGIN_ROOT}`）は、`--format claude-plugin` で確かめられます。
-- エクステンション（Web管理画面）。4段階目は、画面を開くツールの代わりのサーバーで、入口の選ばれ方だけを確かめます。画面の流れは `tests/extension/`（偽の SDK）と手での確認です。
 - モデルの名前（`gpt-6-luna` などは使えないので、定義の候補のうち claude のものを使う）と、Auto のときのモデルの選ばれ方。
 - Copilot CLI の許可の確認（`/add-dir`、「このセッションでは許可」）。ここでは `--allowedTools` と `--add-dir` で代えます（`copilot-converted` は `--permission-mode acceptEdits` も付けます。`claude-plugin` は付けず、利用者に勧める許可と同じにします）。
 - 作業フォルダ：`copilot-converted` では、`.claude/` を作業フォルダ（＝調べるリポジトリ）に置くので、エージェントの検索に部品のファイルも出ます。`claude-plugin` では、部品はリポジトリの外の一時のプラグインにあります（Copilot CLI と同じ）。

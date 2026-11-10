@@ -1,22 +1,19 @@
 """部品の独立性を確かめる試験（憲章 第25条・第26条3項、仕様 REQ-001〜REQ-003、REQ-006、REQ-007、REQ-101、
 REQ-202、REQ-603、設計書 9.1「独立性」）。
 
-この試験には、部品の名前を書かない。名前は、フォルダ・mcp.json・defaults.json・「使う部品」の表から読む
-（tests/structure/plugin_parts.py）。そのため、部品を足す・消す・置き換えても、この試験は直さずに済む。
+名前は、フォルダ・mcp.json・「使う部品」の表と、tests/structure/plugin_parts.py の定数から読みます。
 
 確かめること：
-- 1段階目の部品（defaults.json の pluginSkills にないスキルと、MCP サーバー）：フォルダの中に、プラグインの名前（と略）、
+- 1段階目の部品（plugin_parts.py の PLUGIN_SKILLS にないスキルと、MCP サーバー）：フォルダの中に、プラグインの名前（と略）、
   ほかの部品の名前、MCP サーバーの登録名とツールの名前（MCP サーバーの中を除く）、上の段階の言葉、フォルダの外を指すパスがない。
   sys.path でフォルダの外を読まない。フォルダだけを別の場所にコピーして（スキルは名前を変えたコピーも）、その試験が通る。
 - エージェント（Copilot CLI の .agent.md と、Claude Code の agents/<名前>.md の両方）：部品の名前は「## 使う部品」の表にだけ
   （そのままの名前で。Claude Code の frontmatter の name・tools・disallowedTools の行は見ない）。tools の MCP のツールは、
-  表の MCP サーバーのものだけ。表の名前は、ある部品を指す。description に、defaults.json の役割の言葉がある。自分の名前を書かない。
+  表の MCP サーバーのものだけ。表の名前は、ある部品を指す。description に、役割の言葉がある。自分の名前を書かない。
   2段階目の組（作業役とその表）と3段階目の組（統括エージェントの表をたどった部品）が、名前で閉じている。Copilot CLI の形
   （.github/agents、.github/skills）と Claude Code の形（.claude/agents、.claude/skills、MCP サーバーは手で coverity-connect の
   ような登録名で登録）の両方で取り出して確かめる。
-- プラグイン全体のスキル：部品の名前は、SKILL.md の「## 使う部品」の表にだけ。
 - 上の段の文書（プラグインの README、4段階目のガイド、エージェントの README、変更履歴）に、下の段のスクリプトの名前と設定の項目がない。
-- エクステンション：スキルとエージェントの名前（とスクリプトの名前）は defaults.json にだけ。
 - 元のプラグインなど、同じリポジトリのほかのプラグインと、エージェントと MCP サーバーの名前が重ならない（REQ-007）。
 - 一括実行が書く指示ファイル（作業・確かめ・統合）と launch の頼みの文に、部品の名前がない（設計書 4.14）。
   一時フォルダのリポジトリで、取ってある警告の一覧から実行を作り、決まった振る舞いの偽のエージェントで最後まで流して確かめる。
@@ -87,7 +84,7 @@ def outside_patterns():
             ("プラグインの根の環境変数", re.compile(r"PLUGIN_ROOT|CLAUDE_PLUGIN|COPILOT_PLUGIN|PLUGIN_DATA")),
             ("plugin.json", re.compile(r"plugin\.json")),
             ("com.github.copilot", re.compile(r"com\.github\.copilot")),
-            ("プラグインの tests/", re.compile(r"(?<![\w.])tests/(independence|contracts|structure|integration|extension)\b"))]
+            ("プラグインの tests/", re.compile(r"(?<![\w.])tests/(independence|contracts|structure|integration)\b"))]
 
 
 # 部品の試験が「書いてはいけない言葉」として並べる、言葉だけの文字列（"../"、"extension" など）は数えない
@@ -244,13 +241,6 @@ def closure(start, form="copilot"):
     return seen, missing
 
 
-def defaults_or_skip(case):
-    data = pp.defaults()
-    if data is None:
-        case.skipTest("defaults.json がまだありません")
-    return data
-
-
 class Stage1Independence(unittest.TestCase):
     """1段階目：スキルと MCP サーバーは、それぞれのフォルダだけで仕事ができ、ほかの部品を知らない"""
 
@@ -395,13 +385,9 @@ class AgentIndependence(unittest.TestCase):
         self.assertEqual(problems, [], "エージェントが、エクステンションのことを書いています：\n" + "\n".join(problems))
 
     def test_role_words(self):
-        """description に、defaults.json の役割の言葉がある。その言葉は、ほかのエージェントの description にない（設計書 4.13）"""
-        data = defaults_or_skip(self)
-        roles = data.get("roles") or {}
+        """description に、役割の言葉がある。その言葉は、ほかのエージェントの description にない（設計書 4.13）"""
         for role, word in pp.ROLE_WORDS.items():
-            if role not in roles:
-                continue
-            owner = pp.id_stem(roles[role])
+            owner = pp.ROLES[role]
             for kind, name in self.agents:
                 description = str(agent_info(name, kind)["fm"].get("description", ""))
                 with self.subTest(role=role, agent=pp.rel(kind_path(name, kind))):
@@ -412,11 +398,7 @@ class AgentIndependence(unittest.TestCase):
 
     def test_worker_knows_no_stage3(self):
         """2段階目の作業役は、3段階目（統括・検証・統合のエージェント）のことを書かない"""
-        data = defaults_or_skip(self)
-        worker = pp.id_stem((data.get("roles") or {}).get("worker", ""))
-        paths = [(kind, kind_path(worker, kind)) for kind in KINDS if kind_path(worker, kind).is_file()]
-        if not paths:
-            self.skipTest("作業役の定義がまだありません")
+        paths = [(kind, kind_path(pp.ROLES["worker"], kind)) for kind in KINDS]
         patterns = [(w, re.compile(re.escape(w))) for w in STAGE3_WORDS_JA] + [(w, pp.token(w)) for w in UPPER_WORDS_EN[2:]]
         found = []
         for kind, path in paths:
@@ -499,29 +481,20 @@ class Stage2And3Sets(unittest.TestCase):
             return problems
 
     def worker_set(self, kind):
-        data = defaults_or_skip(self)
-        worker = pp.id_stem((data.get("roles") or {}).get("worker", ""))
-        if not kind_path(worker, kind).is_file():
-            self.skipTest("作業役の定義がまだありません")
+        worker = pp.ROLES["worker"]
         names, missing = closure(worker, kind)
         self.assertEqual(missing, [], f"作業役の表に、ない部品があります：{missing}")
-        plugin = set(pp.plugin_skill_names())
-        upper = [n for n in names - {worker} if resolve(n, kind) == "agent" or n in plugin]
+        upper = [n for n in names - {worker} if resolve(n, kind) == "agent" or n in pp.PLUGIN_SKILLS]
         self.assertEqual(upper, [], f"作業役の表に、1段階目でない部品があります（2段階目は1段階目の部品だけで動く）：{upper}")
         return names
 
     def orchestrator_set(self, kind):
-        data = defaults_or_skip(self)
-        orchestrator = pp.id_stem(data.get("orchestrator", ""))
-        if not kind_path(orchestrator, kind).is_file():
-            self.skipTest("統括エージェントの定義がまだありません")
-        names, missing = closure(orchestrator, kind)
+        names, missing = closure(pp.ORCHESTRATOR, kind)
         self.assertEqual(missing, [], f"3段階目の組に、ない部品があります：{missing}")
-        plugin = set(pp.plugin_skill_names())
-        self.assertEqual(sorted(names & plugin), [], "3段階目の組に、4段階目のスキルがあります（3段階目は4段階目を知らない）")
-        for role, agent_id in (data.get("roles") or {}).items():
+        self.assertEqual(sorted(names & set(pp.PLUGIN_SKILLS)), [], "3段階目の組に、他のコンポーネントを名前で使うスキルがあります")
+        for role, agent in pp.ROLES.items():
             with self.subTest(role=role):
-                self.assertIn(pp.id_stem(agent_id), names, f"defaults.json の {role} のエージェントが、統括エージェントの表にありません")
+                self.assertIn(agent, names, f"{role} のエージェントが、統括エージェントの表にありません")
         return names
 
     def test_stage2_worker_set(self):
@@ -584,43 +557,6 @@ class ReadmeExtractionLists(unittest.TestCase):
             self.skipTest("一覧を書いたエージェントの README がまだありません")
 
 
-class PluginSkillIndependence(unittest.TestCase):
-    """プラグイン全体のスキル（4段階目）：部品の名前は、SKILL.md の「## 使う部品」の表にだけ（仕様 REQ-101）"""
-
-    def setUp(self):
-        self.names = [n for n in pp.plugin_skill_names() if (pp.SKILLS_DIR / n / "SKILL.md").is_file()]
-        if not self.names:
-            self.skipTest("プラグイン全体のスキルがまだありません")
-
-    def test_parts_table(self):
-        for name in self.names:
-            rows, error = pp.parts_table(pp.frontmatter(pp.SKILLS_DIR / name / "SKILL.md")[1])
-            with self.subTest(skill=name):
-                self.assertIsNone(error, f"{name}: {error}")
-                for _, part, _ in rows:
-                    self.assertIsNotNone(resolve(part), f"{name}: 表の {part} が、ある部品を指していません")
-                    self.assertNotEqual(part, name, f"{name}: 表に自分の名前があります")
-
-    def test_names_only_in_the_table(self):
-        """プラグインの名前は数えない（4段階目のスキルは、プラグインとエクステンションのツールを知ってよい。設計書 2.1）"""
-        problems = []
-        for name in self.names:
-            folder = pp.SKILLS_DIR / name
-            patterns = part_name_patterns(exclude={name}) + script_patterns(own=own_python_files(folder))
-            for path in pp.text_files(folder):
-                text = pp.read(path)
-                if path == folder / "SKILL.md":
-                    _, text = pp.split_section_table(text, pp.PARTS_HEADING)
-                problems += pp.hits_in_text(pp.rel(path) + ("（表の外）" if path.name == "SKILL.md" else ""), text, patterns)
-        self.assertEqual(problems, [], "プラグイン全体のスキルの、表の外に部品の名前があります：\n" + "\n".join(problems))
-
-    def test_no_path_outside_the_folder(self):
-        problems = []
-        for name in self.names:
-            problems += outside_problems(pp.SKILLS_DIR / name)
-        self.assertEqual(problems, [], "プラグイン全体のスキルが、フォルダの外を指しています：\n" + "\n".join(problems))
-
-
 class DocumentIndependence(unittest.TestCase):
     """上の段の文書に、下の段の部品の中身（スクリプトの名前、設定の項目）を書かない（仕様 REQ-006）"""
 
@@ -659,24 +595,8 @@ class DocumentIndependence(unittest.TestCase):
             self.assertFalse((pp.GUIDE_DIR / pp.REPLACE_DOC.name).exists(), "コンポーネント一覧が、利用者向けのガイドの中にあります")
 
 
-class ExtensionIndependence(unittest.TestCase):
-    """エクステンション：スキルとエージェントの名前とコマンドの場所は、defaults.json にだけ（設計書 8.4）"""
-
-    def test_names_only_in_defaults(self):
-        if not pp.EXT_DIR.is_dir():
-            self.skipTest("エクステンションがまだありません")
-        patterns = [(n, pp.name_token(n)) for n in sorted(set(pp.skill_names()) | set(pp.agent_names()))]
-        patterns += [(n, pp.script_token(n)) for n in sorted(pp.script_owners())]
-        problems = []
-        for path in pp.text_files(pp.EXT_DIR):
-            if path == pp.DEFAULTS:
-                continue
-            problems += pp.hits(path, patterns)
-        self.assertEqual(problems, [], "エクステンションの defaults.json の外に、部品の名前があります：\n" + "\n".join(problems))
-
-
 class NoNameCollision(unittest.TestCase):
-    """同じリポジトリのほかのプラグイン（元のプラグインなど）と、エージェント・MCP サーバー・エクステンションの名前が重ならない（仕様 REQ-007）"""
+    """同じリポジトリのほかのプラグイン（元のプラグインなど）と、エージェント・MCP サーバーの名前が重ならない（仕様 REQ-007）"""
 
     def test_names_differ_from_sibling_plugins(self):
         siblings = [p for p in pp.ROOT.parent.iterdir() if p.is_dir() and p != pp.ROOT and (p / "plugin.json").is_file()] \
@@ -685,7 +605,6 @@ class NoNameCollision(unittest.TestCase):
             self.skipTest("ほかのプラグインがありません")
         ours_agents = set(pp.agent_names()) | set(pp.claude_agent_names())
         ours_servers = set(pp.mcp_config().get("mcpServers") or {})
-        ours_ext = {p.name for p in pp.EXTENSIONS_DIR.iterdir() if p.is_dir()} if pp.EXTENSIONS_DIR.is_dir() else set()
         for other in siblings:
             agents = {pp.agent_stem(p) for p in (other / "com.github.copilot" / "agents").glob("*" + pp.AGENT_SUFFIX)}
             agents |= {p.stem for p in (other / "agents").glob("*.md")}  # Claude Code の形
@@ -693,12 +612,9 @@ class NoNameCollision(unittest.TestCase):
             for config in ("mcp.json", ".mcp.json"):
                 data = pp.load_json(other / config) or {}
                 servers |= set(data.get("mcpServers") or {}) if isinstance(data, dict) else set()
-            ext_dir = other / "com.github.copilot" / "extensions"
-            exts = {p.name for p in ext_dir.iterdir() if p.is_dir()} if ext_dir.is_dir() else set()
             with self.subTest(plugin=other.name):
                 self.assertEqual(sorted(ours_agents & agents), [], f"{other.name} と同じ名前のエージェントがあります")
                 self.assertEqual(sorted(ours_servers & servers), [], f"{other.name} と同じ登録名の MCP サーバーがあります")
-                self.assertEqual(sorted(ours_ext & exts), [], f"{other.name} と同じ名前のエクステンションがあります")
 
 
 class ScannerRules(unittest.TestCase):
@@ -764,7 +680,7 @@ class GeneratedBriefs(unittest.TestCase):
         fl.write_settings(repo, cls.tmp / "out", "https://coverity.example.invalid", extra_coverity="  api: fake\n", env=env)
         cids = {w["key"]: 30001 + n for n, w in enumerate(fl.WARNINGS)}
         issues = fl.offline_files(cls.tmp / "fetched", cids, revision)
-        run_py = fl.command_script("runCommand")
+        run_py = pp.RUN_SCRIPT
         created = fl.run_script(run_py, "new-run", "--repo", str(repo), "--issues-file", str(issues), "--review", "--integration",
                                 env=env, cwd=repo)
         run_dir = Path(created["run_dir"])
