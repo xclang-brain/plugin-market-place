@@ -1,5 +1,0 @@
-# 評価の課題で使う設定（偽の Coverity。通信しない）
-coverity:
-  url: https://coverity.example.com:8443
-  api: fake
-  fake_data: fake-issues.yaml
