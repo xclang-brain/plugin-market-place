@@ -203,8 +203,9 @@ function render(s) {
   $('counts').textContent = n.total ? `${n.done} / ${n.total} 件、失敗 ${n.failed} 件` : '条件に合う警告はありません';
   $('working').textContent = s.working.length ? '処置中: ' + s.working.map((w) =>
     `${w.cid}（${String(w.claimed_at || '').slice(11, 16)}〜）`).join('、') : '';
-  $('limited').textContent = f && f.limited && f.total_matched
-    ? `条件に合う警告は ${f.total_matched} 件あります。設定の上限（${f.count} 件）まで取得しました` : '';
+  $('limited').textContent = !f || !f.limited ? ''
+    : f.total_matched ? `条件に合う警告は ${f.total_matched} 件あります。設定の上限（${f.count} 件）まで取得しました`
+      : `条件に合う警告が、設定の上限（${f.count} 件）より多くあります。上限まで取得しました`; // the search could not count
   $('results').hidden = $('foot').hidden = !s.rows.length;
   $('choices').textContent = Object.entries(WORDS.choice).map(([key, label]) =>
     `${label} ${s.choices[key]} 件`).join('、');

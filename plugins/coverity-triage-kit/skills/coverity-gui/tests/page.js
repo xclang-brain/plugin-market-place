@@ -32,6 +32,7 @@ const { chromium } = require('playwright');
     await second.getByText('編集済み').waitFor();
     await page.getByText('何もしない 1 件').waitFor();
     seen.foot = await page.locator('#choices').innerText();
+    seen.limited = await page.locator('#limited').innerText();
     await page.screenshot({ path: shot });
 
     await page.setViewportSize({ width: 390, height: 800 });

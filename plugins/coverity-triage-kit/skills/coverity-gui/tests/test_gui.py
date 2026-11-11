@@ -24,8 +24,10 @@ GUI = HERE.parent / "scripts" / "gui.py"
 ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 FIX = "本物のバグ。src/a.c:3 で p を NULL のまま参照する。"
 KEEP = "誤検知。src/b.c:2 で長さを確認しており、範囲外は参照しない。"
-PATCH = ("--- a/src/a.c\n+++ b/src/a.c\n@@ -1,4 +1,4 @@\n int a(int *p)\n {\n-    return *p;  // 参照\n"
-         "+    return p ? *p : 0;  // 確認\n }\n").encode("cp932")
+FILE = "src/日本語.c"
+PATHS = f"--- a/{FILE}\n+++ b/{FILE}\n"
+HUNK = "@@ -1,4 +1,4 @@\n int a(int *p)\n {\n-    return *p;  // 参照\n+    return p ? *p : 0;  // 確認\n }\n"
+PATCH = PATHS.encode("utf-8") + HUNK.encode("cp932")  # the paths as svn writes them, the content as the file is
 FORBIDDEN = "この URL では画面を表示できません。チャットで「画面を開いて」と入力し、表示された URL を開いてください"
 
 # The default choice of an item: the same rule as in skills/coverity-apply (contracts.md, section 3).
@@ -84,7 +86,7 @@ def item(run: Path, cid: int, fix: bool = True, recommendation: str = "", **stat
                       "action": "Ignore", "severity": "Major" if fix else "Unspecified"}})
     if fix:
         put(folder / "fix.patch", PATCH)
-    put(folder / "state.json", {"status": "done", "slot": 1, "tries": 1, "files": ["src/a.c"] if fix else [],
+    put(folder / "state.json", {"status": "done", "slot": 1, "tries": 1, "files": [FILE] if fix else [],
                                 "confidence": "high", **state})
 
 
@@ -180,7 +182,7 @@ class ApiTest(ScreenCase):
         self.assertEqual(rows[20001], {
             "cid": 20001, "members": [], "checker": "NULL_RETURNS", "place": "src/a.c:3", "status": "done",
             "verdict": "true_bug", "recommendation": "fix", "confidence": "high", "review": "pass", "build": "ok",
-            "files": ["src/a.c"], "comment": FIX, "choice": "fix", "choice_from": "default", "reason": "",
+            "files": [FILE], "comment": FIX, "choice": "fix", "choice_from": "default", "reason": "",
             "can_fix": True, "comment_edited": False, "done": None, "error": ""})
         for cid, want in {20002: {"files": [], "comment": KEEP, "choice": "deviation", "can_fix": False, "build": None},
                           20003: {"members": [20004], "review": "flag", "choice": "none", "reason": "検証で要確認のため"},
@@ -197,7 +199,7 @@ class ApiTest(ScreenCase):
                        "evidence": [{"file": "src/a.c", "line": 3, "note": "p を確認せずに参照しています"}],
                        "recommendation": "fix", "confidence": "high", "fix_summary": "NULL のときは 0 を返します",
                        "no_fix_reason": None},
-            "patch": PATCH.decode("cp932"), "review": {"outcome": "flag", "points": ["src/a.c:3 呼び出し元を確認できません"]},
+            "patch": PATHS + HUNK, "review": {"outcome": "flag", "points": ["src/a.c:3 呼び出し元を確認できません"]},
             "build": "unknown", "deviation": {"comment": FIX, "original_comment": FIX, "classification": "Bug",
                                               "action": "Ignore", "severity": "Major"},
             "choice": "none", "choice_from": "default", "can_fix": True, "done": None}))
@@ -379,7 +381,7 @@ class PageTest(ScreenCase):
             self.skipTest("Node.js がありません")
         if subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=HERE).returncode != 0:
             self.skipTest("Playwright がありません")
-        run = self.run_folder([20001, 20002, 20003])
+        run = self.run_folder([20001, 20002, 20003], total_matched=None, limited=True)  # more match: not counted
         item(run, 20001)
         item(run, 20002, fix=False)
         edited, shot = "誤検知。src/b.c:2 で長さを確認している。", self.top / "page.png"
@@ -389,10 +391,11 @@ class PageTest(ScreenCase):
         seen = json.loads(proc.stdout.decode("utf-8"))
         self.assertEqual(seen["errors"], [])
         self.assertEqual(seen["table"], [  # both outputs of every item, and the choice
-            {"cid": "20001", "fix": "src/a.c", "deviation": FIX, "choice": "fix"},
+            {"cid": "20001", "fix": FILE, "deviation": FIX, "choice": "fix"},
             {"cid": "20002", "fix": "なし", "deviation": KEEP, "choice": "deviation"}])
         self.assertEqual((seen["diff"], seen["counter"]), (True, f"{len(edited)} / 200 文字"))
         self.assertEqual(seen["foot"], "修正を取り込む 0 件、逸脱コメントを登録する 1 件、何もしない 1 件")
+        self.assertEqual(seen["limited"], "条件に合う警告が、設定の上限（3 件）より多くあります。上限まで取得しました")
         self.assertLessEqual(seen["narrow"]["page"], seen["narrow"]["window"])  # no sideways scrolling at 390 px
         self.assertEqual(decisions(run), {"20001": {"decision": "none"},
                                           "20002": {"decision": "deviation", "comment": edited}})

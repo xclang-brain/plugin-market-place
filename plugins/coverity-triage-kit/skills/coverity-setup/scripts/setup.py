@@ -28,7 +28,7 @@ coverity:
   stream: {stream}
 
 conditions:
-  # 取得するチェッカー名（* と ? のワイルドカードを使用できます）。空のときは、すべてのチェッカー
+  # 取得するチェッカー名。* と ? のワイルドカードを使用できます（例: ["NULL_*", "MISRA C-2012 Rule 10.*"]）。空のときは、すべてのチェッカー
   checkers: []
   # 取得する Impact（High / Medium / Low）。空のときは、すべて
   impacts: []
@@ -42,17 +42,17 @@ output_dir: ../coverity-triage-out
 # 3段階目で同時に動かすエージェントの数（1〜8）
 parallel: 3
 # git で修正を取り込む先のブランチ。空のときは、自動で判定します
-base_branch: ""
+base_branch: ''
 
 build:
-  # ビルドのコマンド（下の2つのオプションで使用します）
-  command: ""
+  # ビルドのコマンド（下の2つのオプションで使用します）。例: 'make -j4'
+  command: ''
   # オプション: 修正を適用した状態でビルドして確認します
   check_fixes: false
   # オプション: 取得の前に、解析と Coverity への登録を行います
   initial_analysis: false
   # オプションの解析で cov-analyze に渡す引数
-  analyze_args: "--all"
+  analyze_args: '--all'
 """
 # The person runs one of these in their own terminal: the key never passes through the chat.
 CREDENTIALS = {"powershell": """\
@@ -144,6 +144,9 @@ def check_settings(path: Path) -> tuple[dict, dict]:
     wrong += [f"{key} の値が正しくありません" for key in SECTIONS if key in given]
     wrong += [f"{key}（{KEYS[key][0]}）の値が正しくありません" for key, value in given.items()
               if key in KEYS and not KEYS[key][1](value)]
+    repo, out = path.parents[1], given.get("output_dir")
+    if isinstance(out, str) and (repo / out).resolve().is_relative_to(repo):
+        wrong.append("output_dir は、リポジトリの外のフォルダーを指定してください")
     unknown += [key for key in values if key not in KEYS and key not in SECTIONS]
     unused = [f"使用しないキーがあります: {', '.join(unknown)}"] if unknown else []
     return check("設定ファイル", f"設定ファイルを訂正してください: {shown}。{'。'.join(wrong + unused)}" if wrong else "",

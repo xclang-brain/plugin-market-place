@@ -23,7 +23,7 @@ coverity:
   stream: "<ストリーム>"
 
 conditions:
-  # 取得するチェッカー名（* と ? のワイルドカードを使用できます）。空のときは、すべてのチェッカー
+  # 取得するチェッカー名。* と ? のワイルドカードを使用できます（例: ["NULL_*", "MISRA C-2012 Rule 10.*"]）。空のときは、すべてのチェッカー
   checkers: []
   # 取得する Impact（High / Medium / Low）。空のときは、すべて
   impacts: []
@@ -37,17 +37,17 @@ output_dir: ../coverity-triage-out
 # 3段階目で同時に動かすエージェントの数（1〜8）
 parallel: 3
 # git で修正を取り込む先のブランチ。空のときは、自動で判定します
-base_branch: ""
+base_branch: ''
 
 build:
-  # ビルドのコマンド（下の2つのオプションで使用します）
-  command: ""
+  # ビルドのコマンド（下の2つのオプションで使用します）。例: 'make -j4'
+  command: ''
   # オプション: 修正を適用した状態でビルドして確認します
   check_fixes: false
   # オプション: 取得の前に、解析と Coverity への登録を行います
   initial_analysis: false
   # オプションの解析で cov-analyze に渡す引数
-  analyze_args: "--all"
+  analyze_args: '--all'
 """
 BLOCKS = {"powershell": """\
 [Environment]::SetEnvironmentVariable('COV_USER', '<ユーザー名>', 'User')
@@ -149,6 +149,10 @@ class Git(unittest.TestCase):
                       "build.command（1行の文字列）"):
             self.assertIn(f"{wrong}の値が正しくありません", out["checks"][0]["message"])
         self.assertEqual((out["ok"], "fetch" in out), (False, False))
+        for inside in ("out", (self.repo / "結果 フォルダー").as_posix()):  # relative to the repository, and absolute
+            self.assertEqual(self.check(f"output_dir: '{inside}'\n")["checks"][0], {"name": "設定ファイル", "ok": False, "message": (
+                f"設定ファイルを訂正してください: {shown}。output_dir は、リポジトリの外のフォルダーを指定してください")})
+        self.assertTrue(self.check(f"output_dir: '{self.repo.as_posix()} の結果'\n")["ok"])  # beside the repository
         # a scalar for a list and empty values are fine; unknown keys are named and are not a failure
         out = self.check("conditions: {checkers: NULL_RETURNS, impacts: High, limit: }\nparallel: ''\nbuild:\nfilters: [a]\n"
                          "coverity.project: app\nbuild.command: make\n")

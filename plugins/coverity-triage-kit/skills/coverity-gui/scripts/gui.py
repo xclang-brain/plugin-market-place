@@ -231,6 +231,14 @@ def own_row(run: Run, cid, refusal: int) -> dict:
     return run.row(cid)
 
 
+def text(line: bytes) -> str:
+    """One line of a patch: every file in it has its own encoding, and svn writes the paths in UTF-8."""
+    try:
+        return line.decode("utf-8")
+    except UnicodeDecodeError:
+        return line.decode("cp932", "replace")
+
+
 def detail(repo: Path, cid: int) -> dict:
     run = Run(repo)
     row = own_row(run, cid, 404)
@@ -248,11 +256,7 @@ def detail(repo: Path, cid: int) -> dict:
                      "fix_summary": (result.get("fix") or {}).get("summary"),
                      "no_fix_reason": result.get("no_fix_reason")}
     if row["can_fix"]:
-        data = run.file(cid, "fix.patch").read_bytes()
-        try:
-            out["patch"] = data.decode("utf-8")
-        except UnicodeDecodeError:
-            out["patch"] = data.decode("cp932", "replace")
+        out["patch"] = "\n".join(map(text, run.file(cid, "fix.patch").read_bytes().split(b"\n")))
     if row["review"]:
         out["review"] = {"outcome": row["review"], "points": load(run.file(cid, "review.json")).get("points") or []}
     out["deviation"] = {"comment": row["comment"], "original_comment": result["deviation"]["comment"],
