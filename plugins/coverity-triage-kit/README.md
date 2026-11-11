@@ -61,7 +61,7 @@ bash で設定した値は、そのターミナルの中だけで有効です。
 
 | CID | 判定 | 確信度 | 修正コード | 逸脱コメント | 選択 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 20001 | 本物のバグ | 高 | src/reader.c | 本物のバグ。open_and_read()（src/reader.c:19〜20）は fgets の失敗時に fp を閉じずに返す。（Bug／Ignore／Major） | 修正を取り込む | |
+| 20001 | 本物のバグ | 高 | src/reader.c | 本物のバグ。open_and_read()（src/reader.c:19〜20）は fgets の失敗時に fp を閉じずに返す。 | 修正を取り込む | |
 | 20002 | 誤検知 | 高 | src/reader.c | 誤検知。唯一の呼び出し元 read_config()（src/reader.c:32〜36）が path の NULL を除外してから渡しており、NULL を参照することはない。（False Positive／Ignore／Unspecified） | 逸脱コメントを登録する | |
 
 「OK」と答えると、選択のとおりに処理されます。変更するときは、「20002 は修正、ほかは OK」のように答えます。リポジトリのフォルダー（svn では、手元の作業コピー）と Coverity が変わるのは、「OK」と答えた後だけです。

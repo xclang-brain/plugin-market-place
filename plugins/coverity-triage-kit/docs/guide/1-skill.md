@@ -61,7 +61,7 @@ CID 20002（FORWARD_NULL、src/reader.c:15）
 
 | CID | 判定 | 確信度 | 修正コード | 逸脱コメント | 選択 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 20001 | 本物のバグ | 高 | src/reader.c | 本物のバグ。…（Bug／Ignore／Major） | 修正を取り込む | |
+| 20001 | 本物のバグ | 高 | src/reader.c | 本物のバグ。… | 修正を取り込む | |
 | 20002 | 誤検知 | 高 | src/reader.c | 誤検知。…（False Positive／Ignore／Unspecified） | 逸脱コメントを登録する | |
 
 ```text
