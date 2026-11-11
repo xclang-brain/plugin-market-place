@@ -96,10 +96,14 @@ class Structure(unittest.TestCase):
         # The credentials reach the server through this block, each variable under its own name.
         env = copilot["mcpServers"]["coverity-connect"]["env"]
         self.assertLessEqual({"COV_USER", "COV_AUTH_KEY"}, set(env))
+        # UTF-8 mode: uv records the plugin path in a .pth file as UTF-8, and Python before 3.13 reads .pth files in
+        # the ANSI code page, so without it a plugin installed under a Japanese folder name does not start.
+        self.assertEqual(env.pop("PYTHONUTF8"), "1")
         self.assertEqual(env, {key: "${" + key + "}" for key in env})
         # The development form: its own root variable, and ${NAME:-} for a variable that may be unset.
-        same = json.dumps(development).replace("${CLAUDE_PLUGIN_ROOT}", "${PLUGIN_ROOT}").replace(":-}", "}")
-        self.assertEqual(json.loads(same), copilot)
+        same = json.loads(json.dumps(development).replace("${CLAUDE_PLUGIN_ROOT}", "${PLUGIN_ROOT}").replace(":-}", "}"))
+        self.assertEqual(same["mcpServers"]["coverity-connect"]["env"].pop("PYTHONUTF8"), "1")
+        self.assertEqual(same, copilot)
 
     def test_the_four_skills_have_the_three_frontmatter_keys(self):
         self.assertEqual(sorted({path.parts[1] for path in files() if path.parts[0] == "skills"}), SKILLS)

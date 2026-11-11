@@ -2,7 +2,7 @@
 
 No model. An agent text is followed word for word by a small model, so a user loses a run when a text
 names a reply field or a command the script does not give, lets a loop go on after an error, or lets a
-shell change what a reviewer records. The scripted agent of tests/flow plays the MCP tools. That the
+shell change what a reviewer records. The scripted agent of tests/flow calls the real MCP server. That the
 files exist is in test_structure.py, the wording rules are in test_docs.py.
 
     python3 tests/run.py --only agents

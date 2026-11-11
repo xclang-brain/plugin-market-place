@@ -1,4 +1,4 @@
-# サンプル（sample-target）の警告に対して想定する結論。tests/flow と tests/eval が使用します。
+# サンプル（sample-target）の警告に対して想定する結論。tests/eval が使用します。
 items:
   "20001": {recommendation: fix, reason: "本物のバグ（fgets 失敗時に fp を閉じていない）"}
   "20002": {recommendation: deviation, reason: "誤検知の可能性（呼び出し元の read_config で path を検証済み）"}
