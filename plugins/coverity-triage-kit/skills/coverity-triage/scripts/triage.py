@@ -439,8 +439,9 @@ def cmd_next(args) -> dict:
         busy = [cid for cid, s in states.items()
                 if cid != args.cid and s and s["status"] == "working" and age(s["claimed_at"]) <= STALE]
         if busy:  # a work copy has one writer: nothing is reset and the named CID is not put back
-            return none(f"エージェントが CID {busy[0]} を処置中です。エージェントの処置が終わってから、"
-                        "もう一度依頼してください", states)
+            # No continuation: finish would refuse, and its next line hands out a CID in the agent's copy.
+            return {**none(f"エージェントが CID {busy[0]} を処置中です。エージェントの処置が終わってから、"
+                           "もう一度依頼してください", states), "next": []}
     try:
         repo, copy = work_copy(run, slot)
     except Problem as missing:

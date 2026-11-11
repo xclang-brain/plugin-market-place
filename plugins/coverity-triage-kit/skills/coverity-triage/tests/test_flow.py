@@ -248,13 +248,14 @@ class Flow:
         edited = Path(given["work_dir"]) / "src" / "b.c"
         edited.write_bytes(edited.read_bytes().replace(b"return 0;", b"return 1;"))
         asked = self.next(run, "--cid", ONE)  # another conversation: 「CID 20001 を処置して」
-        self.assertEqual((asked["cid"], asked["message"]), (
-            None, f"エージェントが CID {TWO} を処置中です。エージェントの処置が終わってから、もう一度依頼してください"))
+        self.assertEqual((asked["cid"], asked["next"], asked["message"]), (  # nothing to run: finish leads into the copy
+            None, [], f"エージェントが CID {TWO} を処置中です。エージェントの処置が終わってから、もう一度依頼してください"))
         self.assertEqual((self.state(run, ONE)["status"], b"return 1;" in edited.read_bytes()), ("done", True),
                          "the result is not put back and the copy is not reset")
         self.assertEqual(self.work(given, {}, with_fix=True)["files"], ["src/b.c"], "only the agent's own change")
         again = self.next(run, "--cid", ONE)  # the agent has saved: the same request is served
         self.assertEqual((again["cid"], again["rework"]["patch_applied"]), (ONE, True))
+        self.assertEqual(self.next(run, "--cid", ONE)["cid"], ONE, "asked again: the named CID itself is not waited for")
         long_ago = (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds")
         (run / "cid" / str(ONE) / "state.json").write_text(
             json.dumps({**self.state(run, ONE), "claimed_at": long_ago}), encoding="utf-8")
@@ -515,8 +516,10 @@ class Flow:
         refused = self.run_triage("finish", "--run", run)
         self.assertEqual((refused["ok"], refused["unreviewed"]), (False, [ONE, TWO]))
         self.assertEqual(refused["error"], "検証されていない CID が 2 件あります")
-        chat = (support.SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8").split("\n## 6.")[1]
+        skill = (support.SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        chat = skill.split("\n## 6.")[1]
         self.assertTrue("`pending`" in chat and "`unreviewed`" in chat, "in a chat both refusals lead on to the list")
+        self.assertNotIn("だけは、終了せず", skill, "and no sentence says that another case is the only one that goes on")
         self.assertFalse((run / "summary.md").exists())
         self.assertEqual(self.start("--slots", 1, "--review")["run_dir"], run.as_posix(), "not reviewed: continued")
         self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "pass")
