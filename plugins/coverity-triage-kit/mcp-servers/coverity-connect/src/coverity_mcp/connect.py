@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import re
 import ssl
+import sys
 import time
+import urllib.request
 import xml.etree.ElementTree as ET
 from html import escape
 from urllib.parse import quote
@@ -78,7 +80,9 @@ class Client:
         self.user, self.key = credentials()
         self.slowest = 0.0  # seconds of the slowest request so far
         try:  # company PCs hold the in-house CA in the certificate store of the OS
-            self.http = httpx.Client(base_url=url, timeout=TIMEOUT, follow_redirects=False,
+            # httpx takes the proxy of the OS (Windows: the registry) but never asks the OS for its exceptions
+            direct = bool(urllib.request.proxy_bypass(httpx.URL(url).host))
+            self.http = httpx.Client(base_url=url, timeout=TIMEOUT, follow_redirects=False, trust_env=not direct,
                                      verify=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
         except httpx.InvalidURL as exc:
             raise self._no_connection(exc) from None
@@ -114,7 +118,10 @@ class Client:
     def _not_authenticated(status: int) -> Failure:
         # A 403 can come with the right credentials: the user lacks the permission the API needs.
         permission = "、ユーザーの権限（Access Web services）" if status == 403 else " "
-        return Failure(f"認証できませんでした（HTTP {status}）。COV_USER と COV_AUTH_KEY{permission}を確認してください")
+        text = f"認証できませんでした（HTTP {status}）。COV_USER と COV_AUTH_KEY{permission}を確認してください"
+        if sys.platform == "win32":  # a value saved again reaches only a copilot that is started after it
+            text += "。保存し直したときは、新しいターミナルで copilot を起動し直してください"
+        return Failure(text)
 
     @staticmethod
     def _not_coverity(status: int) -> Failure:

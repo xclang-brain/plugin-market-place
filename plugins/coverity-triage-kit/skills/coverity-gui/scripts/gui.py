@@ -44,6 +44,7 @@ MAX_BODY = 64 * 1024
 CHOICES = ("fix", "deviation", "none")
 STARTS = ("誤検知。", "意図的。", "本物のバグ。")  # the start of a deviation comment fixes its Classification
 COMMENT_MAX = 200  # characters
+IDLE = 30 * 60  # seconds without a request (an open page asks every 3 seconds) after which the server ends
 FORBIDDEN = "この URL では画面を表示できません。チャットで「画面を開いて」と入力し、表示された URL を開いてください"
 
 
@@ -320,6 +321,7 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(self.rfile.read(min(int(length), 16 * MAX_BODY) if length.isdecimal() else 0))
 
     def answer(self, raw: bytes) -> None:
+        self.server.quiet = 0
         try:
             status, (body, kind) = 200, self.route(raw)
         except Problem as exc:
@@ -398,14 +400,16 @@ def cmd_serve(repo: Path) -> dict:
         stream.reconfigure(encoding="utf-8", errors="replace")
     record = record_file(repo)
     server = Server(("127.0.0.1", 0), Handler)
-    server.repo, server.token, server.lock = repo, secrets.token_urlsafe(24), threading.Lock()
+    server.repo, server.token, server.lock, server.quiet = repo, secrets.token_urlsafe(24), threading.Lock(), 0
     started = datetime.now().astimezone().isoformat(timespec="seconds")
     write_json(record, {"pid": os.getpid(), "port": server.server_port, "token": server.token,
                         "repo": repo.as_posix(), "started_at": started}, mode=0o600)
 
     def watch() -> None:  # the record is what keeps the server running: stop removes it, a newer server replaces it
-        while load(record).get("token") == server.token:
+        # The rounds are counted, not the clock: a PC that slept does not end the server when it wakes up.
+        while load(record).get("token") == server.token and server.quiet < IDLE:
             time.sleep(0.5)
+            server.quiet += 0.5
         server.shutdown()
 
     threading.Thread(target=watch, daemon=True).start()

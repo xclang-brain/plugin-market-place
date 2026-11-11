@@ -88,5 +88,6 @@ def get_env(name: str) -> str:
 def credentials() -> tuple[str, str]:
     user, key = get_env("COV_USER"), get_env("COV_AUTH_KEY")
     if not user or not key:
-        raise Failure("環境変数 COV_USER と COV_AUTH_KEY を設定してください")
+        raise Failure("環境変数 COV_USER と COV_AUTH_KEY を設定してください。"
+                      "手順は /coverity-triage-kit:coverity-setup と入力すると表示されます")
     return user, key

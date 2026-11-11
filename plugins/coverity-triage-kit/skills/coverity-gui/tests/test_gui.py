@@ -29,6 +29,21 @@ PATHS = f"--- a/{FILE}\n+++ b/{FILE}\n"
 HUNK = "@@ -1,4 +1,4 @@\n int a(int *p)\n {\n-    return *p;  // 参照\n+    return p ? *p : 0;  // 確認\n }\n"
 PATCH = PATHS.encode("utf-8") + HUNK.encode("cp932")  # the paths as svn writes them, the content as the file is
 FORBIDDEN = "この URL では画面を表示できません。チャットで「画面を開いて」と入力し、表示された URL を開いてください"
+# The server as open starts it, but with a limit of 2 seconds without a request (30 minutes in real use).
+SHORT = """\
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml>=6.0"]
+# ///
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import gui
+
+assert gui.IDLE == 30 * 60, gui.IDLE
+gui.IDLE = 2
+sys.exit(gui.main(["serve", "--repo", sys.argv[2]]))
+"""
 
 # The default choice of an item: the same rule as in skills/coverity-apply (contracts.md, section 3).
 # confidence, the run has a review, state.review, build result, recommendation -> choice, reason (備考)
@@ -353,6 +368,31 @@ class LifecycleTest(ScreenCase):
         with self.assertRaises(OSError):
             self.http("GET", "/api/state")
         self.assertEqual(gui("stop", "--repo", self.repo), {"ok": True, "stopped": False, "message": "画面は起動していません"})
+
+    def test_the_server_ends_by_itself_when_no_page_asks_any_more(self):
+        script, log = self.top / "serve.py", self.top / "serve.log"
+        script.write_text(SHORT, encoding="utf-8")
+        with open(log, "wb") as out:  # this server takes the place of the one that setUp opened
+            proc = subprocess.Popen([*command()[:-1], str(script), str(GUI.parent), str(self.repo)], env=ENV,
+                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        record, saved, deadline = next(self.out.glob("gui-*.json")), {}, time.monotonic() + 60
+        while saved.get("token") in (None, self.token):
+            self.assertTrue(proc.poll() is None and time.monotonic() < deadline, log.read_text("utf-8", "replace"))
+            time.sleep(0.1)
+            try:
+                saved = json.loads(record.read_bytes().decode("utf-8"))
+            except (OSError, ValueError):  # Windows: the server replaces the file at this moment
+                pass
+        self.port, self.token = saved["port"], saved["token"]
+        for _ in range(6):  # 3 seconds: a page that asks keeps the server running beyond the limit
+            self.assertEqual(self.http("GET", "/api/state")[0], 200)
+            time.sleep(0.5)
+        self.assertIsNone(proc.poll())
+        self.assertEqual(proc.wait(timeout=30), 0)  # no page asks any more: the server ends
+        again = gui("open", "--repo", self.repo, env=self.env)
+        self.assertEqual((again["reused"], again["url"] == self.opened["url"]), (False, False))
 
     @unittest.skipIf(os.name == "nt", "Windows は、コマンドの出力を引き継がずにブラウザーを開きます")
     def test_browser_gets_no_output_of_the_command(self):

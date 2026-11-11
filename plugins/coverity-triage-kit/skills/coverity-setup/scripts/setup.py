@@ -41,7 +41,7 @@ conditions:
 output_dir: ../coverity-triage-out
 # 3段階目で同時に動かすエージェントの数（1〜8）
 parallel: 3
-# git で修正を取り込む先のブランチ。空のときは、自動で判定します
+# git で、処置の基準にして修正を取り込む先のブランチ。空のときは、origin の既定のブランチ（例: main）
 base_branch: ''
 
 build:

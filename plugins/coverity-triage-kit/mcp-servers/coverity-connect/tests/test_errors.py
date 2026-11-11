@@ -4,6 +4,7 @@ connection check answers ``ok: false`` instead), and never a credential value.""
 from __future__ import annotations
 
 import socket
+import sys
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from support import ServerCase, warning
 WARNINGS = [warning(101, "NULL_RETURNS"), warning(102, "RESOURCE_LEAK", impact="Medium")]
 ENTRY = {"cids": [101], "classification": "False Positive", "action": "Ignore", "severity": "Unspecified",
          "comment": "誤検知。呼び出し元が引数を検証してから呼び出す。"}
+# On Windows the variables are saved for the user: a copilot that is running still has the old values.
+AGAIN = "。保存し直したときは、新しいターミナルで copilot を起動し直してください" if sys.platform == "win32" else ""
 
 
 class ErrorsTest(ServerCase):
@@ -55,18 +58,19 @@ class ErrorsTest(ServerCase):
     def test_no_credentials(self) -> None:
         server = self.start_server()  # the variables as mcp.json passes them: "${COV_USER}", not expanded
         self.assertEqual(set(self.every_tool(self.repo(), server=server).values()),
-                         {"環境変数 COV_USER と COV_AUTH_KEY を設定してください"})
+                         {("環境変数 COV_USER と COV_AUTH_KEY を設定してください。"
+                           "手順は /coverity-triage-kit:coverity-setup と入力すると表示されます")})
         self.assertNothingDone()
 
     def test_authentication_fails(self) -> None:
         self.emu.key = "another-key"
         self.assertEqual(set(self.every_tool(self.repo()).values()),
-                         {"認証できませんでした（HTTP 401）。COV_USER と COV_AUTH_KEY を確認してください"})
+                         {"認証できませんでした（HTTP 401）。COV_USER と COV_AUTH_KEY を確認してください" + AGAIN})
         self.assertNothingDone()
         self.emu.fail = {"/api/v2/": 403}
         self.assertEqual(self.ok("coverity_check_connection", repo_root=self.repo())["message"],
                          "認証できませんでした（HTTP 403）。COV_USER と COV_AUTH_KEY、ユーザーの権限（Access Web services）"
-                         "を確認してください")
+                         "を確認してください" + AGAIN)
 
     def test_stream_not_found(self) -> None:
         repo = self.repo(stream="no-such-stream")
