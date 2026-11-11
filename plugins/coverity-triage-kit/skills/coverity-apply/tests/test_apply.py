@@ -34,6 +34,7 @@ FIX_BC = {"src/b.c": (b"return 0;", b"return 1;"), "src/c.c": (b"return 0;", b"r
 FIX_S = {JP: (b"return 0;", "return 1; // 修正".encode("cp932"))}
 HEAD = "| CID | 判定 | 確信度 | 修正コード | 逸脱コメント | 選択 | 備考 |\n| --- | --- | --- | --- | --- | --- | --- |\n"
 ASK = "よろしければ「OK」と入力してください。変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください"
+
 BUG = "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。"
 CHANGED = "一覧を表示した後に、結果または選択が変更されています。もう一度、一覧を確認してください"
 REFUSED = ("取り込み先のコードに適用できませんでした。先に取り込んだ修正と同じ箇所を変更しているときは、"
@@ -73,6 +74,17 @@ def keep_row(cid, choice: str, remark: str, comment: str = "") -> str:
     return f"誤検知 | 高 | なし | {comment}（False Positive／Ignore／Unspecified） | {choice} | {remark} |"
 
 
+def folder_name(kind: str, japanese: str, plain: str) -> str:
+    """svn on Windows reads its arguments in the ANSI code page of the PC; where that cannot hold Japanese
+    (a PC that is not set to Japanese), the svn tests use a plain name."""
+    if kind == "svn" and os.name == "nt":
+        try:
+            japanese.encode("mbcs")
+        except UnicodeEncodeError:
+            return plain
+    return japanese
+
+
 class Case(unittest.TestCase):
     """A repository with one commit and the settings file, and an empty result folder."""
 
@@ -82,7 +94,7 @@ class Case(unittest.TestCase):
     def setUp(self):
         if self.kind == "svn" and not (shutil.which("svn") and shutil.which("svnadmin")):
             self.skipTest("svn または svnadmin コマンドがありません")
-        self.top = Path(tempfile.mkdtemp(prefix="適用 テスト-")).resolve()
+        self.top = Path(tempfile.mkdtemp(prefix=folder_name(self.kind, "適用 テスト-", "apply test-"))).resolve()
         self.addCleanup(remove_tree, self.top)
         (self.top / "gitconfig").write_bytes(b"")  # the commits must not depend on the settings of this PC
         self.env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "GIT_CONFIG_NOSYSTEM": "1",

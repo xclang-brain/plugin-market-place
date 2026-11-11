@@ -51,7 +51,7 @@ def run(args: list[str], cwd: Path, check: bool = True, timeout: float | None = 
     try:
         proc = subprocess.run(args, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, capture_output=True,
                               timeout=timeout, creationflags=NO_WINDOW)
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):  # Windows reports a missing cwd as "not a directory"
         if not Path(cwd).is_dir():
             raise VcsError(f"フォルダーがありません: {Path(cwd).as_posix()}") from None
         raise VcsError(f"{args[0]} コマンドが見つかりません。インストールして、PATH を設定してください") from None

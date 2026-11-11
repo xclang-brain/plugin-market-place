@@ -147,7 +147,12 @@ class Replies:
     def setUp(self):
         if self.kind == "svn" and not (shutil.which("svn") and shutil.which("svnadmin")):
             self.skipTest("svn コマンドがありません")
-        self.top = Path(tempfile.mkdtemp(prefix="agents テスト ")).resolve()  # a space and Japanese in every path
+        try:  # a space and Japanese in every path; svn on a Windows PC that is not set to Japanese cannot take it
+            "テスト".encode("mbcs" if self.kind == "svn" and os.name == "nt" else "utf-8")
+            prefix = "agents テスト "
+        except UnicodeEncodeError:
+            prefix = "agents test "
+        self.top = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
         self.addCleanup(flowlib.remove_tree, self.top)
         self.repo = flowlib.make_repo(self.kind, self.top)
         self.seen = []
