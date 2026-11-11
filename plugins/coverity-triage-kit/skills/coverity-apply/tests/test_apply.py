@@ -20,11 +20,24 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+
+def folder_name(kind: str, japanese: str, plain: str) -> str:
+    """svn on Windows reads its arguments in the ANSI code page of the PC; where that cannot hold Japanese
+    (a PC that is not set to Japanese), the svn tests use a plain name."""
+    if kind == "svn" and os.name == "nt":
+        try:
+            japanese.encode("mbcs")
+        except UnicodeEncodeError:
+            return plain
+    return japanese
+
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "apply.py"
 RUN = "20261110-153000"
 BRANCH = f"coverity-fix/{RUN}"
 A = b"/* a */\nint a(int *p)\n{\n    int x = 1;\n    int y = 2;\n    (void)x;\n    (void)y;\n    return *p;\n}\n"
-JP = "src/日本語 名前.c"  # its content is Shift_JIS with CRLF
+# Shift_JIS with CRLF. On a Windows PC that is not set to Japanese, svn cannot write the name into a patch.
+JP = folder_name("svn", "src/日本語 名前.c", "src/sjis name.c")
 SJIS = "// 日本語のコメント\r\nint s(void)\r\n{\r\n    return 0;\r\n}\r\n".encode("cp932")
 B = b"int b(void)\n{\n    return 0;\n}\n"
 FILES = {"src/a.c": A, "src/b.c": B, "src/c.c": B.replace(b"b", b"c"), JP: SJIS,
@@ -72,17 +85,6 @@ def fix_row(cid, choice: str, remark: str, level: str = "高") -> str:
 def keep_row(cid, choice: str, remark: str, comment: str = "") -> str:
     comment = comment or f"誤検知。CID {cid} の理由。"
     return f"誤検知 | 高 | なし | {comment}（False Positive／Ignore／Unspecified） | {choice} | {remark} |"
-
-
-def folder_name(kind: str, japanese: str, plain: str) -> str:
-    """svn on Windows reads its arguments in the ANSI code page of the PC; where that cannot hold Japanese
-    (a PC that is not set to Japanese), the svn tests use a plain name."""
-    if kind == "svn" and os.name == "nt":
-        try:
-            japanese.encode("mbcs")
-        except UnicodeEncodeError:
-            return plain
-    return japanese
 
 
 class Case(unittest.TestCase):
