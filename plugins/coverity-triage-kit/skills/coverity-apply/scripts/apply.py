@@ -39,6 +39,8 @@ CHOICE = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登
 NOT_ITEM = {"failed": "処置に失敗", "unfinished": "未処置"}
 REFUSED = ("取り込み先のコードに適用できませんでした。先に取り込んだ修正と同じ箇所を変更しているときは、"
            "その修正を{}した後に、もう一度処置してください")  # {}: マージ (git), コミット (svn)
+STALE = "。作業コピーが最新でないときは、svn update を実行した後に、「修正を取り込んで」と入力してください"  # svn
+REST = "\n\n未処置の CID が {} 件あります。続けるときは「次を処置して」と入力してください"  # below the table of a chat run
 
 
 class Problem(Exception):
@@ -123,13 +125,16 @@ def git(repo: Path, *args: str, check: bool = False, **options) -> subprocess.Co
 # ---- the result folder ----------------------------------------------------------------------
 
 
+def stamp(at: str) -> float:
+    return datetime.fromisoformat(at).timestamp()
+
+
 def fits(decision, patch: bool, state_file: Path) -> bool:
     """A choice made on the screen counts while it still fits the item: a fix needs fix.patch, and
     state.json must not have been written after the choice (a new save, review or merge)."""
     try:
-        at = datetime.fromisoformat(decision["at"]).timestamp()
         return (decision["decision"] in CHOICE and (patch or decision["decision"] != "fix")
-                and int(state_file.stat().st_mtime) <= at)
+                and int(state_file.stat().st_mtime) <= stamp(decision["at"]))
     except (KeyError, TypeError, ValueError, OSError):
         return False
 
@@ -177,8 +182,9 @@ class Run:
         deviation = result.get("deviation") or {}
         handled = "applied" if str(cid) in self.fixed else "written" if self.registered(cids) else ""
         return {"cid": cid, "kind": "item", "cids": cids, "state": state, "patch": patch, "default": default,
-                "reason": reason, "decision": decision.get("decision"), "handled": handled,
-                "verdict": result.get("verdict"), "summary": str((result.get("fix") or {}).get("summary", "")),
+                "reason": reason, "decision": decision.get("decision"), "decided": decision.get("at"),
+                "handled": handled, "verdict": result.get("verdict"),
+                "summary": str((result.get("fix") or {}).get("summary", "")),
                 "deviation": {**{key: deviation.get(key) for key in ("classification", "action", "severity")},
                               "comment": decision.get("comment") or deviation.get("comment", "")}}
 
@@ -232,6 +238,25 @@ def open_run(args) -> Run:
     return run
 
 
+def agreed(run: Run) -> dict:
+    """The choices of the chat that got their OK: ``set`` of the last plan when it was carried out
+    (applied.json is not older than it), else what that plan had taken over itself. One stands while it
+    fits its item, as a choice on the screen must, and no choice was made on the screen after it."""
+    file, kept = run.dir / "apply-plan.json", {}
+    old = read_json(file)
+    try:
+        carried = (run.dir / "applied.json").stat().st_mtime >= file.stat().st_mtime
+    except OSError:
+        carried = False
+    for cid, choice in (old.get("set" if carried else "agreed") or {}).items():
+        row = run.items.get(int(cid)) if cid.isdigit() else None
+        made = {"decision": choice, "at": old.get("created_at")}
+        if (row and not row["handled"] and fits(made, row["patch"], run.file(row["cid"], "state.json"))
+                and not (row["decision"] and stamp(row["decided"]) > stamp(made["at"]))):
+            kept[row["cid"]] = choice
+    return kept
+
+
 def cmd_plan(args) -> dict:
     run = open_run(args)
     chosen, problems = {}, []
@@ -257,19 +282,24 @@ def cmd_plan(args) -> dict:
     if problems:
         raise Problem("選択の指定に訂正が必要な項目があります", problems=problems,
                       next=[run.command("plan", *(f"--set {cid}={choice}" for cid, choice in chosen.items()))])
+    earlier = agreed(run)
+    chosen = {**earlier, **chosen}  # what the person says now replaces it
+    branch, kind = f"coverity-fix/{run.dir.name}", run.meta.get("vcs")
+    origin = kind == "git" and git(run.repo, "config", "--get", "remote.origin.url").stdout.strip()
     # What an earlier OK did not complete: a push (the branch has fixes and there is an origin), entries.
-    unpushed = bool(run.meta.get("vcs") == "git" and run.fixed and not run.applied.get("pushed")
-                    and git(run.repo, "config", "--get", "remote.origin.url").stdout.strip())
+    unpushed = bool(origin and run.fixed and not run.applied.get("pushed"))
     waiting = len(run.waiting())
     n = {**dict.fromkeys(("fix", "deviation", "none", "done", "failed", "unfinished"), 0), "left": unpushed + waiting}
-    plan = {"created_at": datetime.now().isoformat(timespec="seconds"), "basis": run.basis(),
-            "set": {str(cid): choice for cid, choice in chosen.items()}, "fixes": [], "deviations": [], "none": []}
+    plan = {"created_at": datetime.now().isoformat(), "basis": run.basis(),  # exact: agreed() compares it
+            "set": {str(cid): choice for cid, choice in chosen.items()},
+            "agreed": {str(cid): choice for cid, choice in earlier.items()}, "fixes": [], "deviations": [], "none": []}
     table = [["CID", "判定", "確信度", "修正コード", "逸脱コメント", "選択", "備考"], ["---"] * 7]
     for row in run.rows:
         cid = row["cid"]
         if row["kind"] != "item":
             n[row["kind"]] += 1
-            table.append([cid, "-", "-", "-", "-", "-", NOT_ITEM[row["kind"]]])
+            if row["kind"] == "failed" or run.meta.get("all"):  # a chat run: the unfinished CIDs are counted below
+                table.append([cid, "-", "-", "-", "-", "-", NOT_ITEM[row["kind"]]])
             continue
         deviation, choice = row["deviation"], None
         if row["handled"] == "written":
@@ -295,12 +325,15 @@ def cmd_plan(args) -> dict:
                       deviation["comment"] + values, CHOICE.get(choice, "-"), remark])
     write(run.dir / "apply-plan.json", plan)
     summary = run.dir / "summary.md"
-    out = {"vcs": run.meta.get("vcs"), "plan_file": (run.dir / "apply-plan.json").as_posix(),
+    rest = REST.format(n["unfinished"]) if n["unfinished"] and not run.meta.get("all") else ""
+    out = {"vcs": kind, "plan_file": (run.dir / "apply-plan.json").as_posix(),
            "summary_file": summary.as_posix() if summary.is_file() else None,
-           "table": "\n".join("| " + " | ".join(map(cell, line)) + " |" for line in table), "counts": n}
-    parts = [f"修正の取り込み（{n['fix']} 件）" if n["fix"] else "",
+           "table": "\n".join("| " + " | ".join(map(cell, line)) + " |" for line in table) + rest, "counts": n}
+    # What the OK does to the repository. The push of earlier fixes is named alone only when no fix is taken in.
+    how = "作業コピーのファイルに適用" if kind != "git" else f"ブランチ {branch} にコミット" + ("して origin に push" if origin else "")
+    parts = [f"修正の取り込み（{n['fix']} 件。{how}）" if n["fix"] else "",
              f"逸脱コメントの登録（{n['deviation']} 件）" if n["deviation"] else "",
-             f"ブランチ {run.applied.get('branch')} の push" if unpushed else "",
+             f"ブランチ {branch} の push" if unpushed and not n["fix"] else "",
              f"取り込み済みの修正の Coverity への登録（{waiting} 件）" if waiting else ""]
     if not any(parts):
         return {**out, "message": "取り込む修正と、登録する逸脱コメントはありません。"
@@ -320,12 +353,16 @@ def record(run: Run, cid: int, **fields) -> None:
 
 
 def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
-    """One commit per fix on the one branch of this result folder, made in a temporary worktree outside
-    the repository (the person's working tree, index and current branch are not touched); then the push,
-    without force, and the text of the pull request (the person creates it)."""
+    """One commit per fix on the one branch of this result folder, made in the index of a temporary
+    worktree outside the repository, without a checkout (the person's working tree, index and current
+    branch are not touched); then the push, without force, and the text of the pull request (the person
+    creates it)."""
     repo, branch, base = run.repo, f"coverity-fix/{run.dir.name}", str(run.meta.get("base_branch") or "")
     remote = text(git(repo, "config", "--get", "remote.origin.url").stdout)
     if todo:
+        version = re.search(r"(\d+)\.(\d+)(\.\d+)*", text(git(repo, "version").stdout))  # "git version 2.43.0.windows.1"
+        if version and (int(version[1]), int(version[2])) < (2, 32):  # apply --cached --3way
+            raise Problem(f"git を 2.32 以降に更新してから、もう一度「修正を取り込んで」と入力してください（現在の git は {version[0]} です）")
         if f"branch refs/heads/{branch}" in text(git(repo, "worktree", "list", "--porcelain").stdout).splitlines():
             raise Problem(f"ブランチ {branch} がチェックアウトされています。別のブランチに切り替えてから、"
                           "もう一度「修正を取り込んで」と入力してください")
@@ -339,11 +376,13 @@ def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
         tmp = Path(tempfile.mkdtemp(prefix="coverity-apply-"))
         tree = tmp / "w"
         try:
-            git(repo, "worktree", "add", "--quiet", "--detach", "--force", str(tree), start, check=True)
+            git(repo, "worktree", "add", "--quiet", "--detach", "--no-checkout", "--force", str(tree), start,
+                check=True)
+            git(repo, "read-tree", "HEAD", cwd=tree, check=True)  # the index is filled, no file is written
             for cid in todo:
                 row = run.items[cid]
                 subject = f"Coverity CID {', '.join(map(str, row['cids']))} の修正（{run.issues[cid].get('checker', '')}）"
-                tried = git(repo, "apply", "--index", "--3way", "--whitespace=nowarn", str(run.file(cid, "fix.patch")),
+                tried = git(repo, "apply", "--cached", "--3way", "--whitespace=nowarn", str(run.file(cid, "fix.patch")),
                             cwd=tree)
                 if tried.returncode != 0:
                     reason = REFUSED.format("マージ")
@@ -357,7 +396,7 @@ def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
                     reason = made.returncode and f"コミットできませんでした（{text(made.stderr or made.stdout)[:300]}）"
                 if reason:
                     fixes["failed"][str(cid)] = reason
-                    git(repo, "reset", "--quiet", "--hard", cwd=tree, check=True)
+                    git(repo, "read-tree", "HEAD", cwd=tree, check=True)
                     continue
                 commit = text(git(repo, "rev-parse", "HEAD", cwd=tree, check=True).stdout)
                 git(repo, "update-ref", f"refs/heads/{branch}", commit, check=True)
@@ -404,7 +443,7 @@ def take_svn(run: Run, todo: list[int], fixes: dict) -> dict | None:
     for cid in todo:
         patch, files = run.file(cid, "fix.patch"), run.items[cid]["state"].get("files") or []
         if not (svn_patch(run.repo, patch, files, "--dry-run") and svn_patch(run.repo, patch, files)):
-            fixes["failed"][str(cid)] = REFUSED.format("コミット")
+            fixes["failed"][str(cid)] = REFUSED.format("コミット") + STALE
             continue
         run.applied = {"vcs": "svn"}
         record(run, cid)
