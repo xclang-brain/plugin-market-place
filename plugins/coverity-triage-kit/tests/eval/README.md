@@ -1,14 +1,15 @@
-# EVAL（2段階目と3段階目）
+# EVAL（1〜3段階目）
 
-実際のモデルでエージェントを実行して、結果を採点する、開発者向けのツールです。モデルの利用料がかかるため、`tests/run.py` からは実行しません。エージェントやスキルの文を変更したときに、手動で実行します。
+実際のモデルでスキルとエージェントを実行して、結果を採点する、開発者向けのツールです。モデルの利用料がかかるため、`tests/run.py` からは実行しません。エージェントやスキルの文を変更したときに、手動で実行します。
 
 ## 確認する内容
 
-開発用の形のプラグイン（`agents/*.md`、`.claude-plugin/plugin.json`、`.mcp.json`）のエージェントに、`claude -p` で「条件に合う警告をすべて処置して」と依頼します。Coverity は `tests/coverity_emulator`、リポジトリは見本（`tests/fixtures/sample/sample-target`）のコードです。Coverity に書き込むツール（`coverity_update_triage`）は、どの実行でも許可しません。
+開発用の形のプラグイン（`agents/*.md`、`.claude-plugin/plugin.json`、`.mcp.json`）を `claude -p` で実行します。2・3段階目は、エージェントに「条件に合う警告をすべて処置して」と依頼します。1段階目は、エージェントを指定せずに、README と `docs/guide/1-skill.md` の5つの依頼を、1つの会話に順に入力します（依頼の文は、`run_eval.py` の `TURNS` にあります）。Coverity は `tests/coverity_emulator`、リポジトリは見本（`tests/fixtures/sample/sample-target`）のコードです。Coverity に書き込むツール（`coverity_update_triage`）は、どの実行でも許可しません。
 
 | 対象 | 確認する内容 |
 | --- | --- |
-| 共通 | 条件に合う警告をすべて取得し、どの CID も、処置済みまたは理由のある失敗になっている。`summary.md` に、取得した CID がすべて載っている。`result.json` の項目がそろっている。推奨と判定が `expected.yaml` の想定に合っている。`fix.patch` を、処置を開始したリビジョンに適用できる |
+| 1段階目（スキル） | 「条件に合う警告を取得して」：警告をすべて取得し、メッセージに CID の一覧がある。処置は開始していない（`state.json` がない）。「CID 20002 を処置して」：その CID だけが処置済みになり、`result.json` の項目がそろっている。メッセージに、修正コード（`fix.patch` が追加する行のうち最も長い行。修正がないときは「修正コード」の語）と逸脱コメントの文がある。「次を処置して」：処置済みの CID が1件だけ増えている。「まとめを見せて」：メッセージに、処置済みの CID の一覧の行（`apply.py plan` の応答のまま）と質問文がある。下の「OK の前」も確認します。「OK」：下の `--answer-ok` と同じ。依頼が正常に終了しなかったときは、その後の依頼を入力しません |
+| 2・3段階目の共通 | 条件に合う警告をすべて取得し、どの CID も、処置済みまたは理由のある失敗になっている。`summary.md` に、取得した CID がすべて載っている。`result.json` の項目がそろっている。推奨と判定が `expected.yaml` の想定に合っている。`fix.patch` を、処置を開始したリビジョンに適用できる |
 | 2段階目（`triage-worker`） | 最後の一覧より前に、利用者に質問していない（質問のツールの使用と、質問で終わる文章がない）。最後のメッセージに、すべての CID と `apply.py plan` の質問文がある |
 | 3段階目（`triage-orchestrator`） | `run.json` の `review` が `true` で、すべての結果に検証の記録（合格・要確認）がある。1回の応答で `triage-worker` を2つ以上起動している。同じ原因の CID だけが1つに統合されている。`triage-reviewer` と `triage-integrator` を起動し、検証の記録と統合を任せている（起動を拒否された依頼は数えません。`triage-orchestrator` が自分で記録または統合したときは、不合格です） |
 | OK の前 | 修正を取り込んでいない（`applied.json`、origin のブランチ、作業コピーの変更がない）。Coverity に書き込んでいない |
@@ -19,15 +20,18 @@
 ## 実行
 
 ```text
-python3 tests/eval/run_eval.py --stage 2 --vcs git
+python3 tests/eval/run_eval.py --stage 1 --vcs git
+python3 tests/eval/run_eval.py --stage 2 --vcs git --copies 3
 python3 tests/eval/run_eval.py --stage 3 --vcs svn --answer-ok --work <フォルダー>
 ```
 
-確認ごとに「合格」または「不合格」と理由を1行ずつ表示し、最後に結果を JSON で1行表示します。終了コードは、0 がすべて合格、1 が不合格あり、2 が実行できなかったとき、または停止されたときです。停止のシグナル（SIGTERM など）を受け取ると、エージェントとエミュレーターも停止します。
+`--copies N`（1〜9）は、見本のコードと警告を N 倍にします。件数を増やして時間を測定するときに使用します。2番目以降のコピーは、ファイルが `src/reader<k>.c`、関数名の末尾が `_<k>`、CID が 1000×(k−1) だけ大きい警告です。設定ファイルの `conditions.limit` は、警告の件数に書き換えます。`expected.yaml` はコピーごとに適用し、3段階目では、同じ原因の CID がコピーごとに1つに統合されているとき（別のコピーの CID と統合されていないとき）に合格です。`--model <名前>` は、1段階目のチャットのモデルです（既定は、`triage-worker` と同じ haiku）。
+
+確認ごとに「合格」または「不合格」と理由を1行ずつ表示し、最後に結果を JSON で1行表示します。終了コードは、0 がすべて合格、1 が不合格あり、2 が実行できなかったとき、または停止されたときです。停止のシグナル（SIGTERM など）を受け取ると、エージェントとエミュレーターも停止します。JSON の `seconds` は最初の依頼にかかった秒数、`phases` は結果フォルダーの `log.txt` から読み取った、最初の依頼からの秒数の内訳です（`start`: 取得と作業用コピーの準備、`work`: 処置、`merge`: 統合、`rework`: 統合または検証の後の作り直し、`review`: 検証、`finish`: まとめの作成。`status` のコマンドまでの時間は、その次のコマンドの項目に含めます。最後の一覧の表示は含みません）。`usage` は、claude CLI が返すセッションの合計です（`transcript-ok` と、1段階目の2番目以降の値は、それより前の依頼の分を含みます）。
 
 必要なもの: claude CLI（モデルを使用できるアカウントでログイン済み）、uv、PyYAML を使用できる Python 3.10 以上、git（`--vcs svn` では svn と svnadmin）。
 
-時間の上限は、1回の実行につき、2段階目が 30 分、3段階目が 60 分です。2段階目の実測（git、`--answer-ok`、claude CLI 2.1.322、モデルは claude-haiku-5-5、3回）は、約 2 分、入力 約 200〜235 万トークン（大半はキャッシュの読み取り）、出力 約 2 万トークン、約 0.05 ドルでした。3段階目の実測（git と svn、`--answer-ok`、各1回。進行と検証は claude-sonnet-5-5、処置と統合は claude-haiku-5-5）は、約 3〜4 分、入力 約 290〜380 万トークン、出力 約 5〜6 万トークン、約 0.6〜0.8 ドルでした。JSON の `usage` は、claude CLI が返すセッションの合計です（`transcript-ok` の値は、最初の依頼の分を含みます）。
+時間の上限は、1回の実行につき、1段階目が 15 分、2段階目が 30 分、3段階目が 60 分です。2段階目の実測（git、`--answer-ok`、claude CLI 2.1.322、モデルは claude-haiku-5-5、3回）は、約 2 分、入力 約 200〜235 万トークン（大半はキャッシュの読み取り）、出力 約 2 万トークン、約 0.05 ドルでした。3段階目の実測（git と svn、`--answer-ok`、各1回。進行と検証は claude-sonnet-5-5、処置と統合は claude-haiku-5-5）は、約 3〜4 分、入力 約 290〜380 万トークン、出力 約 5〜6 万トークン、約 0.6〜0.8 ドルでした。1段階目の実測（git、claude-haiku-5-5、1回）は、5つの依頼の合計で約 2 分、入力 約 175 万トークン、出力 約 1.7 万トークン、約 0.04 ドルでした。
 
 ## 記録と結果フォルダー
 
@@ -35,6 +39,6 @@ python3 tests/eval/run_eval.py --stage 3 --vcs svn --answer-ok --work <フォル
 
 | 場所 | 内容 |
 | --- | --- |
-| `transcript.jsonl`、`transcript-ok.jsonl` | エージェントの実行の記録（stream-json）。標準エラーは `.err` |
+| `transcript.jsonl`、`transcript-ok.jsonl`（1段階目は `transcript-1.jsonl`〜`transcript-5.jsonl`） | 実行の記録（stream-json）。標準エラーは `.err` |
 | `coverity-triage-out/<年月日-時分秒>/` | 結果フォルダー |
-| `repo/`、`origin.git/`（svn は `svnrepo/`）、`plugin/`、`fresh/` | 見本のリポジトリ、修正の取り込み先、実行に使用したプラグインのコピー（`tests/` と `docs/` を除く）、`fix.patch` の適用を確認したコピー |
+| `repo/`、`origin.git/`（svn は `svnrepo/`）、`plugin/`、`fresh/`、`warnings.json` | 見本のリポジトリ、修正の取り込み先、実行に使用したプラグインのコピー（`tests/` と `docs/` を除く）、`fix.patch` の適用を確認したコピー、エミュレーターが返す警告 |
