@@ -36,6 +36,8 @@ HEAD = "| CID | 判定 | 確信度 | 修正コード | 逸脱コメント | 選�
 ASK = "よろしければ「OK」と入力してください。変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください"
 BUG = "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。"
 CHANGED = "一覧を表示した後に、結果または選択が変更されています。もう一度、一覧を確認してください"
+REFUSED = ("取り込み先のコードに適用できませんでした。先に取り込んだ修正と同じ箇所を変更しているときは、"
+           "その修正を{}した後に、もう一度処置してください")
 
 
 def interpreter() -> list:
@@ -230,16 +232,18 @@ class PlanTest(Case):
                                          "left": 0})
         self.assertEqual(out["question"], "この内容で、修正の取り込み（1 件）、逸脱コメントの登録（2 件）を行います。" + BUG + ASK)
         self.assertEqual((out["ok"], out["vcs"], out["next"]), (True, "git", [self.line("apply")]))
-        self.assertEqual((out["run_dir"], out["plan_file"], out["summary_file"]), tuple(
-            (self.run_dir / name).as_posix() for name in ("", "apply-plan.json", "summary.md")))
+        self.assertEqual((out["run_dir"], out["plan_file"], out["summary_file"]),
+                         (self.run_dir.as_posix(), (self.run_dir / "apply-plan.json").as_posix(), None))
         plan = self.get("apply-plan.json")
         keep = {"classification": "False Positive", "action": "Ignore", "severity": "Unspecified"}
         self.assertEqual((plan["set"], plan["fixes"], plan["none"]), ({}, [20001], [20003, 20004, 20005, 20006, 20007]))
         self.assertEqual(plan["deviations"], [{"cids": [20002], **keep, "comment": "誤検知。CID 20002 の理由。"},
                                               {"cids": [20008, 20009], **keep, "comment": "誤検知。CID 20008 の理由。"}])
+        summary = self.put("summary.md", b"# Coverity\n")  # finish has written it
+        self.assertEqual(self.plan()["summary_file"], summary.as_posix())
         # showing the list takes nothing in and registers nothing
         self.assertEqual(sorted(p.name for p in self.run_dir.iterdir()),
-                         ["apply-plan.json", "build.json", "cid", "issues.json", "run.json"])
+                         ["apply-plan.json", "build.json", "cid", "issues.json", "run.json", "summary.md"])
 
     def test_the_sentence_in_the_chat_and_what_it_cannot_change(self):
         self.add(20001, FIX_A)
@@ -317,17 +321,16 @@ class Flow:
         self.disturb()
         self.plan()
         out = self.go()
-        self.assertEqual((out["ok"], out["fixes"]["applied"], out["fixes"]["skipped"], list(out["fixes"]["failed"])),
-                         (True, [20001, 20004], [], ["20003"]))
-        self.assertIn("修正を適用できませんでした", out["fixes"]["failed"]["20003"])
-        where = self.taken_in(out)
+        self.assertEqual((out["ok"], out["fixes"]),
+                         (True, {"applied": [20001, 20004], "skipped": [], "failed": {"20003": self.refused}}))
+        self.taken_in(out)
         self.assertEqual(out["message"], self.said + "。取り込めなかった修正が 1 件あります。"
                                          "続けて、逸脱コメント 1 件と、取り込んだ修正 2 件を Coverity に登録します")
         bug = {"classification": "Bug", "action": "Fix Required", "severity": "Major"}
         entries = [{"cids": [20002], "classification": "False Positive", "action": "Ignore", "severity": "Unspecified",
                     "comment": "誤検知。CID 20002 の理由。"},
-                   {"cids": [20001], **bug, "comment": where + "CID 20001 の修正の概要"},
-                   {"cids": [20004, 20005], **bug, "comment": where + "CID 20004 の修正の概要"}]
+                   {"cids": [20001], **bug, "comment": self.where + "CID 20001 の修正の概要"},
+                   {"cids": [20004, 20005], **bug, "comment": self.where + "CID 20004 の修正の概要"}]
         target = self.run_dir / "coverity-entries.json"
 
         def check(reply: dict, expected: list) -> None:
@@ -342,7 +345,7 @@ class Flow:
         # the same OK again: no fix is taken in twice
         again = self.go()
         self.assertEqual((again["fixes"]["applied"], again["fixes"]["skipped"]), ([], [20001, 20004]))
-        self.assertEqual(self.taken_in(again), where)
+        self.taken_in(again)
         check(again, entries)
         # the write tool records what it has registered (here: not 20005): only the rest is left
         self.put("written.json", {"written": {"20001": {}, "20002": {}, "20004": {}}})
@@ -377,21 +380,55 @@ class Flow:
         self.assertFalse((self.run_dir / "applied.json").exists() or (self.run_dir / "coverity-entries.json").exists())
         self.assertEqual(self.sh(*self.status), b"")
 
-    def test_two_cids_with_the_same_fix_are_both_taken_in(self):
+    def test_fixes_of_one_line_are_taken_in_one_at_a_time(self):
         self.add(20001, FIX_A)
         self.add(20002, FIX_A)  # the same cause, not merged: its fix is the same change again
+        self.add(20003, {"src/a.c": (b"return *p;", b"return *p + 0;")})  # another change of that line
         self.plan()
         out = self.go()
-        self.assertEqual((out["fixes"]["applied"], out["fixes"]["failed"]), ([20001, 20002], {}))
+        self.assertEqual((out["fixes"]["applied"], out["fixes"]["failed"]), ([20001, 20002], {"20003": self.refused}))
         self.assertEqual(sorted(self.get("applied.json")["fixes"]), ["20001", "20002"])
         self.assertEqual([entry["cids"] for entry in self.get("coverity-entries.json")["entries"]], [[20001], [20002]])
         self.assertEqual(len(self.sh(*self.changes).splitlines()), 1)  # one commit, one changed file
+
+    def test_the_comment_of_a_fix_is_one_line_of_at_most_200_characters(self):
+        self.add(20001, FIX_A)
+        result = self.get("cid/20001/result.json")
+        result["fix"]["summary"] = "1行目。\r\n\r\n  2行目。\t" + "長い文。" * 60
+        self.put("cid/20001/result.json", result)
+        self.plan()
+        self.go()
+        self.assertEqual(self.get("coverity-entries.json")["entries"][0]["comment"],
+                         (self.where + "1行目。 2行目。 " + "長い文。" * 60)[:200])
+
+    def test_an_ok_without_a_fix_is_recorded_too(self):
+        self.add(20001, FIX_A)
+        self.add(20002)
+        self.plan("20001=none")
+        out = self.go()
+        self.assertEqual((out["fixes"], out["entries"], out["message"], self.kind in out), (
+            {"applied": [], "skipped": [], "failed": {}}, 1, "続けて、逸脱コメント 1 件を Coverity に登録します", False))
+        self.assertEqual(self.get("applied.json"), {"vcs": self.kind, "fixes": {}})
+        # that record is no fix: the list has nothing of it
+        out = self.plan("20001=none")
+        self.assertEqual((out["counts"]["done"], out["counts"]["left"], out["question"]),
+                         (0, 0, "この内容で、逸脱コメントの登録（1 件）を行います。" + ASK))
+        # the same OK again, once the write tool has registered the comment: the record gets the new time
+        self.put("written.json", {"written": {"20002": {}}})
+        record, before = self.run_dir / "applied.json", time.time() - 100
+        os.utime(record, (before, before))
+        out = self.go()
+        self.assertEqual((out["entries_file"], out["call"], out["message"]), (None, [], "取り込みと登録は完了しています"))
+        self.assertEqual((self.get("applied.json"), record.stat().st_mtime > before + 50),
+                         ({"vcs": self.kind, "fixes": {}}, True))
 
 
 class GitTest(Flow, Case):
     status = ("git", "status", "--porcelain")
     changes = ("git", "log", "--format=%H", f"main..{BRANCH}")
     said = f"修正 2 件をブランチ {BRANCH} にコミットして push しました"
+    where = f"修正をブランチ {BRANCH} にコミットしました。"
+    refused = REFUSED.format("マージ")
 
     def remote(self, *args) -> bytes:
         return self.sh("git", "--git-dir", self.origin, *args).strip()
@@ -420,7 +457,7 @@ class GitTest(Flow, Case):
         return [self.sh("git", *args) for args in (("symbolic-ref", "HEAD"), ("rev-parse", "HEAD"), ("status", "--porcelain"),
                                                    ("diff",), ("diff", "--cached"), ("worktree", "list"))]
 
-    def taken_in(self, out: dict) -> str:
+    def taken_in(self, out: dict) -> None:
         self.assertEqual(self.mine(), self.before)
         self.assertEqual(self.remote("log", "--format=%an|%s|%b", f"main..{BRANCH}").decode("utf-8").split("\n\n"), [
             "試験 太郎|Coverity CID 20004, 20005 の修正（NULL_RETURNS）|CID 20004 の修正の概要",
@@ -438,15 +475,18 @@ class GitTest(Flow, Case):
                           "20004": (self.remote("rev-parse", BRANCH), [JP])})
         pull = out["git"].pop("pr")
         self.assertEqual(out["git"], {"branch": BRANCH, "base_branch": "main", "pushed": True, "push_error": None})
-        self.assertEqual(pull["title"], "Coverity の警告の修正（app-main、2 件）")
-        self.assertEqual(pull["body"].splitlines()[2:], [
-            "| CID | チェッカー | 場所 | 修正の内容 |", "| --- | --- | --- | --- |",
-            "| 20001 | NULL_RETURNS | src/a.c:8 | CID 20001 の修正の概要 |",
-            "| 20004, 20005 | NULL_RETURNS | src/a.c:8 | CID 20004 の修正の概要 |"])
+        self.assertEqual((pull["title"], pull["body"]), ("Coverity の警告の修正（app-main、2 件）", (
+            "Coverity の警告の修正です。修正の内容は、各コミットのメッセージにあります。\n\nCID: 20001, 20004, 20005")))
         url = urlsplit(pull["compare_url"])
         self.assertEqual((url.scheme, url.netloc, url.path), ("https", "github.example", f"/acme/app/compare/main...{BRANCH}"))
         self.assertEqual(parse_qs(url.query), {"expand": ["1"], "title": [pull["title"]], "body": [pull["body"]]})
-        return f"修正をブランチ {BRANCH} にコミットしました。"
+
+    def test_the_url_of_the_pull_request_holds_the_whole_body(self):
+        self.add(20001, FIX_A, members=list(range(30001, 30501)))  # one cause of 501 warnings
+        self.plan()
+        pull = self.go()["git"]["pr"]
+        self.assertEqual(pull["body"].split("CID: ")[1], ", ".join(map(str, [20001, *range(30001, 30501)])))
+        self.assertEqual(parse_qs(urlsplit(pull["compare_url"]).query)["body"], [pull["body"]])
 
     def test_a_refused_push_is_made_later_and_one_branch_holds_every_fix(self):
         self.add(20001, FIX_A)
@@ -484,7 +524,7 @@ class GitTest(Flow, Case):
         self.colleague("main", {"src/a.c": A.replace(*FIX_A["src/a.c"])})  # a colleague has made the same change
         self.plan()
         self.assertEqual(self.go()["fixes"]["failed"], {"20001": "取り込み先のブランチに、同じ変更が既にあります"})
-        self.assertEqual((self.sh("git", "branch", "--list", BRANCH), (self.run_dir / "applied.json").exists()), (b"", False))
+        self.assertEqual((self.sh("git", "branch", "--list", BRANCH), self.get("applied.json")["fixes"]), (b"", {}))
 
     def test_without_origin_the_branch_stays_local(self):
         self.add(20001, FIX_A)
@@ -509,12 +549,14 @@ class SvnTest(Flow, Case):
     status = ("svn", "status")
     changes = status
     said = "修正 2 件を作業コピーに適用しました。内容を確認して、コミットしてください"
+    where = "修正を作業コピーに適用しました。"
+    refused = REFUSED.format("コミット")
 
     def disturb(self):
         """The person has changed the line of 20003 in one of its two files."""
         (self.repo / "src/b.c").write_bytes(B.replace(b"0", b"2"))
 
-    def taken_in(self, out: dict) -> str:
+    def taken_in(self, out: dict) -> None:
         self.assertEqual((self.repo / "src/a.c").read_bytes(), A.replace(*FIX_A["src/a.c"]))
         self.assertEqual((self.repo / JP).read_bytes(), SJIS.replace(*FIX_S[JP]))
         # the fix with a conflict is left out as a whole: nothing of it in the working copy
@@ -524,7 +566,6 @@ class SvnTest(Flow, Case):
         applied = self.get("applied.json")
         self.assertEqual((applied["vcs"], {cid: fix["files"] for cid, fix in applied["fixes"].items()}),
                          ("svn", {"20001": ["src/a.c"], "20004": [JP]}))
-        return "修正を作業コピーに適用しました。"
 
     def test_a_fix_with_a_file_that_svn_skips_is_left_out_as_a_whole(self):
         self.add(20001, FIX_A)
@@ -534,7 +575,7 @@ class SvnTest(Flow, Case):
         (self.repo / "src/new.c").write_bytes(b"mine\n")  # the person has a file of this name: svn skips the target
         self.plan()
         self.assertEqual(list(self.go()["fixes"]["failed"]), ["20001"])
-        self.assertEqual(((self.repo / "src/a.c").read_bytes(), (self.run_dir / "applied.json").exists()), (A, False))
+        self.assertEqual(((self.repo / "src/a.c").read_bytes(), self.get("applied.json")["fixes"]), (A, {}))
 
     @unittest.skipUnless(os.name == "posix", "svn の出力を置き換えるシェルスクリプトを使用するため、POSIX だけで実行します")
     def test_a_file_name_that_svn_cannot_print_is_taken_in(self):

@@ -37,6 +37,8 @@ VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intent
 LEVEL = {"high": "高", "medium": "中", "low": "低"}
 CHOICE = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する", "none": "何もしない"}
 NOT_ITEM = {"failed": "処置に失敗", "unfinished": "未処置"}
+REFUSED = ("取り込み先のコードに適用できませんでした。先に取り込んだ修正と同じ箇所を変更しているときは、"
+           "その修正を{}した後に、もう一度処置してください")  # {}: マージ (git), コミット (svn)
 
 
 class Problem(Exception):
@@ -292,8 +294,9 @@ def cmd_plan(args) -> dict:
                       ", ".join(row["state"].get("files") or []) if row["patch"] else "なし",
                       deviation["comment"] + values, CHOICE.get(choice, "-"), remark])
     write(run.dir / "apply-plan.json", plan)
+    summary = run.dir / "summary.md"
     out = {"vcs": run.meta.get("vcs"), "plan_file": (run.dir / "apply-plan.json").as_posix(),
-           "summary_file": (run.dir / "summary.md").as_posix(),
+           "summary_file": summary.as_posix() if summary.is_file() else None,
            "table": "\n".join("| " + " | ".join(map(cell, line)) + " |" for line in table), "counts": n}
     parts = [f"修正の取り込み（{n['fix']} 件）" if n["fix"] else "",
              f"逸脱コメントの登録（{n['deviation']} 件）" if n["deviation"] else "",
@@ -343,7 +346,7 @@ def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
                 tried = git(repo, "apply", "--index", "--3way", "--whitespace=nowarn", str(run.file(cid, "fix.patch")),
                             cwd=tree)
                 if tried.returncode != 0:
-                    reason = f"取り込み先のコードが変更されているため、修正を適用できませんでした（{text(tried.stderr)[:300]}）"
+                    reason = REFUSED.format("マージ")
                 elif git(repo, "diff", "--cached", "--quiet", cwd=tree).returncode == 0:
                     # Nothing to commit. An earlier fix on this branch made the same change: it is taken in.
                     made_here = git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").stdout
@@ -371,35 +374,28 @@ def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
         push = git(repo, "push", "--quiet", "origin", branch, timeout=NETWORK)
         if push.returncode == 0:
             run.applied["pushed"] = pushed = True
-            write(run.dir / "applied.json", {**run.applied, "fixes": run.fixed})
         else:
             error = text(push.stderr)[-500:] or "git push が失敗しました"
     if pushed:
-        stream = run.meta.get("stream", "")
-        title = f"Coverity の警告の修正（{stream}、{len(run.fixed)} 件）"
-        lines = [[", ".join(map(str, row["cids"])), run.issues[cid].get("checker", ""),
-                  f"{run.issues[cid].get('file', '')}:{run.issues[cid].get('line', '')}", row["summary"]]
-                 for cid, row in run.items.items() if str(cid) in run.fixed]
-        body = "\n".join([f"Coverity Connect のストリーム {stream} で検出された警告の修正です。", "",
-                          "| CID | チェッカー | 場所 | 修正の内容 |", "| --- | --- | --- | --- |",
-                          *("| " + " | ".join(map(cell, line)) + " |" for line in lines)]) + "\n"
+        title = f"Coverity の警告の修正（{run.meta.get('stream', '')}、{len(run.fixed)} 件）"
+        cids = [member for cid, row in run.items.items() if str(cid) in run.fixed for member in row["cids"]]
+        body = ("Coverity の警告の修正です。修正の内容は、各コミットのメッセージにあります。\n\n"
+                f"CID: {', '.join(map(str, cids))}")  # no table: the URL stays short
         web = (re.match(r"https?://(?:[^@/]+@)?([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$", remote)
                or re.match(r"(?:ssh://)?[^@/]+@([^:/]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", remote))
         url = web and (f"https://{web[1]}/{web[2]}/{web[3]}/compare/{quote(base)}...{quote(branch)}?expand=1"
-                       f"&title={quote(title, safe='')}&body={quote(body[:3000], safe='')}")
+                       f"&title={quote(title, safe='')}&body={quote(body, safe='')}")
         pull = {"title": title, "body": body, "compare_url": url}
     return {"branch": branch, "base_branch": base, "pushed": pushed, "push_error": error, "pr": pull}
 
 
-def svn_patch(repo: Path, patch: Path, files: list[str], *dry: str) -> str:
-    """'' when svn patch takes every file of the fix, else what svn printed. svn prints one status line
-    per file: with C for a conflict (a rejected hunk), and none for a target it skips. The lines are
-    counted, not compared with the file names: svn prints a name the console cannot show as ?\\NNN."""
+def svn_patch(repo: Path, patch: Path, files: list[str], *dry: str) -> bool:
+    """Whether svn patch takes every file of the fix. svn prints one status line per file: with C for
+    a conflict (a rejected hunk), and none for a target it skips. The lines are counted, not compared
+    with the file names: svn prints a name the console cannot show as ?\\NNN."""
     proc = execute(["svn", "--non-interactive", "patch", *dry, str(patch), "."], repo, check=False)
-    output = text(proc.stdout + proc.stderr)
-    status = re.findall(r"^([ADUGC][ADUGC ]| [ADUGC]) +\S", output, re.M)
-    taken = proc.returncode == 0 and len(status) >= len(files) and not any("C" in columns for columns in status)
-    return "" if taken else output or "svn patch が失敗しました"
+    status = re.findall(r"^([ADUGC][ADUGC ]| [ADUGC]) +\S", text(proc.stdout + proc.stderr), re.M)
+    return proc.returncode == 0 and len(status) >= len(files) and not any("C" in columns for columns in status)
 
 
 def take_svn(run: Run, todo: list[int], fixes: dict) -> dict | None:
@@ -407,9 +403,8 @@ def take_svn(run: Run, todo: list[int], fixes: dict) -> dict | None:
     can, so a dry run comes first: a fix with a conflict is left out as a whole."""
     for cid in todo:
         patch, files = run.file(cid, "fix.patch"), run.items[cid]["state"].get("files") or []
-        refused = svn_patch(run.repo, patch, files, "--dry-run") or svn_patch(run.repo, patch, files)
-        if refused:
-            fixes["failed"][str(cid)] = f"作業コピーのコードが変更されているため、修正を適用できませんでした（{refused[:300]}）"
+        if not (svn_patch(run.repo, patch, files, "--dry-run") and svn_patch(run.repo, patch, files)):
+            fixes["failed"][str(cid)] = REFUSED.format("コミット")
             continue
         run.applied = {"vcs": "svn"}
         record(run, cid)
@@ -429,12 +424,13 @@ def cmd_apply(args) -> dict:
     todo = [cid for cid in plan["fixes"] if str(cid) not in run.fixed]
     place = (take_git if kind == "git" else take_svn)(run, todo, fixes)
     # The entries for Coverity, after the fixes: the chosen deviations and every fix that is taken in,
-    # each while it is not registered yet (written.json).
+    # each while it is not registered yet (written.json). The comment of a fix is one line.
     where = f"修正をブランチ {place['branch']} にコミットしました。" if kind == "git" and place \
         else "修正を作業コピーに適用しました。"
     deviations = [entry for entry in plan["deviations"] if not run.registered(entry["cids"])]
     taken = [{"cids": run.items[cid]["cids"], "classification": "Bug", "action": "Fix Required",
-              "severity": run.items[cid]["deviation"]["severity"], "comment": (where + run.items[cid]["summary"])[:200]}
+              "severity": run.items[cid]["deviation"]["severity"],
+              "comment": " ".join((where + run.items[cid]["summary"]).split())[:200]}
              for cid in run.waiting()]
     target, entries = run.dir / "coverity-entries.json", [*deviations, *taken]
     if entries:
@@ -443,6 +439,8 @@ def cmd_apply(args) -> dict:
     else:
         for path in (target, Path(f"{target}.sha256")):
             path.unlink(missing_ok=True)
+    # Written at the end of every run, also without a fix: its time is that of the OK that was carried out.
+    write(run.dir / "applied.json", {"vcs": kind, **run.applied, "fixes": run.fixed})
     said, done = [], len(fixes["applied"])
     if kind == "git" and place:
         if done:
