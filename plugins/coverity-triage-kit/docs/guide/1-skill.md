@@ -41,6 +41,8 @@ CID 20002（FORWARD_NULL、src/reader.c:15）
 
 逸脱コメント（78文字）：
 誤検知。唯一の呼び出し元 read_config()（src/reader.c:32〜36）が path の NULL を除外してから渡しており、NULL を参照することはない。
+
+続けるときは「次を処置して」、修正の取り込みと逸脱コメントの登録に進むときは「まとめを見せて」と入力してください
 ```
 
 修正コードは、リポジトリの外の作業用コピーで作成されます。この時点では、リポジトリも Coverity も変わっていません。
@@ -70,7 +72,7 @@ CID 20002（FORWARD_NULL、src/reader.c:15）
 「OK」の後、プラグインが修正の取り込みと逸脱コメントの登録を行います。Coverity に書き込む直前には、Copilot CLI が許可を確認します。
 
 ```text
-修正 1 件をブランチ coverity-fix/20261110-153000 にコミットして push しました。続けて、逸脱コメント 1 件を Coverity に登録します
+修正 1 件をブランチ coverity-fix/20261110-153000 にコミットして push しました。続けて、逸脱コメント 1 件と、取り込んだ修正 1 件を Coverity に登録します
 プルリクエスト：https://github.com/…/compare/main...coverity-fix/20261110-153000?expand=1
 ```
 
