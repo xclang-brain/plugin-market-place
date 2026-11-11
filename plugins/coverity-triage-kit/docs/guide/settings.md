@@ -32,7 +32,7 @@ conditions:
 
 ```yaml
 build:
-  command: "make -j4"
+  command: 'make -j4'
   check_fixes: true
 ```
 
