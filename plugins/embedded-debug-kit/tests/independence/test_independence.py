@@ -126,8 +126,8 @@ class SettingsTest(unittest.TestCase):
 
     def test_every_skill_reads_settings_with_the_same_code(self):
         blocks = self.blocks()
-        for template in sorted(SKILLS.glob("*/config-template.yaml")):
-            self.assertIn(template.parent.name, blocks, "設定を持つスキルに、読み取りがありません")
+        for template in sorted(SKILLS.glob("*/assets/config-template.yaml")):
+            self.assertIn(template.parent.parent.name, blocks, "設定を持つスキルに、読み取りがありません")
         self.assertGreater(len(blocks), 1)
         self.assertEqual(len(set(blocks.values())), 1, f"読み取りの中身が、スキルで違います：{sorted(blocks)}")
 
@@ -138,7 +138,7 @@ class SettingsTest(unittest.TestCase):
             self.skipTest("PyYAML がありません（skills/skill-config/tests/requirements.txt）")
         space = {"re": re}
         exec(next(iter(self.blocks().values())), space)
-        templates = sorted(SKILLS.glob("*/config-template.yaml"))
+        templates = sorted(SKILLS.glob("*/assets/config-template.yaml"))
         self.assertTrue(templates)
         for template in templates:
             text = read(template)
@@ -172,7 +172,8 @@ class UpperStageTest(unittest.TestCase):
             self.assertEqual(found, [], f"{name} が Web管理画面のことを書いています")
 
     def test_dashboard_holds_no_lower_parts(self):
-        words = list(Parts.stage1) + [Parts.worker]
+        # 設定専用のスキルだけは、Web管理画面が使ってよい（憲章 第25条4項）
+        words = [w for w in list(Parts.stage1) + [Parts.worker] if w != "skill-config"]
         for skill in Parts.others:
             for path in text_files(SKILLS / skill):
                 found = [w for w in words if w in read(path)]

@@ -1,0 +1,6 @@
+[project]
+name = "cross-build"
+version = "0.0.0"
+description = "プログラムをビルドするスキルのスクリプト"
+requires-python = ">=3.8"
+dependencies = []

@@ -22,7 +22,7 @@ from unittest import mock
 TESTS = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(TESTS)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "cross_build.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.yaml")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 FAKE = os.path.join(TESTS, "fake_build.py")
 IS_WINDOWS = os.name == "nt"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
@@ -103,7 +103,7 @@ class Project:
         return os.path.join(self.dir, *parts)
 
     def configure(self, text=None, **values):
-        """設定ファイルを書く（.gitignore は作らない）。値は、どれも '…' で囲む。リストは「- 値」の行にする。"""
+        """設定ファイルを書く。値は、どれも '…' で囲む。リストは「- 値」の行にする。"""
         if text is None:
             lines = []
             for key, value in values.items():
@@ -117,6 +117,7 @@ class Project:
             f.write(text)
 
     def run(self, *args):
+        """スクリプトを動かし、(終了コード, 結果) を返す。標準エラー出力は self.stderr に残す。"""
         r = subprocess.run([sys.executable, self.script] + list(args) + ["--workdir", self.dir],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            timeout=120)
@@ -126,9 +127,12 @@ class Project:
             data = json.loads(r.stdout.decode("ascii"))
         except ValueError:
             raise AssertionError("標準出力が JSON 1つではありません：{!r} {!r}".format(r.stdout, r.stderr))
-        for key in ("ok", "message", "problems", "config", "log"):
+        for key in ("ok", "message", "problems", "config"):
             if key not in data:
                 raise AssertionError("{} がありません：{}".format(key, data))
+        if "log" in data:
+            raise AssertionError("log があります：{}".format(data))
+        self.stderr = r.stderr.decode("utf-8", "replace")
         return r.returncode, data
 
 
@@ -166,34 +170,10 @@ class TemplateTest(unittest.TestCase):
         self.assertEqual((values["sdk_env"], values["build_command"], values["outputs"]), ("", "", ""))
 
 
-class InitTest(unittest.TestCase):
+MISSING_CONFIG = "設定ファイル {} がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、値を書いてください。"
 
-    def test_creates_gitignore_and_config_from_template(self):
-        p = Project(self)
-        code, data = p.run("init")
-        self.assertEqual(code, 0, data)
-        self.assertTrue(data["created"])
-        self.assertEqual(data["config"], p.config)
-        with open(os.path.join(p.data, ".gitignore"), encoding="utf-8") as f:
-            self.assertEqual(f.read(), "*\n")
-        with open(p.config, "rb") as a, open(TEMPLATE, "rb") as b:
-            self.assertEqual(a.read(), b.read())
 
-    def test_keeps_an_existing_config(self):
-        p = Project(self)
-        p.configure(build_command="make")
-        code, data = p.run("init")
-        self.assertEqual(code, 0, data)
-        self.assertFalse(data["created"])
-        with open(p.config, encoding="utf-8") as f:
-            self.assertEqual(f.read(), "build_command: 'make'\n")
-
-    def test_missing_workdir(self):
-        p = Project(self)
-        r = subprocess.run([sys.executable, SCRIPT, "init", "--workdir", p.path("nope")],
-                           stdout=subprocess.PIPE, timeout=60)
-        self.assertEqual(r.returncode, 2)
-        self.assertFalse(os.path.exists(p.path("nope")))
+class RenamedCopyTest(unittest.TestCase):
 
     def test_renamed_copy_uses_its_folder_name(self):
         base = tempfile.mkdtemp(prefix="cross-build-copy-")
@@ -201,9 +181,14 @@ class InitTest(unittest.TestCase):
         copy = os.path.join(base, "my-build")
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__"))
         p = Project(self, os.path.join(copy, "scripts", "cross_build.py"))
-        code, data = p.run("init")
+        code, data = p.run("check")
+        self.assertEqual(code, 2, data)
+        self.assertEqual(data["message"], MISSING_CONFIG.format(p.path(".my-build", "config.yaml")))
+        p.configure(build_command=fake("write", "app"), outputs="app")
+        code, data = p.run("run")
         self.assertEqual(code, 0, data)
-        self.assertTrue(os.path.isfile(p.path(".my-build", "config.yaml")))
+        self.assertEqual(data["config"], p.path(".my-build", "config.yaml"))
+        self.assertTrue(os.path.isfile(p.path(".my-build", "run.lock")))
         self.assertFalse(os.path.exists(p.path(".cross-build")))
 
 
@@ -211,7 +196,7 @@ class ArgumentTest(unittest.TestCase):
 
     def test_bad_arguments(self):
         p = Project(self)
-        for args in ([], ["build"], ["run", "--workdir"]):
+        for args in ([], ["build"], ["init"], ["run", "--workdir"]):
             r = subprocess.run([sys.executable, SCRIPT] + args, stdout=subprocess.PIPE, timeout=60, cwd=p.dir)
             self.assertEqual(r.returncode, 2, args)
             data = json.loads(r.stdout.decode("ascii"))
@@ -224,14 +209,19 @@ class CheckTest(unittest.TestCase):
 
     def test_missing_config_creates_nothing(self):
         p = Project(self)
-        code, data = p.run("check")
-        self.assertEqual(code, 2, data)
-        self.assertIn("init", data["message"])
-        self.assertEqual(tree(p.dir), [])
+        for command in ("check", "run"):
+            code, data = p.run(command)
+            self.assertEqual(code, 2, data)
+            self.assertFalse(data["ok"])
+            self.assertEqual(data["message"], MISSING_CONFIG.format(p.config))
+            self.assertEqual(data["problems"], [data["message"]])
+            self.assertEqual(data["config"], p.config)
+            self.assertEqual(tree(p.dir), [])
 
     def test_template_needs_required_keys(self):
         p = Project(self)
-        p.run("init")
+        os.makedirs(p.data)
+        shutil.copyfile(TEMPLATE, p.config)
         code, data = p.run("check")
         self.assertEqual(code, 2, data)
         self.assertEqual(len(data["problems"]), 2, data)
@@ -438,12 +428,36 @@ class RunTest(unittest.TestCase):
         self.assertEqual(data["outputs"][0]["path"], p.path("app"))
         self.assertEqual(data["outputs"][0]["size"], os.path.getsize(p.path("app")))
         self.assertIn("ARM", data["message"])
-        with open(os.path.join(p.data, ".gitignore"), encoding="utf-8") as f:
-            self.assertEqual(f.read(), "*\n")
-        self.assertEqual(os.path.dirname(data["log"]), os.path.join(p.data, "logs"))
-        with open(data["log"], "rb") as f:
-            log = f.read().decode("utf-8")
-        self.assertIn("wrote app.hex", log)
+
+    def test_build_output_goes_to_stderr(self):
+        p = Project(self)
+        lines = ["line {}".format(n) for n in range(40)]  # tail（30 行）に入りきらない数
+        args = []
+        for line in lines:
+            args += ["say", line, "+"]
+        p.configure(build_command=fake(*args + ["write", "app"]), outputs="app")
+        code, data = p.run("run")
+        self.assertEqual(code, 0, data)
+        self.assertEqual(p.stderr.splitlines(), lines + ["wrote app"])
+        self.assertEqual(data["tail"], (lines + ["wrote app"])[-30:])
+
+    def test_failed_build_output_goes_to_stderr(self):
+        p = Project(self)
+        p.configure(build_command=fake("say", "main.c:3:5: error: 'x' undeclared", "+", "exit", "2"),
+                    outputs="app")
+        code, data = p.run("run")
+        self.assertEqual(code, 1, data)
+        self.assertIn("main.c:3:5: error: 'x' undeclared", p.stderr.splitlines())
+
+    def test_run_creates_no_logs_and_no_gitignore(self):
+        p = Project(self)
+        p.configure(build_command=fake("write", "app"), outputs="app")
+        for _ in range(2):
+            code, data = p.run("run")
+            self.assertEqual(code, 0, data)
+            self.assertFalse(os.path.exists(os.path.join(p.data, "logs")))
+            self.assertEqual(tree(p.dir), sorted([".cross-build", os.path.join(".cross-build", "config.yaml"),
+                                                  os.path.join(".cross-build", "run.lock"), "app"]))
 
     def test_unchanged_output_is_not_updated(self):
         p = Project(self)
@@ -498,8 +512,6 @@ class RunTest(unittest.TestCase):
         code, data = p.run("run")
         self.assertEqual(code, 1, data)
         self.assertEqual(data["tail"][-1], "日本語の行")
-        with open(data["log"], "rb") as f:
-            f.read().decode("utf-8")  # ログはいつも UTF-8
 
     def test_command_not_found(self):
         p = Project(self)
@@ -580,7 +592,6 @@ class RunTest(unittest.TestCase):
         data = json.loads(out.decode("ascii"))
         self.assertEqual(proc.returncode, 1, data)
         self.assertIn("途中で止められた", data["message"])
-        self.assertTrue(data["log"], data)
         with open(pids_file, encoding="utf-8") as f:
             pids = [int(x) for x in f.read().split()]
         self.assertEqual(wait_until_gone(pids), [], "ビルドの子のプロセスが残っています")
@@ -661,7 +672,7 @@ class RunTest(unittest.TestCase):
         p.configure(build_command=fake("write", "app"))
         code, data = p.run("run")
         self.assertEqual(code, 2, data)
-        self.assertIsNone(data["log"])
+        self.assertEqual(p.stderr, "")
         self.assertFalse(os.path.exists(p.path("app")))
 
 

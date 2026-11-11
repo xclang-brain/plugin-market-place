@@ -4,8 +4,6 @@
 (() => {
   const TOKEN_KEY = "debug-dashboard-token";
   const POLL_MS = 2000;          // 記録を読み直す間隔
-  const SAVE_DELAY_MS = 600;     // 設定を打ち終えてから保存するまでの間
-  const MAX_TRIALS = 20;
   const VERIFIER = "debug-verifier";
   const $ = (id) => document.getElementById(id);
 
@@ -15,8 +13,6 @@
   let follow = true;      // 統括エージェントの新しいセッションを表示し続けるか
   let shownKey = "";      // 表示中の内容。変わったときだけ描き直す
   let listKey = "";
-  let settingsFilled = false;
-  let saveTimer = null;
   let busy = false;
 
   // URL の #k=<トークン> を sessionStorage に移し、アドレスバーから消す
@@ -79,61 +75,81 @@
   }
 
   // ---- 設定 ----
+  // 項目は、ここには書かない。サーバーが設定ファイルのコメントから読んだものを、そのまま入力欄にする。
 
-  function buildRequest() {
-    const goal = $("goal").value.trim();
-    if (!goal) return "";
-    const criteria = $("criteria").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    const trials = parseInt($("trials").value, 10);
-    const parts = ["直したいこと：\n" + goal];
-    if (criteria.length) parts.push("合格の条件：\n" + criteria.map((c) => "- " + c).join("\n"));
-    if (trials >= 1 && trials <= MAX_TRIALS) parts.push("試行の上限：" + trials + "回");
-    return parts.join("\n\n");
+  function itemInput(skill, item) {
+    let input;
+    if (item.choices && item.choices.length) {
+      input = el("select");
+      for (const choice of [""].concat(item.choices)) input.appendChild(el("option", "", choice));
+      input.value = item.value || "";
+    } else if (Array.isArray(item.value) || /1行に1つ/.test(item.comment || "")) {
+      // 値を2つ以上書ける項目（今の値がリストか、コメントに「1行に1つ」とある）
+      const values = [].concat(item.value || []);
+      input = el("textarea");
+      input.rows = Math.max(2, values.length + 1);
+      input.value = values.join("\n");
+    } else {
+      input = el("input");
+      input.type = "text";
+      input.value = item.value || "";
+      if (item.examples && item.examples.length) input.placeholder = "例：" + item.examples.join("、");
+    }
+    input.id = "skill-" + skill + "-" + item.key;
+    return input;
   }
 
-  function updateRequest() {
-    const text = buildRequest();
-    $("request").value = text;
-    $("request").hidden = !text;
-    $("request-hint").hidden = Boolean(text);
-    $("copy").disabled = !text;
-    $("copy-result").textContent = "";
+  function renderSkillItem(skill, item, missing) {
+    const row = el("div", "item");
+    const label = el("label", "", item.key + (item.required ? "（必須）" : ""));
+    row.appendChild(label);
+    if (item.comment) row.appendChild(el("p", "hint", item.comment));
+    if (item.secret) {
+      const how = item.env_key ? "下の " + item.env_key + " に、パスワードを入れた環境変数の名前を入れてください。"
+        : "設定ファイルに、自分で書いてください。";
+      row.appendChild(el("p", "hint", "この画面では扱いません。" + how));
+      return row;
+    }
+    const input = itemInput(skill, item);
+    const result = el("span", "hint", missing ? "まだ空です。" : "");
+    label.htmlFor = input.id;
+    input.addEventListener("change", async () => {
+      const value = input.tagName === "TEXTAREA" ? input.value.split(/\r?\n/) : input.value;
+      try {
+        await api("/api/config", { skill: skill, key: item.key, value: value });
+        result.textContent = "設定ファイルに書きました。";
+      } catch (e) {
+        result.textContent = e.message;
+      }
+    });
+    row.appendChild(input);
+    row.appendChild(result);
+    return row;
   }
 
-  function fillSettings(settings) {
-    settingsFilled = true;
-    $("goal").value = settings.goal || "";
-    $("criteria").value = settings.criteria || "";
-    $("trials").value = settings.max_trials || 5;
-    updateRequest();
-  }
-
-  async function saveSettings() {
-    const trials = Number($("trials").value);
-    if (!Number.isInteger(trials) || trials < 1 || trials > MAX_TRIALS) {
-      $("settings-result").textContent = "試行の上限は、1 から " + MAX_TRIALS + " までの数にしてください。";
+  async function loadSkills() {
+    const box = $("skills");
+    $("skills-result").textContent = "読んでいます。";
+    let data;
+    try {
+      data = await api("/api/config");
+    } catch (e) {
+      $("skills-result").textContent = e.message;
       return;
     }
-    try {
-      await api("/api/settings", { goal: $("goal").value, criteria: $("criteria").value, max_trials: trials });
-      $("settings-result").textContent = "保存しました。";
-    } catch (e) {
-      $("settings-result").textContent = e.message;
-    }
-  }
-
-  async function copyRequest() {
-    const text = $("request").value;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (e) {
-      $("request").select();
-      if (!document.execCommand("copy")) {
-        $("copy-result").textContent = "コピーできませんでした。依頼文を選んでコピーしてください。";
-        return;
+    box.textContent = "";
+    for (const skill of data.skills || []) {
+      const group = el("fieldset");
+      group.appendChild(el("legend", "", skill.name));
+      if (skill.config) group.appendChild(el("p", "hint", skill.config));
+      if (!skill.ok) group.appendChild(el("p", "hint", skill.message));
+      for (const item of skill.items) {
+        group.appendChild(renderSkillItem(skill.name, item, skill.missing.indexOf(item.key) >= 0));
       }
+      box.appendChild(group);
     }
-    $("copy-result").textContent = "コピーしました。";
+    $("skills-result").textContent = (data.skills || []).length ? ""
+      : "設定ファイルがありません。CLI で「スキルを使う準備をして」と依頼してください。";
   }
 
   // ---- 進み具合と結果 ----
@@ -173,28 +189,20 @@
     return (session.title || "（依頼の記録がありません）") + "（" + when(session.started, true) + " から）";
   }
 
-  // 追うセッション：エージェントに依頼したセッションのうち、いちばん新しいもの。なければ、いちばん新しいセッション。
-  // 画面を起動したセッションなど、エージェントを使わないセッションに移らないようにする
+  // 追うセッション：いちばん新しく動いたセッション
   function latest(sessions) {
-    const run = sessions.find((s) => s.requests > 0) || sessions[0];
-    return run ? run.id : null;
+    return sessions.length ? sessions[0].id : null;
   }
 
   function render(detail) {
     const s = detail ? detail.session : null;
     shown = s;
-    const key = s ? [s.id, s.count, s.stage, s.stopped].join("|") : "";
+    const key = s ? [s.id, s.count, s.running.join(","), s.stopped].join("|") : "";
     if (key === shownKey) return;
     shownKey = key;
 
     $("progress-title").textContent = title(s);
     $("results-title").textContent = title(s);
-    for (const step of document.querySelectorAll(".stages li")) {
-      const on = Boolean(s) && step.dataset.stage === s.stage;
-      step.classList.toggle("current", on);
-      if (on) step.setAttribute("aria-current", "step");
-      else step.removeAttribute("aria-current");
-    }
     $("running").textContent = !s ? "" : s.running.length
       ? "動いているエージェント：" + s.running.join("、")
       : "動いているエージェントはありません。";
@@ -207,11 +215,12 @@
     $("messages").replaceChildren(...events.filter((e) => e.kind !== "tool").map(messageItem));
     $("tools").replaceChildren(...events.filter((e) => e.kind === "tool").reverse().map(toolItem));
     $("last-report").textContent = (s && s.last_report) || "まだ報告がありません。";
-    $("last-verdict").textContent = (s && s.last_verdict) || "まだ判定がありません。";
+    $("verdict").hidden = !(s && s.last_verdict);
+    $("last-verdict").textContent = (s && s.last_verdict) || "";
   }
 
   function renderSessions(sessions) {
-    const key = selected + "|" + sessions.map((s) => s.id + s.updated + s.stage).join(",");
+    const key = selected + "|" + sessions.map((s) => s.id + s.updated).join(",");
     if (key === listKey) return;
     listKey = key;
     const items = sessions.map((s) => {
@@ -256,7 +265,6 @@
     }
     const state = await api("/api/state");
     $("workdir").textContent = state.workdir || "―";
-    if (!settingsFilled) fillSettings(state.settings || {});
     const sessions = state.sessions || [];
     if (follow || !sessions.some((s) => s.id === selected)) {
       selected = latest(sessions);
@@ -280,19 +288,14 @@
   }
 
   for (const tab of document.querySelectorAll('[role="tab"]')) {
-    tab.addEventListener("click", () => showTab(tab.id.slice("tab-".length)));
-  }
-  for (const id of ["goal", "criteria", "trials"]) {
-    $(id).addEventListener("input", () => {
-      updateRequest();
-      $("settings-result").textContent = "";
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(saveSettings, SAVE_DELAY_MS);
+    tab.addEventListener("click", () => {
+      showTab(tab.id.slice("tab-".length));
+      if (tab.id === "tab-settings") loadSkills();
     });
   }
-  $("copy").addEventListener("click", copyRequest);
+  $("skills-reload").addEventListener("click", loadSkills);
   $("stop").addEventListener("click", stopRun);
-  updateRequest();
+  if (token) loadSkills();
   tick();
   setInterval(tick, POLL_MS);
 })();

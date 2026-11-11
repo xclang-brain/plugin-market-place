@@ -41,6 +41,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+      # スキルのスクリプトとフックは、uv run で動かす
+      - uses: astral-sh/setup-uv@v6
       # 各スキルの tests/requirements.txt にあるパッケージ（ないと、それを使うテストは飛ばされる）
       - name: テストに使うパッケージを入れる
         shell: pwsh
@@ -91,6 +93,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      # スキルのスクリプトとフックは、uv run で動かす
+      - uses: astral-sh/setup-uv@v6
       # 独立性のテストは、スキルのフォルダだけをコピーして、そのテストも動かす。スキルのジョブと同じパッケージを入れる
       - name: テストに使うパッケージを入れる
         shell: pwsh

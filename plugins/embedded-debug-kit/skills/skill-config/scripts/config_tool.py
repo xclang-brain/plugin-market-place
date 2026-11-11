@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
-"""ほかのスキルの設定ファイル <作業フォルダ>/.<スキルの名前>/config.yaml を読み書きする。
+"""ほかのスキルの設定ファイル <作業フォルダ>/.<スキルの名前>/config.yaml を作り、読み書きする。
 
+  config_tool.py setup [<スキルの名前>] [--workdir 作業フォルダ]
   config_tool.py show <スキルの名前> [--workdir 作業フォルダ]
   config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]
 
+setup は、このスキルの隣にあるスキルのうち、assets/config-template.yaml を持つものを準備する。
+  設定ファイルがなければ、ひな形を写して作る。pyproject.toml があれば、依存パッケージを uv で入れる。
 show は、項目ごとに、値と、すぐ上のコメントから読んだこと（必須・秘密・例・選べる値）を返す。何も作らない。
 set は、標準入力の値を1つの項目に書く（--empty なら空にする）。その項目の行だけを書き換え、コメントと並びは残す。
-標準出力には結果の JSON を1つだけ、ASCII で書く。
-終了コード：0 成功、1 書き込みの失敗や思わぬエラー、2 設定ファイルや引数の問題。
-Python 3.8 以上の標準ライブラリだけで動く。
+標準出力には結果の JSON を1つだけ、ASCII で書く。uv の出力は、標準エラー出力に出る。
+終了コード：0 成功、1 書き込みの失敗、依存パッケージを入れられなかったとき、思わぬエラー、2 設定ファイルや引数の問題。
+uv run で動かす。依存パッケージは、スキルのフォルダの pyproject.toml に書く。
 """
 
 import argparse
-import datetime
 import json
 import locale
 import os
 import re
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
-import traceback
 
 # このスキルの名前は、このスクリプトのフォルダの親の名前。名前を変えて写せば、その名前になる。
-SKILL_NAME = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SKILL_NAME = os.path.basename(SKILL_DIR)
+SKILLS_DIR = os.path.dirname(SKILL_DIR)  # ほかのスキルは、このスキルの隣にある
+TEMPLATE = os.path.join("assets", "config-template.yaml")
 MASK = "***"  # ほかのスキルと同じ伏せ方
-USAGE = ("使い方：config_tool.py show <スキルの名前> [--workdir 作業フォルダ]、"
+USAGE = ("使い方：config_tool.py setup [<スキルの名前>] [--workdir 作業フォルダ]、"
+         "config_tool.py show <スキルの名前> [--workdir 作業フォルダ]、"
          "config_tool.py set <スキルの名前> <項目> --stdin|--empty [--workdir 作業フォルダ]")
 HOW_TO_PASS = ("bash は「--stdin <<'END'」の次の行から値を書いて END の行で閉じ、"
                "PowerShell は @' と '@ の間に値を書いて、パイプで渡してください。"
@@ -50,42 +57,6 @@ class Stop(Exception):
         Exception.__init__(self, message)
         self.message = message
         self.code = code
-
-
-class Log(object):
-    """ログのファイル（UTF-8）。開いていなければ何も書かない（show は何も作らない）。"""
-
-    path = None
-    fh = None
-
-    def open(self, workdir):
-        folder = os.path.join(workdir, "." + SKILL_NAME)
-        try:
-            os.makedirs(folder, exist_ok=True)
-            put_gitignore(folder)
-            logs = os.path.join(folder, "logs")
-            os.makedirs(logs, exist_ok=True)
-            path = os.path.join(logs, "%s-%s.log" % (SKILL_NAME, datetime.date.today().strftime("%Y%m%d")))
-            self.fh = open(path, "a", encoding="utf-8")
-            self.path = path
-        except OSError as e:
-            raise Stop("ログのファイルを作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
-                       % (e.strerror or e), 1)
-
-    def __call__(self, text):
-        if self.fh is not None:
-            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for line in str(text).splitlines() or [""]:
-                self.fh.write("%s %s\n" % (stamp, line))
-            self.fh.flush()
-
-    def close(self):
-        if self.fh is not None:
-            self.fh.close()
-        self.fh = self.path = None
-
-
-LOG = Log()
 
 
 def put_gitignore(folder):
@@ -212,8 +183,7 @@ class Doc(object):
 
 def load(path, skill):
     if not os.path.isfile(path):
-        raise Stop("設定ファイル %s がありません。先に %s スキルに、設定ファイルを作るよう依頼してください"
-                   "（そのスキルの init で作れます）。" % (path, skill))
+        raise Stop("設定ファイル %s がありません。先に、setup %s で作ってください。" % (path, skill))
     try:
         with open(path, "rb") as fh:
             data = fh.read()
@@ -228,7 +198,7 @@ def load(path, skill):
 
 
 def shown(item, value):
-    """結果とログに出す値。（秘密）の値は、空でなければ伏せる。"""
+    """結果に出す値。（秘密）の値は、空でなければ伏せる。"""
     return MASK if item.secret and value else value
 
 
@@ -366,10 +336,7 @@ def write_atomic(path, data):
         raise
 
 
-def cmd_set(path, skill, key, empty, workdir, result):
-    LOG.open(workdir)
-    result["log"] = LOG.path
-    LOG("set を始めます。設定ファイル：%s、項目：%s" % (path, key))
+def cmd_set(path, skill, key, empty, result):
     doc = load(path, skill)
     item = doc.find(key)
     values = checked_values(doc, item, [] if empty else read_input())
@@ -387,9 +354,52 @@ def cmd_set(path, skill, key, empty, workdir, result):
     except OSError as e:
         raise Stop("設定ファイル %s に書き込めません（%s）。ほかのアプリで開いていないか、フォルダの権限を"
                    "確かめてください。ファイルは元のままです。" % (path, e.strerror or e), 1)
-    LOG("%s：%s → %s" % (item.key, json.dumps(shown(item, before), ensure_ascii=False),
-                        json.dumps(shown(item, value), ensure_ascii=False)))
     result.update(ok=True, changed=True, message="設定ファイル %s の %s を書き換えました。" % (path, item.key))
+
+
+def uv_sync(folder):
+    """スキルのフォルダの pyproject.toml にある依存パッケージを、uv で入れる。問題があれば、その文を返す。"""
+    uv = os.environ.get("UV") or shutil.which("uv")
+    if not uv:
+        return "uv が見つかりません。uv を入れてから、もう一度動かしてください。"
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}  # このスクリプトの環境を、uv に使わせない
+        done = subprocess.run([uv, "sync", "--project", folder], stdin=subprocess.DEVNULL, stdout=sys.stderr, env=env)
+    except OSError as e:
+        return "uv を動かせません（%s）。" % (e.strerror or e)
+    if done.returncode != 0:
+        return "%s の依存パッケージを入れられませんでした。標準エラー出力を見てください。" % folder
+    return None
+
+
+def cmd_setup(only, workdir, result):
+    names = [n for n in sorted(os.listdir(SKILLS_DIR))
+             if n != SKILL_NAME and os.path.isfile(os.path.join(SKILLS_DIR, n, TEMPLATE))]
+    if only:
+        if only not in names:
+            raise Stop("スキル %s に、ひな形 %s がありません。ひな形のあるスキル：%s。"
+                       % (only, TEMPLATE.replace(os.sep, "/"), "、".join(names) or "なし"))
+        names = [only]
+    result.update(skills=[])
+    for name in names:
+        folder = os.path.join(workdir, "." + name)
+        config = os.path.join(folder, "config.yaml")
+        created = not os.path.exists(config)
+        if created:
+            try:
+                os.makedirs(folder, exist_ok=True)
+                put_gitignore(folder)
+                shutil.copyfile(os.path.join(SKILLS_DIR, name, TEMPLATE), config)
+            except OSError as e:
+                raise Stop("設定ファイル %s を作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
+                           % (config, e.strerror or e), 1)
+        skill = os.path.join(SKILLS_DIR, name)
+        problems = [m for m in [uv_sync(skill)] if m] if os.path.isfile(os.path.join(skill, "pyproject.toml")) else []
+        result["problems"] += problems
+        result["skills"].append({"name": name, "config": config, "created": created, "packages": not problems})
+    if result["problems"]:
+        raise Stop("".join(result["problems"]), 1)
+    result.update(ok=True, message="%d 個のスキルを準備しました：%s。" % (len(names), "、".join(names)))
 
 
 # --- 入口 ---------------------------------------------------------------------
@@ -401,36 +411,41 @@ class Parser(argparse.ArgumentParser):
 
 def parse_args(argv):
     parser = Parser(prog="config_tool.py", add_help=False)
-    parser.add_argument("command", choices=("show", "set"))
-    parser.add_argument("skill")
+    parser.add_argument("command", choices=("setup", "show", "set"))
+    parser.add_argument("skill", nargs="?")
     parser.add_argument("key", nargs="?")
     parser.add_argument("--stdin", action="store_true")
     parser.add_argument("--empty", action="store_true")
     parser.add_argument("--workdir")
     args = parser.parse_intermixed_args(argv)
-    if (args.command == "show") == bool(args.key):
+    if (args.command == "set") != bool(args.key) or (args.command != "setup" and not args.skill):
         raise Stop("コマンドの書き方が違います。" + USAGE)
+    if args.command != "set" and (args.stdin or args.empty):
+        raise Stop("--stdin と --empty は、set でだけ使えます。" + USAGE)
     if args.command == "set" and args.stdin == args.empty:
         raise Stop("set には、--stdin か --empty のどちらか1つだけを付けてください。" + HOW_TO_PASS)
-    if not SKILL_NAME_RE.match(args.skill):
+    if args.skill and not SKILL_NAME_RE.match(args.skill):
         raise Stop("スキルの名前 %s は使えません。スキルのフォルダの名前（英数字とハイフンなど）で指定してください。"
                    % args.skill)
     return args
 
 
 def main(argv=None):
-    result = {"ok": False, "message": "", "problems": [], "config": None, "log": None}
+    result = {"ok": False, "message": "", "problems": [], "config": None}
     try:
         args = parse_args(sys.argv[1:] if argv is None else argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir)
-        path = os.path.join(workdir, "." + args.skill, "config.yaml")
-        result["config"] = path
-        if args.command == "show":
-            cmd_show(path, args.skill, result)
+        if args.command == "setup":
+            cmd_setup(args.skill, workdir, result)
         else:
-            cmd_set(path, args.skill, args.key, args.empty, workdir, result)
+            path = os.path.join(workdir, "." + args.skill, "config.yaml")
+            result["config"] = path
+            if args.command == "show":
+                cmd_show(path, args.skill, result)
+            else:
+                cmd_set(path, args.skill, args.key, args.empty, result)
         code = 0
     except Stop as e:
         result.update(ok=False, message=e.message)
@@ -438,13 +453,8 @@ def main(argv=None):
             result["problems"] = [e.message]
         code = e.code
     except Exception as e:
-        LOG(traceback.format_exc())
         result.update(ok=False, message="思わぬエラーで止まりました（%s: %s）。" % (type(e).__name__, e))
-        if LOG.path:
-            result["message"] += "ログ %s を見てください。" % LOG.path
         code = 1
-    LOG(result["message"])
-    LOG.close()
     sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     return code
