@@ -4,7 +4,7 @@ coverity-triage-kit を変更する開発者に向けて、テストの実行方
 
 ## 実行する
 
-プラグインのフォルダーで実行します。モデルは使用しません。すべて実行して、3分ほどです。
+プラグインのフォルダーで実行します。モデルは使用しません。すべて実行して、4分ほどです。
 
 ```text
 python3 tests/run.py                              すべて実行します（Windows は py -3 tests/run.py）
@@ -44,9 +44,10 @@ Playwright は、リポジトリの外にインストールして、環境変数
 
 ## CI
 
-`.github/workflows/coverity-triage-kit.yml` が、Windows と Linux のそれぞれで、Python 3.10 と最新版を使用して `python tests/run.py` を実行します。svn と Playwright をインストールするので、Linux ではスキップはありません。Windows では、次の2件をスキップします。
+`.github/workflows/coverity-triage-kit.yml` が、Windows と Linux のそれぞれで、Python 3.10 と最新版を使用して `python tests/run.py` を実行します。svn と Playwright をインストールするので、Linux ではスキップはありません。Windows では、次の3件をスキップします。
 
 - `skills/coverity-gui`：ブラウザーがコマンドの出力を引き継がないことの確認（Windows では、出力を引き継がない方法でブラウザーを開くため）
 - `skills/coverity-apply`：svn が表示できないファイル名の確認（svn の出力を、シェルスクリプトで置き換えるため）
+- `skills/coverity-apply`：git が 2.32 より古いときのメッセージの確認（git の出力を、シェルスクリプトで置き換えるため）
 
 CI の Windows は日本語の設定ではないため、svn に日本語の名前を渡せません。svn のテストは、その場合だけ、フォルダーとファイルの名前を英数字にして実行します。日本語の設定の Windows での svn と日本語の名前の組み合わせは、CI では確認していません。

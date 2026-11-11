@@ -67,8 +67,9 @@ command = functools.partial(line, PLUGIN, "triage")  # a line of triage.py
 
 
 def rows(table: str) -> dict[int, list[str]]:
-    """The rows of the one table by CID: [CID, 判定, 確信度, 修正コード, 逸脱コメント, 選択, 備考]."""
-    return {int(row[2:7]): row[2:-2].split(" | ") for row in table.splitlines()[2:]}
+    """The rows of the one table by CID: [CID, 判定, 確信度, 修正コード, 逸脱コメント, 選択, 備考]. What a
+    chat run has below the table, after an empty line, is no row."""
+    return {int(row[2:7]): row[2:-2].split(" | ") for row in table.split("\n\n")[0].splitlines()[2:]}
 
 
 @functools.cache

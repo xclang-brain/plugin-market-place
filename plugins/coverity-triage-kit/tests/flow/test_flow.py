@@ -28,6 +28,7 @@ SAVED = "patch_file"  # a key of the reply of an accepted save
 
 class Case(unittest.TestCase):
     kind = "git"
+    based = "。ブランチ main の最新のコードで処置します"  # git: how the message of a new list ends
 
     def person(self, **options) -> None:
         """The person's side: the repository, the Coverity, and what the repository holds before a request."""
@@ -115,14 +116,16 @@ class Flow:
         request = me.line("triage", "start", "--repo", self.repo)
         first = me.ready(request)
         run = Path(first["run_dir"])
-        self.assertEqual(first["message"], "条件に合う警告は 6 件あります。設定の上限（3 件）まで取得しました")
+        self.assertEqual(first["message"], "条件に合う警告は 6 件あります。設定の上限（3 件）まで取得しました" + self.based)
         self.assertEqual((self.listed(run), run.parent), (CIDS[:3], self.top / "coverity-triage-out"))
-        # 「CID 20002 を処置して」, then 「まとめを見せて」: the one table and the one question
+        # 「CID 20002 を処置して」, then 「まとめを見せて」: the one table and the one question. In a chat the table
+        # has the processed CIDs, and one sentence below it counts the others
         saved = me.follow(first["next"][0] + " --cid 20002", stop=SAVED)
         plan = self.summary(me, run)
         comment = self.read(run, "cid/20002/result.json")["deviation"]["comment"]
-        self.assertEqual([row[3:] for row in flowlib.rows(plan["table"]).values()], [["-", "-", "-", "未処置"], [
-            "なし", comment + "（False Positive／Ignore／Unspecified）", WORD["deviation"], ""], ["-", "-", "-", "未処置"]])
+        self.assertEqual(({cid: row[3:] for cid, row in flowlib.rows(plan["table"]).items()}, plan["table"].split("\n\n")[1:]), (
+            {20002: ["なし", comment + "（False Positive／Ignore／Unspecified）", WORD["deviation"], ""]},
+            ["未処置の CID が 2 件あります。続けるときは「次を処置して」と入力してください"]))
         self.assertEqual(plan["question"], "この内容で、逸脱コメントの登録（1 件）を行います。" + ASK)
         self.assert_nothing_changed()
         # 「OK」: the comment is in Coverity
@@ -180,9 +183,10 @@ class Flow:
             20006: ["src/reader.c", WORD["none"], "確信度が低いため"]})
         for cid, row in table.items():
             self.assertTrue(row[4].startswith(self.read(run, f"cid/{cid}/result.json")["deviation"]["comment"] + "（"), row)
+        how = f"ブランチ coverity-fix/{run.name} にコミットして origin に push" if self.kind == "git" else "作業コピーのファイルに適用"
         self.assertEqual((plan["summary_file"], plan["question"]), (done["summary_file"], (
-            "この内容で、修正の取り込み（3 件）、逸脱コメントの登録（2 件）を行います。"
-            "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" + ASK)))
+            f"この内容で、修正の取り込み（3 件。{how}）、逸脱コメントの登録（2 件）を行います。"
+            "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" + ASK)), "the question says what the OK does")
         self.assert_nothing_changed()
         # 「20003 は逸脱、ほかは OK」
         plan = second.table("20003=deviation")
@@ -195,7 +199,7 @@ class Flow:
                                           ([20004], "Bug", "Fix Required")], "the chosen deviations, the fixes taken in, nothing else")
         # the same request again: the next list is what was left undecided
         new = Agent(self.repo, plugin).ready(request)
-        self.assertEqual((self.listed(new["run_dir"]), new["message"]), ([20006], "条件に合う警告を 1 件取得しました"))
+        self.assertEqual((self.listed(new["run_dir"]), new["message"]), ([20006], "条件に合う警告を 1 件取得しました" + self.based))
 
     def test_stage_3_workers_in_parallel_one_cause_merged_every_result_reviewed(self):
         """docs/guide/3-multi-agent.md; then a write to Coverity that is not made at first."""
@@ -231,23 +235,28 @@ class Flow:
         code = self.taken_in(run, GROUP)
         self.assertEqual([FIXES[cid][1] in code for cid in (20001, 20003, *GROUP)], [False, False, True, True, True])
         self.assertEqual(self.written(), [([20002], "False Positive", "Ignore"), (GROUP, "Bug", "Fix Required")])
-        # 「修正を取り込んで」, 「20001 は修正、ほかは OK」; the person refuses the permission prompt, so the write tool is not called
-        applied = lead.ok(lead.table("20001=fix"), write=False)
+        # 「修正を取り込んで」, 「20001 は修正、20003 は逸脱、ほかは OK」; the person refuses the permission prompt: no write call
+        applied = lead.ok(lead.table("20001=fix", "20003=deviation"), write=False)
         self.assertEqual((applied["message"].split("。")[-1], len(applied["call"]), len(self.coverity.writes)),
-                         ("続けて、取り込んだ修正 1 件を Coverity に登録します", 1, 2))
+                         ("続けて、逸脱コメント 1 件と、取り込んだ修正 1 件を Coverity に登録します", 1, 2))
         self.assertIn(b"(void)fclose(fp);", self.taken_in(run, GROUP, [20001]))  # the fix that was made again is in
-        # the same request in a new session: the folder stays open, and the request leads to its table again
+        # the same request in a new session: the folder stays open, and the request leads to its table again,
+        # where the choice of the chat that got its OK stands (20003 is not back at 何もしない)
         again = Agent(self.repo)
         plan = self.summary(again, run, request)
         self.assertEqual([row[5:] for row in flowlib.rows(plan["table"]).values()], [
-            ["-", "取り込み済み（Coverity への登録が残っています）"], ["-", "登録済み"], [WORD["none"], "検証で要確認のため"], ["-", "取り込み済み"]])
-        self.assertEqual(plan["question"], "この内容で、取り込み済みの修正の Coverity への登録（1 件）を行います。" + ASK)
+            ["-", "取り込み済み（Coverity への登録が残っています）"], ["-", "登録済み"], [WORD["deviation"], "チャットで指定"],
+            ["-", "取り込み済み"]])
+        self.assertEqual(plan["question"],
+                         "この内容で、逸脱コメントの登録（1 件）、取り込み済みの修正の Coverity への登録（1 件）を行います。" + ASK)
         again.ok(plan)
-        self.assertEqual(self.written()[2:], [([20001], "Bug", "Fix Required")])
+        self.assertEqual(self.written()[2:], [([20003], "Bug", "Ignore"), ([20001], "Bug", "Fix Required")])
         self.taken_in(run, GROUP, [20001])  # and no fix twice
-        # after the write the same request fetches again: the list is what was left to the person
+        # after the write the same request fetches again: every warning is decided, and the message names the conditions
         new = Agent(self.repo).ready(request)
-        self.assertEqual((new["run_dir"] != run.as_posix(), self.listed(new["run_dir"])), (True, [20003]))
+        self.assertEqual((new["run_dir"] != run.as_posix(), self.listed(new["run_dir"]), new["message"]), (True, [], (
+            "条件に合う警告はありません（ストリーム Sample-main、チェッカー すべて、Impact すべて、分類 Unclassified）。"
+            f"条件は {self.repo.as_posix()}/.coverity-triage/config.yaml の conditions で変更できます")))
 
     def test_stage_4_the_screen_shows_the_choices_of_the_chat_and_its_choices_are_carried_out(self):
         """docs/guide/4-screen.md, on a result folder of the multi-agent stage that holds every kind of row."""
@@ -308,7 +317,7 @@ class GitFlow(Flow, Case):
 
 @unittest.skipUnless(shutil.which("svn") and shutil.which("svnadmin"), "svn コマンドがありません")
 class SvnFlow(Flow, Case):
-    kind = "svn"
+    kind, based = "svn", ""
 
 
 if __name__ == "__main__":
