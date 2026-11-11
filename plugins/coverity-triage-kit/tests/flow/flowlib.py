@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -349,4 +350,11 @@ def remove_tree(path: Path) -> None:
         os.chmod(target, stat.S_IWRITE)
         func(target)
 
-    shutil.rmtree(path, **({"onexc": writable} if sys.version_info >= (3, 12) else {"onerror": writable}))
+    handler = {"onexc": writable} if sys.version_info >= (3, 12) else {"onerror": writable}
+    for attempt in range(60):  # a detached job of the plugin may still hold its log (Windows refuses the delete)
+        try:
+            return shutil.rmtree(path, **handler)
+        except OSError:
+            if attempt == 59:
+                raise
+            time.sleep(0.5)
