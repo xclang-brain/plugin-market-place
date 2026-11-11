@@ -6,8 +6,7 @@
 The development form of the plugin (agents/*.md, .claude-plugin/plugin.json, .mcp.json) runs headless with the
 claude CLI against tests/coverity_emulator, in a scratch folder outside the repository. The tool that writes to
 Coverity is never allowed. Prints one line per check (合格 / 不合格), then one JSON line. Exit code 0: every check
-passed; 1: a check failed; 2: the EVAL could not run. A developer tool: tests/run.py does not run it.
-Standard library and PyYAML.
+passed; 1: a check failed; 2: the EVAL could not run or was stopped. A developer tool: tests/run.py does not run it.
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ FITS = {"fix": ("true_bug",), "deviation": ("false_positive", "intentional")}
 # and no sentence that says it was made
 LEFT = ("「修正を取り込んで」", "残", "まだ", "未", "許可", "拒否", "できません", "できなかった", "されていません")
 MADE = re.compile(r"登録(?:しました|[がをはも]?完了しました|済みです)")
+ASKS = re.compile(r"(?:[?？]|(?:です|ます|でしょう|ません)か。?)[\s*」）)]*\Z")  # a text that ends in a question
 SVN_STATUS = re.compile(r"^([ADUGC][ADUGC ]| [ADUGC]) +\S", re.M)  # a status line of svn patch
 SQUEEZE = re.compile(r"[\s*`]+")  # white space and Markdown emphasis are not compared
 
@@ -250,7 +250,8 @@ def grade_results(ev: Eval) -> None:
     text = summary.read_text(encoding="utf-8", errors="replace") if summary.is_file() else ""
     absent = [c for c in cids if str(c) not in text]
     ev.check("summary.md に、取得した CID がすべて載っている", summary.is_file() and cids and not absent,
-             "summary.md がありません" if not summary.is_file() else f"載っていない CID: {absent}" if absent else "")
+             "summary.md がありません" if not summary.is_file() else f"載っていない CID: {absent}" if absent
+             else "" if cids else "取得した CID がありません")
     ev.items = [c for c in done if not states[c].get("merged_into")]  # a merged CID shares the result of its leader
     results = {c: parse(run / "cid" / str(c) / "result.json") for c in ev.items}
     patches = {c: run / "cid" / str(c) / "fix.patch" for c in ev.items}
@@ -295,9 +296,9 @@ def grade_results(ev: Eval) -> None:
             lines = SVN_STATUS.findall((tried.stdout + tried.stderr).decode("utf-8", "replace"))
             fine = tried.returncode == 0 and lines and not any("C" in line for line in lines)
         refused += [] if fine else [str(cid)]
-    count = sum(patch.is_file() for patch in patches.values())
     ev.check("修正コード（fix.patch）を、処置を開始したリビジョンに適用できる", ready and not refused,
-             f"適用できない CID: {', '.join(refused)}" if refused else f"{count} 件" if ready
+             f"適用できない CID: {', '.join(refused)}" if refused
+             else f"{sum(patch.is_file() for patch in patches.values())} 件" if ready
              else f"run.json の base_revision（{base or 'なし'}）のコードを取り出せません")
 
 
@@ -307,7 +308,7 @@ def grade_stage2(ev: Eval, t: Transcript) -> None:
     for _, block in t.blocks[:first]:  # before the one table (without a table: the whole run)
         if block.get("type") == "tool_use" and block.get("name") == "AskUserQuestion":
             asked.append("質問のツールを使用")
-        elif block.get("type") == "text" and block.get("text", "").rstrip().endswith(("?", "？")):
+        elif block.get("type") == "text" and ASKS.search(block.get("text") or ""):
             asked.append(f"「…{block['text'].rstrip()[-30:]}」")
     ev.check("最後の一覧より前に、利用者に質問していない", not asked, "、".join(asked))
     question = plan.get("question") or ""
@@ -315,7 +316,7 @@ def grade_stage2(ev: Eval, t: Transcript) -> None:
     shown = question and SQUEEZE.sub("", question) in SQUEEZE.sub("", t.final)
     ev.check("最後のメッセージに、すべての CID と apply.py plan の質問文がある", ev.items and not lost and shown,
              "処置済みの CID がありません" if not ev.items else f"ない CID: {', '.join(lost)}" if lost else "" if shown
-             else "質問文が apply.py plan の応答と異なります" if question else "apply.py plan の応答に質問文がありません")
+             else "質問文が apply.py plan の応答と異なります" if question else "apply.py plan の応答に質問文なし")
 
 
 def grade_stage3(ev: Eval, t: Transcript) -> None:
@@ -369,7 +370,7 @@ def grade_after_ok(ev: Eval, t: Transcript) -> None:
     said = next((word for word in LEFT if word in t.final), None) if "登録" in t.final and not made else None
     ev.check("Coverity への書き込みは行われず、最後のメッセージが、登録が残っていることを伝えている", not got and said,
              f"書き込み {len(got)} 件、書き込みのツールの呼び出し: {'あり（許可されず）' if tried else 'なし'}、"
-             + (f"最後のメッセージに「{said}」あり" if said else f"最後のメッセージに「{made[0]}」とあります" if made
+             + (f"最後のメッセージに {said} あり" if said else f"最後のメッセージに「{made[0]}」とあります" if made
                 else "最後のメッセージに、登録が残っていることの記載なし"))
 
 
@@ -413,8 +414,7 @@ def main(argv: list[str] | None = None) -> int:
     failed = [check["name"] for check in ev.checks if not check["ok"]]
     print(f"合格 {len(ev.checks) - len(failed)} 件、不合格 {len(failed)} 件です。", flush=True)
     print(json.dumps({"ok": not failed, "stage": ev.stage, "vcs": ev.vcs, "passed": len(ev.checks) - len(failed),
-                      "failed": failed, "work": ev.site.as_posix(), "run_dir": ev.run.as_posix(),
-                      "transcripts": [(ev.site / f"{name}.jsonl").as_posix() for name in ev.usage], "usage": ev.usage,
+                      "failed": failed, "work": ev.site.as_posix(), "run_dir": ev.run.as_posix(), "usage": ev.usage,
                       "checks": ev.checks}, ensure_ascii=False))
     return 1 if failed else 0
 
