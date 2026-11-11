@@ -73,6 +73,19 @@ class Copies:
         self.assertEqual(repo.original(copy, revision, "src/icon@2x.c"), b"int i;\n")
         self.assertIsNone(repo.original(copy, revision, "src/none.c"))
 
+    def test_a_copy_that_a_killed_job_left_half_made_is_made_again(self):
+        repo = vcs.open_repo(support.make_repo(self.kind, self.top))
+        revision, copy = repo.base("")[1], self.top / "work" / "w1"
+        if self.kind == "git":  # what a killed git worktree add leaves: registered and locked, the files not there
+            call(*GIT, "worktree", "add", "-q", "--detach", "--no-checkout", copy, revision, cwd=repo.repo)
+            (repo.repo / ".git" / "worktrees" / "w1" / "locked").write_bytes(b"initializing")
+        else:  # what a killed svn checkout leaves: a working copy without its files
+            call("svn", "checkout", "-q", "--depth", "empty", (self.top / "svnrepo").as_uri(), copy, cwd=self.top)
+        self.assertFalse(repo.is_copy(copy))
+        repo.make_copy(copy, revision)
+        self.assertTrue(repo.is_copy(copy))
+        self.assertEqual((copy / "src" / "a.c").read_bytes(), support.FILES["src/a.c"])
+
 
 class GitTest(Copies, Case):
 

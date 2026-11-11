@@ -79,18 +79,19 @@ class Build:
         self.assertTrue(first["ok"], first)
         build = json.loads((run / "build.json").read_text(encoding="utf-8"))
         self.assertEqual((build["status"], build["exit_code"], build["cids"]), ("done", 0, {str(ONE): "ok"}))
-        self.assertIn("| 確信度 | ビルド | 修正コード |", first["table"])
-        self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 本物のバグ | 修正を取り込む | 高 | 成功 |", first["table"])
+        self.assertIn("| 確信度 | ビルド | 修正コード |", self.summary(run))
+        self.assertIn(f"| {ONE} | NULL_RETURNS | src/a.c:3 | 本物のバグ | 修正を取り込む | 高 | 成功 |", self.summary(run))
         self.assertIn("build ok", (run / "build.log").read_text(encoding="utf-8"))
 
         self.one(run, TWO, {"src/b.c": (b"return 0;", b"return BROKEN;")})  # breaks the build
         self.one(run, THREE, {"src/a.c": (b"return *p;", b"return p ? *p : 9;")})  # does not fit on the fix of ONE
-        second = self.finish(run)
+        self.finish(run)
         build = json.loads((run / "build.json").read_text(encoding="utf-8"))
         self.assertEqual(build["cids"], {str(ONE): "unknown", str(TWO): "failed", str(THREE): "not_applied"})
-        rows = {int(line.split("|")[1]): line.split("|")[7].strip() for line in second["table"].splitlines()[2:]}
+        rows = {int(line.split("|")[1]): line.split("|")[7].strip()
+                for line in self.summary(run).splitlines() if line.startswith("| 2")}
         self.assertEqual(rows, {ONE: "不明", TWO: "失敗", THREE: "適用できず"})
-        self.assertIn("- ビルド: 失敗", (run / "summary.md").read_text(encoding="utf-8"))
+        self.assertIn("- ビルド: 失敗", self.summary(run))
         self.assertFalse((run / "work").exists())
         self.assertTrue(self.finish(run)["ok"])  # asked again: the same answer, without another build
         self.assertEqual(json.loads((run / "build.json").read_text(encoding="utf-8")), build)

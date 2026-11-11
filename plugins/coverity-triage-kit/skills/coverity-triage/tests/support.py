@@ -191,3 +191,6 @@ class RunCase(unittest.TestCase):
         return json.loads((run / "cid" / str(cid) / name).read_text(encoding="utf-8"))
 
     state = read
+
+    def summary(self, run: Path) -> str:
+        return (run / "summary.md").read_text(encoding="utf-8")

@@ -32,13 +32,17 @@ class VcsError(Exception):
 
 
 def text(data: bytes) -> str:
-    """Bytes of a tool's output or of a patch, for showing (tools on a Japanese Windows write cp932)."""
-    for encoding in ("utf-8", "cp932"):
-        try:
-            return data.decode(encoding).strip()
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", "replace").strip()
+    """Bytes of a tool's output or of a patch, for showing. Every line is decoded alone: tools on a Japanese
+    Windows write cp932, and a patch has each file in its own encoding (svn writes the paths in UTF-8)."""
+    def line(raw: bytes) -> str:
+        for encoding in ("utf-8", "cp932"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", "replace")
+
+    return "\n".join(map(line, data.split(b"\n"))).strip()
 
 
 def run(args: list[str], cwd: Path, check: bool = True, timeout: float | None = None,
@@ -74,7 +78,13 @@ def remove_tree(path: Path) -> None:
         except OSError:
             time.sleep(0.2)
     if os.path.lexists(path):
-        raise VcsError(f"フォルダーを削除できませんでした。ほかのプログラムが使用している可能性があります: {path}")
+        raise VcsError(f"フォルダーを削除できませんでした。ほかのプログラムが使用している可能性があります: {path.as_posix()}")
+
+
+def mark(dest: Path) -> Path:
+    """The file beside a work copy that says make_copy has completed it. A checkout that was killed half
+    way has none: that copy is made again."""
+    return dest.with_name(dest.name + ".ok")
 
 
 class Git:
@@ -120,14 +130,18 @@ class Git:
         raise VcsError(f"ブランチ {branch} が見つかりません。設定ファイルの base_branch を確認してください")
 
     def is_copy(self, dest: Path) -> bool:
-        return (dest / ".git").is_file() and self.git("rev-parse", "--git-dir", cwd=dest, check=False).returncode == 0
+        return (mark(dest).is_file() and (dest / ".git").is_file()
+                and self.git("rev-parse", "--git-dir", cwd=dest, check=False).returncode == 0)
 
     def make_copy(self, dest: Path, revision: str) -> None:
         if self.is_copy(dest):
             return
+        mark(dest).unlink(missing_ok=True)
         self.remove(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        self.git("worktree", "add", "--detach", "--force", str(dest), revision)
+        # --force twice: a git that was killed while it made this copy has left it locked
+        self.git("worktree", "add", "--detach", "--force", "--force", str(dest), revision)
+        mark(dest).write_bytes(b"")
 
     def reset(self, dest: Path, revision: str) -> None:
         try:
@@ -177,11 +191,12 @@ class Svn:
 
     @staticmethod
     def is_copy(dest: Path) -> bool:
-        return (dest / ".svn" / "wc.db").is_file()
+        return mark(dest).is_file() and (dest / ".svn" / "wc.db").is_file()
 
     def make_copy(self, dest: Path, revision: str) -> None:
         if self.is_copy(dest):
             return
+        mark(dest).unlink(missing_ok=True)
         remove_tree(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         # A checkout of a large repository takes many minutes; a copy of another slot's folder does not.
@@ -189,9 +204,10 @@ class Svn:
         if source is not None:
             shutil.copytree(source, dest, symlinks=True)
             self.reset(dest, revision)
-            return
-        url = text(self.svn("info", "--show-item", "url", ".").stdout)
-        self.svn("checkout", "--quiet", "-r", revision, url, str(dest))
+        else:
+            url = text(self.svn("info", "--show-item", "url", ".").stdout)
+            self.svn("checkout", "--quiet", "-r", revision, url, str(dest))
+        mark(dest).write_bytes(b"")
 
     def _status(self, dest: Path, *extra: str) -> list[tuple[str, str]]:
         """[(state, path with /)] from ``svn status --xml`` (the text form garbles non-ASCII names on
@@ -259,4 +275,4 @@ def open_repo(repo: Path) -> Git | Svn:
         return Git(repo)
     if (repo / ".svn").is_dir():
         return Svn(repo)
-    raise VcsError(f"git または svn のリポジトリではありません: {repo}")
+    raise VcsError(f"git または svn のリポジトリではありません: {repo.as_posix()}")

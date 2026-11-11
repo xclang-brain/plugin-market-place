@@ -67,12 +67,11 @@ class Flow:
         self.assertEqual(agent.worked, CIDS, "every CID once, in the order of the list")
         self.assertEqual((done["counts"]["done"], done["counts"]["remaining"]), (6, 0))
         summary = Path(done["summary_file"]).read_text(encoding="utf-8")
-        self.assertIn(done["table"], summary)
         for cid in CIDS:  # both outputs for every CID: in its section and in its row of the table
             result = json.loads(self.read(run, cid, "result.json"))
             comment = result["deviation"]["comment"]
             section = summary.split(f"## CID {cid}（")[1].split("## CID ")[0]
-            row = next(line for line in done["table"].splitlines() if line.startswith(f"| {cid} |"))
+            row = next(line for line in summary.splitlines() if line.startswith(f"| {cid} |"))
             self.assertIn("### 逸脱コメント\n\n" + comment, section)
             if result["recommendation"] == "fix":
                 self.assertIn(f"### 修正コード\n\n{result['fix']['summary']}\n\n````diff\n", section)
@@ -122,10 +121,11 @@ class Flow:
             flowlib.wait_for_copies(done["run_dir"])
         self.assert_repository_untouched()
 
-    def work_round(self, lines: list[str]) -> None:
+    def work_round(self, lines: list[str]) -> list[dict]:
         """One round of stage 3: one worker per line of next, taking turns on the one queue. Each repeats
-        next and save until next answers that the worker has nothing more to do."""
-        workers = {line: Agent(self.repo) for line in lines}
+        next and save until next answers that the worker has nothing more to do. Returns the replies that
+        handed out a CID."""
+        workers, handed_out = {line: Agent(self.repo) for line in lines}, []
         while workers:
             for line, worker in list(workers.items()):
                 given = worker.run(line)
@@ -133,8 +133,10 @@ class Flow:
                     self.assertEqual(given["next"], [], "the worker reports to the agent that sent it")
                     del workers[line]
                 else:
+                    handed_out.append(given)
                     saved = worker.run(worker.act(given))
                     self.assertEqual((saved["ok"], saved["next"]), (True, [line]), saved)
+        return handed_out
 
     def review_round(self, lead: Agent, run: Path, rework: dict) -> list[int]:
         """The reviewers of stage 3: every batch of status, one result after the other. Each looks at the
@@ -179,7 +181,8 @@ class Flow:
         merge = status["merge_command"].replace("<CID>", "20004").replace("<CID,CID>", "20005,20006")
         merged = lead.run(merge.replace("[--rework]", '--rework --point "src/reader.c:58 同じ変換が3行にある"'))
         self.assertTrue(merged["ok"], merged)
-        self.work_round(lead.run(status_line)["next"])  # the leader goes back to a worker: one fix for all
+        again = self.work_round(lead.run(status_line)["next"])  # the leader goes back to a worker: one fix for all
+        self.assertEqual([(given["cid"], given.get("members")) for given in again], [(20004, [20005, 20006])])
         for cid in (20004, 20005, 20006):
             self.assertIn(b"+" + flowlib.FIXES[cid][1], self.read(run, 20004, "fix.patch"))
 
@@ -193,7 +196,8 @@ class Flow:
 
         done = lead.follow(status_line)  # nothing is left: status leads to finish
         self.assertEqual((done["counts"]["done"], done["counts"]["remaining"]), (6, 0))
-        rows = done["table"].splitlines()[2:]
+        summary = Path(done["summary_file"]).read_text(encoding="utf-8")
+        rows = [line for line in summary.splitlines() if line.startswith("| 2")]
         self.assertEqual([row.split(" | ")[0] for row in rows],
                          ["| 20001", "| 20002", "| 20003", "| 20004（同じ原因: 20005, 20006）"], "one row per cause")
         self.assertTrue(all(" | 高 | 合格 | " in row for row in rows), rows)

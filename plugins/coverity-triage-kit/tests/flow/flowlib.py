@@ -5,7 +5,7 @@ MCP tools a reply asks for from the fake warnings of the sample, edits files in 
 names and writes result.json. Nothing of the plugin is imported: the command line is the contract.
 
 The two MCP tools are played here, in the file layout the skill reads. The server in mcp-servers/ is not
-part of this test yet: it still writes another layout (it is rebuilt in a later step).
+part of this test.
 """
 
 from __future__ import annotations
