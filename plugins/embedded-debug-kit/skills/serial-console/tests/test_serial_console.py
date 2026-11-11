@@ -2,11 +2,11 @@
 
 このスキルのフォルダで動かす：python3 -m unittest discover -s tests（Windows は py -3）
 機器の代わりに、tests/fake_device.py の機器のまねを TCP（socket://127.0.0.1:<番号>）で動かす。
+スクリプトは、テストを動かしている Python でそのまま動かす（uv は使わない）。
 ほかにインストールするものはなく、外のネットワークも使わない。
 bash と PowerShell から --stdin で渡すテストは、そのシェルがないときは飛ばす。
 """
 
-import configparser
 import contextlib
 import errno
 import importlib.util
@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 SKILL_NAME = os.path.basename(SKILL_DIR)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "serial_console.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 PASSWORD = "Pw%x-secret"  # % があっても、そのまま読めること
 ENV_NAME = "SERIAL_CONSOLE_TEST_PASSWORD"
 LINUX = sys.platform.startswith("linux")
@@ -61,17 +61,22 @@ def find_bash():
 
 
 def run_main(*args):
-    """スクリプトの main を、このプロセスの中で動かす。(終了コード, 標準出力) を返す。"""
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
+    """スクリプトの main を、このプロセスの中で動かす。(終了コード, 標準出力, 標準エラー出力) を返す。"""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = serial_console.main(list(args))
-    return code, out.getvalue()
+    return code, out.getvalue(), err.getvalue()
 
 
 def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def quoted(value):
+    """YAML の '…' の形にする。値に記号や「: 」があっても、そのまま読める。"""
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 class Base(unittest.TestCase):
@@ -83,7 +88,7 @@ class Base(unittest.TestCase):
     def use_workdir(self, workdir):
         self.workdir = workdir
         self.data = os.path.join(workdir, "." + SKILL_NAME)
-        self.config = os.path.join(self.data, "config.ini")
+        self.config = os.path.join(self.data, "config.yaml")
 
     def device(self, **kw):
         kw.setdefault("password", PASSWORD)
@@ -97,58 +102,71 @@ class Base(unittest.TestCase):
         environ.update(env or {})
         proc = subprocess.run([sys.executable, script] + list(args) + ["--workdir", self.workdir],
                               input=stdin, capture_output=True, env=environ, timeout=120)
-        return self.parse(proc, stderr=True)
+        return self.parse(proc)
 
-    def parse(self, proc, stderr=False):
-        """結果が ASCII の JSON 1つであることを確かめ、(終了コード, 結果) を返す。"""
+    def parse(self, proc):
+        """結果が ASCII の JSON 1つであることを確かめ、(終了コード, 結果) を返す。
+        標準エラー出力（UTF-8）は、self.stderr に入れる。"""
         self.assertTrue(all(b < 128 for b in proc.stdout), "結果の JSON に ASCII でない文字があります")
-        if stderr:
-            self.assertEqual(proc.stderr, b"")
+        self.assertEqual(proc.stdout.count(b"\n"), 1)
+        self.stderr = proc.stderr.decode("utf-8").replace("\r\n", "\n")
         return proc.returncode, json.loads(proc.stdout.decode("ascii"))
 
     def configure(self, device=None, **values):
-        """ひな形から設定ファイルを作り、values の項目を書き換える。"""
-        self.assertEqual(self.script("init")[0], 0)
-        parser = configparser.ConfigParser(interpolation=None)
+        """ひな形を写して設定ファイルを作り、values の項目を書き換える。値は '…' で囲み、2行以上の値はリストにする。"""
+        os.makedirs(self.data, exist_ok=True)
+        shutil.copyfile(TEMPLATE, self.config)
         with open(self.config, encoding="utf-8") as fh:
-            parser.read_file(fh)
+            settings = {key: value for key, value, _, _ in serial_console.read_yaml(fh.read().split("\n"))}
         if device is not None:
             values = dict({"port": device.port, "login_password": PASSWORD}, **values)
-        for key, value in values.items():
-            parser.set("settings", key, value)
+        settings.update(values)
+        lines = []
+        for key, value in settings.items():
+            if "\n" in value:
+                lines += [key + ":"] + ["  - " + quoted(v) for v in value.split("\n")]
+            else:
+                lines.append("%s: %s" % (key, quoted(value)))
         with open(self.config, "w", encoding="utf-8") as fh:
-            parser.write(fh)
+            fh.write("\n".join(lines) + "\n")
 
     def files(self):
         return sorted(os.path.join(root, name) for root, dirs, names in os.walk(self.workdir)
                       for name in dirs + names)
 
-    def log_text(self, result):
-        with open(result["log"], encoding="utf-8") as fh:
-            return fh.read()
+    def device_lines(self):
+        """標準エラー出力のうち、機器の出力の行（「| 」で始まる）の中身。"""
+        return re.findall(r"(?m)^\| (.*)$", self.stderr)
 
 
-class InitTest(Base):
-    def test_init_creates_config_and_gitignore(self):
-        code, result = self.script("init")
-        self.assertEqual((code, result["ok"], result["created"]), (0, True, True))
-        with open(os.path.join(self.data, ".gitignore"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), "*\n")
-        with open(self.config, encoding="utf-8") as fh, open(TEMPLATE, encoding="utf-8") as template:
-            self.assertEqual(fh.read(), template.read())
-        with open(self.config, "a", encoding="utf-8") as fh:
-            fh.write("# 書き足した\n")
-        code, result = self.script("init")
-        self.assertEqual((code, result["created"]), (0, False))
-        with open(self.config, encoding="utf-8") as fh:
-            self.assertIn("# 書き足した", fh.read())
+class ConfigTest(Base):
+    def test_missing_config(self):
+        for args in (("check",), ("run", "--command", "true")):
+            with self.subTest(args=args):
+                code, result = self.script(*args)
+                self.assertEqual(code, 2)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["message"],
+                                 "設定ファイル %s がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、"
+                                 "値を書いてください。" % self.config)
+                self.assertEqual(result["problems"], [result["message"]])
+                self.assertEqual(self.files(), [])
+
+    def test_result_has_no_log_or_created(self):
+        self.configure(self.device(state="shell"))
+        for args in (("check",), ("run", "--command", "true")):
+            with self.subTest(args=args):
+                code, result = self.script(*args)
+                self.assertEqual(code, 0, result["message"])
+                self.assertNotIn("log", result)
+                self.assertNotIn("created", result)
 
     def test_template_has_a_comment_above_every_key(self):
         with open(TEMPLATE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
         comments = {}  # 項目 → すぐ上のコメントの行
         for i, line in enumerate(lines):
-            m = re.match(r"^([a-z_]+) =", line)
+            m = re.match(r"^([a-z_]+):", line)
             if m:
                 block = []
                 while i > 0 and lines[i - 1].startswith("# "):
@@ -166,10 +184,12 @@ class InitTest(Base):
         self.addCleanup(shutil.rmtree, tmp, True)
         copy = os.path.join(tmp, "my-console")
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        code, result = self.script("init", script=os.path.join(copy, "scripts", "serial_console.py"))
-        self.assertEqual(code, 0)
-        self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", "config.ini")))
-        self.assertTrue(os.path.isfile(os.path.join(self.workdir, ".my-console", ".gitignore")))
+        self.data = os.path.join(self.workdir, ".my-console")
+        self.config = os.path.join(self.data, "config.yaml")
+        self.configure(self.device(state="shell"))
+        code, result = self.script("check", script=os.path.join(copy, "scripts", "serial_console.py"))
+        self.assertEqual(code, 0, result["message"])
+        self.assertEqual(result["config"], self.config)
         self.assertFalse(os.path.exists(os.path.join(copy, "scripts", "vendor", "serial", "__pycache__")))
 
 
@@ -187,7 +207,6 @@ class CheckTest(Base):
         code, result = self.script("check")
         self.assertEqual(code, 0, result["message"])
         self.assertIn("ログインしました", result["message"])
-        self.assertIsNone(result["log"])
         self.assertEqual(self.files(), before)
         self.assertNotIn(b"configured", device.received)
 
@@ -209,7 +228,7 @@ class CheckTest(Base):
         self.configure(self.device(state="shell", typed="echo LEFTOVER"))
         code, result = self.script("run", "--command", "true")
         self.assertEqual(code, 0, result["message"])
-        self.assertNotIn("LEFTOVER", self.log_text(result))
+        self.assertNotIn("LEFTOVER", "\n".join(self.device_lines()))
 
     def test_wrong_password(self):
         self.configure(self.device(), login_password="wrong")
@@ -236,7 +255,7 @@ class CheckTest(Base):
         self.assertIn("login_user", result["message"])
 
     def test_bad_arguments(self):
-        for args in (("check", "--command", "uname"), ("init", "--stdin"), ("bogus",),
+        for args in (("check", "--command", "uname"), ("check", "--stdin"), ("init",), ("bogus",),
                      ("run", "--stdin", "--command", "uname"), ("run", "--command", "echo a\necho b")):
             with self.subTest(args=args):
                 code, result = self.script(*args)
@@ -251,10 +270,10 @@ class CheckTest(Base):
     def test_config_errors_do_not_show_the_line(self):
         os.makedirs(self.data)
         cases = [  # BOM があっても読める。パスワードの行かもしれないので、誤りの行の中身は出さない
-            ("\ufeff[settings]\nport = x\nlogin_password = hunter2\nhunter3\n".encode("utf-8"), "4 行目"),
-            ("[settings]\nport = \u3042\n".encode("cp932"), "UTF-8"),
-            (b"port = x\n", "[settings]"),
-            (b"[other]\nport = x\n", "[settings]"),
+            ("\ufeffport: x\nlogin_password: hunter2\nhunter3\n".encode("utf-8"), "3 行目"),
+            ("port: x\nlogin_password: [hunter2\n".encode("utf-8"), "2 行目"),
+            ("port: \u3042\n".encode("cp932"), "UTF-8"),
+            (b"[settings]\nport = x\nlogin_password = hunter2\n", "1 行目"),  # 前の形（INI）のファイル
         ]
         for data, expected in cases:
             with self.subTest(expected=expected):
@@ -272,15 +291,18 @@ class CheckTest(Base):
         self.assertIn("環境変数 %s が空です" % ENV_NAME, result["message"])
 
     def test_unexpected_error_still_gives_one_json(self):
-        saved = serial_console.cmd_init
-        serial_console.cmd_init = lambda *args: 1 / 0
-        self.addCleanup(setattr, serial_console, "cmd_init", saved)
-        code, out = run_main("init", "--workdir", self.workdir)
+        saved = serial_console.cmd_check
+        serial_console.cmd_check = lambda *args: 1 / 0
+        self.addCleanup(setattr, serial_console, "cmd_check", saved)
+        code, out, err = run_main("check", "--workdir", self.workdir)
         self.assertEqual(code, 1)
         self.assertEqual(out.count("\n"), 1)
         result = json.loads(out)
         self.assertFalse(result["ok"])
         self.assertIn("ZeroDivisionError", result["message"])
+        self.assertIn("標準エラー出力を見てください", result["message"])
+        self.assertNotIn("ログ", result["message"])
+        self.assertIn("Traceback", err)
 
     def test_bad_settings(self):
         self.configure(port="", baud="fast", prompt="[", command_timeout_seconds="0", colour="x")
@@ -309,7 +331,27 @@ class RunTest(Base):
                                ("echo $?", "0", 0, False)])  # $? は、終了コードを調べるコマンドのものになる
         self.assertEqual(result["not_run"], [])
         self.assertIn("「false」（1）", result["message"])
-        self.assertIn("| hi", self.log_text(result))
+
+    def test_device_output_goes_to_stderr_with_password_masked(self):
+        self.configure(self.device())
+        code, result = self.script("run", "--command", "echo hi", "--command", "echo " + PASSWORD)
+        self.assertEqual(code, 0, result["message"])
+        lines = self.device_lines()
+        self.assertIn("hi", lines)
+        self.assertIn(serial_console.MASK, lines)
+        self.assertNotIn(PASSWORD, self.stderr)
+        self.assertIn("コマンドを送ります：echo hi", self.stderr)  # 進み具合も出る
+        self.assertNotIn("__rc=", self.stderr)  # 終了コードを読むやりとりは出さない
+        self.assertIn(result["message"], self.stderr)
+
+    def test_run_creates_no_files(self):
+        self.configure(self.device(state="shell"))
+        before = self.files()
+        code, result = self.script("run", "--command", "echo hi")
+        self.assertEqual(code, 0, result["message"])
+        self.assertFalse(os.path.exists(os.path.join(self.data, "logs")))
+        self.assertFalse(os.path.exists(os.path.join(self.workdir, "logs")))
+        self.assertEqual(self.files(), before)  # .gitignore なども作らない
 
     def test_command_option_replaces_configured_commands(self):
         device = self.device()
@@ -325,22 +367,21 @@ class RunTest(Base):
         self.assertEqual(code, 2)
         self.assertIn("--command", result["message"])
 
-    def test_long_output_keeps_last_lines_and_log_keeps_all(self):
+    def test_long_output_keeps_last_lines_and_stderr_has_all(self):
         self.configure(self.device(state="shell"))
         code, result = self.script("run", "--command", "seq 200")
         self.assertEqual(code, 0, result["message"])
         item = result["commands"][0]
         self.assertEqual(item["output"].split("\n"), [str(i) for i in range(141, 201)])
         self.assertTrue(item["truncated"])
-        logged = re.findall(r"(?m)^\S+ \S+ \| (\d+)$", self.log_text(result))
-        self.assertEqual(logged, [str(i) for i in range(1, 201)])
+        self.assertEqual([line for line in self.device_lines() if line.isdigit()], [str(i) for i in range(1, 201)])
 
     def test_color_codes_are_removed(self):
         self.configure(self.device(prompt=COLOR_PROMPT), commands="color")
         code, result = self.script("run")
         self.assertEqual(code, 0, result["message"])
         self.assertEqual(result["commands"][0]["output"], "red and green")
-        self.assertNotIn("\x1b", self.log_text(result))
+        self.assertNotIn("\x1b", self.stderr)
 
     def test_output_without_newline_before_the_prompt(self):
         self.configure(self.device(state="shell"), commands="printf 42\necho next")
@@ -348,16 +389,15 @@ class RunTest(Base):
         self.assertEqual(code, 0, result["message"])
         self.assertEqual([c["output"] for c in result["commands"]], ["42", "next"])
 
-    def test_long_line_is_cut_and_password_is_masked_across_log_pieces(self):
+    def test_long_line_is_cut_and_password_is_masked_across_stderr_pieces(self):
         self.configure(self.device())
-        code, result = self.script("run", "--command", "echo " + PASSWORD * 600,  # ログでは 4,096 字ごとに分けて書く
+        code, result = self.script("run", "--command", "echo " + PASSWORD * 600,  # 標準エラー出力には 4,096 字ごとに分けて書く
                                    "--command", "echo " + "y" * 9000)
         self.assertEqual(code, 0, result["message"])
         masked, long = result["commands"]
         self.assertEqual((masked["output"], masked["truncated"]), (serial_console.MASK * 600, False))
         self.assertEqual((long["output"], long["truncated"]), ("y" * serial_console.OUTPUT_CHARS, True))
-        pieces = "".join(re.findall(r"(?m)^\S+ \S+ \| (.*)$", self.log_text(result)))
-        self.assertNotIn(PASSWORD, pieces)
+        self.assertNotIn(PASSWORD, "".join(self.device_lines()))
 
     def test_exit_code_unreadable(self):
         self.configure(self.device(state="shell", no_rc=True))
@@ -412,7 +452,7 @@ class RunTest(Base):
         self.assertEqual(code, 0, result["message"])
         self.assertEqual(result["commands"][0]["output"], serial_console.MASK)
         self.assertNotIn(PASSWORD, json.dumps(result))
-        self.assertNotIn(PASSWORD, self.log_text(result))
+        self.assertNotIn(PASSWORD, self.stderr)
 
     def test_password_from_environment_is_masked(self):
         # 設定に残った古いパスワードが今のパスワードの一部でも、今のパスワードを残さず伏せる
@@ -420,7 +460,7 @@ class RunTest(Base):
         code, result = self.script("run", "--command", "echo " + PASSWORD, env={ENV_NAME: PASSWORD})
         self.assertEqual(code, 0, result["message"])
         self.assertEqual(result["commands"][0]["output"], serial_console.MASK)
-        for text in (json.dumps(result), self.log_text(result)):
+        for text in (json.dumps(result), self.stderr):
             self.assertNotIn(PASSWORD[4:], text)
 
     def test_paths_are_not_masked(self):
@@ -430,15 +470,6 @@ class RunTest(Base):
         code, result = self.script("run", "--command", "true")
         self.assertEqual(code, 0, result["message"])
         self.assertTrue(os.path.isfile(result["config"]))
-        self.assertTrue(os.path.isfile(result["log"]))
-
-    def test_gitignore_is_put_back_before_writing(self):
-        self.configure(self.device(state="shell"))
-        os.remove(os.path.join(self.data, ".gitignore"))
-        code, result = self.script("run", "--command", "true")
-        self.assertEqual(code, 0, result["message"])
-        with open(os.path.join(self.data, ".gitignore"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), "*\n")
 
     def test_disconnected_in_the_middle(self):
         self.configure(self.device(state="shell"), commands="\n".join(["echo a", "bye", "echo b"]))
@@ -519,10 +550,11 @@ class StdinTest(Base):
         serial_console.IS_WINDOWS = True
         self.addCleanup(setattr, serial_console, "IS_WINDOWS", saved)
         for command in ("C:/Program Files/Git/opt/app/my_app --selftest", "LD_LIBRARY_PATH=C:/Program Files/Git/opt"):
-            code, out = run_main("run", "--command", command, "--workdir", self.workdir)
+            code, out, _ = run_main("run", "--command", command, "--workdir", self.workdir)
             self.assertEqual(code, 2)
             self.assertIn("--stdin", json.loads(out)["message"])
-        code, out = run_main("run", "--command", "wget http://host/x", "--workdir", os.path.join(self.workdir, "nope"))
+        code, out, _ = run_main("run", "--command", "wget http://host/x", "--workdir",
+                                os.path.join(self.workdir, "nope"))
         self.assertNotIn("--stdin", json.loads(out)["message"])  # 止めたのは、作業フォルダがないため
 
 

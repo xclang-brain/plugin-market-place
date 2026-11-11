@@ -33,7 +33,7 @@ timeout_seconds を過ぎたときと、このスクリプトが Ctrl-C や SIGT
 
 ## 出力の読み方
 
-- 出力は1行ずつ UTF-8 として読み、UTF-8 でない行は OS の文字コード（日本語の Windows では cp932）として読む。ログはいつも UTF-8 で書く。
+- 出力は1行ずつ UTF-8 として読み、UTF-8 でない行は OS の文字コード（日本語の Windows では cp932）として読む。標準エラー出力には、UTF-8 で書く。
 - error_lines は、`error:`・`error C2065`・`error #20`・`Error[Pe020]`・`undefined reference`・`No such file or directory`・`エラー` などを含む行。make が表示するコマンドの中の `-Werror` や `error.c` は拾わない。warning_lines も同じように、`warning:` などを含む行。
 - 次のどちらかのときは、`message` を「コマンドが見つかりません：…」にする。
   - 終了コードが 127（bash と PowerShell）か 9009（cmd）のとき

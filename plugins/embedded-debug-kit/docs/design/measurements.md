@@ -13,7 +13,7 @@ CLI のバージョンを上げたら、ここを確かめ直す。
 | M8.2 | Copilot CLI のフックの入力 | Copilot CLI 1.0.108 | 実測、配布物 |
 | M8.3 | Copilot CLI のフックの動かし方 | Copilot CLI 1.0.108 | bash は実測。PowerShell は公式文書と配布物 |
 | M8.4 | フックの処理を hook.sh と hook.ps1 に移した後 | Claude Code 2.1.321（2026-11-10）、CI | 実測、テスト |
-| M9 | 部品の交換 | Claude Code 2.1.321、Copilot CLI 1.0.108（2026-11-10） | 複製での入れ替え、テスト、通しのテスト |
+| M9 | 部品の置き換え | Claude Code 2.1.321、Copilot CLI 1.0.108（2026-11-10） | 複製での入れ替え、テスト、通しのテスト |
 
 ## M2 マニフェストと置き場所
 
@@ -118,21 +118,22 @@ hook.sh と hook.ps1 に移した後（設計書 8.3）に確かめたことを�
 | hooks.json のコマンドが、bash で働く | `skills/debug-dashboard/tests/` を、CI の ubuntu-24.04 と windows-latest（Git Bash）で動かす（2026-11-10） | 通った |
 | hooks.json の `powershell` の欄が働く | 同じテストを、CI の windows-latest で動かす（2026-11-10）。Copilot CLI と同じ引数の PowerShell に、実行ポリシー Restricted を指定する | 通った |
 
-## M9 部品の交換
+## M9 部品の置き換え
 
-プラグインの複製で、[部品を交換する](../guide/5-replace-parts.md)の手順のとおりに入れ替えた。
+プラグインの複製で部品を置き換え、Claude Code 2.1.321 の通しのテストで確かめた（2026-11-10）。
 
-| 入れ替え | 確かめたこと | 結果 |
+| 置き換え | ほかに直したファイル | 結果 |
 | --- | --- | --- |
-| ftp-deploy を、SKILL.md だけのスキル（コピーで機器に送る）に替えた | Claude Code 2.1.321 で、通しのテストの worker のケース | 不具合が直った。替えたスキルが使われ、ログがファイルに残った |
-| 同じ入れ替え | `copilot --plugin-dir <フォルダ> skill list`（Copilot CLI 1.0.108） | 替えたスキルが一覧に出た |
-| device-debugger を、名前だけ変えた作業エージェントに替えた | `tests/independence`、`tests/docs`、debug-dashboard のテスト | 通った。統括エージェントのフックが、新しい名前への依頼を通した |
+| ftp-deploy のフォルダを、同じ名前の、SKILL.md だけのスキル（コピーで機器に送る）に置き換えた | なし | worker のケースが通った。不具合が直り、置き換えたスキルが使われ、ログがファイルに残った |
+| 上に加えて、作業エージェントの定義を、同じ名前の、本文を短く書き直した定義に置き換えた | なし | worker と orchestrator のケースが通った。統括エージェントが作業エージェントに依頼し、検証エージェントが判定した |
+| ftp-deploy を、名前の違うスキルに置き換えた | 作業エージェントの定義の2か所。通しのテストの、FTP の設定と「使ったスキル」の確かめ方 | worker のケースが通った |
+| device-debugger を、名前だけ変えた作業エージェントに置き換えた | 統括エージェントの定義（Copilot CLI は6か所、Claude Code は2か所）、マニフェストの一覧 | `tests/independence`、`tests/docs`、debug-dashboard のテストが通った。統括エージェントのフックが、新しい名前への依頼を通した |
 
-- 通しのテストは、替えたスキルに合わせて、FTP の設定と「使ったスキル」の確かめ方を直して動かした。
-- どちらの入れ替えも、両方の CLI の定義を直した。
+- 名前の違うスキルは、`copilot --plugin-dir <フォルダ> skill list`（Copilot CLI 1.0.108）の一覧に出た。
+- 作業エージェントの定義は、Claude Code 用のものを置き換えた。Copilot CLI 用の定義では、試していない。
 
 ## まだ確かめていないこと
 
 - Windows の Copilot CLI そのもので、`powershell` の欄を動かすこと。テストは、Copilot CLI と同じ引数の PowerShell で動かしているが、Copilot CLI そのものは通していない。
 - hook.sh と hook.ps1 に移した後の、Copilot CLI そのものでの記録と停止（Linux・Windows とも）。
-- 部品を交換した後に、Copilot CLI で AI を動かすこと（M9 は、Claude Code とテストで確かめた）。
+- 部品を置き換えた後に、Copilot CLI で AI を動かすこと（M9 は、Claude Code とテストで確かめた）。

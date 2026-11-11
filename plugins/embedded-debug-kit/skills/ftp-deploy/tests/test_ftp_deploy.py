@@ -7,11 +7,12 @@ pyftpdlib がなければ FTP のテストを、pyOpenSSL がなければ FTPS �
 （pip install -r tests/requirements.txt）。
 """
 
-import configparser
+import contextlib
 import datetime
 import errno
 import ftplib
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -29,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 SKILL_NAME = os.path.basename(SKILL_DIR)
 SCRIPT = os.path.join(SKILL_DIR, "scripts", "ftp_deploy.py")
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
+TEMPLATE = os.path.join(SKILL_DIR, "assets", "config-template.yaml")
 USER = "root"
 PASSWORD = "Pw%x-secret"  # % があっても、そのまま読めること
 ENV_NAME = "FTP_DEPLOY_TEST_PASSWORD"
@@ -75,6 +76,11 @@ def load_script():
 
 
 ftp_deploy = load_script()
+
+
+def quoted(value):
+    """YAML の '…' の形にする。値に記号や「: 」があっても、そのまま読める。"""
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 class FakeDevice(object):
@@ -156,7 +162,7 @@ class Case(unittest.TestCase):
         self.work = tempfile.mkdtemp(prefix="ftp-deploy-work-")
         self.addCleanup(shutil.rmtree, self.work, True)
         self.data = os.path.join(self.work, "." + SKILL_NAME)
-        self.config_path = os.path.join(self.data, "config.ini")
+        self.config_path = os.path.join(self.data, "config.yaml")
         self.app = self.write("build/app", b"\x7fELF app v2\n")
 
     def write(self, rel, data):
@@ -170,12 +176,12 @@ class Case(unittest.TestCase):
         settings = {"host": "127.0.0.1", "port": port, "user": USER, "password": PASSWORD,
                     "files": ["build/app"], "remote_dir": "/opt/app", "timeout_seconds": 10}
         settings.update(values)
-        lines = ["# テストの設定", "[settings]"]
+        lines = ["# テストの設定"]
         for key, value in settings.items():
             if isinstance(value, list):
-                lines += ["%s =" % key] + ["    " + item for item in value]
+                lines += ["%s:" % key] + ["  - " + quoted(item) for item in value]
             elif value is not None:
-                lines.append("%s = %s" % (key, value))
+                lines.append("%s: %s" % (key, quoted(value)))
         os.makedirs(self.data, exist_ok=True)
         with open(self.config_path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
@@ -184,20 +190,20 @@ class Case(unittest.TestCase):
         full_env = dict(os.environ)
         full_env.pop(ENV_NAME, None)
         full_env.update(env or {})
+        full_env["PYTHONIOENCODING"] = "utf-8"  # スクリプトより前に Python が出す文も、UTF-8 で読めるようにする
         proc = subprocess.run([sys.executable, SCRIPT, command, "--workdir", self.work],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=full_env, timeout=60)
         out = proc.stdout.decode("ascii")  # 結果は ASCII だけで書く
         self.assertEqual(len(out.splitlines()), 1, out)
         data = json.loads(out)
-        for key in ("ok", "message", "problems", "config", "log"):
+        for key in ("ok", "message", "problems", "config"):
             self.assertIn(key, data)
+        for key in ("log", "created"):
+            self.assertNotIn(key, data)
+        self.stderr = proc.stderr.decode("utf-8")  # 進み具合と機器の答え
         if secret:
             self.assertNotIn(secret, out)
-        if data["log"]:
-            with open(data["log"], encoding="utf-8") as fh:
-                data["log_text"] = fh.read()
-            if secret:
-                self.assertNotIn(secret, data["log_text"])
+            self.assertNotIn(secret, self.stderr)
         return proc.returncode, data
 
     def local_listing(self):
@@ -206,38 +212,22 @@ class Case(unittest.TestCase):
 
 
 class ConfigTest(Case):
-    def test_init_creates_config_and_gitignore(self):
-        code, data = self.run_script("init")
-        self.assertEqual((code, data["ok"], data["created"]), (0, True, True))
-        self.assertEqual(data["config"], self.config_path)
-        with open(os.path.join(self.data, ".gitignore"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read().strip(), "*")
-        with open(TEMPLATE, "rb") as a, open(self.config_path, "rb") as b:
-            self.assertEqual(a.read(), b.read())
-        with open(self.config_path, "a", encoding="utf-8") as fh:
-            fh.write("# 書き足した\n")
-        code, data = self.run_script("init")
-        self.assertEqual((code, data["ok"], data["created"]), (0, True, False))
-        with open(self.config_path, encoding="utf-8") as fh:
-            self.assertIn("# 書き足した", fh.read())
-
     def test_check_and_run_without_config_create_nothing(self):
         before = self.local_listing()
         for command in ("check", "run"):
             code, data = self.run_script(command)
             self.assertEqual((code, data["ok"]), (2, False))
-            self.assertIn("init", data["message"])
+            self.assertEqual(data["message"], "設定ファイル %s がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの "
+                             "assets/config-template.yaml を写して、値を書いてください。" % self.config_path)
+            self.assertEqual(data["problems"], [data["message"]])
             self.assertEqual(self.local_listing(), before)
 
     def test_template_comments(self):
-        parser = configparser.ConfigParser(interpolation=None)
         with open(TEMPLATE, encoding="utf-8-sig") as fh:
-            text = fh.read()
-        parser.read_string(text)
-        self.assertEqual(tuple(parser["settings"]), ftp_deploy.KEYS)
-        lines = text.splitlines()
+            lines = fh.read().splitlines()
+        self.assertEqual(tuple(key for key, _, _, _ in ftp_deploy.read_yaml(lines)), ftp_deploy.KEYS)
         for key in ftp_deploy.KEYS:
-            index = next(i for i, line in enumerate(lines) if line.startswith(key + " ="))
+            index = next(i for i, line in enumerate(lines) if line.startswith(key + ":"))
             comments = []
             for line in reversed(lines[:index]):
                 if not line.startswith("#"):
@@ -261,11 +251,11 @@ class ConfigTest(Case):
     def test_bom_percent_and_duplicate_key(self):
         os.makedirs(self.data)
         with open(self.config_path, "w", encoding="utf-8-sig") as fh:
-            fh.write("[settings]\npassword = %s\nfiles =\n    build/app\nremote_dir = app\n" % PASSWORD)
+            fh.write("password: %s\nfiles:\n  - build/app\nremote_dir: app\n" % PASSWORD)
         code, data = self.run_script("check")
         self.assertEqual(data["problems"], ["host（機器のアドレス）が空です。"])
         with open(self.config_path, "a", encoding="utf-8") as fh:
-            fh.write("remote_dir = again\n")
+            fh.write("remote_dir: again\n")
         code, data = self.run_script("check")
         self.assertEqual(code, 2)
         self.assertIn("2回", data["message"])
@@ -280,8 +270,7 @@ class ConfigTest(Case):
                      "フォルダです", "hots"):
             self.assertIn(word, text)
         self.assertEqual(len(data["problems"]), 9, text)
-        self.assertTrue(os.path.isfile(data["log"]))
-        self.assertIn("***", data["log_text"])  # 設定をログに書くときも、パスワードは伏せる
+        self.assertIn('"password": "***"', self.stderr)  # 設定を標準エラー出力に書くときも、パスワードは伏せる
 
     def test_windows_style_remote_dir(self):
         self.config(remote_dir="C:\\opt\\app")
@@ -305,11 +294,11 @@ class ConfigTest(Case):
         self.addCleanup(shutil.rmtree, copy_root, True)
         copy = os.path.join(copy_root, "my-ftp")
         shutil.copytree(SKILL_DIR, copy, ignore=shutil.ignore_patterns("__pycache__", "tests"))
-        proc = subprocess.run([sys.executable, os.path.join(copy, "scripts", "ftp_deploy.py"), "init",
-                               "--workdir", self.work], stdout=subprocess.PIPE, timeout=60)
-        self.assertEqual(proc.returncode, 0)
-        self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", "config.ini")))
-        self.assertTrue(os.path.isfile(os.path.join(self.work, ".my-ftp", ".gitignore")))
+        proc = subprocess.run([sys.executable, os.path.join(copy, "scripts", "ftp_deploy.py"), "check",
+                               "--workdir", self.work], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        self.assertEqual(proc.returncode, 2)  # 設定ファイルがない
+        self.assertEqual(json.loads(proc.stdout.decode("ascii"))["config"],
+                         os.path.join(self.work, ".my-ftp", "config.yaml"))
 
     def test_bad_arguments_answer_json(self):
         code, data = self.run_script("deploy")
@@ -398,9 +387,22 @@ class DeviceTest(Case):
         self.assertEqual(device.read("/opt/app/app"), b"\x7fELF app v2\n")
         self.assertEqual(device.listing(), ["opt", "opt/app", "opt/app/app", "opt/app/app.conf"])
         self.assertEqual(device.chmods, [])
-        self.assertTrue(os.path.isfile(os.path.join(self.data, ".gitignore")))
-        self.assertEqual(os.path.dirname(data["log"]), os.path.join(self.data, "logs"))
-        self.assertIn("***", data["log_text"])
+
+    def test_run_writes_progress_to_stderr_and_no_files(self):
+        device = FakeDevice(self)
+        self.config(device.port)
+        before = self.local_listing()
+        code, data = self.run_script("run")  # run_script は、結果と標準エラー出力にパスワードがないことを確かめる
+        self.assertEqual(code, 0, data["message"])
+        lines = self.stderr.splitlines()
+        self.assertIn('"password": "***"', self.stderr)
+        for words in ("run を始めます", "番ポートに FTP でつなぎます", "230 ", "として送ります", "226 ",
+                      "/opt/app/app を送りました。"):
+            self.assertTrue(any(words in line for line in lines), words)  # 機器の答え（230、226）も出る
+        self.assertEqual(lines[-1], data["message"])
+        self.assertEqual(self.local_listing(), before)  # logs も .gitignore も作らない
+        self.assertFalse(os.path.exists(os.path.join(self.data, "logs")))
+        self.assertFalse(os.path.exists(os.path.join(self.work, "logs")))
 
     def test_file_mode(self):
         device = FakeDevice(self)
@@ -569,10 +571,10 @@ class DeviceTest(Case):
     def test_password_is_masked_even_if_the_device_echoes_it(self):
         device = FakeDevice(self, ftp_PASS=lambda handler, line: handler.respond("530 Bad password %s." % line))
         self.config(device.port)
-        code, data = self.run_script("run")  # run_script は、結果とログにパスワードがないことを確かめる
+        code, data = self.run_script("run")  # run_script は、結果と標準エラー出力にパスワードがないことを確かめる
         self.assertEqual(code, 1)
         self.assertIn("Bad password ***", data["message"])
-        self.assertIn("Bad password ***", data["log_text"])
+        self.assertIn("Bad password ***", self.stderr)
 
     def test_short_password_does_not_change_paths(self):
         device = FakeDevice(self, password="root")
@@ -580,8 +582,8 @@ class DeviceTest(Case):
         code, data = self.run_script("run", secret=None)
         self.assertEqual(code, 0, data["message"])
         self.assertEqual((data["remote_dir"], data["files"][0]["remote"]), ("/root/bin", "/root/bin/app"))
-        self.assertIn("ユーザー root", data["log_text"])
-        self.assertNotIn('"password": "root"', data["log_text"])
+        self.assertIn("ユーザー root", self.stderr)
+        self.assertNotIn('"password": "root"', self.stderr)
 
     def test_reply_not_in_utf8(self):
         device = FakeDevice(self, banner="ようこそ", encoding="shift_jis")
@@ -609,7 +611,7 @@ class DeviceTest(Case):
         before = self.local_listing()
         code, data = self.run_script("check")
         self.assertEqual((code, data["ok"]), (0, True), data["message"])
-        self.assertEqual((data["remote_dir"], data["log"], data["notes"]), ("/opt/app", None, []))
+        self.assertEqual((data["remote_dir"], data["notes"]), ("/opt/app", []))
         self.assertEqual(self.local_listing(), before)
         self.assertEqual(device.listing(), ["opt", "opt/app"])
 
@@ -663,8 +665,9 @@ class FTPSTest(Case):
     def test_reuses_tls_session_for_transfers(self):
         # vsftpd などは、ファイルを送る接続で TLS セッションを使い回さないと断る
         device = tls_device(self)
-        ftp = ftp_deploy.connect({"host": "127.0.0.1", "port": device.port, "user": USER, "password": PASSWORD,
-                                  "tls": True, "passive": True, "timeout": 10.0})
+        with contextlib.redirect_stderr(io.StringIO()):  # 進み具合を、テストの出力に混ぜない
+            ftp = ftp_deploy.connect({"host": "127.0.0.1", "port": device.port, "user": USER, "password": PASSWORD,
+                                      "tls": True, "passive": True, "timeout": 10.0})
         try:
             conn, _ = ftp.ntransfercmd("NLST")
             self.assertTrue(conn.session_reused)

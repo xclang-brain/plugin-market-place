@@ -1,0 +1,6 @@
+[project]
+name = "serial-console"
+version = "0.0.0"
+description = "シリアルでつないだ機器でコマンドを動かすスキルのスクリプト"
+requires-python = ">=3.8"
+dependencies = []

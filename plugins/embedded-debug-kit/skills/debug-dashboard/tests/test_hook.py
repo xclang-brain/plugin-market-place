@@ -15,7 +15,7 @@ import support
 from support import DATA, mark_recording, read_events, run_hook, temp_project
 
 sys.path.insert(0, str(support.SCRIPTS))
-import server  # noqa: E402  今のフェーズの求め方を確かめる
+import server  # noqa: E402  動いているエージェントの求め方を確かめる
 
 WORKER = "my-plugin:worker-agent"
 VERIFIER = "my-plugin:debug-verifier"
@@ -398,26 +398,32 @@ class LimitTest(unittest.TestCase):
         self.assertNotIn("old01", names)
 
 
-class StageTest(unittest.TestCase):
-    """今のフェーズは、動いているエージェントの名前で決める（設計書 8.6）"""
+class RunningTest(unittest.TestCase):
+    """動いているエージェントは、依頼と報告の記録から求める（設計書 8.6）"""
 
-    def stage(self, *events):
-        return server.summarize(list(events))["stage"]
+    def running(self, *events):
+        return server.summarize(list(events))["running"]
 
-    def test_stages(self):
+    def test_running_agents(self):
         prompt = {"kind": "prompt", "text": "直して"}
         work = {"kind": "request", "agent": "worker-agent"}
         work_done = {"kind": "report", "agent": "worker-agent", "sub": True}
         review = {"kind": "request", "agent": "debug-verifier"}
         review_done = {"kind": "report", "agent": "debug-verifier", "sub": True, "text": "C1：合格。"}
-        self.assertEqual(self.stage(prompt), "plan")
-        self.assertEqual(self.stage(prompt, work), "work")
-        self.assertEqual(self.stage(prompt, work, work_done), "plan")
-        self.assertEqual(self.stage(prompt, work, work_done, review), "review")
-        self.assertEqual(self.stage(prompt, work, work_done, review, review_done), "plan")
-        self.assertEqual(self.stage(prompt, dict(work, denied=True)), "plan")
-        self.assertEqual(self.stage({"kind": "tool", "agent": "worker-agent", "sub": True}), "work")
-        self.assertEqual(self.stage(prompt, work, {"kind": "report", "agent": "", "sub": False}), "plan")
+        done = {"kind": "report", "agent": "", "sub": False}
+        self.assertEqual(self.running(), [])
+        self.assertEqual(self.running(prompt), ["メインの会話"])
+        self.assertEqual(self.running(prompt, work), ["worker-agent"])
+        self.assertEqual(self.running(prompt, work, work_done), ["メインの会話"])
+        self.assertEqual(self.running(prompt, work, work_done, review), ["debug-verifier"])
+        self.assertEqual(self.running(prompt, work, work_done, review, review_done), ["メインの会話"])
+        self.assertEqual(self.running(prompt, dict(work, denied=True)), ["メインの会話"])
+        self.assertEqual(self.running({"kind": "tool", "agent": "worker-agent", "sub": True}), ["worker-agent"])
+        self.assertEqual(self.running(prompt, work, done), [])
+        # エージェントを指定して起動したセッション（ほかのエージェントに依頼しない）
+        tool = {"kind": "tool", "agent": "worker-agent", "sub": False}
+        self.assertEqual(self.running(prompt, tool), ["worker-agent"])
+        self.assertEqual(self.running(prompt, tool, dict(done, agent="worker-agent")), [])
         self.assertEqual(server.summarize([prompt, work, work_done, review])["requests"], 2)
 
     def test_last_report_and_verdict(self):
@@ -485,12 +491,12 @@ class HooksJsonTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
 
-    def test_without_python_exits_0(self):
+    def test_without_uv_exits_0(self):
         folder = os.path.dirname(BASH)
-        if any(shutil.which(name, path=folder) for name in ("py", "python3")):
+        if any(shutil.which(name, path=folder) for name in ("uv",)):
             own = temp_project(self)
             if not support.can_symlink(own):
-                self.skipTest("Python のない PATH を作れません")
+                self.skipTest("uv のない PATH を作れません")
             os.symlink(BASH, str(own / "bash"))
             folder = str(own)
         project = temp_project(self)
@@ -588,7 +594,7 @@ class CopilotHooksJsonTest(unittest.TestCase):
                 self.assertEqual(decision["permissionDecision"], "deny")
                 self.assertTrue(read_events(project)[-1]["denied"])
 
-    def test_without_python_exits_0(self):
+    def test_without_uv_exits_0(self):
         for field, shell, prefix in self.shells():
             with self.subTest(shell=shell):
                 folder = temp_project(self)  # PATH を、何もないフォルダだけにする。シェルは絶対パスで動かす

@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """シリアルで機器のシェルにつなぎ、コマンドを順に動かして、出力と終了コードを返す。
 
-  serial_console.py run [--command コマンド]... [--workdir 作業フォルダ]
-  serial_console.py run --stdin [--workdir 作業フォルダ]   （標準入力の1行を1つのコマンドにする）
-  serial_console.py check|init [--workdir 作業フォルダ]
+  uv run serial_console.py run [--command コマンド]... [--workdir 作業フォルダ]
+  uv run serial_console.py run --stdin [--workdir 作業フォルダ]   （標準入力の1行を1つのコマンドにする）
+  uv run serial_console.py check [--workdir 作業フォルダ]
 
-設定は <作業フォルダ>/.<スキルの名前>/config.ini、ログは同じフォルダの logs/ に置く。
+設定は <作業フォルダ>/.<スキルの名前>/config.yaml に置く。ファイルやフォルダは作らない。
 標準出力には結果の JSON を1つだけ、ASCII で書く。
+進み具合と機器の出力は、出たそばから標準エラー出力に UTF-8 で書く（パスワードは伏せる）。
 終了コード：0 成功、1 作業の失敗、2 設定や引数の問題。
-Python 3.8 以上の標準ライブラリと、同梱の pyserial 3.5（vendor/serial、BSD ライセンス）で動く。
+uv run で動かす。依存パッケージは、スキルのフォルダの pyproject.toml に書く。pyserial 3.5 は同梱している（vendor/serial、BSD ライセンス）。
 """
 
 import argparse
 import codecs
-import configparser
-import datetime
 import errno
 import json
 import math
 import os
 import re
-import shutil
 import sys
 import time
 import traceback
@@ -35,11 +33,9 @@ import serial.tools.list_ports  # noqa: E402
 # スキルの名前は、scripts/ の親のフォルダの名前。名前を変えて写せば、その名前になる。
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 SKILL_NAME = os.path.basename(SKILL_DIR)
-TEMPLATE = os.path.join(SKILL_DIR, "config-template.ini")
-SECTION = "settings"
 KEYS = ("port", "baud", "login_user", "login_password", "login_password_env", "prompt",
         "commands", "command_timeout_seconds")
-USAGE = "使い方：serial_console.py run [--command コマンド]... | run --stdin | check | init [--workdir 作業フォルダ]"
+USAGE = "使い方：serial_console.py run [--command コマンド]... | run --stdin | check [--workdir 作業フォルダ]"
 DEFAULT_PROMPT = r"[#$] $"
 MASK = "***"
 IS_WINDOWS = os.name == "nt"
@@ -55,7 +51,7 @@ NUDGES = 2            # 1回の待ちで、隠れたプロンプトのために 
 POLL = 0.05           # 1回の読み取りで文字を待つ秒数
 READ_MAX = 4096       # 1回に読むバイト数の上限
 WRITE_WAIT = 5.0      # 書き込みを待つ秒数
-OUTPUT_LINES = 60     # JSON に入れる、コマンドごとの出力の行数（全部はログにある）
+OUTPUT_LINES = 60     # JSON に入れる、コマンドごとの出力の行数（全部は標準エラー出力に出る）
 OUTPUT_CHARS = 8000   # 同じく、文字数
 
 RC_COMMAND = ' echo "__rc=$?"'          # 前の空白は、bash の履歴に残さないため
@@ -70,7 +66,7 @@ CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # Windows の Git Bash は、/ で始まる引数（と「名前=/…」の後ろ）を「C:/Program Files/Git/…」に書き換える
 MSYS_PATH_RE = re.compile(r"(?:^|=)[A-Za-z]:[/\\]")
 
-SECRETS = []  # 結果とログで伏せる文字列（パスワード）
+SECRETS = []  # 結果と標準エラー出力で伏せる文字列（パスワード）
 
 
 class Stop(Exception):
@@ -95,32 +91,14 @@ def mask(value):
     return value
 
 
-class Log(object):
-    """ログのファイル（UTF-8）。開いていなければ何も書かない（check は何も作らない）。"""
-
-    def __init__(self):
-        self.path = None
-        self.fh = None
-
-    def open(self, path):
-        self.fh = open(path, "x", encoding="utf-8")
-        self.path = path
-
-    def __call__(self, text, prefix=""):
-        if self.fh is None:
-            return
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def note(text, prefix=""):
+    """進み具合や機器の出力を、パスワードを伏せて、標準エラー出力に書く。書けなくても止めない。"""
+    try:
         for line in mask(str(text)).splitlines() or [""]:
-            self.fh.write("%s %s%s\n" % (stamp, prefix, line))
-        self.fh.flush()
-
-    def close(self):
-        if self.fh is not None:
-            self.fh.close()
-            self.fh = None
-
-
-LOG = Log()
+            sys.stderr.write("%s%s\n" % (prefix, line))
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def clean(text):
@@ -170,40 +148,72 @@ def data_dir(workdir):
     return os.path.join(workdir, "." + SKILL_NAME)
 
 
-def prepare_data_dir(workdir):
-    """設定とログのフォルダを作る。中に何かを書く前に、中身を Git に入れない .gitignore を置く。"""
-    path = data_dir(workdir)
-    os.makedirs(path, exist_ok=True)
-    ignore = os.path.join(path, ".gitignore")
-    if not os.path.exists(ignore):
-        with open(ignore, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("*\n")
-    return path
+# --- 設定ファイル（YAML）を読む。設定を持つスキルは、どれも同じ中身を持つ ------------------------
+
+YAML_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)\s*:(?:\s+(.*))?$")
+YAML_ITEM = re.compile(r"^\s*-(?:\s+(.*))?$")
+# 囲まないと、YAML として別の意味になる値（記号で始まる、「: 」を含む、「:」で終わる）
+YAML_NEEDS_QUOTES = re.compile(r"""^[\[\]{},&*!|>%@`'"#]|^[-?:](\s|$)|:\s|:$""")
+
+
+def yaml_scalar(text):
+    """YAML の1つの値を、文字列にする。数や true も、文字のまま返す。読めない書き方は ValueError。"""
+    text = (text or "").strip()
+    if text.startswith("#"):
+        return ""
+    quoted = re.match(r"^'((?:[^']|'')*)'(?:\s+#.*)?$", text)
+    if quoted:
+        return quoted.group(1).replace("''", "'")
+    quoted = re.match(r'^"((?:[^"\\]|\\["\\])*)"(?:\s+#.*)?$', text)
+    if quoted:
+        return re.sub(r"\\(.)", r"\1", quoted.group(1))
+    text = re.sub(r"\s+#.*$", "", text)  # 空白の後の # からは、コメント
+    if YAML_NEEDS_QUOTES.search(text):
+        raise ValueError("値を '…' で囲んでください（値の中の ' は '' と書きます）")
+    return text
+
+
+def read_yaml(lines):
+    """設定ファイルの行を読み、項目ごとの [名前, 値, 最初の行, 最後の行] を返す（行は 0 から数える）。
+    読むのは、YAML のうち「項目: 値」と、項目の下の「- 値」のリストだけ。値は、文字列か、文字列のリスト。
+    読めない行は ValueError。何行目かを伝え、行の中身は出さない（パスワードの行かもしれない）。"""
+    entries = []
+    for n, line in enumerate(lines):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, item = YAML_KEY.match(line), YAML_ITEM.match(line)
+        try:
+            if key:
+                if any(e[0] == key.group(1) for e in entries):
+                    raise ValueError("%s が2回書かれています" % key.group(1))
+                entries.append([key.group(1), yaml_scalar(key.group(2)), n, n])
+            elif item and entries and (entries[-1][1] == "" or isinstance(entries[-1][1], list)):
+                value = yaml_scalar(item.group(1))
+                entries[-1][1] = (entries[-1][1] or []) + ([value] if value else [])
+                entries[-1][3] = n
+            else:
+                raise ValueError("「項目: 値」か、項目の次の行からの「- 値」の形で書いてください")
+        except ValueError as e:
+            raise ValueError("%d 行目：%s" % (n + 1, e))
+    return entries
+
+
+# --- 設定ファイル（YAML）を読む：ここまで ---------------------------------------------------------
 
 
 def read_config(path):
-    """[settings] の項目を辞書で返す。読めなければ Stop（終了コード 2）。"""
+    """設定の項目を辞書で返す。リストの値は、1行に1つずつ並べた文字列にする。読めなければ Stop（終了コード 2）。"""
     if not os.path.isfile(path):
-        raise Stop("設定ファイル %s がありません。init で作ってから、値を書いてください。" % path, 2)
-    parser = configparser.ConfigParser(interpolation=None)  # % をそのまま値として扱う
-    # 誤りを伝えるときに、行の中身は出さない（パスワードの行かもしれない）
+        raise Stop("設定ファイル %s がありません。設定のスキルで準備してください。手で作るときは、スキルのフォルダの assets/config-template.yaml を写して、"
+                   "値を書いてください。" % path, 2)
     try:
         with open(path, encoding="utf-8-sig") as fh:  # BOM があっても読める
-            parser.read_file(fh)
+            entries = read_yaml(fh.read().split("\n"))
     except UnicodeDecodeError:
         raise Stop("設定ファイル %s を UTF-8 で読めません。UTF-8 で保存し直してください。" % path, 2)
-    except configparser.DuplicateOptionError as e:
-        raise Stop("設定ファイル %s の %s 行目：%s が2回書かれています。" % (path, e.lineno, e.option), 2)
-    except configparser.MissingSectionHeaderError:
-        raise Stop("設定ファイル %s の最初の項目より前に [settings] の行がありません。" % path, 2)
-    except configparser.Error as e:
-        errors = getattr(e, "errors", None)
-        where = "の %s 行目" % errors[0][0] if errors else ""
-        raise Stop("設定ファイル %s%sを読めません。「項目 = 値」の形で書いてください。"
-                   "2つ目からのリストの値は、行頭に空白を入れてください。" % (path, where), 2)
-    if not parser.has_section(SECTION):
-        raise Stop("設定ファイル %s に [settings] の行がありません。" % path, 2)
-    raw = dict(parser.items(SECTION))
+    except ValueError as e:
+        raise Stop("設定ファイル %s の %s。" % (path, e), 2)
+    raw = {key: "\n".join(value) if isinstance(value, list) else value for key, value, _, _ in entries}
     if raw.get("login_password"):
         SECRETS.append(raw["login_password"])
     return raw
@@ -304,7 +314,7 @@ def open_error(path, e, result):
 
 
 class Console(object):
-    """シリアルポートとのやりとり。届いた文字は、行ごとにログにも書く。"""
+    """シリアルポートとのやりとり。届いた文字は、行ごとに標準エラー出力にも書く。"""
 
     def __init__(self, port, name):
         self.port = port
@@ -319,7 +329,7 @@ class Console(object):
     def mark(self):
         """ここから届く文字を、新しいまとまりとして集める。"""
         if self.unlogged:
-            LOG(clean(self.unlogged), "| ")
+            note(clean(self.unlogged), "| ")
             self.unlogged = ""
         self.chunks = []
         self.tail = ""     # 最後の改行より後の文字
@@ -345,7 +355,7 @@ class Console(object):
                     keep = min(max([len(x) for x in SECRETS] + [1]) - 1, READ_MAX // 2)
                     cut = max(len(line) - keep, 0)
                     line, rest = line[:cut], line[cut:]
-                LOG(clean(line), "| ")
+                note(clean(line), "| ")
                 self.unlogged = rest
         parts = (self.tail + text).split("\n")
         # 「# 」のような短いプロンプトは、出力の行（「# Subtest」など）と見分けられないので見ない
@@ -410,7 +420,7 @@ class Console(object):
             if now >= deadline:
                 return None
             if nudge and self.back and nudges < NUDGES and now - quiet_since >= NUDGE_QUIET:
-                LOG("プロンプトが機器のメッセージで隠れたようなので、Enter を送ります。")
+                note("プロンプトが機器のメッセージで隠れたようなので、Enter を送ります。")
                 nudges += 1
                 quiet_since = now
                 self.send("\r")
@@ -429,14 +439,14 @@ class Console(object):
 
 def open_console(s, result):
     path = s["port"]
-    LOG("シリアルポート %s を %d bps で開きます。" % (path, s["baud"]))
+    note("シリアルポート %s を %d bps で開きます。" % (path, s["baud"]))
     try:
         port = serial.serial_for_url(
             path, baudrate=s["baud"], bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE, timeout=POLL, write_timeout=WRITE_WAIT,
             exclusive=True)  # Linux などで、ほかのプログラムと同時に使わない（Windows はいつも1つだけ）
     except (serial.SerialException, OSError, ValueError) as e:
-        LOG("失敗：%r" % (e,))
+        note("失敗：%r" % (e,))
         raise Stop(open_error(path, e, result))
     return Console(port, path)
 
@@ -476,7 +486,7 @@ def reach_shell(con, s):
     patterns = (("login", LOGIN_RE), ("password", PASSWORD_RE), ("prompt", s["prompt"]))
     user_sent = password_sent = False
     wakes = cancels = 0
-    LOG("Ctrl-U と Enter を送り、プロンプトを待ちます。")
+    note("Ctrl-U と Enter を送り、プロンプトを待ちます。")
     con.send("\x15\r")  # Ctrl-U で打ちかけの文字を消してから Enter を送る（打ちかけのコマンドを動かさない）
     while True:
         hit = con.wait_for(patterns, LOGIN_WAIT if user_sent else WAKE_WAIT)
@@ -486,7 +496,7 @@ def reach_shell(con, s):
             if not s["login_user"]:
                 raise Stop("機器がログインを求めていますが、login_user が空です。ユーザー名を書いてください。", 2)
             con.mark()
-            LOG("ユーザー %s でログインします。" % s["login_user"])
+            note("ユーザー %s でログインします。" % s["login_user"])
             con.send(s["login_user"] + "\r")
             user_sent = True
         elif hit == "password" and user_sent and not password_sent:
@@ -499,7 +509,7 @@ def reach_shell(con, s):
         elif hit == "password" and not user_sent and cancels < 2:
             # 前に誰かがパスワードを入力しかけていた。Enter で取り消すと、ログインの求めに戻る
             con.mark()
-            LOG("パスワードの入力の途中だったので、Enter で取り消します。")
+            note("パスワードの入力の途中だったので、Enter で取り消します。")
             cancels += 1
             con.send("\r")
         elif hit or (password_sent and INCORRECT_RE.search(clean(con.text()))):
@@ -515,7 +525,7 @@ def reach_shell(con, s):
 
 def read_exit_code(con, s):
     """終了コードを調べるコマンドを送り、直前のコマンドの終了コードを返す。読めなければ None。
-    このやりとりは、ログに書かない。"""
+    このやりとりは、標準エラー出力に書かない。"""
     con.mark()
     con.logging = False
     try:
@@ -525,7 +535,7 @@ def read_exit_code(con, s):
     finally:
         con.logging = True
     code = int(found[-1]) if found else None
-    LOG("終了コード：%s" % ("読めません" if code is None else code))
+    note("終了コード：%s" % ("読めません" if code is None else code))
     return code
 
 
@@ -536,13 +546,13 @@ def run_command(con, s, item):
     before = con.prompt_line  # 送る前のプロンプト
     back = None
     con.mark()
-    LOG("コマンドを送ります：%s" % command)
+    note("コマンドを送ります：%s" % command)
     try:
         con.send(command + "\r")
         back = con.wait_for(prompt, s["timeout"], need_newline=True, nudge=True)
         if not back:
             item["timed_out"] = True
-            LOG("%g 秒たっても終わらないので、Ctrl-C を送ります。" % s["timeout"])
+            note("%g 秒たっても終わらないので、Ctrl-C を送ります。" % s["timeout"])
             con.send("\x03")
             back = con.wait_for(prompt, INTERRUPT_WAIT, need_newline=True, nudge=True)
     finally:
@@ -566,10 +576,10 @@ def run_command(con, s, item):
     return bool(back)
 
 
-# --- サブコマンド -------------------------------------------------------------
+# --- 最初の引数ごとの処理 -----------------------------------------------------
 
 def checked_settings(raw, result, commands_arg=None, need_commands=False):
-    LOG("設定：%s" % logged_settings(raw))
+    note("設定：%s" % logged_settings(raw))
     s, problems = settings_from(raw, os.environ, commands_arg)
     if need_commands and not s["commands"]:
         problems.append("動かすコマンドがありません。設定の commands に書くか、--command か --stdin で渡してください。")
@@ -579,46 +589,11 @@ def checked_settings(raw, result, commands_arg=None, need_commands=False):
     return s
 
 
-def open_log(workdir):
-    try:
-        logs = os.path.join(prepare_data_dir(workdir), "logs")
-        os.makedirs(logs, exist_ok=True)
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        for n in range(1, 100):  # 同じ秒に何度も動かしたときは、名前に -2、-3… を付ける
-            try:
-                LOG.open(os.path.join(logs, "%s%s.log" % (stamp, "-%d" % n if n > 1 else "")))
-                return
-            except FileExistsError:
-                pass
-    except OSError as e:
-        raise Stop("ログのファイルを作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
-                   % (e.strerror or e))
-
-
-def cmd_init(workdir, result, commands_arg):
-    config = result["config"]
-    result["created"] = False
-    if os.path.exists(config):
-        result.update(ok=True, message="設定ファイル %s はもうあるので、そのままにしました。" % config)
-        return 0
-    if not os.path.isfile(TEMPLATE):
-        raise Stop("ひな形 %s がありません。スキルのフォルダがそろっているかを確かめてください。" % TEMPLATE)
-    try:
-        prepare_data_dir(workdir)
-        shutil.copyfile(TEMPLATE, config)
-    except OSError as e:
-        raise Stop("設定ファイル %s を作れません（%s）。作業フォルダに書き込めるかを確かめてください。"
-                   % (config, e.strerror or e))
-    result.update(ok=True, created=True,
-                  message="設定ファイル %s を作りました。各項目のすぐ上のコメントを読んで、値を書いてください。" % config)
-    return 0
-
-
 def logged_in_text(s, logged_in):
     return "ユーザー %s でログインしました。" % s["login_user"] if logged_in else "ログインは求められませんでした。"
 
 
-def cmd_check(workdir, result, commands_arg):
+def cmd_check(result, commands_arg):
     s = checked_settings(read_config(result["config"]), result)
     con = open_console(s, result)
     try:
@@ -632,12 +607,10 @@ def cmd_check(workdir, result, commands_arg):
     return 0
 
 
-def cmd_run(workdir, result, commands_arg):
+def cmd_run(result, commands_arg):
     result.update(commands=[], not_run=[])
     raw = read_config(result["config"])
-    open_log(workdir)
-    result["log"] = LOG.path
-    LOG("run を始めます。設定ファイル：%s" % result["config"])
+    note("run を始めます。設定ファイル：%s" % result["config"])
     s = checked_settings(raw, result, commands_arg, need_commands=True)
     commands = s["commands"]
     result["not_run"] = list(commands)
@@ -698,15 +671,15 @@ class Parser(argparse.ArgumentParser):
 
 def main(argv=None):
     parser = Parser(prog="serial_console.py", add_help=False)
-    parser.add_argument("subcommand", choices=("run", "check", "init"))
+    parser.add_argument("subcommand", choices=("run", "check"))
     parser.add_argument("--workdir")
     parser.add_argument("--command", action="append", dest="commands")
     parser.add_argument("--stdin", action="store_true")
-    result = {"ok": False, "message": "", "problems": [], "config": None, "log": None}
+    result = {"ok": False, "message": "", "problems": [], "config": None}
     try:
         args = parser.parse_args(argv)
         workdir = os.path.abspath(args.workdir or os.getcwd())
-        result["config"] = os.path.join(data_dir(workdir), "config.ini")
+        result["config"] = os.path.join(data_dir(workdir), "config.yaml")
         if (args.commands is not None or args.stdin) and args.subcommand != "run":
             raise Stop("--command と --stdin は run でだけ使えます。" + USAGE, 2)
         if args.commands is not None and args.stdin:
@@ -714,8 +687,8 @@ def main(argv=None):
         check_command_args(args.commands)
         if not os.path.isdir(workdir):
             raise Stop("作業フォルダ %s がありません。--workdir を確かめてください。" % workdir, 2)
-        run = {"run": cmd_run, "check": cmd_check, "init": cmd_init}[args.subcommand]
-        code = run(workdir, result, stdin_commands() if args.stdin else args.commands)
+        run = {"run": cmd_run, "check": cmd_check}[args.subcommand]
+        code = run(result, stdin_commands() if args.stdin else args.commands)
     except Stop as e:
         result["ok"] = False
         result["message"] = e.message
@@ -723,20 +696,21 @@ def main(argv=None):
             result["problems"] = [e.message]
         code = e.code
     except Exception as e:
-        LOG(traceback.format_exc())
+        note(traceback.format_exc())
         result["ok"] = False
-        result["message"] = "思わぬエラーで止まりました（%s: %s）。" % (type(e).__name__, e)
-        if LOG.path:
-            result["message"] += "ログ %s を見てください。" % LOG.path
+        result["message"] = "思わぬエラーで止まりました（%s: %s）。標準エラー出力を見てください。" \
+                            % (type(e).__name__, e)
         code = 1
-    LOG(result["message"])
-    LOG.close()
+    note(result["message"])
     shown = mask(result)
-    shown.update(config=result["config"], log=result["log"])  # 手元のパスは伏せない（パスワードと同じ文字を含むことがある）
+    shown["config"] = result["config"]  # 手元のパスは伏せない（パスワードと同じ文字を含むことがある）
     sys.stdout.write(json.dumps(shown, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     return code
 
 
 if __name__ == "__main__":
+    # 標準エラー出力は、どの OS でも UTF-8 で書く。書けない文字があっても止めない
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     sys.exit(main())
