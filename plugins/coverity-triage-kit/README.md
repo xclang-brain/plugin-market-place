@@ -9,7 +9,7 @@ Coverity Connect の警告を、設定した条件で取得し、CID ごとに�
 
 ## 準備（最初の1回）
 
-必要なものは、GitHub Copilot CLI、[uv](https://docs.astral.sh/uv/)、git または svn、Coverity Connect のアカウントと認証キーです。
+必要なものは、GitHub Copilot CLI、[uv](https://docs.astral.sh/uv/)、git（2.32 以降）または svn、Coverity Connect のアカウントと認証キーです。
 
 **1. プラグインをインストールします。**
 
@@ -18,7 +18,7 @@ copilot plugin marketplace add xclang-brain/plugin-market-place
 copilot plugin install coverity-triage-kit@plugin-market-place
 ```
 
-**2. Coverity のユーザー名と認証キーを、環境変数に設定します。** 自分のターミナルで実行します。認証キーは、チャットには入力しません。
+**2. Coverity のユーザー名と認証キーを、環境変数に設定します。** 自分のターミナルで実行します。認証キーは、チャットには入力しません。認証キーは、Coverity Connect で作成します。ダウンロードされたファイルの `"key"` の値を入力します。
 
 PowerShell（Windows）：
 
@@ -35,6 +35,8 @@ read -r -p 'COV_USER: ' COV_USER
 read -r -s -p 'COV_AUTH_KEY（認証キー。入力は表示されません）: ' COV_AUTH_KEY; echo
 export COV_USER COV_AUTH_KEY      # このターミナルから copilot を起動します
 ```
+
+bash で設定した値は、そのターミナルの中だけで有効です。新しいターミナルで `copilot` を起動するときは、先にこの3行をもう一度実行します。
 
 **3. リポジトリのフォルダーで `copilot` を起動し、Coverity の URL とストリーム名を入力します。**
 
@@ -62,7 +64,7 @@ export COV_USER COV_AUTH_KEY      # このターミナルから copilot を起�
 | 20001 | 本物のバグ | 高 | src/reader.c | 本物のバグ。open_and_read()（src/reader.c:19〜20）は fgets の失敗時に fp を閉じずに返す。（Bug／Ignore／Major） | 修正を取り込む | |
 | 20002 | 誤検知 | 高 | src/reader.c | 誤検知。唯一の呼び出し元 read_config()（src/reader.c:32〜36）が path の NULL を除外してから渡しており、NULL を参照することはない。（False Positive／Ignore／Unspecified） | 逸脱コメントを登録する | |
 
-「OK」と答えると、選択のとおりに処理されます。変更するときは、「20002 は修正、ほかは OK」のように答えます。リポジトリと Coverity が変わるのは、「OK」と答えた後だけです。
+「OK」と答えると、選択のとおりに処理されます。変更するときは、「20002 は修正、ほかは OK」のように答えます。リポジトリのフォルダー（svn では、手元の作業コピー）と Coverity が変わるのは、「OK」と答えた後だけです。
 
 | 選択 | プラグインが行うこと |
 | --- | --- |
