@@ -3,8 +3,9 @@
 The person's side is real: a repository of the sample (git with a bare origin, svn with a working copy), a
 Coverity Connect that has its warnings (tests/coverity_emulator), and the MCP server of the plugin, started
 as mcp.json registers it. A scripted agent has a shell in the person's repository and the MCP tools. It runs
-the lines the replies give under ``next``, makes the calls under ``fetch`` and ``call``, edits the work copy
-and writes result.json. It builds only the lines the agent and skill texts tell an agent to build.
+the lines the replies give under ``next`` (and, only after the person's OK, the line under ``after_ok``),
+makes the calls under ``fetch`` and ``call``, edits the work copy and writes result.json. It builds only the
+lines the agent and skill texts tell an agent to build.
 """
 
 import atexit
@@ -230,12 +231,14 @@ class Agent:
         Path(given["result_file"]).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def table(self, *changes: str) -> dict:
-        """Skill coverity-apply: the plan line with every change the person named; its reply has the one table."""
+        """Skill coverity-apply (「修正を取り込んで」, or an answer that changes choices): its plan line with every
+        change the person named; its reply has the one table."""
         return self.run(self.line("apply", "plan", "--repo", self.repo, *(f"--set {change}" for change in changes)))
 
     def ok(self, plan: dict, write: bool = True) -> dict:
-        """The person's OK: the apply line of the plan, then the calls of its reply (write False: no call is made)."""
-        applied = self.run(plan["next"][0])
+        """The person's OK: the line under after_ok of the plan, then the calls of its reply (write False: no call
+        is made)."""
+        applied = self.run(plan["after_ok"][0])
         for call in applied["call"] if write else []:
             self.tool(call)
         return applied
@@ -245,7 +248,7 @@ def team(lead: Agent, run: Path, reviews: dict, log: list):
     """The orchestrator after its start (steps 2 to 6 of its text) with the agents it asks: one worker per
     next line, all at the same time; the integrator, once; the reviewers. ``reviews``: CID -> what its first
     reviewer records (not named: pass; None: nobody records it). Yields every reply of status before its
-    step is done, then the reply of finish. ``log`` gets the workers of each round."""
+    step is done, then the reply of the plan line that finish gives. ``log`` gets the workers of each round."""
     status_line, asked, merged = lead.line("triage", "status", "--run", run), {}, False
     for _ in range(20):
         status = lead.run(status_line)
@@ -274,7 +277,7 @@ def team(lead: Agent, run: Path, reviews: dict, log: list):
                     outcome = reviews.pop(cid, "pass") if asked[cid] < 3 else "unverified"  # the orchestrator's own record
                     other.run(step.split(" [")[0].replace("<CID>", str(cid)).replace("<pass|flag|rework>", outcome))
         else:
-            yield lead.follow(step)  # finish; again while its next is the finish line
+            yield lead.follow(step)  # finish, again while its next is the finish line; then its next: the plan line
             return
     raise AssertionError("the orchestrator does not come to finish")
 

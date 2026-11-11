@@ -248,7 +248,8 @@ class PlanTest(Case):
                                          "left": 0})
         self.assertEqual(out["question"],
                          f"この内容で、修正の取り込み（1 件。{PUSHED}）、逸脱コメントの登録（2 件）を行います。" + BUG + ASK)
-        self.assertEqual((out["ok"], out["vcs"], out["next"]), (True, "git", [self.line("apply")]))
+        # the apply line waits for the OK: it is not under next, which holds what is run without asking
+        self.assertEqual((out["ok"], out["vcs"], out["after_ok"], out["next"]), (True, "git", [self.line("apply")], []))
         # a run in the chat: the CIDs that are not processed yet are counted below the table; a failed one keeps its row
         self.meta(review=True, all=False)
         chat = self.plan()
@@ -327,8 +328,8 @@ class PlanTest(Case):
         self.assertEqual(row(self.plan("20001=fix"), 20001), fix_row(20001, "修正を取り込む", "チャットで指定"))
         # nothing chosen: no question
         out = self.plan("20002=none", "20003=none", "20004=none")
-        self.assertEqual((out.get("question"), out["next"], out["message"]), (
-            None, [], "取り込む修正と、登録する逸脱コメントはありません。変更するときは「20003 は修正」のように入力してください"))
+        self.assertEqual((out.get("question"), out.get("after_ok"), out["next"], out["message"]), (
+            None, None, [], "取り込む修正と、登録する逸脱コメントはありません。変更するときは「20003 は修正」のように入力してください"))
 
 
 class Flow:
@@ -393,7 +394,8 @@ class Flow:
         out = self.go()
         self.assertEqual(out, {"ok": False, "run_dir": self.run_dir.as_posix(), "changed": True, "error": CHANGED,
                                "next": [self.line("plan", "--set 20002=none")]})
-        out = self.follow(out["next"][0])
+        out = self.follow(out["next"][0])  # the plan line: safe to run at once, and the apply line waits for the OK again
+        self.assertEqual((out["after_ok"], out["next"]), ([self.line("apply")], []))
         self.assertEqual(row(out, 20002), keep_row(20002, "何もしない", "チャットで指定"))
         self.put("decisions.json", {"decisions": {"20001": {"decision": "none", "at": "2026-11-10T16:00:00"}}})
         self.assertTrue(self.go()["changed"], "a choice on the screen after the list")

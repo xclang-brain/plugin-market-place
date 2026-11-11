@@ -16,8 +16,9 @@
   finish  --run <dir>                                       refuse unfinished work, write summary.md
 
 Every command prints one JSON object (UTF-8): ``ok``, ``run_dir`` and, under ``next``, the full command
-lines of the next step, so that an agent that lost its context continues from the output alone. ``fetch``
-lists the tools to call before that step. ``message`` is a sentence for the person.
+lines to run now, without a word from the person, so that an agent that lost its context continues from
+the output alone ([]: the request is answered). ``fetch`` lists the tools to call before that step.
+``message`` is a sentence for the person.
 ``"ok": false`` comes with a Japanese ``error`` (and ``problems``) that says what to correct.
 
 The folder is the state. A CID of issues.json without cid/<CID>/state.json is pending. ``next`` wins a
@@ -50,6 +51,7 @@ WAIT = 20  # seconds start and finish wait for a background job before they answ
 STALE = 30 * 60  # seconds after which a claim without a save is taken from its slot
 OLD_LIST = 10 * 60  # seconds after which start says when the list was fetched
 BATCH = 5  # CIDs per slot and round (keeps a worker's context small)
+SHOWN = 200  # lines of a fix that the save reply of a chat carries
 VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intentional": "意図的", "undetermined": "判定不能"}
 RECOMMEND = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する"}
 LEVEL = {"high": "高", "medium": "中", "low": "低"}
@@ -428,8 +430,10 @@ def cmd_next(args) -> dict:
                       "を変更してから、「条件に合う警告を取得して」と入力してください")
 
     def none(message: str, states: dict) -> dict:  # no CID is handed out
+        # A worker of a round reports to its caller, and a person who named a CID gets the sentence: nothing to run.
+        alone = batch is None and args.cid is None
         return reply(run.dir, cid=None, done=True, counts=count(states), message=message,
-                     next=[] if batch is not None else [command("finish", run.dir)])
+                     next=[command("finish", run.dir)] if alone else [])
 
     states = run.states()
     leader = (states.get(args.cid) or {}).get("merged_into")
@@ -439,9 +443,8 @@ def cmd_next(args) -> dict:
         busy = [cid for cid, s in states.items()
                 if cid != args.cid and s and s["status"] == "working" and age(s["claimed_at"]) <= STALE]
         if busy:  # a work copy has one writer: nothing is reset and the named CID is not put back
-            # No continuation: finish would refuse, and its next line hands out a CID in the agent's copy.
-            return {**none(f"エージェントが CID {busy[0]} を処置中です。エージェントの処置が終わってから、"
-                           "もう一度依頼してください", states), "next": []}
+            return none(f"エージェントが CID {busy[0]} を処置中です。エージェントの処置が終わってから、"
+                        "もう一度依頼してください", states)
     try:
         repo, copy = work_copy(run, slot)
     except Problem as missing:
@@ -511,8 +514,9 @@ def cmd_save(args) -> dict:
     state = read_json(folder / "state.json") or {}
     batch = ["--batch", state["batch"]] if state.get("slot") == slot and state.get("batch") else []
     if state.get("status") != "working" or state["slot"] != slot:
+        # In a chat nothing is to run: the line would hand out a CID that the person did not ask for.
         raise Problem(f"CID {cid} は処置中ではないため、保存できません。同じ依頼をもう一度入力すると、続きから進みます",
-                      next=[command("next", run.dir, "--slot", slot, *batch)])
+                      next=[command("next", run.dir, "--slot", slot, *batch)] if run.meta["all"] else [])
     repo, copy = work_copy(run, slot)
     base = run.meta["base_revision"]
     files, patch = [], b""
@@ -565,10 +569,14 @@ def cmd_save(args) -> dict:
     if not run.meta["all"] or (run.dir / "summary.md").is_file():
         summarize(run)  # in a chat; and the summary that finish wrote follows a result that is made again
     states = run.states()
+    out = reply(run.dir, cid=cid, files=files, patch_file=(folder / "fix.patch").as_posix() if patch else None,
+                counts=count(states))
+    if not run.meta["all"]:  # a chat: the request is answered when the two outputs are shown; the fix as text
+        lines = vcs.text(patch).split("\n") if patch else []
+        rest = [f"（続きは {out['patch_file']} にあります）"] if len(lines) > SHOWN else []
+        return {**out, "patch": "\n".join(lines[:SHOWN] + rest) if patch else None, "next": []}
     more = batch or count(states)["remaining"]  # a worker of a round asks next until it answers done
-    return reply(run.dir, cid=cid, files=files, patch_file=(folder / "fix.patch").as_posix() if patch else None,
-                 counts=count(states),
-                 next=[command("next", run.dir, "--slot", slot, *batch)] if more else run.steps(states))
+    return {**out, "next": [command("next", run.dir, "--slot", slot, *batch)] if more else run.steps(states)}
 
 
 def cmd_review(args) -> dict:
@@ -745,8 +753,13 @@ def cmd_finish(args) -> dict:
             raise Problem(f"修正のビルド確認を実行できませんでした: {status['error']}", log=status["log"])
     summarize(run)
     left = remove_work(run.dir, run.repo) if not found["remaining"] else ""
+    # What comes now is the one table: the plan line of the skill beside this one, when it is installed.
+    plan = SCRIPT.parents[2] / "coverity-apply" / "scripts" / "apply.py"
+    table = (f'uv run --native-tls --quiet "{plan.as_posix()}" plan --repo "{run.repo.as_posix()}" '
+             f'--run "{run.dir.as_posix()}"')
     return reply(run.dir, counts=found, summary_file=(run.dir / "summary.md").as_posix(),
-                 **({"message": f"作業用コピーが残っています。{left}"} if left else {}), next=[])
+                 **({"message": f"作業用コピーが残っています。{left}"} if left else {}),
+                 next=[table] if plan.is_file() else [])
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -226,9 +226,11 @@ class Replies:
         unverified = re.sub(r" \[[^\]]*\]", "", template).replace("<CID>", str(group[0])).replace(
             "<pass|flag|rework>", "unverified")  # what the orchestrator records itself
         self.assertEqual(self.run_line(unverified).get("outcome"), "unverified")
-        done = self.run_line(self.run_line(status_line)["next"][0])
-        self.assertEqual((done["ok"], done["next"], Path(done["summary_file"]).is_file()), (True, [], True))
-        self.run_line(f'uv run --native-tls --quiet "{APPLY.as_posix()}" plan --repo "{self.repo.as_posix()}"')
+        done = self.run_line(self.run_line(status_line)["next"][0])  # finish gives the plan line: no agent builds it
+        self.assertEqual((done["ok"], done["next"], Path(done["summary_file"]).is_file()), (True, [
+            f'uv run --native-tls --quiet "{APPLY.as_posix()}" plan --repo "{self.repo.as_posix()}" --run "{run.as_posix()}"'], True))
+        plan = self.run_line(done["next"][0])  # and the apply line waits for the OK: nothing more is run without it
+        self.assertEqual((plan["next"], len(plan["after_ok"]), " apply --repo " in plan["after_ok"][0]), ([], 1, True))
         given = names(self.seen, set()) | WORDS
         for name in AGENTS:
             named = set(re.findall(r"`([a-z_]+)`", read(name, True)[1]))

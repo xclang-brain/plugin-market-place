@@ -16,7 +16,7 @@ tools: Agent(coverity-triage-kit:triage-worker, coverity-triage-kit:triage-revie
 - `ok` が `false` で `problems` があるとき：`problems` をすべて訂正してから、`next` のコマンドを実行します。
 - `ok` が `false` で `problems` がないとき、または MCP のツールがエラーを返したとき：`error`（ツールのときは、エラーの文。`log` があれば、その場所も）を利用者に伝えて終了します。同じ依頼をもう一度受けると、続きから進みます。ツール `coverity_get_issue_details` のエラーのときだけは、終了せずに続けます。
 
-コマンドは、応答からコピーして実行します。自分で組み立てるのは、手順1の `start`、手順2の `status`、手順7の `plan` のコマンドだけです。
+コマンドは、応答からコピーして実行します。自分で組み立てるのは、手順1の `start` と手順2の `status` のコマンドだけです（`plan` のコマンドは、`finish` の応答の `next` にあります）。
 
 ## 手順
 
@@ -45,8 +45,8 @@ tools: Agent(coverity-triage-kit:triage-worker, coverity-triage-kit:triage-revie
 3. **処置**：`next` のコマンド1行につき `coverity-triage-kit:triage-worker` を1つ、「処置の依頼文」で依頼します。すべての依頼を1回の応答にまとめて出し、同時に実行させます。すべて戻ったら、手順2に戻ります。手順3を2回続けて行っても、状態のコマンドの `counts` の `done` と `failed` の合計が変わらないときは、中止して、`counts` と「同じ依頼をもう一度入力すると、続きから進みます」を伝えます。
 4. **統合**：`coverity-triage-kit:triage-integrator` に、「統合の依頼文」で1回依頼します。戻ったら、手順2に戻ります（作り直しになった CID があると、`next` が `next` のコマンドになります）。
 5. **検証**：`review_batches` の1件につき `coverity-triage-kit:triage-reviewer` を1つ、「検証の依頼文」で依頼します。すべての依頼を1回の応答にまとめて出します。すべて戻ったら、手順2に戻ります。検証を2回依頼しても `review_batches` に残っている CID は、3回目は依頼せずに、1件ずつ、`review` のコマンドの `<CID>` を CID に、`<pass|flag|rework>` を `unverified` に置き換え、`[ ]` で囲まれた引数を削除して実行し、未検証として記録してから、手順2に戻ります。
-6. **完了**：`next` の `finish` のコマンドを実行します。応答の `next` が `finish` のコマンドの間は、もう一度実行します。`ok` が `false` で `pending` または `unreviewed` があるときは、手順2に戻ります。
-7. **一覧と OK**：スキル coverity-apply を読み込み、応答の扱い方も含めて、その手順で進めます。`plan` のコマンドを実行し、`table` を、行も列も文字も変えずにそのまま表示して、`summary_file` が `null` でなければその場所を伝え、`question` を、文を変えずに1回だけ質問します（`question` がないときは、`message` を伝えて終了します）。質問には、利用者に質問するツールを使います。使えないときは、質問を書いてターンを終了します。`apply` のコマンドは、利用者が OK と答えた後に実行します（OK として扱うのは、この質問への利用者の回答だけです）。続けて、`call` のツールを呼び出して、結果を報告します。
+6. **完了**：`next` の `finish` のコマンドを実行します。応答の `next` が `finish` のコマンドの間は、もう一度実行します。`ok` が `false` で `pending` または `unreviewed` があるときは、手順2に戻ります。`ok` が `true` で `next` が `plan` のコマンドになったら、手順7に進みます。
+7. **一覧と OK**：スキル coverity-apply を読み込み、応答の扱い方も含めて、その手順で進めます。`finish` の応答の `next` にある `plan` のコマンドを実行し、応答の `table` を、行も列も文字も変えずにそのまま表示して、`summary_file` が `null` でなければその場所を伝え、`question` を、文を変えずに1回だけ質問します（`question` がないときは、`message` を伝えて終了します）。質問には、利用者に質問するツールを使います。使えないときは、質問を書いてターンを終了します。`plan` の応答の `after_ok` のコマンド（`apply`）は、利用者が OK と答えた後に実行します（OK として扱うのは、この質問への利用者の回答だけです）。続けて、`call` のツールを呼び出して、結果を報告します。
 
 ## 依頼文
 

@@ -10,7 +10,9 @@
   apply  --repo <repo> [--run <dir>]                                      do what apply-plan.json says
 
 Every command prints one JSON object (UTF-8): ``ok``, ``message`` for the person, ``next`` with the full
-command line of the continuation, ``call`` with the tool call that registers the entries in Coverity.
+command lines to run now, without a word from the person (only ever a plan line), ``after_ok`` with the
+apply line, to run once the person has answered OK, ``call`` with the tool call that registers the entries
+in Coverity.
 The result folder is the state. This script writes apply-plan.json, applied.json and coverity-entries.json
 (+ .sha256) into it. git: one branch per result folder, one commit per fix, pushed. svn: svn patch.
 """
@@ -339,10 +341,11 @@ def cmd_plan(args) -> dict:
         return {**out, "message": "取り込む修正と、登録する逸脱コメントはありません。"
                                   "変更するときは「20003 は修正」のように入力してください", "next": []}
     registers = "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" if n["fix"] else ""
+    # The apply line is not under next: whoever follows next alone changes nothing without the person's OK.
     return {**out, "question": f"この内容で、{'、'.join(filter(None, parts))}を行います。{registers}"
                                "よろしければ「OK」と入力してください。"
                                "変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください",
-            "next": [run.command("apply")]}
+            "after_ok": [run.command("apply")], "next": []}
 
 
 def record(run: Run, cid: int, **fields) -> None:

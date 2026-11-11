@@ -22,6 +22,8 @@ STAGES = {
 }
 # coverity-apply reads what the person chose on the screen.
 ALLOWED = {"skills/coverity-apply/": ("decisions.json", "画面")}
+# Inside stage 1: finish of triage.py gives the plan line of coverity-apply, which shows the one table.
+HANDS_ON = {"skills/coverity-triage/scripts/triage.py": ("coverity-apply",)}
 CODE = (".py", ".js", ".html", ".css")
 
 
@@ -60,7 +62,8 @@ class Stages(unittest.TestCase):
                                                                           - set(sys.stdlib_module_names) - own - {"yaml"})]
             # the folder name alone: not .coverity-triage, coverity-triage-out or /coverity-triage-kit:coverity-setup
             others = re.compile(rf"(?<![\w.:-])(?:{'|'.join(other for other in SKILLS if other != skill)})(?![\w-])")
-            found += [f"{name}: {match}" for text in strings for match in others.findall(text)]
+            found += [f"{name}: {match}" for text in strings for match in others.findall(text)
+                      if match not in HANDS_ON.get(name, ())]
         self.assertEqual(found, [])
 
 

@@ -47,11 +47,14 @@ class Case(unittest.TestCase):
         return [issue["cid"] for issue in self.read(Path(run_dir), "issues.json")["issues"]]
 
     def summary(self, agent: Agent, run: Path, line: str = "") -> dict:
-        """「まとめを見せて」: finish (or ``line``, a request that leads to it), then the one table and the one
-        question of skill coverity-apply, for this result folder."""
-        done = agent.follow(line or agent.line("triage", "finish", "--run", run))
-        self.assertEqual((done["run_dir"], done["next"]), (run.as_posix(), []))
-        return agent.table()
+        """「まとめを見せて」: finish (or ``line``, a request that leads to it) and every line under next, to the end.
+        The last one is the plan line that finish gives: the one table and the one question, for this result
+        folder. Nothing is left to run before the person's answer."""
+        plan = agent.follow(line or agent.line("triage", "finish", "--run", run))
+        done = agent.replies[-2]
+        self.assertEqual((done["summary_file"], plan["summary_file"], plan["run_dir"], plan["next"]),
+                         ((run / "summary.md").as_posix(), (run / "summary.md").as_posix(), run.as_posix(), []))
+        return plan
 
     def written(self) -> list[tuple]:
         """What Coverity received, in order: (CIDs, Classification, Action) of every entry."""
@@ -118,9 +121,11 @@ class Flow:
         run = Path(first["run_dir"])
         self.assertEqual(first["message"], "条件に合う警告は 6 件あります。設定の上限（3 件）まで取得しました" + self.based)
         self.assertEqual((self.listed(run), run.parent), (CIDS[:3], self.top / "coverity-triage-out"))
-        # 「CID 20002 を処置して」, then 「まとめを見せて」: the one table and the one question. In a chat the table
-        # has the processed CIDs, and one sentence below it counts the others
+        # 「CID 20002 を処置して」: the request is answered with the two outputs, the save reply has nothing to run.
+        # Then 「まとめを見せて」: the one table and the one question. In a chat the table has the processed CIDs,
+        # and one sentence below it counts the others
         saved = me.follow(first["next"][0] + " --cid 20002", stop=SAVED)
+        self.assertEqual((saved["cid"], saved["next"], saved["patch"]), (20002, [], None))
         plan = self.summary(me, run)
         comment = self.read(run, "cid/20002/result.json")["deviation"]["comment"]
         self.assertEqual(({cid: row[3:] for cid, row in flowlib.rows(plan["table"]).items()}, plan["table"].split("\n\n")[1:]), (
@@ -132,14 +137,15 @@ class Flow:
         me.ok(plan)
         self.assertEqual(self.coverity.writes, [{"triageStore": "Default Triage Store", "cids": [20002], "comment": comment,
                                                  "classification": "False Positive", "action": "Ignore", "severity": "Unspecified"}])
-        # 「次を処置して」 in this session (the line under next of the save), 「まとめを見せて」, 「OK」: the fix arrives
-        self.assertEqual(me.follow(saved["next"][0], stop=SAVED)["cid"], 20001)
+        # 「次を処置して」 (the start line, in this session too): one CID, with its fix as text. 「まとめを見せて」, 「OK」
+        saved = me.follow(request, stop=SAVED)
+        self.assertEqual((saved["cid"], saved["next"], "\n+        fclose(fp);" in saved["patch"]), (20001, [], True))
         me.ok(self.summary(me, run))
         self.assertIn(FIXES[20001][1], self.taken_in(run, [20001]))
         # a new session: the list request continues the same list, 「次を処置して」 gets its last CID
         again = me.ready(request)
         self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), "前回の続きから進めます（残り 1 件）"))
-        self.assertEqual(me.follow(again["next"][0], stop=SAVED)["cid"], 20003)
+        self.assertEqual(me.follow(request, stop=SAVED)["cid"], 20003)
         # the list request before the OK for that CID: the work is complete, and the table is the one of this folder
         plan = self.summary(me, run, request)
         self.assertEqual([flowlib.rows(plan["table"])[cid][5:] for cid in CIDS[:3]],
@@ -150,7 +156,7 @@ class Flow:
                          ([([20001], "Bug", "Fix Required"), ([20003], "Intentional", "Ignore")], True))
         self.taken_in(run, [20001])  # the OK for a comment takes nothing in
         # 「次を処置して」 after the last CID and its OK: a new list, without what was taken in or registered
-        new = me.ready(again["next"][0])
+        new = me.ready(request)
         self.assertEqual((new["run_dir"] != run.as_posix(), self.listed(new["run_dir"])), (True, CIDS[3:]))
 
     def test_stage_2_one_agent_processes_every_warning_to_the_end(self):
@@ -167,15 +173,15 @@ class Flow:
         first.edit(given)  # the session ends here: the third CID is half done, nothing is saved
         second = Agent(self.repo, plugin, opinions)  # the same request again, in a new session
         second.slips = {20005}
-        done = second.follow(request)  # to the end of finish, without a question
+        plan = second.follow(request)  # to the end without a question: finish, then the plan line that finish gives
+        done = second.replies[-2]
         self.assertEqual((second.replies[0]["run_dir"], second.replies[0]["message"]),
                          (given["run_dir"], "前回の続きから進めます（残り 4 件）"))
         self.assertEqual((first.worked, second.worked, second.calls), (CIDS[:2], CIDS[2:], []), "no CID twice, no second fetch")
         refused = [(reply["cid"], reply["ok"]) for reply in second.replies if "problems" in reply]
-        self.assertEqual((refused, done["counts"]["done"], done["next"]), ([(20005, False)], 6, []), "one save refused, then corrected")
+        self.assertEqual((refused, done["counts"]["done"], plan["next"]), ([(20005, False)], 6, []), "one save refused, then corrected")
         run = Path(done["run_dir"])
         # the one table: every fetched CID with both outputs and a choice
-        plan = second.table()
         table = flowlib.rows(plan["table"])
         self.assertEqual({cid: [row[3], *row[5:]] for cid, row in table.items()}, {
             20001: ["src/reader.c", WORD["fix"], ""], 20002: ["なし", WORD["deviation"], ""], 20003: ["src/reader.c", WORD["fix"], ""],
@@ -222,7 +228,7 @@ class Flow:
         self.assertEqual([sum((worker.worked for worker in workers), []) for workers in rounds[1:]], [[20004], [20001]],
                          "made again: the leader of the merged CIDs, then the CID that the reviewer sent back")
         # the one table: one row for the merged CIDs; the flagged result is left to the person, the others passed
-        plan = lead.table()
+        plan = status  # the reply of the plan line that finish gave
         self.assertEqual({cid: [row[0], *row[5:]] for cid, row in flowlib.rows(plan["table"]).items()}, {
             20001: ["20001", WORD["fix"], ""], 20002: ["20002", WORD["deviation"], ""],
             20003: ["20003", WORD["none"], "検証で要確認のため"], 20004: ["20004（同じ原因: 20005, 20006）", WORD["fix"], ""]})

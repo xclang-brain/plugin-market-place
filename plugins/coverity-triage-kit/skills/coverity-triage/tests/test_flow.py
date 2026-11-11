@@ -73,6 +73,8 @@ class Flow:
         run = self.begin(THREE_ISSUES, "--slots", 2, "--review")
         self.work(self.next(run, "--slot", 1))
         self.assertEqual(self.next(run, "--slot", 2)["cid"], TWO)
+        held = self.next(run, "--cid", TWO)  # a person names the CID that slot 2 holds: a sentence, nothing to run
+        self.assertEqual((held["cid"], held["next"], held["message"]), (None, [], f"CID {TWO} はほかのエージェントが処置中です"))
         plain = self.start()  # a request in a chat while the agents work
         self.assertEqual({k: self.meta(run)[k] for k in ("slots", "review", "all")},
                          {"slots": 2, "review": True, "all": True})
@@ -181,6 +183,7 @@ class Flow:
             self.assertTrue(saved["ok"], saved)
             self.assertEqual(saved["files"], ["src/b.c" if given["cid"] == TWO else "src/a.c"])
             self.assertIn(" finish --run" if saved["counts"]["remaining"] == 0 else " next --run", saved["next"][0])
+            self.assertNotIn("patch", saved, "an agent does not show the fix")
         self.assertEqual(handed, [ONE, TWO, THREE])
         self.assertTrue(given["done"] and "finish --run" in given["next"][0])
         self.assertEqual(self.state(run, ONE)["status"], "done")
@@ -299,7 +302,8 @@ class Flow:
         taken = self.next(run, "--slot", 2)
         self.assertEqual((taken["cid"], self.state(run, TWO)["slot"]), (TWO, 2))
         late = self.run_triage("save", "--run", run, "--cid", TWO, "--slot", 1)  # the slot that lost the claim
-        self.assertFalse(late["ok"])
+        self.assertEqual((late["ok"], [line.split('triage.py" ')[1] for line in late["next"]]),  # agents: the slot goes on
+                         (False, [f'next --run "{run.as_posix()}" --slot 1']))
         self.assertEqual(late["error"], f"CID {TWO} は処置中ではないため、保存できません。"
                                         "同じ依頼をもう一度入力すると、続きから進みます")
         status = self.run_triage("status", "--run", run)
@@ -373,6 +377,7 @@ class Flow:
         self.assertEqual((self.repo / "src" / "sjis.c").read_bytes(), support.SJIS)
         for line in (" // 日本語のコメント", "+    return 1; // 修正", "+// 新規"):  # each file in its own encoding
             self.assertIn(line, self.summary(run).replace("\r", "").splitlines())
+            self.assertIn(line, saved["patch"].replace("\r", "").splitlines())
 
     def lock(self, copy: Path) -> None:
         """What a git or svn command leaves in a copy when it is killed."""
@@ -470,8 +475,8 @@ class Flow:
         self.assertEqual([row.split(" | ")[0] for row in self.summary(run).splitlines() if row.startswith("| 2")],
                          [f"| {ONE}（同じ原因: {THREE}）", f"| {TWO}"], "one row for the merged CIDs")
         member = self.next(run, "--cid", THREE)  # its result is the one of the leader: no work copy is made for it
-        self.assertEqual((member.get("cid", 0), member["message"]),
-                         (None, f"CID {THREE} は CID {ONE} に統合されています。{ONE} を指定してください"))
+        self.assertEqual((member.get("cid", 0), member["next"], member["message"]),  # a sentence for the person
+                         (None, [], f"CID {THREE} は CID {ONE} に統合されています。{ONE} を指定してください"))
 
     def test_merge_with_rework_sends_the_leader_back(self):
         run = self.begin([issue(ONE), issue(TWO)], "--slots", 1, "--review")
@@ -526,7 +531,10 @@ class Flow:
         self.run_triage("review", "--run", run, "--cid", TWO, "--outcome", "unverified")
 
         done = self.run_triage("finish", "--run", run)
-        self.assertEqual((done["ok"], done["counts"]["done"], done["counts"]["failed"], done["next"]), (True, 2, 1, []))
+        self.assertEqual((done["ok"], done["counts"]["done"], done["counts"]["failed"]), (True, 2, 1))
+        # what comes now is the one table: the plan line of the skill that is installed beside this one
+        self.assertEqual([line.split('" ', 1)[1] for line in done["next"]],
+                         [f'plan --repo "{self.repo.as_posix()}" --run "{run.as_posix()}"'])
         self.assertEqual(done["summary_file"], (run / "summary.md").as_posix())
         self.assertNotIn("table", done, "the one table of the chat is the one the person answers OK to")
         summary = self.summary(run)
@@ -622,7 +630,12 @@ class Flow:
         self.assertEqual([reply["cid"] for reply in again], [TWO] * 4)
         self.assertIn("もう一度処置します", again[0]["message"])
         given = again[-1]
-        self.assertTrue(self.work(given, B_EDIT)["ok"])
+        saved = self.work(given, B_EDIT)  # the request is answered: nothing to run, and the fix as summary.md shows it
+        self.assertEqual((saved["ok"], saved["next"], saved["patch"]),
+                         (True, [], vcs.text((run / "cid" / str(TWO) / "fix.patch").read_bytes())))
+        self.assertIn("\n+    return 1;", saved["patch"])
+        twice = self.run_triage("save", "--run", run, "--cid", TWO)  # saved before: no line that hands out another CID
+        self.assertEqual((twice["ok"], twice["next"]), (False, []))
         summary = self.summary(run)  # written by save
         self.assertIn(f"## CID {TWO}（DEADCODE、src/b.c:3）", summary)
         self.assertIn("| CID | チェッカー | 場所 | 判定 | 推奨 | 確信度 | 修正コード | 逸脱コメント |", summary)
@@ -642,6 +655,12 @@ class Flow:
             self.assertIn(b"+    " + new, (run / "cid" / str(TWO) / "fix.patch").read_bytes())
         self.assertEqual((self.state(run, TWO)["status"], self.state(run, TWO).get("rework")), ("done", None))
         self.assertNotIn("検証", self.summary(run))
+        none = self.work(self.next(run, "--cid", ONE), {})  # no fix: no text; a long fix: its first 200 lines
+        self.assertEqual((none["next"], none["patch"], none["patch_file"]), ([], None, None))
+        long = self.work(self.next(run, "--cid", THREE), {"src/long.c": b"int n;\n" * 300})
+        shown = long["patch"].split("\n")
+        self.assertEqual((long["next"], len(shown), shown[-1]), ([], 201, f"（続きは {long['patch_file']} にあります）"))
+        self.assertEqual(shown[:200], vcs.text(Path(long["patch_file"]).read_bytes()).split("\n")[:200])
 
     def test_the_folder_stays_open_until_the_ok_for_its_latest_results(self):
         run = self.begin(THREE_ISSUES[:2])  # in a chat: one CID, the OK, the next CID
@@ -753,6 +772,8 @@ class CleanupTest(support.RunCase):
             self.assertIn(f"| {ONE} |", self.summary(run))
             other = self.triage.find_run(self.repo, self.triage.settings(self.repo), "git", True)  # 取得し直して
         self.assertTrue(other != run and other.is_dir() and (run / "work").is_dir(), "the next fetch is not stopped")
+        with mock.patch.object(self.triage, "SCRIPT", self.top / "skills" / "coverity-triage" / "scripts" / "triage.py"):
+            self.assertEqual(self.triage.cmd_finish(args)["next"], [], "the skill that shows the table is not installed")
 
 
 class ErrorsTest(support.RunCase):
