@@ -41,10 +41,10 @@ class Flow:
         self.assertIn(f'start --repo "{self.repo.as_posix()}"', first["next"][0])
         self.assertNotIn("message", first)
         self.assertEqual(self.start()["run_dir"], first["run_dir"], "a folder without the list is continued")
-        early = self.next(run)
-        self.assertEqual((early["ok"], early["error"]),  # an agent passes it on: it says what the person does
-                         (False, "警告の一覧がまだありません。同じ依頼をもう一度入力すると、警告の取得から進みます"))
-        self.assertIn("start --repo", early["next"][0])
+        early = self.next(run)  # no error: the agent goes on with start
+        self.assertEqual((early["ok"], early.get("message"), early["next"]), (True, "警告を取得します", first["next"]))
+        self.assertEqual(self.run_triage("status", "--run", run)["error"],  # an agent passes it on to the person
+                         "警告の一覧がまだありません。同じ依頼をもう一度入力すると、警告の取得から進みます")
 
         (run / "issues.json").write_text(json.dumps({"issues": THREE_ISSUES, "total_matched": 137, "limited": True}))
         ready = self.start()
@@ -86,6 +86,13 @@ class Flow:
         fetched = datetime.now() - timedelta(hours=3)
         os.utime(run / "issues.json", (fetched.timestamp(), fetched.timestamp()))
         self.assertEqual(self.start()["message"], f"条件に合う警告を 3 件取得しました（警告の取得: {fetched:%Y-%m-%d %H:%M}）")
+
+    def test_a_list_cut_at_the_limit_says_so_without_the_total_too(self):
+        run = self.begin(THREE_ISSUES, total_matched=None, limited=True)  # Coverity cannot count wildcard matches
+        sentence = "条件に合う警告が、設定の上限（3 件）より多くあります。上限まで取得しました"
+        self.assertEqual(self.start()["message"], sentence)
+        self.work(self.next(run, "--cid", ONE))
+        self.assertIn(f"\n- {sentence}\n", self.summary(run))
 
     def test_other_conditions_or_another_stream_get_a_new_folder(self):
         self.configure("conditions:\n  impacts: [Medium, Low]\n")
@@ -323,18 +330,20 @@ class Flow:
         self.assertTrue(self.work(given)["ok"])
 
         vcs.remove_tree(copy)  # the copy is gone, the record of the job that made it still says done
-        lost = self.next(run)
-        self.assertEqual((lost["ok"], lost["error"]), (False, (
-            f"作業用コピーがありません: {copy.as_posix()}。同じ依頼をもう一度入力すると、作業用コピーを準備して、続きから進みます")))
+        missing = (False, f"作業用コピーがありません: {copy.as_posix()}。"
+                          "同じ依頼をもう一度入力すると、作業用コピーを準備して、続きから進みます")
+        ended = self.next(run, "--batch", 1)  # a worker of a round runs no start: it ends with this sentence
+        self.assertEqual((ended["ok"], ended.get("error")), missing)
+        lost = self.next(run)  # no error: the agent goes on with start, which makes the copy again
+        self.assertEqual((lost["ok"], lost.get("message")), (True, "作業用コピーを準備します"))
         self.assertFalse((run / "cid" / str(TWO) / "state.json").exists(), "no CID is claimed")
-        self.assertIn("start --repo", lost["next"][0])
-        self.assertIn("next --run", self.start("--slots", 1)["next"][0])  # start makes the copy again
+        self.assertTrue(lost["next"][0].endswith(f'start --repo "{self.repo.as_posix()}" --slots 1'), lost["next"])
+        self.assertIn("next --run", self.start("--slots", 1)["next"][0])
         given = self.next(run)
         self.assertEqual((given["cid"], (copy / "src" / "b.c").is_file()), (TWO, True))
         vcs.remove_tree(copy)
-        gone = self.work(given, {})
-        self.assertFalse(gone["ok"])
-        self.assertIn("作業用コピーがありません", gone["error"])
+        gone = self.work(given, {})  # a save without the copy has lost the work: that is an error
+        self.assertEqual((gone["ok"], gone["error"], gone["next"]), (*missing, lost["next"]))
 
     def test_rework_after_review_once(self):
         run = self.begin(THREE_ISSUES[:1], "--slots", 1, "--review")
@@ -391,8 +400,6 @@ class Flow:
         status = self.run_triage("status", "--run", run)
         self.assertEqual((status["merge_candidates"], status["review_batches"][0]["cids"]), ([], [ONE, TWO]))
         self.assertFalse(self.run_triage("review", "--run", run, "--cid", THREE, "--outcome", "pass")["ok"])
-        member = self.next(run, "--cid", THREE)  # its result is the one of the leader
-        self.assertEqual((member["cid"], member["message"]), (None, f"CID {THREE} は処置済みです"))
         self.assertFalse(self.run_triage("merge", "--run", run, "--leader", TWO, "--members", ONE)["ok"], "merged once")
         for cid in (ONE, TWO):
             self.assertTrue(self.run_triage("review", "--run", run, "--cid", cid, "--outcome", "pass")["ok"])
@@ -400,6 +407,9 @@ class Flow:
         self.assertTrue(done["ok"], done)
         self.assertEqual([row.split(" | ")[0] for row in self.summary(run).splitlines() if row.startswith("| 2")],
                          [f"| {ONE}（同じ原因: {THREE}）", f"| {TWO}"], "one row for the merged CIDs")
+        member = self.next(run, "--cid", THREE)  # its result is the one of the leader: no work copy is made for it
+        self.assertEqual((member.get("cid", 0), member["message"]),
+                         (None, f"CID {THREE} は CID {ONE} に統合されています。{ONE} を指定してください"))
 
     def test_merge_with_rework_sends_the_leader_back(self):
         run = self.begin([issue(ONE), issue(TWO)], "--slots", 1, "--review")
@@ -473,8 +483,8 @@ class Flow:
         again = self.start("--slots", 1)
         self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), (
             "前回の処置は完了しています（処置済み 2 件、失敗 1 件）。取得し直すときは「取得し直して」と入力してください")))
-        (run / "written.json").write_text("{}")  # the deviation comments were registered after the OK
-        self.assertNotEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "handled: the next request fetches")
+        (run / "written.json").write_text("{}")
+        self.assertEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "no OK without applied.json")
 
     def test_a_run_stays_the_answer_until_its_results_are_handled(self):
         run = self.begin(THREE_ISSUES)  # in a chat first: one CID is saved and the summary is shown
@@ -514,7 +524,7 @@ class Flow:
         self.assertFalse((run / "work").exists())
         for cid in (TWO, THREE):  # the person reads the table: a remark on a result, and the failed CID once more
             asked = self.next(run, "--cid", cid)
-            self.assertEqual((asked["ok"], asked["error"][:12]), (False, "作業用コピーがありません"))
+            self.assertEqual((asked["ok"], asked.get("message")), (True, "作業用コピーを準備します"))
         self.assertEqual([self.state(run, cid)["status"] for cid in (ONE, TWO, THREE)], ["done", "rework", "rework"])
         self.assertEqual((self.state(run, TWO)["rework"], "rework" in self.state(run, THREE)), ([], False))
         ready = self.follow(asked["next"][0])  # the start line: the folder is continued, the copy is made again
@@ -562,14 +572,31 @@ class Flow:
         self.assertEqual((self.state(run, TWO)["status"], self.state(run, TWO).get("rework")), ("done", None))
         self.assertNotIn("検証", self.summary(run))
 
-    def test_the_ok_for_one_cid_leaves_the_folder_open_for_the_others(self):
+    def test_the_folder_stays_open_until_the_ok_for_its_latest_results(self):
         run = self.begin(THREE_ISSUES[:2])  # in a chat: one CID, the OK, the next CID
         self.work(self.next(run, "--cid", ONE))
         (run / "applied.json").write_text("{}")  # the fix of ONE was taken in after the OK
         again = self.start()
         self.assertEqual((again["run_dir"], again.get("message")), (run.as_posix(), "前回の続きから進めます（残り 1 件）"))
         self.assertTrue(self.work(self.follow(again["next"][0]), B_EDIT)["ok"])
-        self.assertNotEqual(self.start()["run_dir"], run.as_posix(), "no CID is left: the next request fetches")
+        complete = "前回の処置は完了しています（処置済み 2 件）。取得し直すときは「取得し直して」と入力してください"
+        again = self.start()  # TWO was saved after that OK: its result waits for the next one
+        self.assertEqual((again["run_dir"], again.get("message")), (run.as_posix(), complete))
+        (run / "applied.json").write_text("{}")  # the OK for TWO
+        self.assertNotEqual(self.start()["run_dir"], run.as_posix(), "every result had its OK: the next request fetches")
+
+    def test_a_registration_that_did_not_run_keeps_the_folder_open(self):
+        run = self.begin(THREE_ISSUES[:1], "--slots", 1)
+        self.work(self.next(run), {})
+        (run / "coverity-entries.json").write_text("{}")  # the OK for the deviation comment,
+        (run / "applied.json").write_text("{}")  # but the write to Coverity was not allowed
+        self.assertEqual(self.start("--slots", 1)["run_dir"], run.as_posix())
+        (run / "written.json").write_text("{}")  # what an earlier OK registered, a minute before these entries
+        earlier = (run / "coverity-entries.json").stat().st_mtime - 60
+        os.utime(run / "written.json", (earlier, earlier))
+        self.assertEqual(self.start("--slots", 1)["run_dir"], run.as_posix())
+        (run / "written.json").write_text("{}")  # 「修正を取り込んで」 once more: registered
+        self.assertNotEqual(self.start("--slots", 1)["run_dir"], run.as_posix(), "the next request fetches")
 
 
 class GitFlow(Flow, support.RunCase):

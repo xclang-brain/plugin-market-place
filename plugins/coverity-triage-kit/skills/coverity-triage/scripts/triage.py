@@ -166,6 +166,16 @@ def count(states: dict) -> dict:
     return {**found, "remaining": found["pending"] + found["working"]}
 
 
+def over_limit(run: Run) -> str:
+    """The sentence for a list that the limit has cut ('': every matching warning is in the list). The
+    search tool does not always know how many match (total_matched is null)."""
+    limit, matched = len(run.issues), run.fetch.get("total_matched")
+    if not run.fetch.get("limited"):
+        return ""
+    return (f"条件に合う警告は {matched} 件あります。設定の上限（{limit} 件）まで取得しました" if matched else
+            f"条件に合う警告が、設定の上限（{limit} 件）より多くあります。上限まで取得しました")
+
+
 def unreviewed(states: dict) -> list[int]:
     return [cid for cid, s in states.items()
             if s and s["status"] == "done" and not s.get("merged_into") and not s.get("review")]
@@ -186,20 +196,33 @@ def remove_work(run_dir: Path, repo: Path) -> str:
     return ""
 
 
+def closed(run: Run) -> bool:
+    """The next request fetches again. A list without warnings: once that was answered (summary.md). Else:
+    no CID is unfinished, the person's OK covers the latest results (applied.json is not older than any
+    state.json) and the registration that OK asked for has run (no coverity-entries.json, or a written.json
+    that is not older)."""
+    def mtime(name: str) -> float:  # 0: no such file
+        return (run.dir / name).stat().st_mtime if (run.dir / name).is_file() else 0
+
+    if run.fetch and not run.issues:
+        return (run.dir / "summary.md").is_file()
+    applied, entries = mtime("applied.json"), mtime("coverity-entries.json")
+    return bool(applied and not count(run.states())["remaining"]
+                and all(p.stat().st_mtime <= applied for p in run.dir.glob("cid/*/state.json"))
+                and (not entries or mtime("written.json") >= entries))
+
+
 def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
     """The newest result folder of this repository, or a new one. A new one is made: with --new; when
     the stream or the conditions of the settings file are no longer the ones the folder was made for;
-    once the step after the OK has handled results (applied.json, written.json) and no CID is unfinished;
-    and when it was answered that no warning matches (the list is empty and start has written summary.md)."""
+    and when the newest folder is closed."""
     out = cfg["output_dir"]
     made_for = {"stream": cfg["stream"], "conditions": cfg["conditions"]}
     runs = sorted((p for p in out.iterdir() if (read_json(p / "run.json") or {}).get("repo") == repo.as_posix()),
                   reverse=True) if out.is_dir() else []
     if runs and not new:
         latest = Run(runs[0], starting=True)
-        closing = ["applied.json", "written.json", *(["summary.md"] if latest.fetch and not latest.issues else [])]
-        handled = any((runs[0] / name).is_file() for name in closing) and not count(latest.states())["remaining"]
-        if {key: latest.meta.get(key) for key in made_for} == made_for and not handled:
+        if {key: latest.meta.get(key) for key in made_for} == made_for and not closed(latest):
             return runs[0]
     for old in runs:
         remove_work(old, repo)  # what cannot be deleted now is tried again with the next new folder
@@ -281,13 +304,10 @@ def cmd_start(args) -> dict:
     run = Run(run_dir)
     states = run.states()
     found = count(states)
-    total, matched = found["total"], run.fetch.get("total_matched")
     if any(states.values()):  # a CID was handed out before
         message = f"前回の続きから進めます（残り {found['remaining']} 件）"
-    elif run.fetch.get("limited") and matched:
-        message = f"条件に合う警告は {matched} 件あります。設定の上限（{total} 件）まで取得しました"
     else:
-        message = f"条件に合う警告を {total} 件取得しました"
+        message = over_limit(run) or f"条件に合う警告を {found['total']} 件取得しました"
     listed_at = (run_dir / "issues.json").stat().st_mtime
     if time.time() - listed_at > OLD_LIST:
         message += f"（警告の取得: {time.strftime('%Y-%m-%d %H:%M', time.localtime(listed_at))}）"
@@ -380,17 +400,30 @@ def work_copy(run: Run, slot: int):
 
 
 def cmd_next(args) -> dict:
-    run = Run(args.run)
+    run = Run(args.run, starting=True)
     slot, batch = args.slot, args.batch
+    if not run.fetch:  # not an error: the agent goes on with start, which asks for the list
+        return reply(run.dir, message="警告を取得します", next=[start_command(run.repo, run.meta)])
     if args.cid is not None and args.cid not in run.issues:
         raise Problem(f"CID {args.cid} は取得した警告の一覧にありません")
+
+    def none(message: str, states: dict) -> dict:  # no CID is handed out
+        return reply(run.dir, cid=None, done=True, counts=count(states), message=message,
+                     next=[] if batch is not None else [command("finish", run.dir)])
+
+    states = run.states()
+    leader = (states.get(args.cid) or {}).get("merged_into")
+    if leader:  # the result of a member is the one of its leader, with or without a work copy
+        return none(f"CID {args.cid} は CID {leader} に統合されています。{leader} を指定してください", states)
     try:
         repo, copy = work_copy(run, slot)
-    except Problem:
-        again = asked_again(run.states().get(args.cid))
-        if again and again["status"] == "rework":
-            run.put(args.cid, again)  # finish has removed the copies: start makes them again for this CID
-        raise
+    except Problem as missing:
+        asked = asked_again(states.get(args.cid))
+        if asked and asked["status"] == "rework":
+            run.put(args.cid, asked)  # finish has removed the copies: start makes them again for this CID
+        if batch is not None:  # a worker of a round runs no start: it ends, and the same request goes on
+            raise
+        return reply(run.dir, message="作業用コピーを準備します", next=missing.fields["next"])  # start makes it
     # Before a CID is claimed: a copy that cannot be made clean must not cost a CID one of its two tries.
     repo.reset(copy, run.meta["base_revision"])
     states = run.states()
@@ -432,16 +465,14 @@ def cmd_next(args) -> dict:
         return out
     found = count(states)
     if args.cid is not None:
-        done = (read_json(run.cid_dir(args.cid) / "state.json") or {}).get("status") == "done"
-        message = f"CID {args.cid} は" + ("処置済みです" if done else "ほかのエージェントが処置中です")
+        message = f"CID {args.cid} はほかのエージェントが処置中です"
     elif batch is not None:
         message = "この依頼で処置する CID は以上です"
     elif found["remaining"]:
         message = f"ほかのエージェントが処置中の CID が {found['working']} 件あります"
     else:
         message = "未処置の CID はありません"
-    return reply(run.dir, cid=None, done=True, counts=found, message=message,
-                 next=[] if batch is not None else [command("finish", run.dir)])
+    return none(message, states)
 
 
 # ---- save, review, merge --------------------------------------------------------------------
@@ -654,8 +685,8 @@ def summarize(run: Run) -> None:
     found = count(states)
     head = ["# Coverity の警告の処置結果", "", f"- リポジトリ: {run.meta['repo']}", f"- ストリーム: {run.meta['stream']}",
             f"- 警告: {found['total']} 件（処置済み {found['done']} 件、失敗 {found['failed']} 件、未処置 {found['remaining']} 件）"]
-    if run.fetch.get("limited") and run.fetch.get("total_matched"):
-        head.append(f"- 条件に合う警告は {run.fetch['total_matched']} 件あります。設定の上限（{found['total']} 件）まで取得しました")
+    if note := over_limit(run):
+        head.append(f"- {note}")
     write_bytes(run.dir / "summary.md", "\n".join([*head, "", table, "", *sections]).encode("utf-8"))
 
 
