@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """EVAL: run stage 1 (skills in a chat), 2 (triage-worker) or 3 (triage-orchestrator) with a real model, then grade.
 
-    python3 tests/eval/run_eval.py --stage 1|2|3 --vcs git|svn [--work <folder>] [--answer-ok] [--copies N]
+    python3 tests/eval/run_eval.py --stage 1|2|3 --vcs git|svn [--work <folder>] [--answer-ok] [--copies N] [--model M]
 
 The development form of the plugin (agents/*.md, .claude-plugin/plugin.json, .mcp.json) runs headless with the
 claude CLI against tests/coverity_emulator, in a scratch folder outside the repository. The tool that writes to
@@ -136,8 +136,7 @@ class Eval:
         self.stage, self.vcs, self.model, self.checks, self.usage = stage, vcs, model, [], {}
         self.repo, self.out = self.site / "repo", self.site / "coverity-triage-out"  # output_dir is the default
         self.snap = self.site / "plugin" / NAME
-        self.run, self.items, self.states = self.out / "none", [], {}  # the run folder, its items, state.json by CID
-        self.done = []  # the CIDs that are finished
+        self.run, self.items, self.states, self.done = self.out / "none", [], {}, []  # the run folder; see load()
         # The sample, --copies times. Copy k (2, 3, ...) is src/reader<k>.c with the functions <name>_<k>; its CIDs
         # are 1000 * (k - 1) higher. expected.yaml holds for every copy: each has its own group of one cause.
         code = (SAMPLE / "sample-target" / "src" / "reader.c").read_bytes().decode("utf-8")
@@ -232,8 +231,8 @@ def run_agent(ev: Eval, prompt: str, name: str, label: str, resume: str | None =
             "--plugin-dir", str(ev.snap), *who, "--setting-sources", "project",
             "--allowedTools", *allowed, "--add-dir", str(ev.out), "--output-format", "stream-json", "--verbose"]
     record, begin = ev.site / f"{name}.jsonl", time.monotonic()
-    who = f"エージェント {agent}" if agent else f"エージェントなしのチャット（モデル {ev.model}）"
-    print(f"{who} を実行しています（{label}、上限 {limit} 分）。記録: {record}", flush=True)
+    who = f"エージェント {agent} " if agent else f"エージェントなしのチャット（モデル {ev.model}）"
+    print(f"{who}を実行しています（{label}、上限 {limit} 分）。記録: {record}", flush=True)
     with record.open("wb") as log, record.with_suffix(".err").open("wb") as err:
         proc = subprocess.Popen(argv, cwd=str(ev.repo), env=ev.env, stdin=subprocess.DEVNULL, stdout=log, stderr=err,
                                 start_new_session=os.name == "posix")
@@ -412,7 +411,8 @@ def grade_after_ok(ev: Eval, t: Transcript) -> None:
     ev.check("OK の後に、修正を取り込んでいる", fine, f"{where}、applied.json の修正: {len(fixes)} 件")
     got, made = writes(ev), MADE.search(t.final)
     tried = any(str(block.get("name")).endswith("coverity_update_triage") for _, _, block in t.uses)
-    said = next((word for word in LEFT if word in t.final), None) if "登録" in t.final and not made else None
+    final = t.final.replace("未処置", "")  # 未処置 is said of the CIDs that are left (stage 1), not of the registration
+    said = next((word for word in LEFT if word in final), None) if "登録" in final and not made else None
     ev.check("Coverity への書き込みは行われず、最後のメッセージが、登録が残っていることを伝えている", not got and said,
              f"書き込み {len(got)} 件、書き込みのツールの呼び出し: {'あり（許可されず）' if tried else 'なし'}、"
              + (f"最後のメッセージに {said} あり" if said else f"最後のメッセージに「{made[0]}」とあります" if made
@@ -420,7 +420,7 @@ def grade_after_ok(ev: Eval, t: Transcript) -> None:
 
 
 def turn_list(ev: Eval, t: Transcript) -> None:
-    cids = load(ev)
+    cids = list(ev.states)
     missing = [w["cid"] for w in ev.warnings if w["cid"] not in cids] or [c for c in cids if str(c) not in t.final]
     ev.check("条件に合う警告をすべて取得し、メッセージに CID の一覧がある", cids and not missing,
              f"取得していない、またはメッセージにない CID: {missing}" if missing else "" if cids else "一覧なし")
@@ -429,7 +429,6 @@ def turn_list(ev: Eval, t: Transcript) -> None:
 
 
 def turn_cid(ev: Eval, t: Transcript) -> None:
-    load(ev)
     gaps, folder, said = lacks(ev, CID), ev.run / "cid" / str(CID), SQUEEZE.sub("", t.final)
     ev.check(f"CID {CID} だけが処置済みになり、result.json に必要な項目がそろっている", ev.new == [CID] and not gaps,
              "、".join(gaps) if ev.new == [CID] else f"処置済みになった CID: {ev.new or 'なし'}")
@@ -442,12 +441,10 @@ def turn_cid(ev: Eval, t: Transcript) -> None:
 
 
 def turn_next(ev: Eval, t: Transcript) -> None:
-    load(ev)
     ev.check("次の CID を、1件だけ処置している", len(ev.new) == 1, f"処置済みになった CID: {ev.new or 'なし'}")
 
 
 def turn_table(ev: Eval, t: Transcript) -> None:
-    load(ev)
     grade_table(ev, t, rows=True)
     grade_before_ok(ev, ev.baseline)
 
@@ -502,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             session = turn.session
             if not (turn.ended and session):  # the conversation cannot go on: the later requests are not typed
                 break
+            load(ev)
             grade(ev, turn)
         if ev.stage != 1:
             first = run_agent(ev, PROMPT, "transcript", "最初の依頼")
