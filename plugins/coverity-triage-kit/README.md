@@ -53,7 +53,7 @@ bash で設定した値は、そのターミナルの中だけで有効です。
 | 段階 | 入力するもの | プラグインが行うこと |
 | --- | --- | --- |
 | [1. 1件ずつ処置する](docs/guide/1-skill.md) | 「条件に合う警告を取得して」「CID 20002 を処置して」 | 指定した CID の修正コードと逸脱コメントを作成します |
-| [2. すべての警告を任せる](docs/guide/2-agent.md) | `copilot --agent coverity-triage-kit:triage-worker` で起動して、「条件に合う警告をすべて処置して」 | 1つのエージェントが、条件に合う警告をすべて、最後まで処置します |
+| [2. すべての警告を任せる](docs/guide/2-agent.md) | `copilot --agent coverity-triage-kit:triage-worker` で起動して、「条件に合う警告をすべて処置して」 | 1つのエージェントが、条件に合う警告を設定の上限（最初は20件）まで取得し、最後まで処置します |
 | [3. 複数のエージェントに任せる](docs/guide/3-multi-agent.md) | `copilot --agent coverity-triage-kit:triage-orchestrator` で起動して、同じ依頼 | 並列に処置し、同じ原因の CID を1つにまとめ、別のエージェントがすべての結果を検証します |
 | [4. 画面で確認して選ぶ](docs/guide/4-screen.md) | 「画面を開いて」 | ブラウザーの画面に、進捗と、CID ごとの修正コード・逸脱コメントを表示します |
 

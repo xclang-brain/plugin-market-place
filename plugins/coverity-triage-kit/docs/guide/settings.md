@@ -19,13 +19,14 @@ conditions:
 | MISRA の10番台だけ | `checkers: ["MISRA C-2012 Rule 10.*"]` |
 | 保留にした警告も対象にする | `classification: [Unclassified, Pending]` |
 | 1回に50件まで処置する | `limit: 50` |
-| main 以外のブランチ（例 develop）を解析しているストリームを処置する | `base_branch: develop` |
 
 条件を変えた後の依頼では、新しい結果フォルダーを作成して、新しい条件で警告を取得し直します。処置が終わって「OK」と答えていない一覧があるときは、先に「OK」と答えてから、条件を変えてください。
 
 ## そのほかの設定
 
-設定ファイルには、キーごとに説明のコメントが付いています。条件のほかに、結果フォルダーの場所（`output_dir`）、3段階目で同時に動かすエージェントの数（`parallel`）、git で修正を取り込む先のブランチ（`base_branch`）、下のオプション（`build`）を設定できます。
+設定ファイルには、キーごとに説明のコメントが付いています。条件のほかに、結果フォルダーの場所（`output_dir`）、3段階目で同時に動かすエージェントの数（`parallel`）、git で処置の基準にし、修正を取り込む先のブランチ（`base_branch`）、下のオプション（`build`）を設定できます。
+
+main 以外のブランチ（例 develop）の最新のコードで処置するときは、設定ファイルの `base_branch: ''` の行を `base_branch: develop` に変えます。空のときは、origin の既定のブランチ（例 main）です。
 
 ## オプションを使う
 
@@ -37,7 +38,7 @@ build:
   check_fixes: true
 ```
 
-**取得の前に解析する**：`build.initial_analysis: true` にすると、警告を取得する前に、ビルド、解析、Coverity への登録を行います。`cov-build`、`cov-analyze`、`cov-commit-defects` が PATH にあることが必要です。
+**取得の前に解析する**：ビルドのコマンド（`build.command`）を書き、`build.initial_analysis: true` にします。警告を取得する前に、リポジトリのフォルダーでビルド、解析、Coverity への登録を行います。`cov-build`、`cov-analyze`、`cov-commit-defects` が PATH にあることが必要です。
 
 設定を変えた後は、`/coverity-triage-kit:coverity-setup` と入力すると、設定ファイル、認証情報、接続をまとめて確認できます。
 
