@@ -144,7 +144,8 @@ class AnalysisTest(OptionCase):
         self.assertEqual(failed["log"], (Path(failed["run_dir"]) / "analyze.log").as_posix())
         self.assertIn("start --repo", failed["next"][0])
         del self.env["STUB_FAIL"], self.env["COV_AUTH_KEY"]
-        self.assertIn("環境変数 COV_USER と COV_AUTH_KEY を設定してください", self.start()["error"])
+        self.assertEqual(self.start()["error"], "最初の解析と登録が失敗しました: 環境変数 COV_USER と COV_AUTH_KEY を設定してください。"
+                                                "手順は /coverity-triage-kit:coverity-setup と入力すると表示されます")
         self.configure("build:\n  initial_analysis: true\n")
         self.assertIn("build.command", self.start()["error"])
 

@@ -163,6 +163,14 @@ class Git:
         proc = self.git("cat-file", "--filters", f"{revision}:{rel}", cwd=dest, check=False)
         return proc.stdout if proc.returncode == 0 else None
 
+    def stored(self, dest: Path, revision: str, rel: str) -> tuple[bytes | None, bytes | None]:
+        """(before, after) of a changed file as git stores them: the bytes the patch is made of (diff has
+        staged the copy). Where git converts line ends (core.autocrlf, eol in .gitattributes) these are
+        not the bytes of the working file. None: no such file."""
+        blobs = [self.git("cat-file", "blob", name, cwd=dest, check=False)
+                 for name in (f"{revision}:{rel}", f":0:{rel}")]
+        return tuple(proc.stdout if proc.returncode == 0 else None for proc in blobs)
+
     def apply(self, dest: Path, patch: Path) -> str:
         """Apply a patch to the copy. '' when it applied, else the reason (nothing is changed then)."""
         proc = self.git("apply", "--whitespace=nowarn", str(patch), cwd=dest, check=False)
@@ -257,6 +265,10 @@ class Svn:
         """The bytes a file has in a clean copy (line ends as svn checks them out); None: no such file."""
         proc = self.svn("cat", rel + "@BASE", cwd=dest, check=False)
         return proc.stdout if proc.returncode == 0 else None
+
+    def stored(self, dest: Path, revision: str, rel: str) -> tuple[bytes | None, bytes | None]:
+        """(before, after) of a changed file: svn makes the patch from the working file. None: no such file."""
+        return self.original(dest, revision, rel), (dest / rel).read_bytes() if (dest / rel).is_file() else None
 
     def apply(self, dest: Path, patch: Path) -> str:
         for dry in (("--dry-run",), ()):  # svn patch applies what it can: look first, so that nothing is half applied

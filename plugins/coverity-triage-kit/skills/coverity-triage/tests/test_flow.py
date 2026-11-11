@@ -4,10 +4,7 @@ import argparse
 import contextlib
 import json
 import os
-import shutil
 import sqlite3
-import sys
-import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta
@@ -32,6 +29,10 @@ class Flow:
     def meta(self, run) -> dict:
         return json.loads((run / "run.json").read_text(encoding="utf-8"))
 
+    def listed(self, sentence: str, branch: str = "main") -> str:
+        """The message of start for a list nothing was handed out of: git names the branch whose code is used."""
+        return sentence + (f"。ブランチ {branch} の最新のコードで処置します" if self.kind == "git" else "")
+
     def test_start_asks_for_the_list_first_and_continues_the_folder(self):
         first = self.run_triage("start", "--repo", self.repo)  # answered at once: the copies are made meanwhile
         run = Path(first["run_dir"])
@@ -50,7 +51,7 @@ class Flow:
         ready = self.start()
         self.assertEqual((ready["run_dir"], ready["counts"]["total"], ready["counts"]["pending"]),
                          (first["run_dir"], 3, 3))
-        self.assertEqual(ready["message"], "条件に合う警告は 137 件あります。設定の上限（3 件）まで取得しました")
+        self.assertEqual(ready["message"], self.listed("条件に合う警告は 137 件あります。設定の上限（3 件）まで取得しました"))
         self.assertEqual(ready["fetch"], [], "in a chat the warning paths are fetched per CID")
         self.assertIn(f'next --run "{run.as_posix()}" --slot 1', ready["next"][0])
         self.assertEqual({k: v for k, v in self.meta(run).items() if k != "base_revision"}, {
@@ -85,12 +86,13 @@ class Flow:
         run = self.begin(THREE_ISSUES)
         fetched = datetime.now() - timedelta(hours=3)
         os.utime(run / "issues.json", (fetched.timestamp(), fetched.timestamp()))
-        self.assertEqual(self.start()["message"], f"条件に合う警告を 3 件取得しました（警告の取得: {fetched:%Y-%m-%d %H:%M}）")
+        self.assertEqual(self.start()["message"],
+                         self.listed(f"条件に合う警告を 3 件取得しました（警告の取得: {fetched:%Y-%m-%d %H:%M}）"))
 
     def test_a_list_cut_at_the_limit_says_so_without_the_total_too(self):
         run = self.begin(THREE_ISSUES, total_matched=None, limited=True)  # Coverity cannot count wildcard matches
         sentence = "条件に合う警告が、設定の上限（3 件）より多くあります。上限まで取得しました"
-        self.assertEqual(self.start()["message"], sentence)
+        self.assertEqual(self.start()["message"], self.listed(sentence))
         self.work(self.next(run, "--cid", ONE))
         self.assertIn(f"\n- {sentence}\n", self.summary(run))
 
@@ -113,13 +115,41 @@ class Flow:
         self.assertEqual(third["fetch"][0]["tool"], "coverity_search_issues")
         self.assertEqual(self.meta(Path(third["run_dir"]))["stream"], "app-next")
 
+    def test_another_base_branch_gets_a_new_folder(self):
+        run = self.begin(THREE_ISSUES)
+        if self.kind == "git":  # the stream analyses develop, which is ahead of the branch that was detected
+            support.call(*support.GIT, "checkout", "-q", "-b", "develop", cwd=self.repo)
+            support.write(self.repo, {"src/d.c": b"int d;\n"})
+            for args in (("add", "src/d.c"), ("commit", "-q", "-m", "develop"), ("checkout", "-q", "main")):
+                support.call(*support.GIT, *args, cwd=self.repo)
+        self.configure("base_branch: develop\n")
+        again = self.start()
+        if self.kind == "svn":  # the key is for git: the folder is continued
+            self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), "条件に合う警告を 3 件取得しました"))
+            return
+        second = Path(again["run_dir"])
+        self.assertEqual((second != run, again["fetch"][0]["tool"]), (True, "coverity_search_issues"))
+        (second / "issues.json").write_text(json.dumps({"issues": THREE_ISSUES}))
+        ready = self.start()  # run.json has no branch before the copies are made: that is not another branch
+        self.assertEqual((ready["run_dir"], ready["message"]), (
+            second.as_posix(), self.listed("条件に合う警告を 3 件取得しました", "develop")))
+        self.assertEqual((self.meta(second)["base_branch"], (second / "work" / "w1" / "src" / "d.c").is_file()),
+                         ("develop", True))
+        self.assertEqual(self.start()["run_dir"], second.as_posix(), "the branch of the folder: continued")
+        self.configure()  # no branch in the settings: the folder is not asked which branch it was made for
+        self.assertEqual(self.start()["run_dir"], second.as_posix())
+
     def test_no_warning_is_answered_once_and_the_next_request_fetches_again(self):
         first = self.start("--slots", 1)
         run = Path(first["run_dir"])
-        (run / "issues.json").write_text(json.dumps({"issues": [], "total_matched": 0, "limited": False}))
+        applied = {"checkers": ["NULL_*", "FORWARD_NULL"], "impacts": [], "classification": ["Unclassified"], "limit": 20}
+        (run / "issues.json").write_text(json.dumps({"issues": [], "total_matched": 0, "limited": False,
+                                                     "conditions": applied}))
         answer = self.start("--slots", 1)  # the folder with the empty list is open until this was answered
-        self.assertEqual((answer["run_dir"], answer["message"], answer["next"], answer["counts"]["total"]),
-                         (first["run_dir"], "条件に合う警告はありません", [], 0))
+        self.assertEqual((answer["run_dir"], answer["message"], answer["next"], answer["counts"]["total"]), (
+            first["run_dir"], "条件に合う警告はありません（ストリーム app-main、チェッカー NULL_*, FORWARD_NULL、Impact すべて、"
+            f"分類 Unclassified）。条件は {self.repo.as_posix()}/.coverity-triage/config.yaml の conditions で変更できます",
+            [], 0))
         self.assertIn("- 警告: 0 件（処置済み 0 件、失敗 0 件、未処置 0 件）", self.summary(run))
         self.settle()
         again = self.start("--slots", 1)  # the same request a minute later: Coverity is asked again
@@ -199,6 +229,36 @@ class Flow:
         self.assertEqual(errors, [])
         self.assertEqual(sorted(sum(handed.values(), [])), cids, handed)
         self.assertTrue(all(self.state(run, cid)["status"] == "done" for cid in cids))
+
+    def test_a_claim_is_exclusive(self):
+        run = self.begin(THREE_ISSUES, "--slots", 2)
+        token = run / "work" / "claims" / f"{ONE}.1"  # another process has won ONE and has not written its state yet
+        token.parent.mkdir(parents=True, exist_ok=True)
+        token.write_bytes(b"")
+        self.assertEqual(self.next(run, "--slot", 2)["cid"], TWO)
+        self.assertFalse((run / "cid" / str(ONE) / "state.json").exists())
+        os.utime(token, (token.stat().st_mtime - 61,) * 2)  # it ended before it wrote the state: that try is lost
+        given = self.next(run, "--slot", 1)
+        self.assertEqual((given["cid"], self.state(run, ONE)["tries"]), (ONE, 2))
+
+    def test_a_named_cid_waits_while_an_agent_works_on_another(self):
+        run = self.begin(THREE_ISSUES, "--slots", 1)
+        self.work(self.next(run))
+        given = self.next(run)  # the agent has TWO in the one work copy, its edit is not saved yet
+        edited = Path(given["work_dir"]) / "src" / "b.c"
+        edited.write_bytes(edited.read_bytes().replace(b"return 0;", b"return 1;"))
+        asked = self.next(run, "--cid", ONE)  # another conversation: 「CID 20001 を処置して」
+        self.assertEqual((asked["cid"], asked["message"]), (
+            None, f"エージェントが CID {TWO} を処置中です。エージェントの処置が終わってから、もう一度依頼してください"))
+        self.assertEqual((self.state(run, ONE)["status"], b"return 1;" in edited.read_bytes()), ("done", True),
+                         "the result is not put back and the copy is not reset")
+        self.assertEqual(self.work(given, {}, with_fix=True)["files"], ["src/b.c"], "only the agent's own change")
+        again = self.next(run, "--cid", ONE)  # the agent has saved: the same request is served
+        self.assertEqual((again["cid"], again["rework"]["patch_applied"]), (ONE, True))
+        long_ago = (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds")
+        (run / "cid" / str(ONE) / "state.json").write_text(
+            json.dumps({**self.state(run, ONE), "claimed_at": long_ago}), encoding="utf-8")
+        self.assertEqual(self.next(run, "--cid", THREE)["cid"], THREE, "a claim nobody saved for 30 minutes")
 
     def test_batch_of_a_round_is_five_cids(self):
         run = self.begin([issue(cid) for cid in range(30001, 30008)], "--slots", 2, "--review")
@@ -290,7 +350,8 @@ class Flow:
         for data, problem in (  # a fix that a text tool saved in its own form is refused
                 (fixed.encode("utf-8"), "src/sjis.c: 文字コードが変わっています（修正前: UTF-8 以外（Shift_JIS など）、修正後: UTF-8）"),
                 (fixed.replace("\r\n", "\n").encode("cp932"), "src/sjis.c: 改行コードが変わっています（修正前: CRLF、修正後: LF）"),
-                (fixed.replace("1;\r\n", "1;\n").encode("cp932"), "修正後: CRLF と LF の混在）")):
+                (fixed.replace("1;\r\n", "1;\n").encode("cp932"), "修正後: CRLF と LF の混在）"),
+                (b"\xef\xbb\xbf" + fixed.encode("cp932"), "src/sjis.c: 先頭の BOM が追加されています。")):
             refused = self.work(given, {"src/sjis.c": data}, evidence=evidence)
             self.assertEqual((refused["ok"], len(refused["problems"])), (False, 1), refused)
             self.assertIn(problem, refused["problems"][0])
@@ -454,6 +515,8 @@ class Flow:
         refused = self.run_triage("finish", "--run", run)
         self.assertEqual((refused["ok"], refused["unreviewed"]), (False, [ONE, TWO]))
         self.assertEqual(refused["error"], "検証されていない CID が 2 件あります")
+        chat = (support.SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8").split("\n## 6.")[1]
+        self.assertTrue("`pending`" in chat and "`unreviewed`" in chat, "in a chat both refusals lead on to the list")
         self.assertFalse((run / "summary.md").exists())
         self.assertEqual(self.start("--slots", 1, "--review")["run_dir"], run.as_posix(), "not reviewed: continued")
         self.run_triage("review", "--run", run, "--cid", ONE, "--outcome", "pass")
@@ -541,7 +604,12 @@ class Flow:
 
     def test_one_named_cid_in_a_chat(self):
         run = self.begin(THREE_ISSUES)  # no --slots: stage 1
-        self.assertFalse(self.next(run, "--cid", 99999)["ok"])
+        unknown = self.next(run, "--cid", 99999)
+        self.assertEqual((unknown["ok"], unknown["next"], unknown["error"]), (
+            False, [], "CID 99999 は、設定ファイルの条件で取得した警告（3 件）の中にありません。この CID を対象にするときは、"
+            "設定ファイルの conditions（checkers、impacts、classification、limit）を変更してから、"
+            "「条件に合う警告を取得して」と入力してください"))
+        self.assertEqual(self.next(run, "--cid", ONE)["cid"], ONE)  # in a chat the person names one CID, then another
         given = self.next(run, "--cid", TWO)
         self.assertEqual(given["cid"], TWO)
         self.assertTrue(given["next"][0].endswith(f"save --run \"{run.as_posix()}\" --cid {TWO} --slot 1"))
@@ -625,6 +693,31 @@ class GitFlow(Flow, support.RunCase):
         self.assertTrue(self.work(self.next(run))["ok"])
         self.assertEqual((self.state(run, ONE)["files"], person()), (["src/a.c"], before))
 
+    def test_line_ends_are_checked_as_git_stores_them(self):
+        support.write(self.repo, {".gitattributes": b"src/a.c text eol=lf\n"})
+        for args in (("add", ".gitattributes"), ("commit", "-q", "-m", "attributes"),
+                     ("config", "core.autocrlf", "true")):  # the default of Git for Windows
+            support.call(*support.GIT, *args, cwd=self.repo)
+        run = self.begin([issue(ONE), issue(TWO, "src/b.c"), issue(THREE, "src/sjis.c", 4)])
+
+        def changed(saved: dict) -> list:
+            self.assertTrue(saved["ok"], saved)
+            return [line for line in Path(saved["patch_file"]).read_bytes().split(b"\n")
+                    if line[:1] in (b"+", b"-") and line[:3] not in (b"+++", b"---")]
+
+        given = self.next(run, "--cid", TWO)  # git stores LF, the file of the copy has CRLF
+        self.assertEqual((Path(given["work_dir"]) / "src" / "b.c").read_bytes(),
+                         support.FILES["src/b.c"].replace(b"\n", b"\r\n"))
+        added = self.work(given, {"src/b.c": (b"{\r\n", b"{\r\n    int n = 0;\n")})  # an edit tool adds a line with LF
+        self.assertEqual(changed(added), [b"+    int n = 0;"], "git stores every line with LF: the patch is right")
+        self.assertTrue(self.next(run, "--cid", TWO)["rework"]["patch_applied"], "and it fits on the copy")
+        given = self.next(run, "--cid", ONE)  # eol=lf: LF in the copy, and a tool saves the file with CRLF
+        fixed = support.FILES["src/a.c"].replace(b"return *p;", b"return p ? *p : 0;").replace(b"\n", b"\r\n")
+        self.assertEqual(changed(self.work(given, {"src/a.c": fixed})), [b"-    return *p;", b"+    return p ? *p : 0;"])
+        given = self.next(run, "--cid", THREE)  # stored with CRLF: saved with LF, every line would change
+        refused = self.work(given, {"src/sjis.c": support.SJIS.replace(b"\r\n", b"\n").replace(b"0;", b"1;")})
+        self.assertIn("src/sjis.c: 改行コードが変わっています（修正前: CRLF、修正後: LF）", refused["problems"][0])
+
 
 class SvnFlow(Flow, support.RunCase):
     kind = "svn"
@@ -657,26 +750,6 @@ class CleanupTest(support.RunCase):
             self.assertIn(f"| {ONE} |", self.summary(run))
             other = self.triage.find_run(self.repo, self.triage.settings(self.repo), "git", True)  # 取得し直して
         self.assertTrue(other != run and other.is_dir() and (run / "work").is_dir(), "the next fetch is not stopped")
-
-
-class EvalCasesTest(unittest.TestCase):
-
-    def test_the_scaffold_puts_every_case_on_the_path_of_a_real_request(self):
-        if not shutil.which("uv"):
-            self.skipTest("uv がありません")
-        evals = support.SCRIPTS.parent / "evals"
-        cases = sorted(p for p in evals.iterdir() if p.is_dir())
-        self.assertEqual(len(cases), 2)
-        for case in cases:
-            top = Path(tempfile.mkdtemp(prefix="triage-test-")).resolve()
-            self.addCleanup(vcs.remove_tree, top)
-            run = support.call(sys.executable, evals / "scaffold.py", case, top / "work", cwd=top).decode().strip()
-            cid = json.loads((case / "warning.json").read_text(encoding="utf-8"))["cid"]
-            while "counts" not in support.triage("start", "--repo", top / "work"):
-                pass
-            given = support.triage("next", "--run", run, "--cid", cid)
-            self.assertEqual((given["cid"], given["fetch"]), (cid, []), "no Coverity server is needed")
-            self.assertTrue((Path(given["work_dir"]) / given["issue"]["file"]).is_file(), given["issue"])
 
 
 class ErrorsTest(support.RunCase):

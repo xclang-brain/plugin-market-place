@@ -176,6 +176,19 @@ def over_limit(run: Run) -> str:
             f"条件に合う警告が、設定の上限（{limit} 件）より多くあります。上限まで取得しました")
 
 
+def no_warning(repo: Path, cfg: dict, fetch: dict) -> str:
+    """The sentence for a list without warnings: the conditions the search applied, and where they are set."""
+    used = fetch.get("conditions") if isinstance(fetch.get("conditions"), dict) else {}
+
+    def shown(key: str) -> str:
+        value = used.get(key) or []
+        return ", ".join(map(str, value if isinstance(value, list) else [value])) or "すべて"
+
+    return (f"条件に合う警告はありません（ストリーム {cfg['stream']}、チェッカー {shown('checkers')}、"
+            f"Impact {shown('impacts')}、分類 {shown('classification')}）。"
+            f"条件は {(repo / '.coverity-triage' / 'config.yaml').as_posix()} の conditions で変更できます")
+
+
 def unreviewed(states: dict) -> list[int]:
     return [cid for cid, s in states.items()
             if s and s["status"] == "done" and not s.get("merged_into") and not s.get("review")]
@@ -214,15 +227,17 @@ def closed(run: Run) -> bool:
 
 def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
     """The newest result folder of this repository, or a new one. A new one is made: with --new; when
-    the stream or the conditions of the settings file are no longer the ones the folder was made for;
-    and when the newest folder is closed."""
+    the stream, the conditions or the base branch of the settings file are no longer the ones the folder
+    was made for; and when the newest folder is closed."""
     out = cfg["output_dir"]
     made_for = {"stream": cfg["stream"], "conditions": cfg["conditions"]}
     runs = sorted((p for p in out.iterdir() if (read_json(p / "run.json") or {}).get("repo") == repo.as_posix()),
                   reverse=True) if out.is_dir() else []
     if runs and not new:
         latest = Run(runs[0], starting=True)
-        if {key: latest.meta.get(key) for key in made_for} == made_for and not closed(latest):
+        based = latest.meta.get("base_branch")  # '': svn, or git before the work copies are made
+        same_base = not cfg["base_branch"] or not based or cfg["base_branch"] == based
+        if {key: latest.meta.get(key) for key in made_for} == made_for and same_base and not closed(latest):
             return runs[0]
     for old in runs:
         remove_work(old, repo)  # what cannot be deleted now is tried again with the next new folder
@@ -263,7 +278,7 @@ def cmd_start(args) -> dict:
     listed = bool(current.fetch)
     if listed and not current.issues:  # nothing to work on: no work copy is waited for
         summarize(current)  # the request is answered: the next one asks Coverity again
-        return reply(run_dir, counts=count({}), message="条件に合う警告はありません", next=[])
+        return reply(run_dir, counts=count({}), message=no_warning(repo, cfg, current.fetch), next=[])
     states = current.states()
     found = count(states)
     if listed and not found["remaining"] and not (mode["review"] and unreviewed(states)):
@@ -304,13 +319,16 @@ def cmd_start(args) -> dict:
     run = Run(run_dir)
     states = run.states()
     found = count(states)
-    if any(states.values()):  # a CID was handed out before
-        message = f"前回の続きから進めます（残り {found['remaining']} 件）"
-    else:
+    first = not any(states.values())  # no CID was handed out yet
+    if first:
         message = over_limit(run) or f"条件に合う警告を {found['total']} 件取得しました"
+    else:
+        message = f"前回の続きから進めます（残り {found['remaining']} 件）"
     listed_at = (run_dir / "issues.json").stat().st_mtime
     if time.time() - listed_at > OLD_LIST:
         message += f"（警告の取得: {time.strftime('%Y-%m-%d %H:%M', time.localtime(listed_at))}）"
+    if first and mode["base_branch"]:  # git: the fixes are made on this branch, not on the person's checkout
+        message += f"。ブランチ {mode['base_branch']} の最新のコードで処置します"
     if status.get("note"):
         message += f"。{status['note']}"
     # A run that processes every CID fetches the warning paths once, here; a chat fetches them per CID (next).
@@ -405,7 +423,9 @@ def cmd_next(args) -> dict:
     if not run.fetch:  # not an error: the agent goes on with start, which asks for the list
         return reply(run.dir, message="警告を取得します", next=[start_command(run.repo, run.meta)])
     if args.cid is not None and args.cid not in run.issues:
-        raise Problem(f"CID {args.cid} は取得した警告の一覧にありません")
+        raise Problem(f"CID {args.cid} は、設定ファイルの条件で取得した警告（{len(run.issues)} 件）の中にありません。"
+                      "この CID を対象にするときは、設定ファイルの conditions（checkers、impacts、classification、limit）"
+                      "を変更してから、「条件に合う警告を取得して」と入力してください")
 
     def none(message: str, states: dict) -> dict:  # no CID is handed out
         return reply(run.dir, cid=None, done=True, counts=count(states), message=message,
@@ -415,6 +435,12 @@ def cmd_next(args) -> dict:
     leader = (states.get(args.cid) or {}).get("merged_into")
     if leader:  # the result of a member is the one of its leader, with or without a work copy
         return none(f"CID {args.cid} は CID {leader} に統合されています。{leader} を指定してください", states)
+    if args.cid is not None and run.meta["all"]:  # a person names a CID in a run that an agent works through
+        busy = [cid for cid, s in states.items()
+                if cid != args.cid and s and s["status"] == "working" and age(s["claimed_at"]) <= STALE]
+        if busy:  # a work copy has one writer: nothing is reset and the named CID is not put back
+            return none(f"エージェントが CID {busy[0]} を処置中です。エージェントの処置が終わってから、"
+                        "もう一度依頼してください", states)
     try:
         repo, copy = work_copy(run, slot)
     except Problem as missing:
@@ -506,9 +532,9 @@ def cmd_save(args) -> dict:
         if patch and not result.get("fix"):
             problems.append("work_dir のファイルが変更されていますが、fix がありません。fix.summary を記入するか、変更を元に戻してください")
         for rel in files:
-            before = repo.original(copy, base, rel)
-            if before is not None and (copy / rel).is_file():
-                problems += checks.check_form(rel, before, (copy / rel).read_bytes())
+            before, after = repo.stored(copy, base, rel)  # the bytes the patch is made of
+            if before is not None and after is not None:
+                problems += checks.check_form(rel, before, after)
         for n, item in enumerate(result["evidence"]):  # a place in the code before the fix
             rel = item["file"]
             inside = not Path(rel).is_absolute() and ".." not in Path(rel).parts

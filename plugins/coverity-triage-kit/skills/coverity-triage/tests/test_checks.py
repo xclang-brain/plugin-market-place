@@ -111,6 +111,12 @@ class ResultTest(unittest.TestCase):
         self.assertIn("a.c: 改行コードが変わっています（修正前: CRLF、修正後: LF）", both)
         self.assertIn("a.c: 文字コードが変わっています", both)
         self.assertEqual(len(checks.check_form("a.c", utf8, sjis.replace(b"\r\n", b"\n"))), 1)
+        bom = b"\xef\xbb\xbf" + utf8
+        self.assertEqual(checks.check_form("a.c", bom, utf8),
+                         ["a.c: 先頭の BOM が削除されています。修正前と同じく、BOM を付けて保存してください"])
+        self.assertEqual(checks.check_form("a.c", b"int a;\n", b"\xef\xbb\xbfint a;\n"),
+                         ["a.c: 先頭の BOM が追加されています。修正前と同じく、BOM を付けずに保存してください"])
+        self.assertEqual(checks.check_form("a.c", bom, bom + b"int b;\n"), [])
 
 
 class ReviewTest(unittest.TestCase):

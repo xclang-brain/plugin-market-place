@@ -225,7 +225,8 @@ def build(run_dir: Path, args: dict) -> dict:
 def analyze(run_dir: Path, args: dict) -> dict:
     user, key = get_env("COV_USER"), get_env("COV_AUTH_KEY")
     if not user or not key:
-        raise JobError("環境変数 COV_USER と COV_AUTH_KEY を設定してください")
+        raise JobError("環境変数 COV_USER と COV_AUTH_KEY を設定してください。"
+                       "手順は /coverity-triage-kit:coverity-setup と入力すると表示されます")
     folder = (run_dir / "work" / "cov").as_posix()  # the intermediate directory
     steps = (("ビルド（cov-build）", f'cov-build --dir "{folder}" {args["command"]}', None),
              ("解析（cov-analyze）", f'cov-analyze --dir "{folder}" {args["analyze_args"]}', None),

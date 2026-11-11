@@ -148,7 +148,7 @@ def coverity_fields(result: dict, impact) -> dict:
 
 
 def check_form(name: str, before: bytes, after: bytes) -> list[str]:
-    """A fix keeps the line ends and the character encoding of the file (``before``: the clean file)."""
+    """A fix keeps the line ends, the character encoding and the BOM of the file (``before``: the clean file)."""
     def form(data: bytes) -> tuple[str | None, str | None]:  # None: the bytes do not tell
         crlf = data.count(b"\r\n")
         lf = data.count(b"\n") - crlf
@@ -158,9 +158,12 @@ def check_form(name: str, before: bytes, after: bytes) -> list[str]:
             code = "UTF-8 以外（Shift_JIS など）"
         return ("CRLF と LF の混在" if crlf and lf else "CRLF" if crlf else "LF" if lf else None), code
 
-    return [f"{name}: {label}が変わっています（修正前: {old}、修正後: {new}）。修正前と同じ{label}で保存してください"
-            for label, old, new in zip(("改行コード", "文字コード"), form(before), form(after))
-            if old and new and old != new and "混在" not in old]
+    had, has = before.startswith(b"\xef\xbb\xbf"), after.startswith(b"\xef\xbb\xbf")
+    bom = [f"{name}: 先頭の BOM が{'削除' if had else '追加'}されています。"
+           f"修正前と同じく、BOM を{'付けて' if had else '付けずに'}保存してください"] if had != has else []
+    return bom + [f"{name}: {label}が変わっています（修正前: {old}、修正後: {new}）。修正前と同じ{label}で保存してください"
+                  for label, old, new in zip(("改行コード", "文字コード"), form(before), form(after))
+                  if old and new and old != new and "混在" not in old]
 
 
 def check_review(outcome: str, points: list[str], cap: str | None) -> list[str]:
