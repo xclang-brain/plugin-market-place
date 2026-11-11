@@ -1,6 +1,0 @@
-# envmon の Coverity トリアージの設定
-coverity:
-  url: https://coverity.example.co.jp:8443
-vcs:
-  type: git
-  base_branch: main
