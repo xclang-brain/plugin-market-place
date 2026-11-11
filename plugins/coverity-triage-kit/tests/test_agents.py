@@ -57,17 +57,21 @@ REQUESTS = [  # contracts 7.2: exactly these three texts
     "保存の応答の next のコマンドを続けて実行し、done が true の応答で終了します。質問はしません。\n"
     "<next のコマンド>\n終了したら、処置した CID と、保存できなかった CID を1行で報告してください。",
     "処置済みの CID から、同じ原因のものを統合してください。候補（merge_candidates）と統合のコマンド（merge_command）は、"
-    "次のコマンドで取得します。\n<状態のコマンド>\n"
+    "次のコマンドで取得します。どのコマンドも、1回の呼び出しで、その1行だけを実行します。\n<状態のコマンド>\n"
     "終了したら、統合した CID、作り直しにした CID、統合しなかった候補とその理由を報告してください。",
     "次の CID の結果を検証してください。\nCID: <cids>\n修正前のコード: <work_dir>\n"
     "CID ごとのファイル: <run_dir>/cid/<CID>/result.json、fix.patch、issue.json、state.json\n"
-    "検証の結果は、CID ごとに次のコマンドで記録します。\n<review のコマンド>\n"
+    "検証の結果は、CID ごとに次のコマンドで記録します。CID 1件につき1回の呼び出しで、この1行だけを実行します。\n<review のコマンド>\n"
     "終了したら、CID ごとに結果（合格・要確認・差し戻し）を1行ずつ報告してください。",
 ]
-# Words in backticks that are not a field of a triage.py or plan reply: commands, values, and the fields of
-# replies this test does not make (log: a job that still runs or failed; call: apply.py apply).
-WORDS = {*MCP, *"start next save finish status review merge plan apply log call".split(),
+# Words in backticks that are not a field of a reply of triage.py or apply.py: commands, values, and the field
+# of a reply this test does not make (log: a job that still runs or failed).
+WORDS = {*MCP, *"start next save finish status review merge plan apply log".split(),
          *"true false null pass flag rework unverified".split()}
+# What every body says where it runs a command: alone, as it stands. A CLI allows a command by its form, and
+# nobody answers a prompt of a sub-agent: a line in a loop, behind a variable or a pipe is refused, and what
+# it should record is lost (seen with 18 warnings: no merge, six results without a review).
+ALONE = "シェルの変数、for や while、`;` や `&&`、パイプ、cd、リダイレクトは使いません"
 
 
 def read(name: str, copilot: bool) -> tuple[dict, str]:
@@ -140,6 +144,25 @@ class Texts(unittest.TestCase):
         for name in ("triage-reviewer", "triage-integrator"):  # inside "…" a shell expands ` and $
             self.assertIn('`"`、`` ` ``、`$` を含まない1文', read(name, True)[1], name)
 
+    def test_the_step_that_runs_a_command_says_that_it_is_run_alone_and_as_it_stands(self):
+        """In the step, with the reason, not only in the rules at the end: (agent, how the step begins, per what one call)."""
+        for name, step, each in (("triage-reviewer", "5. 結果を記録します。", "CID 1件につき1回の呼び出しで"),
+                                 ("triage-integrator", "4. 同じ原因の CID を統合します。", "統合する組1つにつき1回の呼び出しで"),
+                                 ("triage-orchestrator", "コマンドは、応答からコピーして、", "1回の呼び出しで1行だけ"),
+                                 ("triage-worker", "コマンドは、応答の `next`", "1回の呼び出しで1行だけ")):
+            body = read(name, True)[1]
+            said = [line for line in body.splitlines() if line.strip().startswith(step)]
+            self.assertEqual(len(said), 1, name)
+            for part in (each, "パスも省略せずにそのまま実行します", ALONE, "形を変えたコマンドは実行が許可されず"):
+                self.assertIn(part, said[0], name)
+            self.assertLess(body.index(ALONE), body.index("## 守ること"), name)
+        for name in ("triage-reviewer", "triage-integrator"):  # nobody answers a prompt there: the line is run again as given
+            self.assertIn("許可されなかったときは、この形に直して、もう一度実行します", read(name, True)[1], name)
+        own = next(line for line in read("triage-orchestrator", True)[1].splitlines() if line.startswith("5. **検証**"))
+        self.assertIn("1行を、CID 1件につき1回の呼び出しでそのまま実行し（変数や for でまとめません）", own)  # its own records
+        for name in ("triage-worker", "triage-orchestrator"):  # the write call that was not made: the sentence of the reply
+            self.assertIn("呼び出しが許可されなかったとき、またはエラーになったときは、報告の最後に、`if_not_called` の文を、文字を変えずに書きます", read(name, True)[1])
+
 
 class Replies:
     """The replies of the real scripts that the bodies speak of; GitReplies and SvnReplies run them."""
@@ -199,13 +222,16 @@ class Replies:
             self.assertRegex(line, r' next --run ".*" --slot \d+ --batch \d+$')
             self.work(line, refuse=n == 0)
         status = self.run_line(status_line)
-        merge = status["merge_command"]
-        self.assertTrue(merge.endswith(" --leader <CID> --members <CID,CID> [--rework]"), merge)
+        merge = status["merge_command"]  # a whole line: the integrator fills in the CIDs and the point, and adds nothing
+        rework = f'--rework --point "{flowlib.POINT}"'
+        self.assertTrue(merge.endswith(f" --leader <CID> --members <CID,CID> [{rework}]"), merge)
+        self.assertIn(f"`{flowlib.POINT}` を、その内容に書き換えます", read("triage-integrator", True)[1])
         group = status["merge_candidates"][0]["cids"]
         point = "src/reader.c:58 同じ変換が3行にある"
         merged = self.run_line(merge.replace("<CID,CID>", ",".join(map(str, group[1:]))).replace("<CID>", str(group[0]))
-                               .replace("[--rework]", f'--rework --point "{point}"'))
+                               .replace(f"[{rework}]", rework.replace(flowlib.POINT, point)))
         self.assertTrue(merged["ok"], merged)
+        self.assertEqual(json.loads((run / "cid" / str(group[0]) / "state.json").read_bytes())["rework"][1:], [point])
         for line in self.run_line(status_line)["next"]:  # the leader goes back to a worker
             self.work(line)
         self.assertIn("unreviewed", self.run_line(finish_line))
@@ -231,6 +257,8 @@ class Replies:
             f'uv run --native-tls --quiet "{APPLY.as_posix()}" plan --repo "{self.repo.as_posix()}" --run "{run.as_posix()}"'], True))
         plan = self.run_line(done["next"][0])  # and the apply line waits for the OK: nothing more is run without it
         self.assertEqual((plan["next"], len(plan["after_ok"]), " apply --repo " in plan["after_ok"][0]), ([], 1, True))
+        applied = self.run_line(plan["after_ok"][0])  # the OK: its reply has the write call and the sentence for a call not made
+        self.assertEqual((len(applied["call"]), applied["if_not_called"]), (1, flowlib.NOT_CALLED))
         given = names(self.seen, set()) | WORDS
         for name in AGENTS:
             named = set(re.findall(r"`([a-z_]+)`", read(name, True)[1]))

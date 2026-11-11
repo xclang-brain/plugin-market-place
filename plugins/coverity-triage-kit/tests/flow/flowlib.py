@@ -3,9 +3,10 @@
 The person's side is real: a repository of the sample (git with a bare origin, svn with a working copy), a
 Coverity Connect that has its warnings (tests/coverity_emulator), and the MCP server of the plugin, started
 as mcp.json registers it. A scripted agent has a shell in the person's repository and the MCP tools. It runs
-the lines the replies give under ``next`` (and, only after the person's OK, the line under ``after_ok``),
-makes the calls under ``fetch`` and ``call``, edits the work copy and writes result.json. It builds only the
-lines the agent and skill texts tell an agent to build.
+the lines the replies give under ``next``, each alone and as it stands, and where the person's word decides
+the line of another key: ``take`` of a chat (a CID is asked for), ``after_ok`` (the OK), ``to_change`` (an
+answer that changes a choice). It makes the calls under ``fetch`` and ``call``, edits the work copy and writes
+result.json. It builds only the lines the agent and skill texts tell an agent to build.
 """
 
 import atexit
@@ -49,6 +50,9 @@ FIXES = {
 # What it changes when a CID comes back with its earlier fix: after a review; as the leader of the CIDs with one cause.
 REWORKS = {20001: [(b"        fclose(fp);\n", b"        (void)fclose(fp);\n")], 20004: [FIXES[20005], FIXES[20006]]}
 GROUP = [20004, 20005, 20006]  # the CIDs of the sample that have one cause
+SET = "--set <CID>=<fix|deviation|none>"  # the part of the line under to_change that an agent writes anew
+POINT = "<ファイル:行 1つの修正コードで解消する内容>"  # the part of the merge template that the integrator writes anew
+NOT_CALLED = "Coverity への登録は行われていません。「修正を取り込んで」と入力すると、登録します"
 STARTS = {"true_bug": "本物のバグ。", "false_positive": "誤検知。", "intentional": "意図的。", "undetermined": "本物のバグ。"}
 # What the person's terminal has: the credentials, and a locale in which svn takes a Japanese folder name.
 PERSON = {**os.environ, "COV_USER": USER, "COV_AUTH_KEY": KEY, "PYTHONDONTWRITEBYTECODE": "1"}
@@ -231,10 +235,16 @@ class Agent:
             result["deviation"]["comment"] += "ただし、呼び出し元の確認が必要。"
         Path(given["result_file"]).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    def table(self, *changes: str) -> dict:
-        """Skill coverity-apply (「修正を取り込んで」, or an answer that changes choices): its plan line with every
-        change the person named; its reply has the one table."""
-        return self.run(self.line("apply", "plan", "--repo", self.repo, *(f"--set {change}" for change in changes)))
+    def table(self) -> dict:
+        """Skill coverity-apply (「修正を取り込んで」): its plan line; the reply has the one table."""
+        return self.run(self.line("apply", "plan", "--repo", self.repo))
+
+    def change(self, plan: dict, *changes: str) -> dict:
+        """An answer that changes choices (「20003 は逸脱、…」): the line under to_change of the plan reply, with
+        one --set per changed CID in the place of its template."""
+        if plan["to_change"].count(SET) != 1:
+            raise AssertionError(f"to_change is not the plan line with the template: {plan['to_change']}")
+        return self.run(plan["to_change"].replace(SET, " ".join(f"--set {change}" for change in changes)))
 
     def ok(self, plan: dict, write: bool = True) -> dict:
         """The person's OK: the line under after_ok of the plan, then the calls of its reply (write False: no call
@@ -264,9 +274,11 @@ def team(lead: Agent, run: Path, reviews: dict, log: list):
             merged, asked_for = True, other.run(status_line)
             for group in asked_for["merge_candidates"]:
                 if group["cids"] == GROUP:  # no fix of a member covers all: the lowest CID leads and is made again
-                    other.run(asked_for["merge_command"].replace("<CID>", str(GROUP[0])).replace(
-                        "<CID,CID>", ",".join(map(str, GROUP[1:]))).replace(
-                        "[--rework]", '--rework --point "src/reader.c:58 同じ変換が3行にある"'))
+                    template, rework = asked_for["merge_command"], f'--rework --point "{POINT}"'
+                    if not template.endswith(f" [{rework}]"):
+                        raise AssertionError(f"the merge template is not the whole line: {template}")
+                    other.run(template.replace("<CID>", str(GROUP[0])).replace("<CID,CID>", ",".join(map(str, GROUP[1:])))
+                              .replace(f"[{rework}]", rework.replace(POINT, "src/reader.c:58 同じ変換が3行にある")))
         elif " review --run " in step:
             for batch in status["review_batches"]:  # a reviewer: the code before the fix, one record per CID
                 if (Path(batch["work_dir"]) / "src" / "reader.c").read_bytes() != CLEAN:

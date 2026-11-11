@@ -11,8 +11,9 @@
 
 Every command prints one JSON object (UTF-8): ``ok``, ``message`` for the person, ``next`` with the full
 command lines to run now, without a word from the person (only ever a plan line), ``after_ok`` with the
-apply line, to run once the person has answered OK, ``call`` with the tool call that registers the entries
-in Coverity.
+apply line, to run once the person has answered OK, ``to_change`` with the plan line for an answer that
+changes a choice (a template: one --set per changed CID), ``call`` with the tool call that registers the
+entries in Coverity, and ``if_not_called`` with the sentence for the person when that call was not made.
 The result folder is the state. This script writes apply-plan.json, applied.json and coverity-entries.json
 (+ .sha256) into it. git: one branch per result folder, one commit per fix, pushed. svn: svn patch.
 """
@@ -43,6 +44,7 @@ REFUSED = ("取り込み先のコードに適用できませんでした。先�
            "その修正を{}した後に、もう一度処置してください")  # {}: マージ (git), コミット (svn)
 STALE = "。作業コピーが最新でないときは、svn update を実行した後に、「修正を取り込んで」と入力してください"  # svn
 REST = "\n\n未処置の CID が {} 件あります。続けるときは「次を処置して」と入力してください"  # below the table of a chat run
+NOT_CALLED = "Coverity への登録は行われていません。「修正を取り込んで」と入力すると、登録します"  # the write call was refused or failed
 
 
 class Problem(Exception):
@@ -284,6 +286,9 @@ def cmd_plan(args) -> dict:
     if problems:
         raise Problem("選択の指定に訂正が必要な項目があります", problems=problems,
                       next=[run.command("plan", *(f"--set {cid}={choice}" for cid, choice in chosen.items()))])
+    # For an answer that changes a choice: this line with one --set per changed CID. It keeps what was said before.
+    change = run.command("plan", *(f"--set {cid}={choice}" for cid, choice in chosen.items()),
+                         "--set <CID>=<fix|deviation|none>")
     earlier = agreed(run)
     chosen = {**earlier, **chosen}  # what the person says now replaces it
     branch, kind = f"coverity-fix/{run.dir.name}", run.meta.get("vcs")
@@ -321,7 +326,8 @@ def cmd_plan(args) -> dict:
         elif choice:
             plan["fixes" if choice == "fix" else "none"].append(cid)
         same = f"（同じ原因: {', '.join(map(str, row['cids'][1:]))}）" if row["cids"][1:] else ""
-        values = f"（{deviation['classification']}／{deviation['action']}／{deviation['severity']}）"
+        # The values Coverity gets with the comment: only where the comment is what will be registered.
+        values = f"（{deviation['classification']}／{deviation['action']}／{deviation['severity']}）" if choice == "deviation" else ""
         table.append([f"{cid}{same}", VERDICT.get(row["verdict"], "-"), LEVEL.get(row["state"].get("confidence"), "-"),
                       ", ".join(row["state"].get("files") or []) if row["patch"] else "なし",
                       deviation["comment"] + values, CHOICE.get(choice, "-"), remark])
@@ -339,13 +345,13 @@ def cmd_plan(args) -> dict:
              f"取り込み済みの修正の Coverity への登録（{waiting} 件）" if waiting else ""]
     if not any(parts):
         return {**out, "message": "取り込む修正と、登録する逸脱コメントはありません。"
-                                  "変更するときは「20003 は修正」のように入力してください", "next": []}
+                                  "変更するときは「20003 は修正」のように入力してください", "to_change": change, "next": []}
     registers = "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" if n["fix"] else ""
     # The apply line is not under next: whoever follows next alone changes nothing without the person's OK.
     return {**out, "question": f"この内容で、{'、'.join(filter(None, parts))}を行います。{registers}"
                                "よろしければ「OK」と入力してください。"
                                "変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください",
-            "after_ok": [run.command("apply")], "next": []}
+            "after_ok": [run.command("apply")], "to_change": change, "next": []}
 
 
 def record(run: Run, cid: int, **fields) -> None:
@@ -501,9 +507,10 @@ def cmd_apply(args) -> dict:
         said.append(f"続けて、{'と、'.join(filter(None, kinds))}を Coverity に登録します")
     call = {"tool": "coverity_update_triage",
             "arguments": {"repo_root": run.repo.as_posix(), "entries_file": target.as_posix()}}
+    # In the order an agent acts: what to tell the person, the call to make, what to tell when the call was not made.
     return {"fixes": fixes, **({kind: place} if place else {}), "entries_file": target.as_posix() if entries else None,
-            "entries": len(entries), "call": [call] if entries else [],
-            "message": "。".join(said) or "取り込みと登録は完了しています", "next": []}
+            "entries": len(entries), "message": "。".join(said) or "取り込みと登録は完了しています",
+            "call": [call] if entries else [], **({"if_not_called": NOT_CALLED} if entries else {}), "next": []}
 
 
 def main(argv: list[str] | None = None) -> int:

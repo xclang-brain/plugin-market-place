@@ -121,12 +121,19 @@ class Flow:
         run = Path(first["run_dir"])
         self.assertEqual(first["message"], "条件に合う警告は 6 件あります。設定の上限（3 件）まで取得しました" + self.based)
         self.assertEqual((self.listed(run), run.parent), (CIDS[:3], self.top / "coverity-triage-out"))
-        # 「CID 20002 を処置して」: the request is answered with the two outputs, the save reply has nothing to run.
-        # Then 「まとめを見せて」: the one table and the one question. In a chat the table has the processed CIDs,
-        # and one sentence below it counts the others
-        saved = me.follow(first["next"][0] + " --cid 20002", stop=SAVED)
+        # the list is the answer: nothing is left to run, no CID is begun, and the line that hands one out is under take
+        self.assertEqual((first["next"], list((run / "cid").glob("*/state.json"))), ([], []))
+        # 「CID 20002 を処置して」: the line under take with the CID. The request is answered with the two outputs,
+        # the save reply has nothing to run
+        saved = me.follow(first["take"] + " --cid 20002", stop=SAVED)
         self.assertEqual((saved["cid"], saved["next"], saved["patch"]), (20002, [], None))
-        plan = self.summary(me, run)
+        # 「まとめを見せて」 in a new conversation: the start line gives the result folder, then finish and the plan
+        # line: the one table and the one question. In a chat the table has the processed CIDs, and one sentence
+        # below it counts the others
+        later = Agent(self.repo, plugin)
+        opened = later.ready(request)
+        self.assertEqual((opened["run_dir"], opened["next"], opened["message"]), (run.as_posix(), [], "前回の続きから進めます（残り 2 件）"))
+        plan = self.summary(later, Path(opened["run_dir"]))
         comment = self.read(run, "cid/20002/result.json")["deviation"]["comment"]
         self.assertEqual(({cid: row[3:] for cid, row in flowlib.rows(plan["table"]).items()}, plan["table"].split("\n\n")[1:]), (
             {20002: ["なし", comment + "（False Positive／Ignore／Unspecified）", WORD["deviation"], ""]},
@@ -134,18 +141,22 @@ class Flow:
         self.assertEqual(plan["question"], "この内容で、逸脱コメントの登録（1 件）を行います。" + ASK)
         self.assert_nothing_changed()
         # 「OK」: the comment is in Coverity
-        me.ok(plan)
+        later.ok(plan)
         self.assertEqual(self.coverity.writes, [{"triageStore": "Default Triage Store", "cids": [20002], "comment": comment,
                                                  "classification": "False Positive", "action": "Ignore", "severity": "Unspecified"}])
-        # 「次を処置して」 (the start line, in this session too): one CID, with its fix as text. 「まとめを見せて」, 「OK」
-        saved = me.follow(request, stop=SAVED)
+        # 「次を処置して」 (the start line, in this session too, then the line under take of its reply): one CID, with
+        # its fix as text. 「まとめを見せて」, 「OK」
+        saved = me.follow(me.ready(request)["take"], stop=SAVED)
         self.assertEqual((saved["cid"], saved["next"], "\n+        fclose(fp);" in saved["patch"]), (20001, [], True))
-        me.ok(self.summary(me, run))
+        plan = self.summary(me, run)
+        self.assertEqual(flowlib.rows(plan["table"])[20001][4:],  # a fix that is taken in: the comment alone
+                         [self.read(run, "cid/20001/result.json")["deviation"]["comment"], WORD["fix"], ""])
+        me.ok(plan)
         self.assertIn(FIXES[20001][1], self.taken_in(run, [20001]))
         # a new session: the list request continues the same list, 「次を処置して」 gets its last CID
         again = me.ready(request)
         self.assertEqual((again["run_dir"], again["message"]), (run.as_posix(), "前回の続きから進めます（残り 1 件）"))
-        self.assertEqual(me.follow(request, stop=SAVED)["cid"], 20003)
+        self.assertEqual(me.follow(me.ready(request)["take"], stop=SAVED)["cid"], 20003)
         # the list request before the OK for that CID: the work is complete, and the table is the one of this folder
         plan = self.summary(me, run, request)
         self.assertEqual([flowlib.rows(plan["table"])[cid][5:] for cid in CIDS[:3]],
@@ -158,6 +169,14 @@ class Flow:
         # 「次を処置して」 after the last CID and its OK: a new list, without what was taken in or registered
         new = me.ready(request)
         self.assertEqual((new["run_dir"] != run.as_posix(), self.listed(new["run_dir"])), (True, CIDS[3:]))
+        # the keys that carried this chat are named in the sections of the two skill texts that a model reads there
+        seen = {key for agent in (me, later) for reply in agent.replies for key in reply}
+        for skill, section, keys in (("triage", "1.", ["take"]), ("triage", "6.", ["patch", "after_ok", "to_change", "call", "if_not_called"]),
+                                     ("apply", "1.", ["after_ok", "to_change"]), ("apply", "2.", ["after_ok", "to_change"]),
+                                     ("apply", "3.", ["call", "if_not_called"])):
+            text = (plugin / "skills" / f"coverity-{skill}" / "SKILL.md").read_text(encoding="utf-8")
+            text = text.split(f"\n## {section}")[1].split("\n## ")[0]
+            self.assertEqual([key for key in keys if f"`{key}`" not in text or key not in seen], [], (skill, section))
 
     def test_stage_2_one_agent_processes_every_warning_to_the_end(self):
         """docs/guide/2-agent.md, with only this agent installed: no other agent, no screen."""
@@ -187,16 +206,18 @@ class Flow:
             20001: ["src/reader.c", WORD["fix"], ""], 20002: ["なし", WORD["deviation"], ""], 20003: ["src/reader.c", WORD["fix"], ""],
             20004: ["src/reader.c", WORD["fix"], ""], 20005: ["なし", WORD["deviation"], ""],
             20006: ["src/reader.c", WORD["none"], "確信度が低いため"]})
-        for cid, row in table.items():
-            self.assertTrue(row[4].startswith(self.read(run, f"cid/{cid}/result.json")["deviation"]["comment"] + "（"), row)
+        for cid, row in table.items():  # the values for Coverity follow the comment that will be registered, and only that one
+            comment = self.read(run, f"cid/{cid}/result.json")["deviation"]["comment"]
+            self.assertTrue(row[4].startswith(comment + "（") if row[5] == WORD["deviation"] else row[4] == comment, row)
         how = f"ブランチ coverity-fix/{run.name} にコミットして origin に push" if self.kind == "git" else "作業コピーのファイルに適用"
         self.assertEqual((plan["summary_file"], plan["question"]), (done["summary_file"], (
             f"この内容で、修正の取り込み（3 件。{how}）、逸脱コメントの登録（2 件）を行います。"
             "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" + ASK)), "the question says what the OK does")
         self.assert_nothing_changed()
-        # 「20003 は逸脱、ほかは OK」
-        plan = second.table("20003=deviation")
-        self.assertEqual(flowlib.rows(plan["table"])[20003][5:], [WORD["deviation"], "チャットで指定"])
+        # 「20003 は逸脱、ほかは OK」: the line under to_change with the change, then the apply line of THAT reply
+        plan = second.change(plan, "20003=deviation")
+        self.assertEqual(flowlib.rows(plan["table"])[20003][4:], [
+            self.read(run, "cid/20003/result.json")["deviation"]["comment"] + "（Bug／Ignore／Major）", WORD["deviation"], "チャットで指定"])
         second.ok(plan)
         code = self.taken_in(run, [20001], [20004])
         self.assertEqual([cid for cid in FIXES if FIXES[cid][1] in code], [20001, 20004])
@@ -237,14 +258,15 @@ class Flow:
                           "- 検証の指摘: src/reader.c:47 get_buf" in summary), ([3, 1, 0], True), "every result is reviewed")
         self.assert_nothing_changed()
         # 「20001 は何もしない、ほかは OK」: the one fix of the merged CIDs is taken in, and Coverity gets it and the comment
-        lead.ok(lead.table("20001=none"))
+        lead.ok(lead.change(plan, "20001=none"))
         code = self.taken_in(run, GROUP)
         self.assertEqual([FIXES[cid][1] in code for cid in (20001, 20003, *GROUP)], [False, False, True, True, True])
         self.assertEqual(self.written(), [([20002], "False Positive", "Ignore"), (GROUP, "Bug", "Fix Required")])
         # 「修正を取り込んで」, 「20001 は修正、20003 は逸脱、ほかは OK」; the person refuses the permission prompt: no write call
-        applied = lead.ok(lead.table("20001=fix", "20003=deviation"), write=False)
+        applied = lead.ok(lead.change(lead.table(), "20001=fix", "20003=deviation"), write=False)
         self.assertEqual((applied["message"].split("。")[-1], len(applied["call"]), len(self.coverity.writes)),
                          ("続けて、逸脱コメント 1 件と、取り込んだ修正 1 件を Coverity に登録します", 1, 2))
+        self.assertEqual(applied["if_not_called"], flowlib.NOT_CALLED, "the sentence the agent tells the person now")
         self.assertIn(b"(void)fclose(fp);", self.taken_in(run, GROUP, [20001]))  # the fix that was made again is in
         # the same request in a new session: the folder stays open, and the request leads to its table again,
         # where the choice of the chat that got its OK stands (20003 is not back at 何もしない)

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """EVAL: run stage 1 (skills in a chat), 2 (triage-worker) or 3 (triage-orchestrator) with a real model, then grade.
 
-    python3 tests/eval/run_eval.py --stage 1|2|3 --vcs git|svn [--work <folder>] [--answer-ok] [--copies N] [--model M]
+    python3 tests/eval/run_eval.py --stage 1|2|3 --vcs git|svn [--work <folder>] [--answer-ok] [--answer <text>]
+                                   [--copies N] [--model M]
 
 The development form of the plugin (agents/*.md, .claude-plugin/plugin.json, .mcp.json) runs headless with the
 claude CLI against tests/coverity_emulator, in a scratch folder outside the repository. The tool that writes to
@@ -41,11 +42,14 @@ READ_TOOLS = ("coverity_search_issues", "coverity_get_issue_details")  # coverit
 FITS = {"fix": ("true_bug",), "deviation": ("false_positive", "intentional")}
 # The last message after the OK says that the registration in Coverity is still to do: 登録 with one of LEFT,
 # and no sentence that says it was made
-LEFT = ("「修正を取り込んで」", "残", "まだ", "未", "許可", "拒否", "できません", "できなかった", "されていません")
+LEFT = ("「修正を取り込んで」", "残", "まだ", "未", "許可", "拒否", "できません", "できなかった", "されていません", "行われていません")
 MADE = re.compile(r"登録(?:しました|[がをはも]?完了しました|済みです)")
 ASKS = re.compile(r"(?:[?？]|(?:です|ます|でしょう|ません)か。?)[\s*」）)]*\Z")  # a text that ends in a question
 SVN_STATUS = re.compile(r"^([ADUGC][ADUGC ]| [ADUGC]) +\S", re.M)  # a status line of svn patch
 SQUEEZE = re.compile(r"[\s*`]+")  # white space and Markdown emphasis are not compared
+# A choice that an answer to the one question changes (「20001 は何もしない、ほかは OK」): CID, the word for the choice
+CHANGE = re.compile(r"(\d+) *は *(修正|逸脱|何もしない)")
+CHOICE = {"修正": "fix", "逸脱": "deviation", "何もしない": "none"}
 
 
 class Stop(Exception):
@@ -122,7 +126,7 @@ class Transcript:
 class Eval:
     """One EVAL: its folders, the files it grades and its checks."""
 
-    def __init__(self, stage: int, vcs: str, work: str | None, copies: int = 1, model: str = "haiku"):
+    def __init__(self, stage: int, vcs: str, work: str | None, copies: int = 1, model: str = "haiku", answer: str = "OK"):
         for tool in ("claude", "uv", *(("git",) if vcs == "git" else ("svn", "svnadmin"))):
             if not shutil.which(tool):
                 raise Stop(f"{tool} コマンドが見つかりません。インストールして、PATH を確認してください")
@@ -134,6 +138,8 @@ class Eval:
             raise Stop(f"作業フォルダーが既にあります: {self.site}。--work に別のフォルダーを指定してください")
         self.site.mkdir(parents=True)
         self.stage, self.vcs, self.model, self.checks, self.usage = stage, vcs, model, [], {}
+        # What the person answers to the one question, and the choices it changes: CID -> fix / deviation / none
+        self.answer, self.changes = answer, {int(cid): CHOICE[word] for cid, word in CHANGE.findall(answer)}
         self.repo, self.out = self.site / "repo", self.site / "coverity-triage-out"  # output_dir is the default
         self.snap = self.site / "plugin" / NAME
         self.run, self.items, self.states, self.done = self.out / "none", [], {}, []  # the run folder; see load()
@@ -396,34 +402,92 @@ def grade_before_ok(ev: Eval, baseline: bytes) -> None:
     ev.check("OK の前に、Coverity に書き込んでいない", not got, f"書き込み {len(got)} 件" if got else "")
 
 
-def grade_after_ok(ev: Eval, t: Transcript) -> None:
-    fixes = parse(ev.run / "applied.json").get("fixes") or {}
-    if ev.vcs == "git":  # the branch of the run is on origin, with one commit per fix
+def arrived(ev: Eval, fixes: dict) -> tuple[bool, str]:
+    """Whether the person has what applied.json says, and where. git: the branch of the run on origin has one commit
+    per fix (no fix: no branch is needed). svn: the working copy has changed files (no fix: none)."""
+    if ev.vcs == "git":
         branch = f"coverity-fix/{ev.run.name}"
         count = sh("git", "--git-dir", ev.site / "origin.git", "rev-list", "--count", f"main..{branch}", cwd=ev.site,
                    check=False)
         commits = int(count.stdout) if count.returncode == 0 else None
-        fine = fixes and commits == len(fixes)
-        where = f"origin のブランチ {branch}: " + ("ありません" if commits is None else f"コミット {commits} 件")
-    else:
-        changed = re.findall(rb"^M", sh("svn", "status", cwd=ev.repo).stdout, re.M)
-        fine, where = fixes and changed, f"作業コピーで変更されたファイル: {len(changed)} 件"
-    ev.check("OK の後に、修正を取り込んでいる", fine, f"{where}、applied.json の修正: {len(fixes)} 件")
+        return (commits or 0) == len(fixes), f"origin のブランチ {branch}: " + (
+            "ありません" if commits is None else f"コミット {commits} 件")
+    changed = re.findall(rb"^M", sh("svn", "status", cwd=ev.repo).stdout, re.M)
+    return bool(changed) == bool(fixes), f"作業コピーで変更されたファイル: {len(changed)} 件"
+
+
+def has_fix(ev: Eval, cid: int) -> bool:
+    """Whether the code the person got holds the fix of the CID: fix.patch can be taken out of it again. git: the
+    branch of the run on origin (no branch: nothing is in). svn: the working copy."""
+    patch = ev.run / "cid" / str(cid) / "fix.patch"
+    if ev.vcs == "svn":  # a fix that is not in: svn says that the reversed hunk is "already applied" (G), or rejects it (C)
+        tried = sh("svn", "--non-interactive", "patch", "--reverse-diff", "--dry-run", patch, cwd=ev.repo, check=False)
+        lines = SVN_STATUS.findall((tried.stdout + tried.stderr).decode("utf-8", "replace"))
+        return tried.returncode == 0 and bool(lines) and not any(set(line) & set("CG") for line in lines)
+    got, branch = ev.site / "taken", f"origin/coverity-fix/{ev.run.name}"  # a clone of origin at the branch, made once
+    if not got.exists():
+        sh("git", "clone", "-q", ev.site / "origin.git", got, cwd=ev.site)
+        sh("git", "checkout", "-q", "--detach", branch, cwd=got, check=False)
+    there = sh("git", "merge-base", "--is-ancestor", branch, "HEAD", cwd=got, check=False).returncode == 0
+    return there and sh("git", "apply", "--reverse", "--check", patch, cwd=got, check=False).returncode == 0
+
+
+def grade_after_ok(ev: Eval, t: Transcript) -> None:
+    fixes = parse(ev.run / "applied.json").get("fixes") or {}
+    fine, where = arrived(ev, fixes)
+    ev.check("OK の後に、修正を取り込んでいる", fixes and fine, f"{where}、applied.json の修正: {len(fixes)} 件")
+    grade_registration(ev, t)
+
+
+def grade_changed(ev: Eval, t: Transcript) -> None:
+    """An answer that changes choices and has the OK: the plan that was carried out has the choices of the answer, a
+    fix the answer takes out is not taken in, the other chosen fixes are."""
+    plan, record = parse(ev.run / "apply-plan.json"), ev.run / "applied.json"
+    fixes = parse(record).get("fixes") or {}
+    carried = record.is_file() and record.stat().st_mtime >= (ev.run / "apply-plan.json").stat().st_mtime
+    kinds = {"fix": plan.get("fixes") or [], "none": plan.get("none") or [],
+             "deviation": [entry["cids"][0] for entry in plan.get("deviations") or []]}
+    now = {cid: next((kind for kind, cids in kinds.items() if cid in cids), "一覧になし") for cid in ev.changes}
+    ev.check("実行した一覧（apply-plan.json）の選択が、回答のとおりになっている", carried and now == ev.changes,
+             "、".join(f"{cid}: {kind}" for cid, kind in now.items()) + ("" if carried else "、apply は実行されていません"))
+    out = [cid for cid, kind in ev.changes.items() if kind != "fix" and (ev.run / "cid" / str(cid) / "fix.patch").is_file()]
+    wrong = [cid for cid in out if str(cid) in fixes or has_fix(ev, cid)]
+    ev.check("回答で取り込まないことにした修正を、取り込んでいない", out and not wrong,
+             f"取り込まれている CID: {wrong}" if wrong else f"対象の CID: {out}" if out
+             else f"回答の CID（{', '.join(map(str, ev.changes))}）に、修正コードがありません")
+    fine, where = arrived(ev, fixes)
+    missing = [cid for cid in kinds["fix"] if str(cid) not in fixes or not has_fix(ev, cid)]
+    ev.check("ほかに選択した修正は、取り込んでいる", carried and fine and not missing,
+             f"{where}、選択した修正: {kinds['fix'] or 'なし'}、applied.json の修正: {len(fixes)} 件"
+             + (f"、取り込まれていない CID: {missing}" if missing else ""))
+    grade_registration(ev, t)
+
+
+def grade_registration(ev: Eval, t: Transcript) -> None:
     got, made = writes(ev), MADE.search(t.final)
     tried = any(str(block.get("name")).endswith("coverity_update_triage") for _, _, block in t.uses)
     final = t.final.replace("未処置", "")  # 未処置 is said of the CIDs that are left (stage 1), not of the registration
     said = next((word for word in LEFT if word in final), None) if "登録" in final and not made else None
+    # Not graded, shown: whether the message has the sentence that the apply reply gives for a call that was not made
+    replies = [parse(body[body.find("{"):body.rfind("}") + 1]) for body in map(
+        t.replies.get, (block.get("id") for _, block in t.commands(r'apply\.py["\']? +apply\b'))) if body]
+    given = next((reply["if_not_called"] for reply in reversed(replies) if reply.get("if_not_called")), "")
+    quoted = "" if not given else "、if_not_called の文: " + ("そのまま" if SQUEEZE.sub("", given) in SQUEEZE.sub("", t.final) else "なし")
     ev.check("Coverity への書き込みは行われず、最後のメッセージが、登録が残っていることを伝えている", not got and said,
              f"書き込み {len(got)} 件、書き込みのツールの呼び出し: {'あり（許可されず）' if tried else 'なし'}、"
              + (f"最後のメッセージに {said} あり" if said else f"最後のメッセージに「{made[0]}」とあります" if made
-                else "最後のメッセージに、登録が残っていることの記載なし"))
+                else "最後のメッセージに、登録が残っていることの記載なし") + quoted)
 
 
 def turn_list(ev: Eval, t: Transcript) -> None:
+    # The person asked for the list: every warning is in the message, and in the list of the result folder. A model
+    # may fetch the list with the search tool alone, without the skill: then there is no result folder yet (the
+    # next request makes it and fetches again), and the message alone is graded.
     cids = list(ev.states)
-    missing = [w["cid"] for w in ev.warnings if w["cid"] not in cids] or [c for c in cids if str(c) not in t.final]
-    ev.check("条件に合う警告をすべて取得し、メッセージに CID の一覧がある", cids and not missing,
-             f"取得していない、またはメッセージにない CID: {missing}" if missing else "" if cids else "一覧なし")
+    missing = [w["cid"] for w in ev.warnings if str(w["cid"]) not in t.final or (cids and w["cid"] not in cids)]
+    ev.check("条件に合う警告をすべて取得し、メッセージに CID の一覧がある", not missing,
+             f"取得していない、またはメッセージにない CID: {missing}" if missing else "" if cids
+             else "検索のツールだけで取得しています（結果フォルダーは、まだありません）")
     begun = [c for c in cids if ev.states[c]]
     ev.check("取得だけを行い、処置は開始していない", not begun, f"開始した CID: {begun}" if begun else "")
 
@@ -449,9 +513,15 @@ def turn_table(ev: Eval, t: Transcript) -> None:
     grade_before_ok(ev, ev.baseline)
 
 
-# Stage 1: the requests of README.md and docs/guide/1-skill.md, typed into one conversation; the checks after each
+def turn_answer(ev: Eval, t: Transcript) -> None:
+    """The answer to the one question (--answer): 「OK」, or an answer that changes choices and has the OK."""
+    (grade_changed if ev.changes else grade_after_ok)(ev, t)
+
+
+# Stage 1: the requests of README.md and docs/guide/1-skill.md, typed into one conversation; the checks after each.
+# The last request (None) is the answer to the one question: --answer.
 TURNS = (("条件に合う警告を取得して", turn_list), (f"CID {CID} を処置して", turn_cid), ("次を処置して", turn_next),
-         ("まとめを見せて", turn_table), ("OK", grade_after_ok))
+         ("まとめを見せて", turn_table), (None, turn_answer))
 
 
 def phases(ev: Eval, began: datetime) -> dict:
@@ -473,16 +543,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", type=int, choices=(1, 2, 3), required=True, help="実行する段階")
     parser.add_argument("--vcs", choices=("git", "svn"), required=True)
     parser.add_argument("--work", help="作業フォルダーを作成する場所（リポジトリの外）。既定は、一時フォルダー")
-    parser.add_argument("--answer-ok", action="store_true", help="2・3段階目で、一覧の質問に「OK」と回答します")
+    parser.add_argument("--answer-ok", action="store_true", help="2・3段階目で、一覧の質問に回答します（回答は --answer）")
+    parser.add_argument("--answer", default="OK", metavar="<回答>",
+                        help="一覧の質問への回答（既定は「OK」）。1段階目では、最後の依頼です。選択を変更する回答"
+                             "（「20001 は何もしない、ほかは OK」）を指定すると、変更のとおりに取り込まれたことを確認します")
     parser.add_argument("--copies", type=int, choices=range(1, 10), default=1, metavar="N",
                         help="見本のコードと警告を N 倍（1〜9）にします。時間の測定に使用します")
     parser.add_argument("--model", default="haiku", help="1段階目のチャットのモデル（既定は haiku）")
     args = parser.parse_args(argv)
+    if "OK" not in args.answer:
+        parser.error("--answer には、OK を含む回答を指定してください（例: \"20001 は何もしない、ほかは OK\"）")
     for name in ("SIGTERM", "SIGHUP"):  # a stopped EVAL stops the agent and the emulator too: the finally blocks run
         signal.signal(getattr(signal, name, signal.SIGTERM), lambda *_: sys.exit(2))
     emulator = None
     try:
-        ev = Eval(args.stage, args.vcs, args.work, args.copies, args.model)
+        ev = Eval(args.stage, args.vcs, args.work, args.copies, args.model, args.answer)
         print(f"作業フォルダー: {ev.site}", flush=True)
         emulator = subprocess.Popen([sys.executable, "-B", "-m", "coverity_emulator", "--port", "0", "--data",
                                      str(ev.site / "warnings.json")], cwd=str(PLUGIN / "tests"),
@@ -495,6 +570,7 @@ def main(argv: list[str] | None = None) -> int:
         prepare(ev, started)
         ev.baseline, began, session = tree(ev), datetime.now().replace(microsecond=0), None
         for number, (request, grade) in enumerate(TURNS if ev.stage == 1 else (), 1):
+            request = request or ev.answer
             turn = run_agent(ev, request, f"transcript-{number}", f"「{request}」", resume=session)
             session = turn.session
             if not (turn.ended and session):  # the conversation cannot go on: the later requests are not typed
@@ -507,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
             (grade_stage2 if ev.stage == 2 else grade_stage3)(ev, first)
             grade_before_ok(ev, ev.baseline)
             if args.answer_ok and first.ended and first.session:
-                grade_after_ok(ev, run_agent(ev, "OK", "transcript-ok", "「OK」の回答", resume=first.session))
+                turn_answer(ev, run_agent(ev, ev.answer, "transcript-ok", f"「{ev.answer}」の回答", resume=first.session))
             elif args.answer_ok:
                 ev.check("OK の後に、修正を取り込んでいる", False,
                          "最初の依頼が正常に終了しなかったため、回答していません")

@@ -30,7 +30,7 @@ Playwright は、リポジトリの外にインストールして、環境変数
 | `skills/<名前>` | `skills/<名前>/tests/` | スキルのスクリプトの動作。コマンドごとの応答と結果フォルダーのファイルを、git と svn の両方で確認します。`coverity-gui` は、HTTP の API と、ブラウザーでの操作も確認します |
 | `mcp-servers/coverity-connect` | `mcp-servers/coverity-connect/tests/` | MCP サーバーのツール4つ。`mcp.json` のコマンドで起動し、Coverity Connect の代わりの HTTP サーバー（`tests/coverity_emulator/`）に接続します |
 | `structure` | `tests/test_structure.py` | 2つのマニフェストの一致、MCP サーバーの登録、スキル4つの frontmatter、エージェント4つのファイル、設定キー13個、MCP のツール4つ |
-| `agents` | `tests/test_agents.py` | エージェントの2つの形（Copilot CLI 用と開発用）の本文が同じであること、frontmatter、依頼先を制限するフック（その PC にある bash と PowerShell で実行します）、3つの依頼文。本文に書かれた応答の項目とコマンドが、`triage.py` の実際の応答（git と svn）にあること |
+| `agents` | `tests/test_agents.py` | エージェントの2つの形（Copilot CLI 用と開発用）の本文が同じであること、frontmatter、依頼先を制限するフック（その PC にある bash と PowerShell で実行します）、3つの依頼文。コマンドを1回の呼び出しで1行だけ、そのまま実行することが、コマンドを実行する手順の中に書かれていること。本文に書かれた応答の項目とコマンドが、`triage.py` と `apply.py` の実際の応答（git と svn）にあること |
 | `stages` | `tests/test_stages.py` | どの段階も、上の段階なしで使えること。下の段階のファイルに上の段階の構成要素の名前がないことと、スキルのコードがほかのスキルのフォルダーを使用しないことを確認します |
 | `budget` | `tests/test_budget.py` | 仕様書8章の規模の上限。不合格のときは、現在の値を表示します |
 | `docs` | `tests/test_docs.py` | 文書のリンクと見出し、バージョンの一致、使用しない言葉、文書にあるコマンドのスキルとエージェントが存在すること、README の認証情報の設定手順が `setup.py` の表示と同じであること |

@@ -18,7 +18,9 @@
 Every command prints one JSON object (UTF-8): ``ok``, ``run_dir`` and, under ``next``, the full command
 lines to run now, without a word from the person, so that an agent that lost its context continues from
 the output alone ([]: the request is answered). ``fetch`` lists the tools to call before that step.
-``message`` is a sentence for the person.
+``message`` is a sentence for the person. In a chat, start gives the line that hands out a CID under
+``take``, not under ``next``: which CID is worked on, and whether one is, is the person's word.
+Every line is made to be run alone, as it stands: a CLI allows a command by its form.
 ``"ok": false`` comes with a Japanese ``error`` (and ``problems``) that says what to correct.
 
 The folder is the state. A CID of issues.json without cid/<CID>/state.json is pending. ``next`` wins a
@@ -50,7 +52,7 @@ SCRIPT = Path(__file__).resolve()
 WAIT = 20  # seconds start and finish wait for a background job before they answer that it still runs
 STALE = 30 * 60  # seconds after which a claim without a save is taken from its slot
 OLD_LIST = 10 * 60  # seconds after which start says when the list was fetched
-BATCH = 5  # CIDs per slot and round (keeps a worker's context small)
+BATCH = 7  # CIDs per slot and round (a worker's context stays small; 3 slots take a list of 20 in one round)
 SHOWN = 200  # lines of a fix that the save reply of a chat carries
 VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intentional": "意図的", "undetermined": "判定不能"}
 RECOMMEND = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する"}
@@ -335,8 +337,10 @@ def cmd_start(args) -> dict:
         message += f"。{status['note']}"
     # A run that processes every CID fetches the warning paths once, here; a chat fetches them per CID (next).
     unfinished = [cid for cid, s in states.items() if not s or s["status"] in ("working", "rework")]
-    return reply(run_dir, fetch=details_call(run, unfinished) if mode["all"] else [], counts=found,
-                 message=message, next=run.steps(states))
+    steps = run.steps(states)
+    if not mode["all"]:  # a chat: the list is the answer, and the person says which CID comes now
+        return reply(run_dir, fetch=[], counts=found, message=message, take=steps[0], next=[])
+    return reply(run_dir, fetch=details_call(run, unfinished), counts=found, message=message, next=steps)
 
 
 # ---- next: hand out one CID -----------------------------------------------------------------
@@ -617,9 +621,12 @@ def cmd_merge(args) -> dict:
     leader = {**states[args.leader], "members": members}
     leader.pop("review", None)  # the item now stands for the members too: it is reviewed as such
     if args.rework:  # no member's fix covers all: one worker makes one fix and one comment for all
+        # The leader's own fix is in the copy when it comes back: a worker then describes only what it adds,
+        # and the reviewer, who reads the code before the fix, sends the result back (seen with 18 warnings).
         leader.update(status="rework", rework=[
             f"CID {', '.join(map(str, members))} と同じ原因です。"
-            "すべての CID の警告を解消する修正と逸脱コメントを1つ作成してください", *args.point])
+            "すべての CID の警告を解消する修正と逸脱コメントを1つ作成してください。"
+            "根拠と fix.summary は、前回の修正の分も含めて、修正前のコードを基準に書いてください", *args.point])
     run.put(args.leader, leader)
     return reply(run.dir, leader=args.leader, members=members, rework=args.rework, next=[command("status", run.dir)])
 
@@ -664,7 +671,8 @@ def cmd_status(args) -> dict:
                for k in range(slots) if todo[k::slots]]
     single = [cid for cid, s in states.items()
               if s and s["status"] == "done" and not s.get("merged_into") and not s.get("members")]
-    merge = command("merge", run.dir, "--leader", "<CID>", "--members", "<CID,CID>", "[--rework]")
+    merge = command("merge", run.dir, "--leader", "<CID>", "--members", "<CID,CID>",
+                    '[--rework --point "<ファイル:行 1つの修正コードで解消する内容>"]')
     return reply(run.dir, counts=count(states), merge_candidates=merge_candidates(run, single), merge_command=merge,
                  review_batches=batches, next=run.steps(states))
 
