@@ -91,19 +91,12 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(headers["Content-Type"].startswith("application/json"))
         state = json.loads(body)
         self.assertEqual([s["id"] for s in state["sessions"]], ["s1"])
-        self.assertEqual((state["sessions"][0]["stage"], state["sessions"][0]["stopped"]), ("review", False))
+        self.assertEqual((state["sessions"][0]["running"], state["sessions"][0]["stopped"]), (["debug-verifier"], False))
         status, headers, body = request(self.info, "GET", "/api/sessions/s1")
         self.assertEqual(status, 200)
         self.assertTrue(headers["Content-Type"].startswith("application/json"))
         self.assertEqual(json.loads(body)["events"][0]["text"], HTML_IN_RECORD)
         self.assertEqual(request(self.info, "GET", "/api/sessions/..%2Fs1")[0], 404)
-
-    def test_settings_are_saved(self):
-        form = {"goal": "平均値が違う", "criteria": "C の1\nC の2", "max_trials": 3}
-        self.assertEqual(request(self.info, "POST", "/api/settings", form)[0], 200)
-        self.assertEqual(json.loads(request(self.info, "GET", "/api/state")[2])["settings"], form)
-        for bad in (dict(form, max_trials=0), dict(form, max_trials="3"), dict(form, goal=None)):
-            self.assertEqual(request(self.info, "POST", "/api/settings", bad)[0], 400, bad)
 
     @unittest.skipUnless(shutil.which("uv") and os.path.isfile(server.CONFIG_TOOL),
                          "uv か、隣の設定のスキルがないので飛ばす（スキルのフォルダだけをコピーしたとき）")

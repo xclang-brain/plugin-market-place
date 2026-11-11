@@ -33,7 +33,7 @@ AI に任せる範囲に合わせて、4つの段階から選びます。
 | 1 | 機器でコマンドを動かす | [serial-console](docs/guide/1-serial-console.md) |
 | 2 | 不具合の調査と修正を、AI に任せる | [作業エージェント](docs/guide/2-device-debugger.md) |
 | 3 | 修正を任せ、直ったかを別の AI に判定させる | [統括エージェント](docs/guide/3-debug-orchestrator.md) |
-| 4 | 3段階目の進み具合と結果を、ブラウザーで見る | [Web管理画面](docs/guide/4-debug-dashboard.md) |
+| 4 | 2段階目と3段階目の進み具合と結果を、ブラウザーで見る | [Web管理画面](docs/guide/4-debug-dashboard.md) |
 
 1段階目の4つを、スキルと呼びます。スキルと作業エージェントは、[自分で作ったものに置き換える](docs/guide/5-replace-parts.md)ことができます。スキルの置き換えは、AI に任せられます。
 

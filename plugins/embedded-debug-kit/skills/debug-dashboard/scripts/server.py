@@ -43,11 +43,9 @@ SECURITY_HEADERS = {
 REFRESH_SECONDS = 30   # recording を書き直す間隔。フックは 2 分より古いものを、ないものとして扱う
 MAX_BODY = 64 * 1024   # POST の本文の上限。画面の設定より大きいものは来ない
 TOOLS_SHOWN = 300      # 画面に返すツールの呼び出しの数（新しいほうから）
-MAX_TEXT = 4000        # 設定の各欄の上限の文字数
-MAX_TRIALS = 20
+MAX_TEXT = 4000        # スキルの設定の値の上限の文字数
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 VERIFIER = "debug-verifier"
-DEFAULT_SETTINGS = {"goal": "", "criteria": "", "max_trials": 5}
 # スキルの設定ファイルは、設定のスキル（skill-config）のスクリプトで読み書きする。このスキルの隣にある
 CONFIG_SKILL = os.path.join(os.path.dirname(os.path.dirname(SCRIPTS)), "skill-config")
 CONFIG_TOOL = os.path.join(CONFIG_SKILL, "scripts", "config_tool.py")
@@ -91,8 +89,9 @@ def read_json(path):
 
 
 def summarize(events):
-    """記録から、今のフェーズ・動いているエージェント・最後の報告と判定を求める（設計書 8.6）"""
+    """記録から、動いているエージェント・最後の報告と判定を求める（設計書 8.6）"""
     running = {}
+    main = None  # メインの会話が作業中なら、そのエージェントの名前（名前がなければ ""）
     result = {"title": "", "started": None, "updated": None, "count": len(events), "requests": 0,
               "last_report": None, "last_verdict": None}
     for e in events:
@@ -102,6 +101,7 @@ def summarize(events):
         result["updated"] = e.get("time") or result["updated"]
         if kind == "prompt":
             running.clear()
+            main = ""
             if not result["title"]:
                 result["title"] = (e.get("text") or "").strip().split("\n")[0][:60]
         elif kind == "request" and not e.get("denied"):
@@ -115,12 +115,14 @@ def summarize(events):
                 result["last_verdict"] = e.get("text")
         elif kind == "report":
             running.clear()
+            main = None
             result["last_report"] = e.get("text")
         elif kind == "tool" and e.get("sub") and agent not in running:
             running[agent] = 1
-    names = sorted(running)
-    result["running"] = names
-    result["stage"] = ("review" if any(n.endswith(VERIFIER) for n in names) else "work" if names else "plan")
+        elif kind == "tool" and not e.get("sub"):
+            main = agent
+    # ほかのエージェントに依頼していれば、そのエージェント。していなければ、メインの会話のエージェント
+    result["running"] = sorted(running) or ([main or "メインの会話"] if main is not None else [])
     return result
 
 
@@ -185,7 +187,7 @@ class Store:
                     item.pop(key)
                 sessions.append(item)
         sessions.sort(key=lambda s: s["updated"] or "", reverse=True)
-        return {"ok": True, "workdir": self.workdir, "settings": self.settings(), "sessions": sessions}
+        return {"ok": True, "workdir": self.workdir, "sessions": sessions}
 
     def config_tool(self, args, stdin=None):
         """設定のスキルのスクリプトを動かし、結果の JSON を返す。動かせなければ、ok が False の結果を返す"""
@@ -245,23 +247,6 @@ class Store:
             os.close(os.open(path, os.O_WRONLY | os.O_CREAT | FLAGS, 0o600))
         return True
 
-    def settings(self):
-        saved = read_json(os.path.join(self.base, "settings.json"))
-        return dict(DEFAULT_SETTINGS, **saved) if isinstance(saved, dict) else dict(DEFAULT_SETTINGS)
-
-    def save_settings(self, body):
-        goal, criteria, trials = body.get("goal"), body.get("criteria"), body.get("max_trials")
-        if not (isinstance(goal, str) and isinstance(criteria, str) and len(goal) <= MAX_TEXT
-                and len(criteria) <= MAX_TEXT):
-            return "直したいことと合格の条件は、%d 字までの文で送ってください。" % MAX_TEXT
-        if not (isinstance(trials, int) and not isinstance(trials, bool) and 1 <= trials <= MAX_TRIALS):
-            return "試行の上限は、1 から %d までの数にしてください。" % MAX_TRIALS
-        try:
-            write_private(os.path.join(self.base, "settings.json"),
-                          {"goal": goal, "criteria": criteria, "max_trials": trials})
-        except OSError as e:
-            return "設定を保存できませんでした（%s）。作業フォルダの権限と空き容量を確かめてください。" % e
-        return None
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -360,9 +345,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not store.stop(body.get("session")):
                 return self.fail(404, "そのセッションの記録はありません。")
             return self.reply(200, {"ok": True, "message": "止めました。次のツールの呼び出しから断ります。"})
-        if path == "/api/settings":
-            problem = store.save_settings(body)
-            return self.fail(400, problem) if problem else self.reply(200, {"ok": True})
         if path == "/api/config":
             result = store.save_skill_config(body)
             if not result.get("ok"):
