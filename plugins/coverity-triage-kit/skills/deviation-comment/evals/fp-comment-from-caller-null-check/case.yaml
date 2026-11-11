@@ -1,9 +1,0 @@
-schema_version: "1.1"
-name: fp-comment-from-caller-null-check
-expected_outcome: |
-  チャットで逸脱コメントの案を返す。コメントは「誤検知。」で始まり、200文字以内、判定区分のあと1〜2文で、
-  check_comment.py を通る。理由（copy_name() の呼び出し元は read_all() だけで、read_all() が NULL を除いてから渡す）を
-  条件・前提・読み手への指示なしで言い切り、根拠の場所として src/io/reader.c:32（NULL を除く if）を示す。
-  Classification は False Positive、Action は Ignore、Severity は Unspecified。ファイルを作らず、コードも変えない。
-context:
-  scaffold_script: place-files.sh
