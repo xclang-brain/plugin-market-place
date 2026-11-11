@@ -225,7 +225,8 @@ class Flow:
                         return
                     handed[slot].append(given["cid"])
                     self.assertEqual(given["work_dir"], (run / "work" / f"w{slot}").as_posix())
-                    self.assertTrue(self.work(given)["ok"])
+                    saved = self.work(given)
+                    self.assertTrue(saved["ok"], saved)
             except Exception as exc:  # noqa: BLE001 - reported by the main thread
                 errors.append(exc)
 

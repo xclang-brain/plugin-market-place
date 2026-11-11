@@ -179,6 +179,15 @@ class JobTest(support.RunCase):
         job.write_json(run / "work" / "prepare.json", made)
         self.assertEqual(triage.cmd_start(args)["counts"]["total"], 1)
 
+    def test_a_file_that_stays_locked_is_an_error_not_a_missing_file(self):
+        path = self.top / "state.json"
+        job.write_json(path, {"status": "done"})
+        with mock.patch.object(job, "LOCKED_TRIES", 2), mock.patch.object(job.time, "sleep"), \
+                mock.patch.object(Path, "read_bytes", side_effect=PermissionError("locked")):
+            with self.assertRaises(PermissionError):  # a CID that is done must never read as one nobody works on
+                job.read_json(path)
+        self.assertEqual((job.read_json(path), job.read_json(self.top / "none.json", {})), ({"status": "done"}, {}))
+
     def test_job_status(self):
         run = self.top / "run"
         (run / "work").mkdir(parents=True)

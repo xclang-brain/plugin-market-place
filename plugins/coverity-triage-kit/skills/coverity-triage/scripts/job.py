@@ -39,18 +39,20 @@ def now() -> str:
 # ---- files: every write is atomic, every read survives a writer on Windows ------------------
 
 
+LOCKED_TRIES = 200  # 10 seconds for a file that another process replaces or reads at this moment
+
 def write_bytes(path: Path, data: bytes) -> None:
     """Write through a temporary file and a rename. Windows refuses the rename while another process
-    reads the file: tried again for a while."""
+    reads the file: tried again for up to 10 seconds."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_bytes(data)
-    for attempt in range(60):
+    for attempt in range(LOCKED_TRIES):
         try:
             os.replace(tmp, path)
             return
         except PermissionError:
-            if attempt == 59:
+            if attempt == LOCKED_TRIES - 1:
                 raise
             time.sleep(0.05)
 
@@ -60,15 +62,17 @@ def write_json(path: Path, data) -> None:
 
 
 def read_json(path: Path, default=None):
-    """A JSON file (UTF-8, a BOM is allowed). ``default`` when it is missing or is not JSON."""
-    for _ in range(20):
+    """A JSON file (UTF-8, a BOM is allowed). ``default`` when it is missing or is not JSON. A file that
+    stays locked is an error, never ``default``: a locked state.json must not read as a CID nobody works on."""
+    for attempt in range(LOCKED_TRIES):
         try:
             return json.loads(path.read_bytes().decode("utf-8-sig"))
         except PermissionError:  # Windows: the file is being replaced at this moment
+            if attempt == LOCKED_TRIES - 1:
+                raise
             time.sleep(0.05)
         except (OSError, ValueError):
             return default
-    return default
 
 
 def pid_alive(pid: int | None) -> bool:

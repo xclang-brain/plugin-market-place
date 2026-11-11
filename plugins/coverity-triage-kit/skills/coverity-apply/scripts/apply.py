@@ -66,24 +66,27 @@ def write(path: Path, data) -> bytes:
     raw = data if isinstance(data, bytes) else (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode()
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_bytes(raw)
-    for attempt in range(60):
+    for attempt in range(200):  # Windows refuses the rename while another process reads the file
         try:
             os.replace(tmp, path)
             break
         except PermissionError:
-            if attempt == 59:
+            if attempt == 199:
                 raise
             time.sleep(0.05)
     return raw
 
 
 def read_json(path: Path) -> dict:
-    """A JSON object (UTF-8, a BOM is allowed). {} when the file is missing or is not one."""
-    for _ in range(20):
+    """A JSON object (UTF-8, a BOM is allowed). {} when the file is missing or is not one. A file that stays
+    locked is an error, never {}: a locked written.json must not read as nothing registered."""
+    for attempt in range(200):
         try:
             data = json.loads(path.read_bytes().decode("utf-8-sig"))
             return data if isinstance(data, dict) else {}
         except PermissionError:  # Windows: the file is being replaced at this moment
+            if attempt == 199:
+                raise
             time.sleep(0.05)
         except (OSError, ValueError):
             break
