@@ -27,7 +27,7 @@ python3 tests/eval/run_eval.py --stage 3 --vcs svn --answer-ok --work <フォル
 
 必要なもの: claude CLI（モデルを使用できるアカウントでログイン済み）、uv、PyYAML を使用できる Python 3.10 以上、git（`--vcs svn` では svn と svnadmin）。
 
-時間の上限は、1回の実行につき、2段階目が 30 分、3段階目が 60 分です。2段階目の実測（git、`--answer-ok`、claude CLI 2.1.322、モデルは claude-haiku-5-5、3回）は、約 2 分、入力 約 200〜235 万トークン（大半はキャッシュの読み取り）、出力 約 2 万トークン、約 0.05 ドルでした。3段階目の実測は、まだありません。JSON の `usage` は、claude CLI が返すセッションの合計です（`transcript-ok` の値は、最初の依頼の分を含みます）。
+時間の上限は、1回の実行につき、2段階目が 30 分、3段階目が 60 分です。2段階目の実測（git、`--answer-ok`、claude CLI 2.1.322、モデルは claude-haiku-5-5、3回）は、約 2 分、入力 約 200〜235 万トークン（大半はキャッシュの読み取り）、出力 約 2 万トークン、約 0.05 ドルでした。3段階目の実測（git と svn、`--answer-ok`、各1回。進行と検証は claude-sonnet-5-5、処置と統合は claude-haiku-5-5）は、約 3〜4 分、入力 約 290〜380 万トークン、出力 約 5〜6 万トークン、約 0.6〜0.8 ドルでした。JSON の `usage` は、claude CLI が返すセッションの合計です（`transcript-ok` の値は、最初の依頼の分を含みます）。
 
 ## 記録と結果フォルダー
 
