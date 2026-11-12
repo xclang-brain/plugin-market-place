@@ -21,8 +21,8 @@ from urllib.parse import parse_qs, urlsplit
 import flowlib
 from flowlib import CIDS, FIXES, GROUP, Agent
 
-WORD = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する", "none": "何もしない", None: "-"}
-ASK = "よろしければ「OK」と入力してください。変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください"
+WORD = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する", "none": "保留にする", None: "-"}
+ASK = "よろしければ「OK」と入力してください。変更するときは「20003 は逸脱、20007 は保留、ほかは OK」のように入力してください"
 SAVED = "patch_file"  # a key of the reply of an accepted save
 
 
@@ -56,6 +56,10 @@ class Case(unittest.TestCase):
                          ((run / "summary.md").as_posix(), (run / "summary.md").as_posix(), run.as_posix(), []))
         return plan
 
+    def held(self, run: Path, cid: int, why: str) -> str:
+        """The comment Coverity gets for an item of 保留: the reason, then the first sentence of the result's summary."""
+        return f"保留。{why}。" + self.read(run, f"cid/{cid}/result.json")["summary"]
+
     def written(self) -> list[tuple]:
         """What Coverity received, in order: (CIDs, Classification, Action) of every entry."""
         return [(write["cids"], write["classification"], write["action"]) for write in self.coverity.writes]
@@ -88,7 +92,7 @@ class Case(unittest.TestCase):
 
     def parity(self, agent: Agent, url: str) -> tuple[dict, dict]:
         """One rule, two implementations: every row has the same choice in the table of the chat and on the
-        screen, and a default 何もしない has the same reason. Returns (the plan reply, screen rows by CID)."""
+        screen, and a default 保留 has the same reason. Returns (the plan reply, screen rows by CID)."""
         plan, state = agent.table(), self.screen(url, "/api/state")
         table, rows = flowlib.rows(plan["table"]), {row["cid"]: row for row in state["rows"]}
         self.assertEqual({cid: row[5] for cid, row in table.items()}, {cid: WORD[row["choice"]] for cid, row in rows.items()})
@@ -161,10 +165,11 @@ class Flow:
         plan = self.summary(me, run, request)
         self.assertEqual([flowlib.rows(plan["table"])[cid][5:] for cid in CIDS[:3]],
                          [["-", "取り込み済み"], ["-", "登録済み"], [WORD["deviation"], ""]])
-        me.ok(plan)
+        me.ok(me.change(plan, "20003=none"))  # 「20003 は保留、ほかは OK」: Coverity marks it, it is not fetched again
         where = f"修正をブランチ coverity-fix/{run.name} にコミットしました。" if self.kind == "git" else "修正を作業コピーに適用しました。"
         self.assertEqual((self.written()[1:], self.coverity.writes[1]["comment"].startswith(where)),
-                         ([([20001], "Bug", "Fix Required"), ([20003], "Intentional", "Ignore")], True))
+                         ([([20001], "Bug", "Fix Required"), ([20003], "Pending", "Undecided")], True))
+        self.assertEqual(self.coverity.writes[2]["comment"], self.held(run, 20003, "利用者が保留にしたため"))
         self.taken_in(run, [20001])  # the OK for a comment takes nothing in
         # 「次を処置して」 after the last CID and its OK: a new list, without what was taken in or registered
         new = me.ready(request)
@@ -211,7 +216,7 @@ class Flow:
             self.assertTrue(row[4].startswith(comment + "（") if row[5] == WORD["deviation"] else row[4] == comment, row)
         how = f"ブランチ coverity-fix/{run.name} にコミットして origin に push" if self.kind == "git" else "作業コピーのファイルに適用"
         self.assertEqual((plan["summary_file"], plan["question"]), (done["summary_file"], (
-            f"この内容で、修正の取り込み（3 件。{how}）、逸脱コメントの登録（2 件）を行います。"
+            f"この内容で、修正の取り込み（3 件。{how}）、逸脱コメントの登録（2 件）、保留の登録（1 件）を行います。"
             "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" + ASK)), "the question says what the OK does")
         self.assert_nothing_changed()
         # 「20003 は逸脱、ほかは OK」: the line under to_change with the change, then the apply line of THAT reply
@@ -223,8 +228,14 @@ class Flow:
         self.assertEqual([cid for cid in FIXES if FIXES[cid][1] in code], [20001, 20004])
         self.assertEqual(self.written(), [([20002], "False Positive", "Ignore"), ([20003], "Bug", "Ignore"),
                                           ([20005], "Intentional", "Ignore"), ([20001], "Bug", "Fix Required"),
-                                          ([20004], "Bug", "Fix Required")], "the chosen deviations, the fixes taken in, nothing else")
-        # the same request again: the next list is what was left undecided
+                                          ([20004], "Bug", "Fix Required"), ([20006], "Pending", "Undecided")],
+                         "the chosen deviations, the fixes taken in, 保留")
+        self.assertEqual(self.coverity.writes[-1]["comment"], self.held(run, 20006, "確信度が低いため"))
+        # the same request again: every warning is decided. With Pending in the conditions, the one of 保留 comes back
+        self.assertEqual(self.listed(Agent(self.repo, plugin).ready(request)["run_dir"]), [])
+        config = self.repo / ".coverity-triage" / "config.yaml"
+        config.write_text(config.read_text(encoding="utf-8") + "conditions:\n  classification: [Unclassified, Pending]\n",
+                          encoding="utf-8")
         new = Agent(self.repo, plugin).ready(request)
         self.assertEqual((self.listed(new["run_dir"]), new["message"]), ([20006], "条件に合う警告を 1 件取得しました" + self.based))
 
@@ -257,29 +268,29 @@ class Flow:
         self.assertEqual(([summary.count(f"- 検証: {word}") for word in ("合格", "要確認", "差し戻し")],
                           "- 検証の指摘: src/reader.c:47 get_buf" in summary), ([3, 1, 0], True), "every result is reviewed")
         self.assert_nothing_changed()
-        # 「20001 は何もしない、ほかは OK」: the one fix of the merged CIDs is taken in, and Coverity gets it and the comment
-        lead.ok(lead.change(plan, "20001=none"))
+        # 「20001 は保留、ほかは OK」: the one fix of the merged CIDs is taken in; the person refuses the permission
+        # prompt of the write to Coverity: no write call
+        applied = lead.ok(lead.change(plan, "20001=none"), write=False)
+        self.assertEqual((applied["message"].split("。")[-1], len(applied["call"]), self.coverity.writes),
+                         ("続けて、逸脱コメント 1 件と、取り込んだ修正 1 件と、保留 2 件を Coverity に登録します", 1, []))
+        self.assertEqual(applied["if_not_called"], flowlib.NOT_CALLED, "the sentence the agent tells the person now")
         code = self.taken_in(run, GROUP)
         self.assertEqual([FIXES[cid][1] in code for cid in (20001, 20003, *GROUP)], [False, False, True, True, True])
-        self.assertEqual(self.written(), [([20002], "False Positive", "Ignore"), (GROUP, "Bug", "Fix Required")])
-        # 「修正を取り込んで」, 「20001 は修正、20003 は逸脱、ほかは OK」; the person refuses the permission prompt: no write call
-        applied = lead.ok(lead.change(lead.table(), "20001=fix", "20003=deviation"), write=False)
-        self.assertEqual((applied["message"].split("。")[-1], len(applied["call"]), len(self.coverity.writes)),
-                         ("続けて、逸脱コメント 1 件と、取り込んだ修正 1 件を Coverity に登録します", 1, 2))
-        self.assertEqual(applied["if_not_called"], flowlib.NOT_CALLED, "the sentence the agent tells the person now")
-        self.assertIn(b"(void)fclose(fp);", self.taken_in(run, GROUP, [20001]))  # the fix that was made again is in
         # the same request in a new session: the folder stays open, and the request leads to its table again,
-        # where the choice of the chat that got its OK stands (20003 is not back at 何もしない)
+        # where the choice of the chat that got its OK stands (20001 is not back at 修正を取り込む)
         again = Agent(self.repo)
         plan = self.summary(again, run, request)
         self.assertEqual([row[5:] for row in flowlib.rows(plan["table"]).values()], [
-            ["-", "取り込み済み（Coverity への登録が残っています）"], ["-", "登録済み"], [WORD["deviation"], "チャットで指定"],
-            ["-", "取り込み済み"]])
-        self.assertEqual(plan["question"],
-                         "この内容で、逸脱コメントの登録（1 件）、取り込み済みの修正の Coverity への登録（1 件）を行います。" + ASK)
-        again.ok(plan)
-        self.assertEqual(self.written()[2:], [([20003], "Bug", "Ignore"), ([20001], "Bug", "Fix Required")])
-        self.taken_in(run, GROUP, [20001])  # and no fix twice
+            [WORD["none"], "チャットで指定"], [WORD["deviation"], ""], [WORD["none"], "検証で要確認のため"],
+            ["-", "取り込み済み（Coverity への登録が残っています）"]])
+        self.assertEqual(plan["question"], "この内容で、逸脱コメントの登録（1 件）、保留の登録（2 件）、"
+                                           "取り込み済みの修正の Coverity への登録（1 件）を行います。" + ASK)
+        # 「20001 は修正、ほかは OK」: the fix that was made again is taken in, and Coverity gets every entry once
+        again.ok(again.change(plan, "20001=fix"))
+        self.assertIn(b"(void)fclose(fp);", self.taken_in(run, GROUP, [20001]))
+        self.assertEqual(self.written(), [([20002], "False Positive", "Ignore"), ([20001], "Bug", "Fix Required"),
+                                          (GROUP, "Bug", "Fix Required"), ([20003], "Pending", "Undecided")])
+        self.assertEqual(self.coverity.writes[-1]["comment"], self.held(run, 20003, "検証で要確認のため"))
         # after the write the same request fetches again: every warning is decided, and the message names the conditions
         new = Agent(self.repo).ready(request)
         self.assertEqual((new["run_dir"] != run.as_posix(), self.listed(new["run_dir"]), new["message"]), (True, [], (
@@ -331,12 +342,17 @@ class Flow:
             [WORD["none"], "未検証のため"]))
         self.assert_nothing_changed()
         me.ok(plan)
+        held = [([cid], "Pending", "Undecided") for cid in (20003, 20007, 20008, 20009)]
         self.assertEqual((self.coverity.writes[0]["comment"], self.written()),
-                         (edited, [([20002], "False Positive", "Ignore"), (GROUP, "Bug", "Fix Required")]))
+                         (edited, [([20002], "False Positive", "Ignore"), (GROUP, "Bug", "Fix Required"), *held]))
+        self.assertEqual([write["comment"] for write in self.coverity.writes[2:]], [self.held(run, cid, why) for cid, why in (
+            (20003, "未検証のため"), (20007, "検証で要確認のため"), (20008, "確信度が低いため"), (20009, "未検証のため"))])
         code = self.taken_in(run, GROUP)
         self.assertEqual([FIXES[cid][1] in code for cid in (20003, *GROUP)], [False, True, True, True])
         rows = self.parity(me, url)[1]
         self.assertEqual((rows[20002]["done"], rows[20002]["comment"], rows[20004]["done"]), ("written", edited, "applied"))
+        self.assertEqual((rows[20008]["done"], rows[20008]["comment"], rows[20008]["comment_edited"]),
+                         ("written", self.held(run, 20008, "確信度が低いため"), False))
 
 
 class GitFlow(Flow, Case):

@@ -21,7 +21,7 @@ const { chromium } = require('playwright');
     const first = page.locator('#cid-20001');
     await first.getByRole('button', { name: '20001' }).click(); // the opened row shows the diff
     seen.diff = (await first.locator('.diff .add').first().innerText()).includes('確認'); // cp932 in the patch
-    await first.locator('select').selectOption({ label: '何もしない' }); // a choice is saved at once
+    await first.locator('select').selectOption({ label: '保留にする' }); // a choice is saved at once
     await first.getByText('画面で選択').waitFor();
 
     const second = page.locator('#cid-20002');
@@ -30,7 +30,7 @@ const { chromium } = require('playwright');
     seen.counter = await second.locator('.tools span').innerText();
     await second.getByRole('button', { name: 'コメントを保存' }).click();
     await second.getByText('編集済み').waitFor();
-    await page.getByText('何もしない 1 件').waitFor();
+    await page.getByText('保留にする 1 件').waitFor();
     seen.foot = await page.locator('#choices').innerText();
     seen.limited = await page.locator('#limited').innerText();
     await page.screenshot({ path: shot });

@@ -157,7 +157,7 @@ uv run --native-tls --quiet "<このスキルのフォルダー>/scripts/triage.
 「まとめを見せて」と依頼されたときは、`… finish --run "<run_dir>"` を実行し、応答の `next` のコマンドを、`next` が空になるまで続けて実行します（`finish` の次は、一覧を作成する `plan` のコマンドです）。`plan` の応答は、次の順で示します。`table` を、行も列も文字も変えずにそのまま表示します。`summary_file` が `null` でなければ「CID ごとの修正コードと根拠は <summary_file> にあります」と伝えます。最後に、`question` をそのまま書いて、回答を待ちます（`question` がないときは、`message` を伝えて終わります）。`table` と `question` は、利用者が OK を出す対象そのものです。言い換え、箇条書きへの整形、補足の追加をせずに、文字を変えずに書きます。回答は、次のように扱います。
 
 - 「OK」：`after_ok` のコマンドを実行します。
-- 選択を変更する回答（「20003 は逸脱、20007 は何もしない、ほかは OK」）：`to_change` のコマンドの `--set <CID>=<fix|deviation|none>` を、変更する CID ごとの `--set`（修正は `fix`、逸脱は `deviation`、何もしないは `none`。この例では `--set 20003=deviation --set 20007=none`）に書き換えて実行します。回答に OK も含まれていたときだけ、その新しい応答の `after_ok` のコマンドを実行します。OK がないときは、新しい `table` と `question` を示して、回答を待ちます。
+- 選択を変更する回答（「20003 は逸脱、20007 は保留、ほかは OK」）：`to_change` のコマンドの `--set <CID>=<fix|deviation|none>` を、変更する CID ごとの `--set`（修正は `fix`、逸脱は `deviation`、保留は `none`。この例では `--set 20003=deviation --set 20007=none`）に書き換えて実行します。回答に OK も含まれていたときだけ、その新しい応答の `after_ok` のコマンドを実行します。OK がないときは、新しい `table` と `question` を示して、回答を待ちます。
 - `after_ok` のコマンドの応答：`call` のツールを呼び出して、結果を報告します（報告する内容は、スキル `coverity-apply` の3章にあります）。呼び出しが許可されなかったとき、またはエラーになったときは、報告の最後に、`if_not_called` の文を、文字を変えずに書きます（利用者が次に入力する文が入っています）。
 
-`finish` の応答の `ok` が `false` で、`pending` または `unreviewed` があるとき（エージェントが開始した処置が残っているとき）は、`error` を伝え、その `next` は実行せずに、スキル `coverity-apply` の1章の手順で一覧を示します（その CID は、一覧に「未処置」、または「何もしない」（未検証のため）と表示されます）。
+`finish` の応答の `ok` が `false` で、`pending` または `unreviewed` があるとき（エージェントが開始した処置が残っているとき）は、`error` を伝え、その `next` は実行せずに、スキル `coverity-apply` の1章の手順で一覧を示します（その CID は、一覧に「未処置」、または「保留にする」（未検証のため）と表示されます）。

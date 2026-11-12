@@ -277,16 +277,20 @@ class ApiTest(ScreenCase):
         self.assertEqual(self.decide(run, 20001, "fix")[1]["row"]["comment"], FIX)  # no comment: the result's again
 
     def test_registered_item_shows_the_comment_that_was_registered(self):
-        run = self.run_folder([20001])
+        run = self.run_folder([20001, 20002])
         item(run, 20001, fix=False)
+        item(run, 20002, confidence="low")
         edited = "誤検知。src/b.c:2 で長さを確認している。"
         self.assertEqual(self.decide(run, 20001, "deviation", edited)[0], 200)
+        held = "保留。確信度が低いため。呼び出し元がリポジトリにない。"  # 20002: the comment of 保留, which nobody edited
         put(run / "written.json", {"written": {"20001": {  # the OK was given: Coverity has the edited comment
             "classification": "False Positive", "action": "Ignore", "severity": "Unspecified", "comment": edited,
+            "at": "2026-11-10T16:00:00+09:00"}, "20002": {
+            "classification": "Pending", "action": "Undecided", "severity": "Unspecified", "comment": held,
             "at": "2026-11-10T16:00:00+09:00"}}})
-        row = self.rows()[20001]
-        self.assertEqual([row[key] for key in ("done", "choice", "comment", "comment_edited")],
-                         ["written", None, edited, True])
+        rows = self.rows()
+        self.assertEqual([[rows[cid][key] for key in ("done", "choice", "comment", "comment_edited")] for cid in (20001, 20002)],
+                         [["written", None, edited, True], ["written", None, held, False]])
         self.assertEqual(self.http("GET", "/api/cid/20001")[1]["deviation"]["comment"], edited)
 
     def test_decision_that_no_longer_fits_is_ignored(self):
@@ -434,7 +438,7 @@ class PageTest(ScreenCase):
             {"cid": "20001", "fix": FILE, "deviation": FIX, "choice": "fix"},
             {"cid": "20002", "fix": "なし", "deviation": KEEP, "choice": "deviation"}])
         self.assertEqual((seen["diff"], seen["counter"]), (True, f"{len(edited)} / 200 文字"))
-        self.assertEqual(seen["foot"], "修正を取り込む 0 件、逸脱コメントを登録する 1 件、何もしない 1 件")
+        self.assertEqual(seen["foot"], "修正を取り込む 0 件、逸脱コメントを登録する 1 件、保留にする 1 件")
         self.assertEqual(seen["limited"], "条件に合う警告が、設定の上限（3 件）より多くあります。上限まで取得しました")
         self.assertLessEqual(seen["narrow"]["page"], seen["narrow"]["window"])  # no sideways scrolling at 390 px
         self.assertEqual(decisions(run), {"20001": {"decision": "none"},

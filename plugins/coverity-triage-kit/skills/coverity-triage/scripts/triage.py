@@ -229,18 +229,19 @@ def closed(run: Run) -> bool:
                 and (not entries or mtime("written.json") >= entries))
 
 
-def find_run(repo: Path, cfg: dict, kind: str, new: bool) -> Path:
+def find_run(repo: Path, cfg: dict, opened, new: bool) -> Path:
     """The newest result folder of this repository, or a new one. A new one is made: with --new; when
-    the stream, the conditions or the base branch of the settings file are no longer the ones the folder
-    was made for; and when the newest folder is closed."""
-    out = cfg["output_dir"]
+    the stream, the conditions or the base branch (the one of the settings file, else the branch checked
+    out now) are no longer the ones the folder was made for; and when the newest folder is closed."""
+    out, kind = cfg["output_dir"], opened.kind
     made_for = {"stream": cfg["stream"], "conditions": cfg["conditions"]}
     runs = sorted((p for p in out.iterdir() if (read_json(p / "run.json") or {}).get("repo") == repo.as_posix()),
                   reverse=True) if out.is_dir() else []
     if runs and not new:
         latest = Run(runs[0], starting=True)
         based = latest.meta.get("base_branch")  # '': svn, or git before the work copies are made
-        same_base = not cfg["base_branch"] or not based or cfg["base_branch"] == based
+        wanted = cfg["base_branch"] or opened.checked_out()
+        same_base = not wanted or not based or wanted == based
         if {key: latest.meta.get(key) for key in made_for} == made_for and same_base and not closed(latest):
             return runs[0]
     for old in runs:
@@ -266,7 +267,7 @@ def cmd_start(args) -> dict:
     repo = Path(args.repo).resolve()
     cfg = settings(repo)
     opened = vcs.open_repo(repo)
-    run_dir = find_run(repo, cfg, opened.kind, args.new)
+    run_dir = find_run(repo, cfg, opened, args.new)
 
     def meta() -> dict:
         """run.json with the mode of this request. The mode of a run only grows: a request in a chat

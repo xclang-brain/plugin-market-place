@@ -110,6 +110,26 @@ class GitTest(Copies, Case):
         self.assertEqual((branch, revision), ("main", head))
         self.assertIn("取得できなかった", note)
 
+    def test_base_is_the_branch_checked_out_and_with_a_detached_head_the_default_of_origin(self):
+        origin = support.make_repo("git", self.top / "origin")
+        call(*GIT, "branch", "develop", cwd=origin)
+        user = self.top / "user"
+        call(*GIT, "clone", "-q", origin, user, cwd=self.top)
+        call(*GIT, "checkout", "-q", "develop", cwd=user)
+        call(*GIT, "checkout", "-q", "develop", cwd=origin)
+        support.write(origin, {"src/d.c": b"int d;\n"})  # origin's develop moves on after the clone
+        call(*GIT, "add", "-A", cwd=origin)
+        call(*GIT, "commit", "-q", "-m", "develop", cwd=origin)
+        pushed = call(*GIT, "rev-parse", "HEAD", cwd=origin).decode().strip()
+        call(*GIT, "checkout", "-q", "main", cwd=origin)
+        repo = vcs.open_repo(user)
+        self.assertEqual(repo.base(""), ("develop", pushed, ""), "the pushed state of the branch checked out")
+        call(*GIT, "checkout", "-q", "-b", "mine", cwd=user)  # a branch origin does not have: the local one
+        self.assertEqual(repo.base(""), ("mine", call(*GIT, "rev-parse", "HEAD", cwd=user).decode().strip(), ""))
+        call(*GIT, "checkout", "-q", "--detach", cwd=user)
+        main = call(*GIT, "rev-parse", "main", cwd=origin).decode().strip()
+        self.assertEqual((repo.checked_out(), repo.base("")), ("main", ("main", main, "")))
+
     def test_base_without_origin_is_the_current_branch(self):
         repo = vcs.open_repo(support.make_repo("git", self.top))
         head = call(*GIT, "rev-parse", "HEAD", cwd=repo.repo).decode().strip()

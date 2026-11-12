@@ -106,13 +106,19 @@ class Git:
     def _commit(self, ref: str) -> str:
         return text(self.git("rev-parse", "--verify", "--quiet", ref + "^{commit}", check=False).stdout)
 
+    def checked_out(self) -> str:
+        """The branch the work is based on when the settings name none: the one the person has checked
+        out; with a detached HEAD, origin's default branch. '' when neither is known."""
+        head = self.git("symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+        if text(head.stdout):
+            return text(head.stdout)
+        default = self.git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False)
+        return text(default.stdout).partition("/")[2]
+
     def base(self, branch: str) -> tuple[str, str, str]:
         """(base branch, base revision, note): the branch the fixes start from, fetched from origin."""
         origin = "origin" in text(self.git("remote").stdout).split()
-        if not branch and origin:
-            head = self.git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False)
-            branch = text(head.stdout).partition("/")[2]
-        branch = branch or text(self.git("symbolic-ref", "--quiet", "--short", "HEAD", check=False).stdout)
+        branch = branch or self.checked_out()
         if not branch:
             raise VcsError("取り込み先のブランチを判定できません。設定ファイルの base_branch に指定してください")
         note = ""
@@ -122,7 +128,7 @@ class Git:
                 failed = fetched.returncode != 0
             except VcsError:
                 failed = True
-            if failed:
+            if failed and self._commit(f"origin/{branch}"):  # a branch that origin has never had: the local one
                 note = f"origin から {branch} を取得できなかったため、取得済みのリビジョンを使用します"
         for ref in (f"origin/{branch}", branch) if origin else (branch,):
             if self._commit(ref):
@@ -190,6 +196,10 @@ class Svn:
 
     def svn(self, *args: str, cwd: Path | None = None, check: bool = True):
         return run(["svn", "--non-interactive", *args], cwd or self.repo, check)
+
+    @staticmethod
+    def checked_out() -> str:
+        return ""  # svn has no base branch
 
     def base(self, branch: str) -> tuple[str, str, str]:
         """('', the highest revision in the person's working copy, ''). svnversion prints 4168, or 4123:4168M

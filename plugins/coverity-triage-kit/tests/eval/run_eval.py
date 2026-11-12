@@ -47,9 +47,9 @@ MADE = re.compile(r"登録(?:しました|[がをはも]?完了しました|済�
 ASKS = re.compile(r"(?:[?？]|(?:です|ます|でしょう|ません)か。?)[\s*」）)]*\Z")  # a text that ends in a question
 SVN_STATUS = re.compile(r"^([ADUGC][ADUGC ]| [ADUGC]) +\S", re.M)  # a status line of svn patch
 SQUEEZE = re.compile(r"[\s*`]+")  # white space and Markdown emphasis are not compared
-# A choice that an answer to the one question changes (「20001 は何もしない、ほかは OK」): CID, the word for the choice
-CHANGE = re.compile(r"(\d+) *は *(修正|逸脱|何もしない)")
-CHOICE = {"修正": "fix", "逸脱": "deviation", "何もしない": "none"}
+# A choice that an answer to the one question changes (「20001 は保留、ほかは OK」): CID, the word for the choice
+CHANGE = re.compile(r"(\d+) *は *(修正|逸脱|保留)")
+CHOICE = {"修正": "fix", "逸脱": "deviation", "保留": "none"}
 
 
 class Stop(Exception):
@@ -441,11 +441,12 @@ def grade_after_ok(ev: Eval, t: Transcript) -> None:
 
 def grade_changed(ev: Eval, t: Transcript) -> None:
     """An answer that changes choices and has the OK: the plan that was carried out has the choices of the answer, a
-    fix the answer takes out is not taken in, the other chosen fixes are."""
+    fix the answer takes out is not taken in, the other chosen fixes are, and a CID the answer puts on 保留 is in
+    the entries for Coverity as Pending."""
     plan, record = parse(ev.run / "apply-plan.json"), ev.run / "applied.json"
     fixes = parse(record).get("fixes") or {}
     carried = record.is_file() and record.stat().st_mtime >= (ev.run / "apply-plan.json").stat().st_mtime
-    kinds = {"fix": plan.get("fixes") or [], "none": plan.get("none") or [],
+    kinds = {"fix": plan.get("fixes") or [], "none": [entry["cids"][0] for entry in plan.get("none") or []],
              "deviation": [entry["cids"][0] for entry in plan.get("deviations") or []]}
     now = {cid: next((kind for kind, cids in kinds.items() if cid in cids), "一覧になし") for cid in ev.changes}
     ev.check("実行した一覧（apply-plan.json）の選択が、回答のとおりになっている", carried and now == ev.changes,
@@ -455,6 +456,13 @@ def grade_changed(ev: Eval, t: Transcript) -> None:
     ev.check("回答で取り込まないことにした修正を、取り込んでいない", out and not wrong,
              f"取り込まれている CID: {wrong}" if wrong else f"対象の CID: {out}" if out
              else f"回答の CID（{', '.join(map(str, ev.changes))}）に、修正コードがありません")
+    held = [cid for cid, kind in ev.changes.items() if kind == "none"]
+    if held:
+        entries = {cid: entry["classification"] for entry in parse(ev.run / "coverity-entries.json").get("entries") or []
+                   for cid in entry["cids"]}
+        ev.check("回答で保留にした CID が、Coverity に登録する内容に「Pending」として入っている",
+                 all(entries.get(cid) == "Pending" for cid in held),
+                 "、".join(f"{cid}: {entries.get(cid, 'なし')}" for cid in held))
     fine, where = arrived(ev, fixes)
     missing = [cid for cid in kinds["fix"] if str(cid) not in fixes or not has_fix(ev, cid)]
     ev.check("ほかに選択した修正は、取り込んでいる", carried and fine and not missing,
@@ -546,13 +554,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--answer-ok", action="store_true", help="2・3段階目で、一覧の質問に回答します（回答は --answer）")
     parser.add_argument("--answer", default="OK", metavar="<回答>",
                         help="一覧の質問への回答（既定は「OK」）。1段階目では、最後の依頼です。選択を変更する回答"
-                             "（「20001 は何もしない、ほかは OK」）を指定すると、変更のとおりに取り込まれたことを確認します")
+                             "（「20001 は保留、ほかは OK」）を指定すると、変更のとおりに取り込まれたことを確認します")
     parser.add_argument("--copies", type=int, choices=range(1, 10), default=1, metavar="N",
                         help="見本のコードと警告を N 倍（1〜9）にします。時間の測定に使用します")
     parser.add_argument("--model", default="haiku", help="1段階目のチャットのモデル（既定は haiku）")
     args = parser.parse_args(argv)
     if "OK" not in args.answer:
-        parser.error("--answer には、OK を含む回答を指定してください（例: \"20001 は何もしない、ほかは OK\"）")
+        parser.error("--answer には、OK を含む回答を指定してください（例: \"20001 は保留、ほかは OK\"）")
     for name in ("SIGTERM", "SIGHUP"):  # a stopped EVAL stops the agent and the emulator too: the finally blocks run
         signal.signal(getattr(signal, name, signal.SIGTERM), lambda *_: sys.exit(2))
     emulator = None

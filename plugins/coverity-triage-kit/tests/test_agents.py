@@ -8,6 +8,7 @@ files exist is in test_structure.py, the wording rules are in test_docs.py.
     python3 tests/run.py --only agents
 """
 
+import ast
 import json
 import os
 import re
@@ -105,6 +106,16 @@ class Texts(unittest.TestCase):
                         ("plugin_coverity-triage-kit_coverity-connect", "coverity-connect")] if mcp else []
                 self.assertEqual((dev["name"], dev["description"], dev["model"], dev["tools"]),
                                  (name, description, model, ", ".join([tools, *both])))
+
+    def test_a_body_names_a_choice_with_the_word_of_the_table(self):
+        """What the person reads in the table is what the agent says. The third choice marks the CID as Pending in
+        Coverity, so its word is 保留にする."""
+        table = ast.literal_eval(re.search(r"^CHOICE = (\{.*\})$", APPLY.read_text(encoding="utf-8"), re.M)[1])
+        self.assertEqual(table["none"], "保留にする")
+        for name in AGENTS:
+            named = re.findall(r"一覧で「([^」]+)」（", read(name, True)[1])
+            self.assertLessEqual(set(named), set(table.values()), name)
+        self.assertEqual(re.findall(r"一覧で「([^」]+)」（未検証のため）", read("triage-worker", True)[1]), [table["none"]])
 
     def test_the_orchestrator_sends_the_three_request_texts_of_the_contract(self):
         body = read("triage-orchestrator", True)[1].split("## 依頼文")[1]

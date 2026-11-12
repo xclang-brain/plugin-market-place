@@ -38,7 +38,10 @@ SCRIPT = Path(__file__).resolve()
 NETWORK = 120  # seconds a fetch or a push may take
 VERDICT = {"true_bug": "本物のバグ", "false_positive": "誤検知", "intentional": "意図的", "undetermined": "判定不能"}
 LEVEL = {"high": "高", "medium": "中", "low": "低"}
-CHOICE = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する", "none": "何もしない"}
+CHOICE = {"fix": "修正を取り込む", "deviation": "逸脱コメントを登録する", "none": "保留にする"}
+# An item that is neither taken in nor registered with its comment is marked in Coverity: it is not fetched again.
+PENDING = {"classification": "Pending", "action": "Undecided", "severity": "Unspecified"}
+OWN = "利用者が保留にしたため"  # the reason of 保留 for a choice of the chat or the screen
 NOT_ITEM = {"failed": "処置に失敗", "unfinished": "未処置"}
 REFUSED = ("取り込み先のコードに適用できませんでした。先に取り込んだ修正と同じ箇所を変更しているときは、"
            "その修正を{}した後に、もう一度処置してください")  # {}: マージ (git), コミット (svn)
@@ -192,6 +195,7 @@ class Run:
                 "reason": reason, "decision": decision.get("decision"), "decided": decision.get("at"),
                 "handled": handled, "verdict": result.get("verdict"),
                 "summary": str((result.get("fix") or {}).get("summary", "")),
+                "finding": re.match(r"[^。]*。?", str(result.get("summary") or ""))[0],  # its first sentence
                 "deviation": {**{key: deviation.get(key) for key in ("classification", "action", "severity")},
                               "comment": decision.get("comment") or deviation.get("comment", "")}}
 
@@ -318,16 +322,19 @@ def cmd_plan(args) -> dict:
             remark = "取り込み済み" + ("（push が残っています）" if unpushed else "" if run.registered(row["cids"])
                                  else "（Coverity への登録が残っています）")
         elif cid in chosen:
-            choice, remark = chosen[cid], "チャットで指定"
+            choice, remark, why = chosen[cid], "チャットで指定", OWN
         elif row["decision"]:
-            choice, remark = row["decision"], "画面で選択"
+            choice, remark, why = row["decision"], "画面で選択", OWN
         else:
-            choice, remark = row["default"], row["reason"]
+            choice, remark, why = row["default"], row["reason"], row["reason"]
         n[choice or "done"] += 1
         if choice == "deviation":
             plan["deviations"].append({"cids": row["cids"], **deviation})
-        elif choice:
-            plan["fixes" if choice == "fix" else "none"].append(cid)
+        elif choice == "fix":
+            plan["fixes"].append(cid)
+        elif choice:  # 保留: one line, the reason and what the investigation found
+            said = "".join(f"{part}。" for part in ("保留", why) if part) + row["finding"]
+            plan["none"].append({"cids": row["cids"], **PENDING, "comment": " ".join(said.split())[:200]})
         same = f"（同じ原因: {', '.join(map(str, row['cids'][1:]))}）" if row["cids"][1:] else ""
         # The values Coverity gets with the comment: only where the comment is what will be registered.
         values = f"（{deviation['classification']}／{deviation['action']}／{deviation['severity']}）" if choice == "deviation" else ""
@@ -344,16 +351,16 @@ def cmd_plan(args) -> dict:
     how = "作業コピーのファイルに適用" if kind != "git" else f"ブランチ {branch} にコミット" + ("して origin に push" if origin else "")
     parts = [f"修正の取り込み（{n['fix']} 件。{how}）" if n["fix"] else "",
              f"逸脱コメントの登録（{n['deviation']} 件）" if n["deviation"] else "",
+             f"保留の登録（{n['none']} 件）" if n["none"] else "",
              f"ブランチ {branch} の push" if unpushed and not n["fix"] else "",
              f"取り込み済みの修正の Coverity への登録（{waiting} 件）" if waiting else ""]
     if not any(parts):
-        return {**out, "message": "取り込む修正と、登録する逸脱コメントはありません。"
-                                  "変更するときは「20003 は修正」のように入力してください", "to_change": change, "next": []}
+        return {**out, "message": "取り込む修正と、Coverity に登録する内容はありません", "to_change": change, "next": []}
     registers = "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。" if n["fix"] else ""
     # The apply line is not under next: whoever follows next alone changes nothing without the person's OK.
     return {**out, "question": f"この内容で、{'、'.join(filter(None, parts))}を行います。{registers}"
                                "よろしければ「OK」と入力してください。"
-                               "変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください",
+                               "変更するときは「20003 は逸脱、20007 は保留、ほかは OK」のように入力してください",
             "after_ok": [run.command("apply")], "to_change": change, "next": []}
 
 
@@ -474,8 +481,8 @@ def cmd_apply(args) -> dict:
     fixes = {"applied": [], "skipped": [cid for cid in plan["fixes"] if str(cid) in run.fixed], "failed": {}}
     todo = [cid for cid in plan["fixes"] if str(cid) not in run.fixed]
     place = (take_git if kind == "git" else take_svn)(run, todo, fixes)
-    # The entries for Coverity, after the fixes: the chosen deviations and every fix that is taken in,
-    # each while it is not registered yet (written.json). The comment of a fix is one line.
+    # The entries for Coverity, after the fixes: the chosen deviations, every fix that is taken in and the
+    # items of 保留, each while it is not registered yet (written.json). The comment of a fix is one line.
     where = f"修正をブランチ {place['branch']} にコミットしました。" if kind == "git" and place \
         else "修正を作業コピーに適用しました。"
     deviations = [entry for entry in plan["deviations"] if not run.registered(entry["cids"])]
@@ -483,7 +490,8 @@ def cmd_apply(args) -> dict:
               "severity": run.items[cid]["deviation"]["severity"],
               "comment": " ".join((where + run.items[cid]["summary"]).split())[:200]}
              for cid in run.waiting()]
-    target, entries = run.dir / "coverity-entries.json", [*deviations, *taken]
+    pending = [entry for entry in plan["none"] if isinstance(entry, dict) and not run.registered(entry["cids"])]
+    target, entries = run.dir / "coverity-entries.json", [*deviations, *taken, *pending]
     if entries:
         raw = write(target, {"stream": run.meta.get("stream"), "entries": entries})
         write(Path(f"{target}.sha256"), (hashlib.sha256(raw).hexdigest() + "\n").encode("ascii"))
@@ -505,7 +513,8 @@ def cmd_apply(args) -> dict:
         said.append(f"修正 {done} 件を作業コピーに適用しました。内容を確認して、コミットしてください")
     if fixes["failed"]:
         said.append(f"取り込めなかった修正が {len(fixes['failed'])} 件あります")
-    kinds = [f"逸脱コメント {len(deviations)} 件" if deviations else "", f"取り込んだ修正 {len(taken)} 件" if taken else ""]
+    kinds = [f"逸脱コメント {len(deviations)} 件" if deviations else "", f"取り込んだ修正 {len(taken)} 件" if taken else "",
+             f"保留 {len(pending)} 件" if pending else ""]
     if entries:
         said.append(f"続けて、{'と、'.join(filter(None, kinds))}を Coverity に登録します")
     call = {"tool": "coverity_update_triage",

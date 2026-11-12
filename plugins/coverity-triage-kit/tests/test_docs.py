@@ -58,6 +58,12 @@ class Docs(unittest.TestCase):
     def test_no_shipped_text_has_a_banned_word(self):
         self.assertEqual([f"{name}: {word}" for name in self.shipped for word in BANNED if word in read(name)], [])
 
+    def test_the_third_choice_has_one_word(self):
+        """保留にする (in a chat sentence 保留): the CID is marked as Pending in Coverity. 何もしない is said of code only."""
+        self.assertEqual([name for name in self.shipped if "何もしない" in read(name) and "/references/" not in name], [])
+        for skill in ("coverity-apply", "coverity-triage"):  # the texts that turn the person's answer into --set
+            self.assertIn("修正は `fix`、逸脱は `deviation`、保留は `none`", read(f"skills/{skill}/SKILL.md"), skill)
+
     def test_only_the_development_documents_name_the_development_tool(self):
         self.assertEqual([name for name in self.names
                           if not name.startswith(MAY_NAME_IT) and DEVELOPMENT.search(read(name))], [])

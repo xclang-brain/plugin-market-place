@@ -189,9 +189,10 @@ class Run:
         if str(cid) in self.applied:
             return {**row, "done": "applied"}
         if all(str(c) in self.written for c in [cid, *members]):  # shown: the comment that was registered
-            entry = self.written[str(cid)]
-            said = (entry.get("comment") if isinstance(entry, dict) else None) or row["comment"]
-            return {**row, "done": "written", "comment": said, "comment_edited": said != row["comment"]}
+            entry = self.written[str(cid)] if isinstance(self.written[str(cid)], dict) else {}
+            said = entry.get("comment") or row["comment"]  # 保留 has a comment of its own, which nobody edited
+            edited = said != row["comment"] and entry.get("classification") != "Pending"
+            return {**row, "done": "written", "comment": said, "comment_edited": edited}
         chosen = self.chosen(cid, can_fix)
         if chosen:
             return {**row, "choice": chosen["decision"], "choice_from": "screen",

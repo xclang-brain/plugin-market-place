@@ -46,7 +46,7 @@ FIX_A = {"src/a.c": (b"return *p;", b"return p ? *p : 0;")}  # the edits of a fi
 FIX_BC = {"src/b.c": (b"return 0;", b"return 1;"), "src/c.c": (b"return 0;", b"return 1;")}
 FIX_S = {JP: (b"return 0;", "return 1; // 修正".encode("cp932"))}
 HEAD = "| CID | 判定 | 確信度 | 修正コード | 逸脱コメント | 選択 | 備考 |\n| --- | --- | --- | --- | --- | --- | --- |\n"
-ASK = "よろしければ「OK」と入力してください。変更するときは「20003 は逸脱、20007 は何もしない、ほかは OK」のように入力してください"
+ASK = "よろしければ「OK」と入力してください。変更するときは「20003 は逸脱、20007 は保留、ほかは OK」のように入力してください"
 
 BUG = "取り込んだ修正は、Coverity に「Bug／Fix Required」として登録します。"
 CHANGED = "一覧を表示した後に、結果または選択が変更されています。もう一度、一覧を確認してください"
@@ -56,6 +56,8 @@ REST = "\n\n未処置の CID が {} 件あります。続けるときは「次�
 NOT_CALLED = "Coverity への登録は行われていません。「修正を取り込んで」と入力すると、登録します"
 TEMPLATE = "--set <CID>=<fix|deviation|none>"  # the end of the line under to_change: one --set per changed CID
 PUSHED = f"ブランチ {BRANCH} にコミットして origin に push"  # what the OK does to a git repository with an origin
+HOLD = "保留にする"
+PENDING = {"classification": "Pending", "action": "Undecided", "severity": "Unspecified"}  # what Coverity gets for 保留
 
 
 def interpreter() -> list:
@@ -243,7 +245,7 @@ class PlanTest(Case):
         self.add(20012, status="rework")
         self.put("build.json", {"status": "done", "exit_code": 1, "cids": {"20001": "ok", "20007": "failed"}})
         out = self.plan()
-        none = "何もしない"
+        none = HOLD
         self.assertEqual(out["table"] + "\n", HEAD + "".join(f"| {cid} | {cells}\n" for cid, cells in (
             (20001, fix_row(20001, "修正を取り込む", "")), (20002, keep_row(20002, "逸脱コメントを登録する", "")),
             (20003, fix_row(20003, none, "確信度が低いため", "低")), (20004, fix_row(20004, none, "検証で要確認のため")),
@@ -255,7 +257,8 @@ class PlanTest(Case):
         self.assertEqual(out["counts"], {"fix": 1, "deviation": 2, "none": 5, "done": 0, "failed": 1, "unfinished": 2,
                                          "left": 0})
         self.assertEqual(out["question"],
-                         f"この内容で、修正の取り込み（1 件。{PUSHED}）、逸脱コメントの登録（2 件）を行います。" + BUG + ASK)
+                         f"この内容で、修正の取り込み（1 件。{PUSHED}）、逸脱コメントの登録（2 件）、保留の登録（5 件）を行います。"
+                         + BUG + ASK)
         # the apply line waits for the OK: it is not under next, which holds what is run without asking
         self.assertEqual((out["ok"], out["vcs"], out["after_ok"], out["next"]), (True, "git", [self.line("apply")], []))
         # an answer that changes a choice: the plan line of this folder, with one --set per changed CID
@@ -269,7 +272,10 @@ class PlanTest(Case):
                          (self.run_dir.as_posix(), (self.run_dir / "apply-plan.json").as_posix(), None))
         plan = self.get("apply-plan.json")
         keep = {"classification": "False Positive", "action": "Ignore", "severity": "Unspecified"}
-        self.assertEqual((plan["set"], plan["fixes"], plan["none"]), ({}, [20001], [20003, 20004, 20005, 20006, 20007]))
+        self.assertEqual((plan["set"], plan["fixes"]), ({}, [20001]))
+        self.assertEqual(plan["none"], [{"cids": [cid], **PENDING, "comment": f"保留。{why}。概要"} for cid, why in (
+            (20003, "確信度が低いため"), (20004, "検証で要確認のため"), (20005, "未検証のため"), (20006, "未検証のため"),
+            (20007, "ビルドに失敗したため"))])
         self.assertEqual(plan["deviations"], [{"cids": [20002], **keep, "comment": "誤検知。CID 20002 の理由。"},
                                               {"cids": [20008, 20009], **keep, "comment": "誤検知。CID 20008 の理由。"}])
         summary = self.put("summary.md", b"# Coverity\n")  # finish has written it
@@ -288,7 +294,7 @@ class PlanTest(Case):
         self.add(20011, status="working")
         out = self.plan("20001=none", "20003=fix", "20008=none")
         self.assertEqual([row(out, cid) for cid in (20001, 20003)],
-                         [fix_row(20001, "何もしない", "チャットで指定"), fix_row(20003, "修正を取り込む", "チャットで指定", "低")])
+                         [fix_row(20001, HOLD, "チャットで指定"), fix_row(20003, "修正を取り込む", "チャットで指定", "低")])
         self.assertEqual(out["counts"], {"fix": 1, "deviation": 1, "none": 2, "done": 0, "failed": 1, "unfinished": 1,
                                          "left": 0})
         chosen = {"20001": "none", "20003": "fix", "20008": "none"}
@@ -341,18 +347,22 @@ class PlanTest(Case):
         os.utime(self.run_dir / "cid" / "20003" / "state.json", (later, later))
         out = self.plan()
         self.assertEqual([row(out, cid) for cid in (20001, 20002, 20003, 20004)], [
-            fix_row(20001, "何もしない", "画面で選択"),
+            fix_row(20001, HOLD, "画面で選択"),
             keep_row(20002, "逸脱コメントを登録する", "画面で選択", "誤検知。画面で編集した文。"),
             fix_row(20003, "修正を取り込む", ""), keep_row(20004, "逸脱コメントを登録する", "")])
         self.assertEqual([entry["comment"] for entry in self.get("apply-plan.json")["deviations"]],
                          ["誤検知。画面で編集した文。", "誤検知。CID 20004 の理由。"])
         # the sentence in the chat wins over the screen
         self.assertEqual(row(self.plan("20001=fix"), 20001), fix_row(20001, "修正を取り込む", "チャットで指定"))
-        # nothing chosen: no question
+        # only 保留: it is registered too, so there is a question and an OK
         out = self.plan("20002=none", "20003=none", "20004=none")
-        self.assertEqual((out.get("question"), out.get("after_ok"), out["next"], out["message"]), (
-            None, None, [], "取り込む修正と、登録する逸脱コメントはありません。変更するときは「20003 は修正」のように入力してください"))
+        self.assertEqual((out["question"], out["after_ok"]), ("この内容で、保留の登録（5 件）を行います。" + ASK, [self.line("apply")]))
         self.assertEqual(out["to_change"], self.line("plan", "--set 20002=none", "--set 20003=none", "--set 20004=none", TEMPLATE))
+        # everything is registered: no question
+        self.put("written.json", {"written": {str(cid): {} for cid in range(20001, 20006)}})
+        out = self.plan()
+        self.assertEqual((out.get("question"), out.get("after_ok"), out["next"], out["message"]),
+                         (None, None, [], "取り込む修正と、Coverity に登録する内容はありません"))
 
 
 class Flow:
@@ -410,6 +420,27 @@ class Flow:
         self.assertEqual((out["entries_file"], out["entries"], out["call"], "if_not_called" in out), (None, 0, [], False))
         self.assertFalse(target.exists() or Path(f"{target}.sha256").exists())
 
+    def test_an_item_of_hold_is_marked_pending_in_coverity_and_then_is_registered(self):
+        self.add(20001, FIX_A)
+        self.add(20002, confidence="low")  # 保留 by default
+        self.add(20003, FIX_A, members=[20004])
+        self.add(20004, merged_into=20003)
+        result = self.get("cid/20002/result.json")
+        result["summary"] = "呼び出し元が\nリポジトリにない" + "長い文" * 70 + "。次の文。"
+        self.put("cid/20002/result.json", result)
+        out = self.plan("20003=none")  # 「20003 は保留、ほかは OK」
+        self.assertEqual(out["question"], f"この内容で、修正の取り込み（1 件。{self.how}）、保留の登録（2 件）を行います。" + BUG + ASK)
+        out = self.go()
+        self.assertEqual(out["message"].split("。")[-1], "続けて、取り込んだ修正 1 件と、保留 2 件を Coverity に登録します")
+        self.assertEqual(self.get("coverity-entries.json")["entries"][1:], [  # after the fix: one line, at most 200 characters
+            {"cids": [20002], **PENDING, "comment": ("保留。確信度が低いため。呼び出し元が リポジトリにない" + "長い文" * 70)[:200]},
+            {"cids": [20003, 20004], **PENDING, "comment": "保留。利用者が保留にしたため。概要"}])
+        self.put("written.json", {"written": {str(cid): {} for cid in (20001, 20002, 20003, 20004)}})
+        out = self.plan()
+        self.assertEqual([row(out, cid).rsplit(" | ", 2)[1:] for cid in (20002, 20003)], [["-", "登録済み |"]] * 2)
+        self.assertEqual((out["message"], self.plan("20003=fix")["problems"]),
+                         ("取り込む修正と、Coverity に登録する内容はありません", ["CID 20003 は登録済みです"]))
+
     def test_a_result_or_choice_changed_after_the_list_was_shown(self):
         self.add(20001, FIX_A)
         self.add(20002)
@@ -421,7 +452,7 @@ class Flow:
         out = self.follow(out["next"][0])  # the plan line: safe to run at once, and the apply line waits for the OK again
         self.assertEqual((out["after_ok"], out["next"]), ([self.line("apply")], []))
         self.assertEqual(out["to_change"], self.line("plan", "--set 20002=none", TEMPLATE))
-        self.assertEqual(row(out, 20002), keep_row(20002, "何もしない", "チャットで指定"))
+        self.assertEqual(row(out, 20002), keep_row(20002, HOLD, "チャットで指定"))
         # the values for Coverity are shown where the comment is what will be registered, and only there
         self.assertEqual((row(out, 20001), row(out, 20003)), (
             "本物のバグ | 高 | src/a.c | 本物のバグ。CID 20001 の理由。 | 修正を取り込む |  |",
@@ -438,18 +469,18 @@ class Flow:
         self.add(20002)
         self.add(20003, FIX_BC)
         self.add(20004, FIX_S)
-        fix, keep, none, chat = ["修正を取り込む", " |"], ["逸脱コメントを登録する", " |"], "何もしない", "チャットで指定 |"
+        fix, keep, none, chat = ["修正を取り込む", " |"], ["逸脱コメントを登録する", " |"], HOLD, "チャットで指定 |"
 
         def choices(*sets: str) -> list:
             out = self.plan(*sets)
             return [row(out, cid).rsplit(" | ", 2)[1:] for cid in (20002, 20003, 20004)]
 
-        def screen() -> None:  # the person chooses 何もしない for 20003 on the screen, now
+        def screen() -> None:  # the person chooses 保留 for 20003 on the screen, now
             at = datetime.now().astimezone().isoformat()
             self.put("decisions.json", {"decisions": {"20003": {"decision": "none", "at": at}}})
 
         screen()
-        self.plan("20003=deviation", "20004=none")  # 「20003 は逸脱、20004 は何もしない、ほかは OK」
+        self.plan("20003=deviation", "20004=none")  # 「20003 は逸脱、20004 は保留、ほかは OK」
         self.assertEqual(self.go()["fixes"]["applied"], [20001])  # the write to Coverity is not made after it
         self.assertEqual(choices(), [keep, [keep[0], chat], [none, chat]])
         self.assertEqual(self.get("apply-plan.json")["set"], {"20003": "deviation", "20004": "none"})
@@ -490,14 +521,14 @@ class Flow:
         self.plan("20001=none")
         out = self.go()
         self.assertEqual((out["fixes"], out["entries"], out["message"], self.kind in out), (
-            {"applied": [], "skipped": [], "failed": {}}, 1, "続けて、逸脱コメント 1 件を Coverity に登録します", False))
+            {"applied": [], "skipped": [], "failed": {}}, 2, "続けて、逸脱コメント 1 件と、保留 1 件を Coverity に登録します", False))
         self.assertEqual(self.get("applied.json"), {"vcs": self.kind, "fixes": {}})
         # that record is no fix: the list has nothing of it
         out = self.plan("20001=none")
         self.assertEqual((out["counts"]["done"], out["counts"]["left"], out["question"]),
-                         (0, 0, "この内容で、逸脱コメントの登録（1 件）を行います。" + ASK))
-        # the same OK again, once the write tool has registered the comment: the record gets the new time
-        self.put("written.json", {"written": {"20002": {}}})
+                         (0, 0, "この内容で、逸脱コメントの登録（1 件）、保留の登録（1 件）を行います。" + ASK))
+        # the same OK again, once the write tool has registered both: the record gets the new time
+        self.put("written.json", {"written": {"20001": {}, "20002": {}}})
         record, before = self.run_dir / "applied.json", time.time() - 100
         os.utime(record, (before, before))
         out = self.go()
@@ -590,13 +621,13 @@ class GitTest(Flow, Case):
         self.assertIn("rejected", out["git"]["push_error"])
         self.assertEqual(self.remote("rev-parse", BRANCH), theirs, "a push must not overwrite what origin has")
         self.assertEqual(out["message"], f"修正 1 件をブランチ {BRANCH} にコミットしました。push に失敗しました。"
-                                         "続けて、取り込んだ修正 1 件を Coverity に登録します")
+                                         "続けて、取り込んだ修正 1 件と、保留 1 件を Coverity に登録します")
         self.assertFalse(self.get("applied.json")["pushed"])
         out = self.plan("20004=none")
         self.assertEqual(row(out, 20001), fix_row(20001, "-", "取り込み済み（push が残っています）"))
         self.assertEqual(out["counts"]["left"], 2)
         registers = "取り込み済みの修正の Coverity への登録（1 件）を行います。"
-        self.assertEqual(out["question"], f"この内容で、ブランチ {BRANCH} の push、" + registers + ASK)
+        self.assertEqual(out["question"], f"この内容で、保留の登録（1 件）、ブランチ {BRANCH} の push、" + registers + ASK)
         # with a fix to take in, the push is named once, with that fix
         self.assertEqual(self.plan("20004=fix")["question"], f"この内容で、修正の取り込み（1 件。{PUSHED}）、" + registers + BUG + ASK)
         self.plan("20004=none")

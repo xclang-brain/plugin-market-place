@@ -7,7 +7,7 @@ const WORDS = {
   confidence: { high: '高', medium: '中', low: '低' },
   review: { pass: '合格', flag: '要確認', rework: '差し戻し', unverified: '未検証' },
   build: { ok: '成功', failed: '失敗', not_applied: '適用できず', unknown: '不明' },
-  choice: { fix: '修正を取り込む', deviation: '逸脱コメントを登録する', none: '何もしない' },
+  choice: { fix: '修正を取り込む', deviation: '逸脱コメントを登録する', none: '保留にする' },
 };
 const COMMENT_MAX = 200;
 let state = null; // the last reply of /api/state

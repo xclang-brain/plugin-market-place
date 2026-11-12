@@ -141,8 +141,26 @@ class Flow:
         self.assertEqual((self.meta(second)["base_branch"], (second / "work" / "w1" / "src" / "d.c").is_file()),
                          ("develop", True))
         self.assertEqual(self.start()["run_dir"], second.as_posix(), "the branch of the folder: continued")
-        self.configure()  # no branch in the settings: the folder is not asked which branch it was made for
-        self.assertEqual(self.start()["run_dir"], second.as_posix())
+        self.configure()  # no branch in the settings: the branch checked out (main) is not the one of the folder
+        self.assertNotIn(self.start()["run_dir"], (run.as_posix(), second.as_posix()))
+
+    def test_the_branch_checked_out_is_the_base_and_another_one_gets_a_new_folder(self):
+        run = self.begin(THREE_ISSUES)
+        self.work(self.next(run, "--cid", ONE))
+        if self.kind == "svn":  # no branch: the folder is continued
+            self.assertEqual(self.start()["run_dir"], run.as_posix())
+            return
+        support.call(*support.GIT, "checkout", "-q", "-b", "topic", cwd=self.repo)  # the person switches
+        support.write(self.repo, {"src/t.c": b"int t;\n"})
+        for args in (("add", "src/t.c"), ("commit", "-q", "-m", "topic")):
+            support.call(*support.GIT, *args, cwd=self.repo)
+        again = self.start()
+        second = Path(again["run_dir"])
+        self.assertEqual((second != run, again["fetch"][0]["tool"]), (True, "coverity_search_issues"))
+        (second / "issues.json").write_text(json.dumps({"issues": THREE_ISSUES}))
+        self.assertEqual(self.start()["message"], self.listed("条件に合う警告を 3 件取得しました", "topic"))
+        self.assertTrue((second / "work" / "w1" / "src" / "t.c").is_file(), "the code of the branch checked out")
+        self.assertEqual(self.start()["run_dir"], second.as_posix(), "the same branch: continued")
 
     def test_no_warning_is_answered_once_and_the_next_request_fetches_again(self):
         first = self.start("--slots", 1)
@@ -815,7 +833,8 @@ class CleanupTest(support.RunCase):
             done = self.triage.cmd_finish(args)
             self.assertEqual((done["ok"], done["message"]), (True, f"作業用コピーが残っています。{held}"))
             self.assertIn(f"| {ONE} |", self.summary(run))
-            other = self.triage.find_run(self.repo, self.triage.settings(self.repo), "git", True)  # 取得し直して
+            cfg, opened = self.triage.settings(self.repo), vcs.open_repo(self.repo)
+            other = self.triage.find_run(self.repo, cfg, opened, True)  # 取得し直して
         self.assertTrue(other != run and other.is_dir() and (run / "work").is_dir(), "the next fetch is not stopped")
         with mock.patch.object(self.triage, "SCRIPT", self.top / "skills" / "coverity-triage" / "scripts" / "triage.py"):
             self.assertEqual(self.triage.cmd_finish(args)["next"], [], "the skill that shows the table is not installed")

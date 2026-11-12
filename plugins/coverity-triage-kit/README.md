@@ -70,7 +70,9 @@ bash で設定した値は、そのターミナルの中だけで有効です。
 | --- | --- |
 | 修正を取り込む | git：修正用のブランチに修正1件を1コミットとして push し、プルリクエスト作成用の URL を表示します。svn：作業コピーに差分を適用します。Coverity には「Bug／Fix Required」と修正の概要を登録します |
 | 逸脱コメントを登録する | Coverity に、逸脱コメントと Classification・Action・Severity を登録します |
-| 何もしない | 何も変更しません。確信度が低い CID は、最初からこの選択です |
+| 保留にする | Coverity に「Pending」（保留）と理由を登録します。次の取得からは除かれます。確信度が低い CID などは、最初からこの選択です |
+
+保留にした警告は、Coverity で確認できます。もう一度処置するときは、[設定](docs/guide/settings.md) の `classification` に `Pending` を加えます。
 
 ## 文書
 
