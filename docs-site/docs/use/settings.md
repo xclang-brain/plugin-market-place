@@ -2,6 +2,10 @@
 
 設定は、リポジトリの `.coverity-triage/config.yaml` の1ファイルです。[準備](setup.md)で作られたファイルをエディターで編集すると、次の依頼から使われます。
 
+??? example "設定ファイルの初期内容"
+
+    <!-- ctk:config-template -->
+
 ## 主な設定例
 
 | 目的 | 記述例 |
@@ -37,7 +41,7 @@ build:
 
 ### 取得前の解析
 
-`build.command` を書き、`build.initial_analysis: true` にします。警告を取得する前に、リポジトリのフォルダーでビルド、解析、Coverity への登録を行います。`cov-build`、`cov-analyze`、`cov-commit-defects` に PATH が通っている必要があります。cov-analyze に渡す引数は `build.analyze_args`（初期値 `--all`）です。
+`build.command` を書き、`build.initial_analysis: true` にします。警告を取得する前に、リポジトリのフォルダーでビルドと解析をして、結果を Coverity に登録します。`cov-build`、`cov-analyze`、`cov-commit-defects` に PATH が通っている必要があります。cov-analyze に渡す引数は `build.analyze_args`（初期値 `--all`）です。
 
 ## プロジェクト固有の知識
 
@@ -60,9 +64,3 @@ build:
 | `summary.md` | 全 CID の判定、根拠、修正コード、逸脱コメント |
 | `cid/<CID>/fix.patch` | CID ごとの修正コード（差分） |
 | `cid/<CID>/result.json` | CID ごとの判定、根拠、逸脱コメント |
-
-## 設定ファイルの全体
-
-??? example "設定ファイルの初期内容"
-
-    <!-- ctk:config-template -->

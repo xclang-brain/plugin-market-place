@@ -8,17 +8,12 @@
 | エージェントのモデル（frontmatter の `model`） | 上記2ファイルの両方 | EVAL |
 | スキルの本文（`SKILL.md`） | 本文中の応答キーとコマンドが、スクリプトの実際の応答と一致すること | `agents`、`flow`、EVAL |
 | スクリプトの応答（`triage.py`、`apply.py`） | その応答を扱うスキルとエージェントの本文 | `skills/<名前>`、`agents`、`flow` |
-| 設定キー | `setup.py` のテンプレートと検証処理、キーを読み込むスクリプト、仕様書5章、`tests/test_structure.py` の `SETTINGS`、`docs/guide/settings.md` | `structure`、`budget` |
+| 設定キー | `setup.py` のテンプレートと検証処理、設定ファイルを読み込む5か所（`setup.py`、`triage.py`、`apply.py`、`gui.py`、MCP サーバーの `settings.py`）、仕様書5章、`tests/test_structure.py` の `SETTINGS`、`docs/guide/settings.md` | `structure`、`budget` |
 | MCP ツール | `tools.py` と `server.py`、エージェントの `tools`（2ファイルとも）、`tests/test_structure.py` の `TOOLS` | `structure`、`mcp-servers/coverity-connect` |
 | Coverity に登録する値 | `checks.py`（判定ごとの Classification・Action・Severity）、`apply.py`（取り込んだ修正と保留）、仕様書4章 | `skills/coverity-triage`、`skills/coverity-apply` |
 | 逸脱コメントの規則 | `checks.py`、スキル `coverity-triage` の4章、画面での編集時の検査（`gui.py`） | `skills/coverity-triage`、`skills/coverity-gui` |
 | Web 画面 | `gui.py`、`static/` | `skills/coverity-gui` |
 | README と `docs/guide` | 後述の「文書の規則」、本サイトの該当ページ | `docs`、`budget` |
-
-テストスイートの内容は[テスト](test.md)を参照してください。
-
-!!! note "設定ファイルの読み込み箇所（5か所）"
-    `setup.py`、`triage.py`、`apply.py`、`gui.py`、MCP サーバーの `settings.py` が、それぞれ設定ファイルを読み込みます。各スキルがほかのフォルダーのコードを読み込まない設計のためです。キーの意味や既定値を変更する場合は、5か所すべてを確認してください。
 
 ## 機能追加時の制約
 
