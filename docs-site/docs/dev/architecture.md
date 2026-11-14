@@ -79,7 +79,7 @@ sequenceDiagram
 - `save` は、結果の形式と逸脱コメントの規則（`checks.py`）を検査し、`git diff` / `svn diff` の出力をバイト列のまま `fix.patch` に保存します。文字コードと改行コードを保持するためです。
 - 作業用コピーの準備、ビルドによる確認、取得前の解析は時間がかかるため、バックグラウンドで実行し、同じコマンドを再度呼び出して完了を確認します。
 
-## OK の後の処理
+## OK 後の処理
 
 ```mermaid
 sequenceDiagram
@@ -139,9 +139,9 @@ stateDiagram-v2
   [*] --> none
   none --> working: next
   working --> done: save
-  working --> failed: 2回渡しても保存されない
+  working --> failed: 2回の受け渡しで未保存
   done --> rework: 差し戻し・統合・利用者の指摘
-  failed --> rework: 利用者が CID を指定
+  failed --> rework: 利用者による CID の指定
   rework --> working: next
 ```
 

@@ -4,9 +4,9 @@
 
 | ソフトウェア | 不足時の動作 |
 | --- | --- |
-| Python 3.10 以上と PyYAML、uv、git | テストを実行できない |
-| svn（`svn` と `svnadmin`） | svn のテストをスキップ |
-| Node.js と Playwright（Chromium） | ブラウザー操作のテストをスキップ |
+| Python 3.10 以上と PyYAML、uv、git | テスト実行不可 |
+| svn（`svn` と `svnadmin`） | svn のテストのスキップ |
+| Node.js と Playwright（Chromium） | ブラウザー操作のテストのスキップ |
 
 ## 実行方法
 
