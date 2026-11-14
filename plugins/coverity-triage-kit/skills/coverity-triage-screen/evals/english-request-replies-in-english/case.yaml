@@ -1,7 +1,0 @@
-schema_version: "1.1"
-name: english-request-replies-in-english
-expected_outcome: |
-  The user says they use GitHub Copilot CLI. The request is in English, so the whole reply (the causes and fixes included) is in English. The tool that opens the web screen
-  is not available, so the reply explains the three causes (experimental features off, load confirmation declined, extensions mode
-  Disabled) with their fixes, tells the user to send the request again after fixing it, and does not claim that the screen opened.
-  It does not start the triage and asks no follow-up questions (the conditions are chosen on the screen).

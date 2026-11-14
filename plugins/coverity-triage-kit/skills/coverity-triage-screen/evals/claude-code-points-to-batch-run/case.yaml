@@ -1,7 +1,0 @@
-schema_version: "1.1"
-name: claude-code-points-to-batch-run
-expected_outcome: |
-  Claude Code で動いていて、Web管理画面を開くツールがない。返事は、Web管理画面が GitHub Copilot CLI の機能であることを伝え、
-  Claude Code で一括のトリアージを始める2つのしかた（スキルの「使う部品」の表の統括エージェントを claude --agent で起動して頼む、
-  表の一括実行のスキルをスラッシュコマンドで呼ぶ）を示す。Copilot CLI の3つの原因（試験的な機能、読み込みの確認、/extensions mode）は示さない。
-  トリアージを自分で始めず、警告の一覧やコードを開かない。

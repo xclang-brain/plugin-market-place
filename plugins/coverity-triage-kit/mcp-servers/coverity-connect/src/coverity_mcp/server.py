@@ -1,357 +1,118 @@
-"""MCP server ``coverity_mcp`` (stdio): search Coverity Connect issues, read warning paths, write triage.
+"""MCP server ``coverity-connect`` (stdio): four tools for Coverity Connect.
 
-The server stands alone. It needs the Coverity settings (``<repo_root>/.coverity-triage/config.yaml``
-or environment variables) and the credentials in environment variables, nothing else. Logs go to
-stderr only; stdout carries the protocol.
+Each tool takes the repository (``repo_root``) and reads ``<repo_root>/.coverity-triage/config.yaml``; the
+credentials come from the environment variables COV_USER and COV_AUTH_KEY. stdout carries the protocol.
 """
 
-import functools
-import inspect
-import logging
+from __future__ import annotations
+
+import asyncio
+import json
 import os
-import sys
-import time
-from typing import Annotated, Any, Callable, Literal
+import re
+from collections.abc import Callable
+from typing import Annotated
 
-import anyio
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import ToolAnnotations
-from pydantic import ConfigDict, Field
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import Field
 
-from . import __version__, tools
-from .envvars import drop_unexpanded
-from .models import TriageEntry
-from .settings import FilterArg
+from . import tools
+from .settings import Failure
 
-log = logging.getLogger("coverity_mcp")
+INSTRUCTIONS = (
+    "Coverity Connect の警告を取得し、トリアージ（Classification・Action・Severity・コメント）を登録します。"
+    "どのツールにも repo_root（リポジトリの最上位フォルダーの絶対パス）を指定します。"
+    "接続先の URL、ストリーム、取得する条件は <repo_root>/.coverity-triage/config.yaml から、"
+    "ユーザー名と認証キーは環境変数 COV_USER と COV_AUTH_KEY から読み取ります。"
+    "応答の done が false のときは、同じ引数でもう一度呼び出すと、続きから進みます。")
 
-INSTRUCTIONS = """\
-Coverity Connect の警告を検索し、警告経路を取り、トリアージ（分類・対応・重大度・コメント）を書き戻すためのツールです。
-- 使えるツールだけを使います。クライアントの設定によっては、読むツール（接続の確認・警告の検索・警告経路の取得）だけが\
-使え、書き戻しのツールは使えません。そのときは、書き戻していないことを伝えます（ほかの方法で Coverity に書き込もうとしません）。
-- 設定：repo_root（リポジトリの絶対パス）を渡すと <repo_root>/.coverity-triage/config.yaml の coverity の項目を読みます。\
-渡さないときは環境変数 COVERITY_URL などを読みます。ユーザ名と認証キーは環境変数（既定 COV_USER と COV_AUTH_KEY）から読みます。
-- パスの引数は、どれも絶対パスで渡します。
-- 読むとき：coverity_check_connection で接続を確かめ、見られるストリームの名前（streams）を知る。\
-coverity_search_issues で1つのストリームの警告を探す（各警告に cid と stream がある）。\
-coverity_get_issue_details で CID の警告経路を取る（ストリームが分からなければ stream を省く。見られるすべての\
-ストリームから CID を探し、見つけたストリームを返す）。
-- 書き戻すとき（coverity_preview_triage と coverity_update_triage が使えるときだけ）：coverity_preview_triage で\
-書き戻す件数・内容と確認の文字列を出し、人に見せて同意を得てから、coverity_update_triage に同じ内容と確認の文字列を渡します。
-- 続き：has_more が true なら offset に next_offset を渡して呼び直します。done が false なら同じ引数でもう一度呼びます。\
-remaining があれば、その CID だけで呼び直します。
-- 書き戻しは、人が件数と内容を見て同意したときだけ行います。confirmation_token は自分で作りません。"""
+mcp = FastMCP("coverity-connect", instructions=INSTRUCTIONS, log_level="WARNING")
 
-mcp = FastMCP("coverity_mcp", instructions=INSTRUCTIONS, log_level="WARNING")
-mcp._mcp_server.version = __version__  # serverInfo.version: this server's version, not the SDK's
-
-# ---- argument types (shared by the tools) -------------------------------------------------------
-
-RepoRoot = Annotated[str | None, Field(
-    description="調べるリポジトリの絶対パス（例: \"C:/work/app\"、\"/home/me/app\"）。<repo_root>/.coverity-triage/config.yaml の"
-                " coverity の項目を読む。省くと環境変数（COVERITY_URL など）の設定を使う")]
-Format = Annotated[Literal["concise", "detailed"], Field(
-    description="会話に返す項目の量。concise（既定）は要る項目だけ、detailed はすべての項目")]
-PlanFile = Annotated[str | None, Field(
-    description="書き戻しの計画のファイル（{\"triage\": [項目…]} の JSON。ほかの鍵は読まない）の絶対パス"
-                "（例: \"/work/out/20261108-101500/apply-plan.json\"）。entries と、どちらか一方")]
-Entries = Annotated[list[TriageEntry] | None, Field(
-    description="書き戻す項目の並び（例: [{\"id\": \"20001\", \"cids\": [20001], \"stream\": \"app-main\", "
-                "\"classification\": \"False Positive\", \"action\": \"Ignore\", \"severity\": \"Unspecified\", "
-                "\"comment\": \"誤検知。…\"}]）。plan_file と、どちらか一方")]
+RepoRoot = Annotated[str, Field(description="リポジトリの最上位フォルダーの絶対パス（例: C:/work/app、/home/me/app）")]
 
 
-def _strict(name: str) -> None:
-    """Refuse arguments the tool does not have, instead of dropping them silently (a misspelt
-    argument would otherwise widen a search or skip a value)."""
-    tool = mcp._tool_manager.get_tool(name)
-    base = tool.fn_metadata.arg_model
-
-    class Strict(base):  # type: ignore[misc, valid-type]
-        model_config = ConfigDict(extra="forbid", title=base.__name__)
-
-    tool.fn_metadata.arg_model = Strict
-    tool.parameters = Strict.model_json_schema(by_alias=True)
-
-
-def _register(name: str, title: str, **hints: bool) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        mcp.tool(name=name, title=title, description=inspect.getdoc(func),
-                 annotations=ToolAnnotations(title=title, **hints))(func)
-        _strict(name)
-        return func
-    return decorator
-
-
-async def _run(name: str, func: Callable[..., dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
-    """Run a tool in a worker thread (the requests block), so that calls at the same time do not
-    wait for each other, and turn a failure into a tool error the agent reads."""
-    started = time.monotonic()
-    log.info("%s: 開始", name)
+async def _run(func: Callable[..., dict], *args) -> CallToolResult:
+    """Run a tool in a worker thread (its requests block). A failure becomes a tool error whose text is the
+    Japanese sentence alone."""
     try:
-        result = await anyio.to_thread.run_sync(functools.partial(func, **kwargs))
-    except tools.ToolFailure as exc:
-        log.warning("%s: 失敗（%.1f 秒）: %s", name, time.monotonic() - started, exc)
-        raise ToolError(str(exc)) from None
-    log.info("%s: 終わり（%.1f 秒）", name, time.monotonic() - started)
-    return result
+        data = await asyncio.to_thread(func, *args)
+    except (Failure, OSError) as exc:
+        text = str(exc) if isinstance(exc, Failure) else (
+            f"ファイルまたはフォルダーを使用できませんでした（{exc}）。引数のパスを確認してください")
+        return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(data, ensure_ascii=False))],
+                          structuredContent=data)
 
 
-# ---- tools --------------------------------------------------------------------------------------
-
-@_register("coverity_check_connection", "Coverity 接続の確認とストリームの一覧",
-           readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
-async def coverity_check_connection(repo_root: RepoRoot = None, response_format: Format = "concise") -> dict[str, Any]:
-    """Coverity Connect への接続と認証を確かめ、このユーザーが見られるストリームの一覧を返す
-    （読み取りの問い合わせを1回、10 秒まで）。書き込みはしない。
-
-    使うとき：初めて使う前、認証の失敗や接続のエラーが出たとき、設定を変えたあと。ストリームの名前が
-    分からないとき（警告の検索にはストリームの名前が要る）、ストリームが使うプロジェクトとトリアージストアを知りたいとき。
-    使わないとき：警告を探す・取るとき（それぞれのツールを使う）。
-
-    引数:
-      - repo_root: リポジトリの絶対パス（例: "/home/me/app"）。省くと環境変数の設定。
-      - response_format: concise（既定）は streams がストリームの名前の並び。detailed は
-        [{"name", "project", "triage_store"}]（triage_store は、そのストリームのトリアージを書き戻す先）。
-
-    返す値（JSON）:
-      {"ok": true/false, "result": "認証できました（0.4 秒）" などの説明,
-       "config": 設定のファイルのパスか "環境変数", "api": "auto"|"fake", "url": "https://…",
-       "triage_store": 設定のトリアージストア（stream のない書き戻しだけの先。stream のある書き戻しは、
-       そのストリームのトリアージストアに書く。それは detailed の streams の triage_store）,
-       "user": "環境変数 COV_USER: 設定あり|なし",
-       "key": "環境変数 COV_AUTH_KEY: 設定あり（N 文字）|なし", "seconds": 0.4, "warning": http のときの注意,
-       "unknown_keys": [coverity の中の知らない項目], "fake_data": 偽の Coverity のファイル（api が fake のとき）,
-       "streams": ["app-main", "app-release"]（名前の順。最大 100 個）, "streams_total": ストリームの数,
-       "streams_note": 100 個を超えて省いたときの説明}
-      認証キーの値は返さない。
-
-    エラー: 設定のファイルがない・値が正しくないときは ok: false と、何を直すかを result に返す。
-      認証の失敗は HTTP 401（ユーザ名と認証キー）か 403（それに加えて Web サービスを使う権限 Access Web services）。
-    """
-    return await _run("coverity_check_connection", tools.check_connection, repo_root=repo_root,
-                      response_format=response_format)
+@mcp.tool(name="coverity_check_connection", title="Coverity への接続の確認",
+          annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True), description=(
+              "設定ファイルの URL と認証情報で Coverity Connect に接続し、設定したストリームがあることを確認します。"
+              "応答: {\"ok\", \"message\", \"streams\"}。message は、利用者にそのまま伝える文です。"
+              "streams は、このユーザーが参照できるストリームの名前（最大 100 件）です。"))
+async def coverity_check_connection(repo_root: RepoRoot) -> CallToolResult:
+    return await _run(tools.check_connection, repo_root)
 
 
-@_register("coverity_search_issues", "Coverity の警告の検索",
-           readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
+@mcp.tool(name="coverity_search_issues", title="Coverity の警告の取得",
+          annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+          description=(
+              "設定したストリームから、設定ファイルの条件（conditions: チェッカー、Impact、Classification、件数の上限）に"
+              "合う警告を取得します。output_file を指定すると、一覧をそのファイルに保存して、件数を返します: "
+              "{\"done\", \"count\", \"total_matched\", \"limited\", \"output_file\"}。done が false のときは、"
+              "同じ引数でもう一度呼び出します。指定しないときは、一覧（最大 100 件）を応答に含めます: "
+              "{\"done\": true, \"stream\", \"count\", \"total_matched\", \"limited\", \"issues\": [{\"cid\", \"checker\", "
+              "\"file\", \"line\", \"function\", \"impact\"}]}。total_matched は条件に合う警告の総数（不明のときは null）、"
+              "limited は、上限を超える警告があることを表します。"))
 async def coverity_search_issues(
-    repo_root: RepoRoot = None,
-    filter: Annotated[FilterArg | None, Field(  # noqa: A002
-        description="条件（例: {\"streams\": [\"app-main\"], \"impacts\": [\"High\"], \"checkers\": [\"NULL_RETURNS\"], "
-                    "\"triage\": {\"classification\": [\"Unclassified\"], \"status\": [\"New\", \"Triaged\"]}}）。"
-                    "同じ項目の値はどれか、項目どうしはすべてに合う警告。filter_file と、どちらか一方")] = None,
-    filter_file: Annotated[str | None, Field(
-        description="条件のファイル（YAML か JSON。filter と同じ形。知らない項目は読み飛ばす）の絶対パス"
-                    "（例: \"/home/me/app/.coverity-triage/filters/untriaged.yaml\"）。filter と、どちらか一方")] = None,
-    offset: Annotated[int, Field(
-        ge=0,
-        description="会話に返すときの続きの位置。最初は 0、続きは前の結果の next_offset（Coverity の行の位置）")] = 0,
-    limit: Annotated[int, Field(
-        ge=1, le=100,
-        description="会話に返すときの1ページの件数（1〜100、既定 20）。output_file のときは使わない（条件の limit、既定 100）")] = 20,
-    response_format: Format = "concise",
+    repo_root: RepoRoot,
     output_file: Annotated[str | None, Field(
-        description="結果を書く JSON のファイルの絶対パス（例: \"/work/out/run1/issues.json\"）。渡すと会話には件数だけ返す")] = None,
-) -> dict[str, Any]:
-    """1つのストリームの、条件に合う Coverity の警告を探す。
-
-    探す範囲: triage.status を省くと、最新のスナップショットのすべての警告（New・Triaged・Dismissed。
-    Dismissed も入る）。Fixed と Absent Dismissed の警告は前のスナップショットにしかないので、triage.status に
-    それを入れたときだけ、前のスナップショットも探す（例: 直った警告は {"triage": {"status": ["Fixed"]}}）。
-
-    使うとき：「ストリーム app-main の、Impact が High の警告を一覧にして」「未分類の NULL_RETURNS は何件？」など。
-    使わないとき：CID ごとの警告経路やチェッカーの説明が要るとき（coverity_get_issue_details を使う。CID だけ
-    分かっていてストリームが分からないときも、こちらではなく coverity_get_issue_details を stream なしで使う）。
-
-    引数:
-      - filter か filter_file のどちらか一方（必須）。streams はちょうど1つ（名前は coverity_check_connection の
-        streams にある。2つのストリームを比べるときは、ストリームごとに呼ぶ）。checkers は * ? [ ] のワイルドカード可。
-        impacts: High / Medium / Low / Unspecified。triage.classification: Unclassified / Pending / False Positive /
-        Intentional / Bug。triage.action: Undecided / Fix Required / Fix Submitted / Modeling Required / Ignore。
-        triage.status: New / Triaged / Dismissed / Absent Dismissed / Fixed。filter にほかの項目があればエラー。
-      - offset, limit: 会話に返すときのページ（例: offset=0, limit=20 → 次は offset=next_offset）。
-      - response_format: concise（cid, checker, file, line, function, impact, cwe, classification, action, status,
-        stream）か detailed（それに category, severity, merge_key も）。どちらも、値のない項目は省く
-        （例: CWE のない MISRA の警告には cwe がない）。file と line は問題の起きる場所（警告経路の main のイベント）。
-        警告経路のイベントは含まない（要るときは coverity_get_issue_details）。
-      - output_file: 渡すと、条件の limit 件（既定 100）までをファイルに書き、解析したリビジョンも記録する。
-
-    返す値（会話のとき）:
-      {"stream": "app-main", "count": 20, "offset": 0, "total": Coverity が返した件数（Status とワイルドカードの
-       チェッカーで絞る前。分からなければ null）, "has_more": true, "next_offset": 20, "excluded": 検索のあとの条件で
-       外した件数, "issues": [{"cid": 20001, "checker": "NULL_RETURNS", "file": "src/reader.c", "line": 42, …}],
-       "ignored_values": [{"filter": "triage.classification", "value": "…"}]（Coverity にない値で、外して探したもの）}
-    返す値（output_file のとき）:
-      {"done": true/false, "found": 件数, "limit": 上限, "limited": 上限で止めたか, "coverity_total": …, "excluded": …,
-       "analyzed_revision": "a1b2c3d", "revision_error": null, "output_file": "…", "next": 続きの案内}
-      done が false なら、同じ引数でもう一度呼ぶ（保存済みの続きから探す）。
-
-    エラー: 見られるストリームにないストリームは、見られるストリームの名前を添えてエラーにする（0 件とは返さない）。
-      認証の失敗（401/403）、リダイレクト（3xx）、5xx、JSON でない応答、接続の失敗は、何を確かめるかを返して止まる。
-    """
-    return await _run("coverity_search_issues", tools.search_issues, repo_root=repo_root, filter=filter,
-                      filter_file=filter_file, offset=offset, limit=limit, response_format=response_format,
-                      output_file=output_file)
+        description="一覧を保存する JSON ファイルの絶対パス（例: <結果フォルダー>/issues.json）")] = None,
+) -> CallToolResult:
+    return await _run(tools.search_issues, repo_root, output_file)
 
 
-@_register("coverity_get_issue_details", "Coverity の警告経路の取得",
-           readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
+@mcp.tool(name="coverity_get_issue_details", title="Coverity の警告の経路の取得",
+          annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+          description=(
+              "CID ごとに、警告の経路（イベント）とチェッカーの説明を取得します。output_dir を指定すると、"
+              "<output_dir>/<CID>/issue.json（{\"cid\", \"fetched_at\", \"events\": [{\"file\", \"line\", \"tag\", "
+              "\"description\", \"main\"}], \"checker_description\"}）に保存します: {\"done\", \"saved\", \"failed\", "
+              "\"remaining\", \"output_dir\"}。done が false のときは、同じ引数でもう一度呼び出します"
+              "（残りの CID だけを取得します）。指定しないときは、10 件までの CID の内容を応答に含めます: "
+              "{\"done\": true, \"issues\": [{\"cid\", \"events\", \"checker_description\"}], \"failed\"}。"
+              "events は経路の順で、main が true のイベントが、問題の発生する場所です。"
+              "failed は、取得できなかった CID とその理由です。"))
 async def coverity_get_issue_details(
-    cids: Annotated[list[int], Field(
-        description="CID の並び（例: [20001, 20002]）。会話に返すときは 10 件まで、output_dir のときは 50 件まで")],
-    repo_root: RepoRoot = None,
-    stream: Annotated[str | None, Field(
-        description="警告のあるストリームの名前（例: \"app-main\"）。警告の検索の結果の各警告に stream がある。"
-                    "分からなければ省く（見られるすべてのストリームから CID を探す）")] = None,
-    response_format: Format = "concise",
+    repo_root: RepoRoot,
+    cids: Annotated[list[int], Field(description="CID の一覧（例: [20001, 20002]）")],
     output_dir: Annotated[str | None, Field(
-        description="CID ごとに issue-<CID>.json を書くフォルダの絶対パス（例: \"/work/out/run1/items/20001\"）。"
-                    "なければ作る（親のフォルダは要る）")] = None,
-) -> dict[str, Any]:
-    """CID ごとに、警告経路（イベント）とチェッカーの説明を取る。ストリームが分からない CID も探せる。
-
-    使うとき：「CID 20001 の警告経路を見せて」「この警告が本物か調べたいので、経路と説明を取って」
-    「CID 20001 はどのストリームの、どのチェッカーの警告？」など。
-    使わないとき：条件に合う警告を一覧にするとき（coverity_search_issues を使う）。
-
-    引数:
-      - cids（必須）と stream（例: stream="app-main", cids=[20001]）。
-        stream を省くと、見られるすべてのストリーム（100 個まで）から CID を探し、見つけたストリームの経路を返す。
-        2つ以上のストリームにある CID は、名前の順で最初のストリームの経路を返し、ほかを other_streams に入れる
-        （そのストリームの経路が要るときは、stream を渡して呼び直す）。問い合わせの数は stream を渡したときと同じ。
-      - response_format: concise はイベントの file, line, tag, description と、問題の起きる場所のイベントだけ main: true。
-        tag はイベントの種類（例: returned_null, alloc_fn, freed_arg, cond_true, dereference, leaked_storage）。
-        イベントは経路の順。concise でイベントが 40 件を超えると間を省く。detailed は impact, category, cwe と、
-        すべてのイベント（main は false も書く）。
-      - output_dir: 渡すと issue-<CID>.json（{"fetched_at", "issue", "events", "checker_description"}）を書く。
-        取れなかった CID は {"cid", "stream", "fetched_at", "error"} を書く。保存済みの CID は取り直さない。
-
-    返す値（会話のとき。値のない項目は省く）:
-      {"stream": 渡したストリーム（省いたときは代わりに "streams_searched": 探したストリームの数）,
-       "issues": [{"cid": 20001, "stream": "app-main", "checker": "NULL_RETURNS", "file": "src/reader.c", "line": 42,
-       "function": "read_header", "other_streams": [同じ CID があるほかのストリーム], "events": [{"file": "src/reader.c",
-       "line": 40, "tag": "returned_null", "description": "…"}, …], "checker_description": "…"}],
-       "failed": {"20009": "理由"}, "failed_note": 次にすること（ほかの見られるストリームの名前など）,
-       "remaining": [取っていない CID], "next": 続きの案内}
-      remaining が空でなければ、その CID だけで呼び直す。
-    返す値（output_dir のとき）:
-      {"done": true/false, "saved": [...], "already_saved": [...], "failed": {...}, "failed_note": …,
-       "remaining": [...], "output_dir": "…"}
-      done が false なら、同じ引数でもう一度呼ぶ。
-
-    エラー: stream を渡して、そのストリームにない CID は、その CID だけ failed になり、failed_note に、ほかの見られる
-      ストリームの名前と、stream を省くと探せることを書く。認証の失敗などは、何も書かずに止まる。
-    """
-    return await _run("coverity_get_issue_details", tools.get_issue_details, repo_root=repo_root, stream=stream,
-                      cids=cids, response_format=response_format, output_dir=output_dir)
+        description="CID ごとのフォルダーを作成するフォルダーの絶対パス（例: <結果フォルダー>/cid）")] = None,
+) -> CallToolResult:
+    return await _run(tools.get_issue_details, repo_root, cids, output_dir)
 
 
-@_register("coverity_preview_triage", "Coverity へのトリアージの書き戻しの確認",
-           readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
-async def coverity_preview_triage(plan_file: PlanFile = None, entries: Entries = None) -> dict[str, Any]:
-    """書き戻す件数と内容と、coverity_update_triage に渡す確認の文字列（confirmation_token）を返す。
-    読むだけで、Coverity とは通信しない。何も書き込まない。
-
-    使うとき：トリアージを書き戻す前に、必ず先に呼ぶ。返った counts と items を人に見せ、同意を得る。
-    使わないとき：警告を探す・取るとき。
-
-    引数（どちらか一方）:
-      - plan_file: {"triage": [項目…]} の JSON のファイルの絶対パス。
-      - entries: 項目の並び。項目は {"id": "20001", "cids": [20001], "stream": "app-main"（省略可）,
-        "classification": "False Positive", "action": "Ignore", "severity": "Unspecified"（省略可）,
-        "comment": "誤検知。…"（省略可）}。stream を書くと、そのストリームが使うトリアージストアに書き戻す。
-
-    返す値:
-      {"counts": {"entries": 2, "cids": 3}, "items": [書き戻す内容], "confirmation_token": "1a2b3c4d5e6f",
-       "next": 次にすること, "note": stream のない項目の書き先}
-      confirmation_token は自分で作らない。内容を変えたら、もう一度このツールを呼ぶ。
-
-    エラー: plan_file がない・JSON でない、entries の項目に足りない鍵や知らない鍵があるときは、何を直すかを返す。
-    """
-    return await _run("coverity_preview_triage", tools.preview_triage, plan_file=plan_file, entries=entries)
-
-
-@_register("coverity_update_triage", "Coverity へのトリアージの書き戻し",
-           readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
+@mcp.tool(name="coverity_update_triage", title="Coverity へのトリアージの登録",
+          annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
+          description=(
+              "entries_file の内容（{\"stream\", \"entries\": [{\"cids\", \"classification\", \"action\", \"severity\", "
+              "\"comment\"}]}）を Coverity Connect に登録します。利用者が一覧を確認して OK と答えた後に呼び出します。"
+              "登録した CID は、entries_file と同じフォルダーの written.json に記録し、"
+              "次の呼び出しでは残りの CID だけを登録します。"
+              "応答: {\"done\", \"written\", \"skipped\", \"failed\", \"remaining\", \"written_file\"}。"
+              "done が false のときは、同じ引数でもう一度呼び出します。written はこの呼び出しで登録した CID、"
+              "skipped は登録済みの CID、failed は登録できなかった CID とその理由です。"))
 async def coverity_update_triage(
-    confirmation_token: Annotated[str, Field(
-        min_length=1,
-        description="coverity_preview_triage が返した confirmation_token（例: \"1a2b3c4d5e6f\"）。"
-                    "人が件数と内容を見て同意したあとにだけ渡す")],
-    repo_root: RepoRoot = None,
-    plan_file: PlanFile = None,
-    entries: Entries = None,
-) -> dict[str, Any]:
-    """トリアージ（Classification・Action・Severity・コメント）を Coverity に書き込む。
-
-    使うとき：coverity_preview_triage の結果を人に見せ、同意を得たあと。preview に渡したのと同じ plan_file か
-    entries と、返った confirmation_token を渡す。
-    使わないとき：同意を得ていないとき。確認の文字列が内容と合わなければ、何も書き込まない。
-
-    ふるまい:
-      - 項目に stream があれば、そのストリームが使うトリアージストアに書く（Coverity に問い合わせて決める。
-        ストリームがなければ、その項目だけ失敗）。stream がなければ、設定の coverity.triage_store に書く。
-      - 書き込み済みの項目（id・cids・stream・値・コメントが同じもの）は、並べ方や確認の文字列が変わっても書き直さない。
-        記録は、plan_file なら同じフォルダの <名前>.result.json、entries なら一時のフォルダの
-        coverity-connect-mcp-<ユーザー名>/（本人だけが読める）。
-      - Coverity が値の誤り（401・403 のほかの 4xx）で1項目を断っても、ほかの項目は書く。断られた項目は、
-        同じ確認の文字列では送り直さない（値を直して preview からやり直す）。
-      - 認証の失敗（401・403）、5xx、接続の失敗では、呼び出し全体を止める。止まった項目は記録しないので、
-        直ってから同じ引数で呼ぶと書き込む。
-      - 記録は、ほかのセッションと分けて使う。保存の間だけ、記録の横に <記録のファイル名>.lock を置く
-        （1 秒もかからない）。ほかのセッションが記録を使っていて空かなければ、そこで送るのをやめて done: false を返す。
-        Coverity に書いたあとに記録できなかった項目は、このセッションが覚えていて、もう一度呼ぶと送り直さずに記録する。
-
-    返す値:
-      {"done": true/false, "written": [この呼び出しで書いた id], "written_total": 書き込み済みの数, "entries": 項目の数,
-       "failed": [{"id", "cids", "error"}], "remaining": [送らずに残した id], "result_file": "記録のパス", "next": …,
-       "busy_note": 記録を保存できなかったときだけ。理由と、書いたがまだ記録していない id}
-      remaining は、時間が足りなかった項目と、記録が空かなかった項目。done が false なら、同じ引数でもう一度呼ぶ。
-      .lock のファイルは、書き戻し中のセッションがなければ消してよい（60 秒より古いものは次の呼び出しが片づける）。
-    """
-    return await _run("coverity_update_triage", tools.update_triage, confirmation_token=confirmation_token,
-                      repo_root=repo_root, plan_file=plan_file, entries=entries)
-
-
-class _MaskingFilter(logging.Filter):
-    """Credential values never reach a log line."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            message = record.getMessage()
-        except Exception:  # noqa: BLE001 - a bad format string is logged as is
-            return True
-        masked = tools.masker_for(None).text(message)
-        if masked != message:
-            record.msg, record.args = masked, None
-        return True
-
-
-def setup_logging() -> None:
-    root = logging.getLogger()
-    if not root.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        root.addHandler(handler)
-    for handler in root.handlers:
-        handler.addFilter(_MaskingFilter())
-    log.setLevel(logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    repo_root: RepoRoot,
+    entries_file: Annotated[str, Field(
+        description="登録する内容のファイルの絶対パス（例: <結果フォルダー>/coverity-entries.json）")],
+) -> CallToolResult:
+    return await _run(tools.update_triage, repo_root, entries_file)
 
 
 def main() -> None:
-    drop_unexpanded()  # values such as "${HTTPS_PROXY}" that the client did not expand count as not set
-    if not os.environ.get("PYTHONIOENCODING"):
-        try:  # clients read the log as UTF-8; a Windows console code page cannot hold every character
-            sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
-    setup_logging()
-    log.info("coverity_mcp %s: 起動（stdio）", __version__)
+    # A value such as "${COV_USER}" or "${HTTPS_PROXY}" (the client did not expand the env block of the MCP
+    # registration) counts as not set; httpx reads the proxy variables itself.
+    for name in [name for name, value in os.environ.items() if re.fullmatch(r"\s*\$\{[^}]*\}\s*", value)]:
+        del os.environ[name]
     mcp.run("stdio")
-
-
-if __name__ == "__main__":
-    main()

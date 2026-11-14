@@ -1,3 +1,1 @@
-"""Coverity Connect MCP server."""
-
-__version__ = "0.1.0"
+"""MCP server coverity-connect: four tools for Coverity Connect."""

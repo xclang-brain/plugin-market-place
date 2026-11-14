@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coverity の警告の処置</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Coverity の警告の処置</h1>
+  <dl id="conditions"></dl>
+</header>
+<main>
+  <section id="start">
+    <p>処置は、Copilot CLI のチャットで依頼します。</p>
+    <ul>
+      <li>1件ずつ: 「条件に合う警告を取得して」「CID 20002 を処置して」と入力します</li>
+      <li>すべて（エージェント1つ）: <code>copilot --agent coverity-triage-kit:triage-worker</code> を起動して、「条件に合う警告をすべて処置して」と入力します</li>
+      <li>すべて（マルチエージェント）: <code>copilot --agent coverity-triage-kit:triage-orchestrator</code> を起動して、「条件に合う警告をすべて処置して」と入力します</li>
+    </ul>
+  </section>
+  <section id="progress" hidden>
+    <h2>進捗</h2>
+    <p><progress id="bar" value="0" max="1" aria-label="進捗"></progress> <span id="counts"></span></p>
+    <p id="working"></p>
+    <p id="limited"></p>
+  </section>
+  <section id="results" hidden>
+    <h2>CID ごとの修正コードと逸脱コメント</h2>
+    <p class="sub">CID を選択すると、根拠と修正コードの差分を表示します。採用する方を「選択」の列で選びます。</p>
+    <table id="table"></table>
+  </section>
+</main>
+<footer id="foot" hidden>
+  <p id="choices"></p>
+  <p>選択が終わったら、チャットに「画面で選んだ内容で進めて」と入力します。一覧が表示されるので、「OK」と答えると、修正の取り込みと、逸脱コメントと保留の登録を行います。</p>
+</footer>
+<p id="message" role="alert" hidden></p>
+<script src="app.js"></script>
+</body>
+</html>

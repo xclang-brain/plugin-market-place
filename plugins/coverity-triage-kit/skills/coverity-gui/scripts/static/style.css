@@ -1,0 +1,92 @@
+:root { --line: #d0d7de; --sub: #57606a; --bg: #f6f8fa; --link: #0969da; --warn: #9a6700; --ok: #1a7f37; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; color: #1f2328; background: #fff;
+  font: 14px/1.6 system-ui, "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+header, main, footer { padding: 12px 20px; }
+header, footer { background: var(--bg); }
+header { border-bottom: 1px solid var(--line); }
+footer { position: sticky; bottom: 0; border-top: 1px solid var(--line); }
+h1 { margin: 0 0 4px; font-size: 18px; }
+h2 { margin: 20px 0 4px; font-size: 16px; }
+h3 { margin: 12px 0 2px; font-size: 13px; color: var(--sub); }
+p, ul { margin: 4px 0; }
+p:empty { display: none; }
+ul { padding-left: 20px; }
+code, pre { font-family: ui-monospace, Consolas, "MS Gothic", monospace; font-size: 13px; }
+button, select, textarea { font: inherit; }
+button:disabled { opacity: .5; cursor: default; }
+.sub { color: var(--sub); font-size: 12px; }
+.warn { color: var(--warn); font-weight: 600; }
+
+#conditions, #conditions div { display: flex; flex-wrap: wrap; gap: 0 6px; margin: 0; }
+#conditions dt { color: var(--sub); }
+#conditions dd { margin: 0 14px 0 0; font-weight: 600; }
+#start { padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+progress { width: 240px; max-width: 50%; vertical-align: middle; }
+#choices { font-weight: 600; }
+#message {
+  position: fixed; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 92vw; margin: 0;
+  padding: 8px 14px; border: 1px solid #cf222e; border-radius: 6px; background: #ffebe9; color: #82071e;
+  cursor: pointer;
+}
+#message::after { content: "　×"; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { position: sticky; top: 0; background: var(--bg); white-space: nowrap; }
+td.short, td.state { white-space: nowrap; }
+td.fix code { display: block; overflow-wrap: anywhere; }
+td.state { color: var(--sub); }
+td[colspan].state { white-space: normal; }
+tr[data-choice="fix"] td.fix, tr[data-choice="deviation"] td.deviation {
+  background: #dafbe1; box-shadow: inset 3px 0 0 var(--ok);
+}
+.badge {
+  margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px;
+  white-space: nowrap;
+}
+button.open {
+  padding: 0; border: 0; background: none; color: var(--link); font-weight: 600; text-align: left; cursor: pointer;
+}
+button.open::before { content: "▸ "; }
+button.open[aria-expanded="true"]::before { content: "▾ "; }
+select { max-width: 100%; padding: 3px 4px; }
+
+tr.detail > td { padding: 4px 16px 16px; background: var(--bg); }
+.outputs { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 20px; }
+pre.diff {
+  max-height: 420px; margin: 0; padding: 6px 0; border: 1px solid var(--line); background: #fff; overflow: auto;
+}
+.diff span { display: block; width: max-content; min-width: 100%; padding: 0 8px; white-space: pre; }
+.diff .add { background: #dafbe1; }
+.diff .del { background: #ffebe9; }
+.diff .at { background: #ddf4ff; color: var(--sub); }
+textarea { width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: 4px; resize: vertical; }
+.tools, .picks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tools span { margin-right: auto; }
+.picks { margin-top: 14px; }
+.tools button, .picks button {
+  padding: 4px 12px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer;
+}
+.picks button[aria-pressed="true"] { border-color: var(--ok); background: var(--ok); color: #fff; font-weight: 600; }
+
+@media (min-width: 761px) {
+  td.cid { min-width: 150px; }
+  td.fix { min-width: 190px; width: 20%; }
+  td.deviation { min-width: 240px; }
+}
+@media (max-width: 760px) {
+  header, main, footer { padding: 10px 12px; }
+  footer { position: static; }
+  thead { display: none; }
+  table, tbody, tr, td { display: block; }
+  tbody { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 6px; }
+  td { border-bottom: 0; }
+  td[data-label]:not(.cid) { position: relative; min-height: 34px; padding-left: 104px; }
+  td[data-label]:not(.cid)::before { content: attr(data-label); position: absolute; left: 10px; color: var(--sub); }
+  td.state:empty { display: none; }
+  .outputs { grid-template-columns: minmax(0, 1fr); }
+}

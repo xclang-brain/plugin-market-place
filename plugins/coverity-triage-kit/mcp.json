@@ -17,7 +17,8 @@
         "COV_USER": "${COV_USER}",
         "COV_AUTH_KEY": "${COV_AUTH_KEY}",
         "HTTPS_PROXY": "${HTTPS_PROXY}",
-        "NO_PROXY": "${NO_PROXY}"
+        "NO_PROXY": "${NO_PROXY}",
+        "PYTHONUTF8": "1"
       }
     }
   }

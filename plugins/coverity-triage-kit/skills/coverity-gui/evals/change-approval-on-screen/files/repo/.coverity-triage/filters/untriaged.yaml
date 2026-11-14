@@ -1,6 +1,0 @@
-name: 分類がまだの警告
-project: app
-streams: [app-main]
-triage:
-  classification: [Unclassified]
-limit: 20

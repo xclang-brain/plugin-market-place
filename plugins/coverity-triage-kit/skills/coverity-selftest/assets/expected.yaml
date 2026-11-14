@@ -1,9 +1,0 @@
-# 見本（sample-target）で想定する AI の結論（自己診断の ②）。
-# 想定と違っても「要確認」として記録するだけで、失敗にはしない（AI の結論は実行ごとに揺れるため）。
-items:
-  "20001": {recommendation: fix, reason: "本物のバグ（fgets 失敗時に fp を閉じていない）"}
-  "20002": {recommendation: deviation, reason: "誤検知の可能性（呼び出し元の read_config で path を検証済み）"}
-  "20003": {recommendation: fix, reason: "本物のバグ（malloc の戻り値を確認していない）"}
-group:
-  id: G1
-  cids: [20004, 20005, 20006]

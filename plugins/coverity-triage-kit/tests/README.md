@@ -1,150 +1,53 @@
-# 試験の手引き
+# テスト
 
-coverity-triage-kit の試験は2つあります。
+coverity-triage-kit を変更する開発者に向けて、テストの実行方法と、スイートごとの確認内容を説明します。
 
-| 試験 | 何で動かすか | 費用 | CI |
-| --- | --- | --- | --- |
-| モデルを使わない試験 | `tests/run.py` | なし | 動かす（Windows と Linux） |
-| EVAL（実際のモデルで課題を解かせて採点する） | skill-creator、`tests/eval/` の道具 | AI クレジットを使う | 動かさない |
+## 実行する
 
-## モデルを使わない試験
-
-プラグインのフォルダで動かします（仕様 REQ-601）。
+プラグインのフォルダーで実行します。モデルは使用しません。すべて実行して、4分ほどです。
 
 ```text
-# Windows（PowerShell）
-py -3 tests/run.py
-# Linux（bash）
-python3 tests/run.py
+python3 tests/run.py                              すべて実行します（Windows は py -3 tests/run.py）
+python3 tests/run.py --list                       スイートの名前を表示します
+python3 tests/run.py --only docs --only budget    指定したスイートだけを実行します
+python3 tests/run.py -v                           合格したスイートの出力も表示します
 ```
 
-終わると、試験の組ごとに「○ 合格」「△ 飛ばしたものがある」「× 不合格（理由）」が出ます。
-件数は、組の記録の最後の `Ran N tests` の行とその後の行から数えます（試験の中で動かした別の試験の記録は数えません）。不合格は試験の数で数えます（1つの試験の中で、いくつもの場合（subTest）が不合格でも1件）。
-終了コードは、0 がすべて合格（要る道具がなくて飛ばしたものはあってよい）、1 が不合格あり、2 が要る道具なしです。
-結果は `tests/results/latest.json` にも書きます（git に入れません）。
+スイートごとに、結果が1行表示されます（○ は合格、× は不合格）。スキップしたテストは、理由と件数が表示されます。不合格のスイートは、テストの出力も表示されます。終了コードは、すべて合格したときが 0、それ以外が 1 です。リポジトリの中にファイルを残したスイートは、不合格になります。
 
-### 選んで動かす
-
-| オプション | 意味 |
+| 必要なもの | ないとき |
 | --- | --- |
-| `--list` | 試験の組の名前を出す |
-| `--only <名前>` | その組だけを動かす。何回でも付けられる。`parts` は部品ごとの試験すべて。部品は `skills/<名前>` か、フォルダの名前でも選べる |
-| `--skip-slow` | 時間のかかる試験を飛ばす（部品をコピーして動かす独立性の試験、部品を動かす取り決めの試験、結合の試験、画面の試験） |
-| `--jobs <数>` | 部品ごとの試験を同時にいくつ動かすか（既定は CPU の数。4 まで） |
-| `--timeout <秒>` | 1つの組の時間の上限（既定は 900 秒。独立性の試験は 3600 秒） |
-| `--results <ファイル>` | 結果の JSON の置き場所 |
-| `-v` | すべての記録を出す（既定では、不合格の組の記録の終わりの 80 行だけ） |
+| Python 3.10 以上と PyYAML（`python -m pip install pyyaml`）、uv、git | 実行できません |
+| svn（`svn` と `svnadmin`） | svn のテストをスキップします |
+| Node.js と Playwright（Chromium） | 画面をブラウザーで操作するテスト（1件）をスキップします |
 
-例：文書と構造の試験だけを動かす。
+Playwright は、リポジトリの外にインストールして、環境変数 `NODE_PATH` で指定します。コマンドは、CI の定義（リポジトリの `.github/workflows/coverity-triage-kit.yml`）にあります。
 
-```text
-# Windows（PowerShell）
-py -3 tests/run.py --only docs --only structure
-# Linux（bash）
-python3 tests/run.py --only docs --only structure
-```
+## スイート
 
-### 要る道具
-
-| 道具 | 版 | なければ |
+| 名前 | 場所 | 確認する内容 |
 | --- | --- | --- |
-| Python | 3.10 以上 | 動かせない（終了コード 2） |
-| uv | （あること） | 部品の試験を動かせない（終了コード 2） |
-| git | （あること） | 部品の試験を動かせない（終了コード 2） |
-| Node.js | 22 以上 | エクステンションの試験を動かせない（`--only extension` のときなど。終了コード 2）。`ui` は飛ばす |
-| svn、cppcheck | （あれば使う） | それを使う試験だけを飛ばす |
-| Claude Code（`claude`） | （あれば使う） | `structure` の `claude plugin validate` だけを飛ばす |
-| Playwright（Chromium） | （あれば使う） | 画面をブラウザーで確かめる試験（`extension` の一部と `ui`）だけを飛ばす。入れるとき：`npm install --prefix tests --no-save --no-package-lock playwright@1.56.1` と `npx --prefix tests playwright install chromium` |
+| `skills/<名前>` | `skills/<名前>/tests/` | スキルのスクリプトの動作。コマンドごとの応答と結果フォルダーのファイルを、git と svn の両方で確認します。`coverity-gui` は、HTTP の API と、ブラウザーでの操作も確認します |
+| `mcp-servers/coverity-connect` | `mcp-servers/coverity-connect/tests/` | MCP サーバーのツール4つ。`mcp.json` のコマンドで起動し、Coverity Connect の代わりの HTTP サーバー（`tests/coverity_emulator/`）に接続します |
+| `structure` | `tests/test_structure.py` | 2つのマニフェストの一致、MCP サーバーの登録、スキル4つの frontmatter、エージェント4つのファイル、設定キー13個、MCP のツール4つ |
+| `agents` | `tests/test_agents.py` | エージェントの2つの形（Copilot CLI 用と開発用）の本文が同じであること、frontmatter、依頼先を制限するフック（その PC にある bash と PowerShell で実行します）、3つの依頼文。コマンドを1回の呼び出しで1行だけ、そのまま実行することが、コマンドを実行する手順の中に書かれていること。本文に書かれた応答の項目とコマンドが、`triage.py` と `apply.py` の実際の応答（git と svn）にあること |
+| `stages` | `tests/test_stages.py` | どの段階も、上の段階なしで使えること。下の段階のファイルに上の段階の構成要素の名前がないことと、スキルのコードがほかのスキルのフォルダーを使用しないことを確認します |
+| `budget` | `tests/test_budget.py` | 仕様書8章の規模の上限。不合格のときは、現在の値を表示します |
+| `docs` | `tests/test_docs.py` | 文書のリンクと見出し、バージョンの一致、使用しない言葉、文書にあるコマンドのスキルとエージェントが存在すること、README の認証情報の設定手順が `setup.py` の表示と同じであること |
+| `flow` | `tests/flow/` | 1〜4段階の、準備から取得、処置、「OK」の後の取り込みと登録までの流れ。エージェントの代わりのスクリプトが、実際の MCP サーバー（接続先はエミュレーター）と、`triage.py` の応答のとおりにコマンドを実行します。git と svn の両方で確認します |
 
-要る道具は、選んだ組の分だけを確かめます（`--only docs` なら Python だけ）。
+`tests/fixtures/sample/` は、テストと EVAL が使用するサンプルです（C のコード、エミュレーターが返す警告、想定する結論）。
 
-### 試験の組
+## モデルを使用する確認（EVAL）
 
-| 名前 | 置き場所 | 確かめること |
-| --- | --- | --- |
-| 部品ごと | `skills/<名前>/tests/`、`mcp-servers/<名前>/tests/` | スクリプトとツールの振る舞い。部品のフォルダだけでも動く |
-| `structure` | `tests/structure/` | `plugin.json`・`mcp.json` を公式の schema で（`plugin.json` の `$schema` は Agent Plugins 1.0.0 のまま。なくなると Copilot CLI が `agents/` と `.mcp.json` も読む）。SKILL.md の frontmatter・長さ・指すファイル・目次、`evals/` の形。エージェントの定義の形。Claude Code の形：`.claude-plugin/plugin.json` の name と version が `plugin.json` と同じ、`.mcp.json` が `mcp.json` と同じサーバー（`${CLAUDE_PLUGIN_ROOT}`、env は `${名前:-}`）、`agents/` はエージェントの `.md` だけで plugin-dev の決まりの frontmatter。リポジトリの2つのマーケットプレイス（`.github/plugin/`、`.claude-plugin/`）の名前と版、根の `marketplace.json` と `.plugin/` がないこと。`claude` があれば `claude plugin validate`（ないときは飛ばす） |
-| `contracts` | `tests/contracts/` | 設計書 4.17 の写し（データ・持ち主のスクリプト・共通の試験のデータ）が、持ち主と同じバイト列。写しは部品の中をファイルの名前で探す（まだない写しは理由を書いて飛ばす）。写したスクリプトを写す側が使い、要るライブラリを持つ。`defaults.json` と統括エージェントの表と役割の言葉が合う。Claude Code と Copilot CLI のエージェントの定義が、同じ名前・同じ「使う部品」の表・同じ見出しの並び・同じ報告の形で、ツールの言葉と tools だけが読み替えたもの（Skill・Agent・AskUserQuestion・Bash と skill・task・ask_user・シェル）。Claude Code の統括エージェントは tools を書かず、Edit・Write と書き戻しのツール（2つの名前の形）を外す。書き戻しのツールは、どのエージェントの tools にもない。tools と disallowedTools の MCP のツールは、表の MCP サーバーのもので、2つの名前の形をどちらも書く。書き戻しのツールが見つからないときは、飛ばさずに不合格にする（守りが黙って外れないように）。MCP サーバーが偽の Coverity で書いたファイルを、一括実行と真偽の調査のスクリプトが受け付ける。確認の文字列（計画のファイルは MCP サーバーのツールで、entries は確認の文字列の関数で） |
-| `independence` | `tests/independence/` | 1段階目の部品に、ほかの部品の名前・プラグインの名前・外を指すパスがない（`output_dir` の既定の値 `../coverity-triage-out` だけは許す。英語の言葉は単語として数え、`uv.lock` は見ない）。部品のフォルダだけをコピーして（スキルは名前を変えたコピーも）試験が通る。エージェント（Copilot CLI と Claude Code の両方）は名前を表にだけ書く（Claude Code の frontmatter の name・tools・disallowedTools の行は見ない）。tools と disallowedTools の MCP のツールは、表にある MCP サーバーのもの。2段階目と3段階目の組が名前で閉じている（Copilot CLI の形の `.github/agents`・`.github/skills` と、Claude Code の形の `.claude/agents`・`.claude/skills`・手で登録した MCP サーバーの両方に取り出して）。上の段の文書に下の段の中身がない。一括実行が実際に書いた指示ファイル（作業・確かめ・作り直し・統合）と頼みの文に、部品の名前がない |
-| `integration` | `tests/integration/` | MCP サーバーと模擬の Coverity Connect（`tests/coverity_emulator/`）の結合。一括のトリアージを、モデルを使わずに最後まで流す（`test_flow.py`：模擬の Coverity の5件の警告、MCP サーバーでの取得、決まった振る舞いの偽のエージェント、一覧、反映の確認の文字列、書き戻し、修正のブランチの push） |
-| `ui` | `tests/ui/` | 結果と設定の画面を、Playwright の Chromium で（幅 390 px と 1280 px、ライトとダーク）。タブが出る、横にはみ出さない、ダークで読める、一覧で選んだ承認と詳細で直した逸脱コメントが `approvals.json` に保存され、反映がそれを読む、サーバを止められる |
-| `docs` | `tests/docs/` | 版の一致（2つのマニフェストと2つのマーケットプレイスも）、要求の番号の追跡、仕様書と設計書に部品の名前がない、`docs/parts.md` の表が今の部品と合う、README の並びと「Claude Code で使う」の節、変更履歴の 0.2.0、リンク。前もって許可するしかた（プラグインの README、エージェントの README のすべて、スキルの `references/usage.md`）：`--allowedTools` の行と ``` で囲んだ行に、書き戻しのツール・サーバーの名前だけの許可・`*` がなく、`--allowedTools` の行は読むツールをすべて並べる。書いた `mcp__plugin_<プラグイン>_<登録名>__<ツール>` が、プラグインの名前・`.mcp.json` の登録名・MCP サーバーのツール（ソースと、サーバーの README の「## ツール」）と合う |
-| `eval` | `tests/eval/` | EVAL の道具の、モデルを使わない試験 |
-| `extension` | `tests/extension/` | エクステンション（偽の SDK と偽のコマンド、画面） |
+実際のモデルが、エージェントとスキルの文に従って警告を最後まで処置できることと、出力の質は、上のテストでは確認できません。EVAL で確認します。モデルの利用料がかかるため、`tests/run.py` と CI では実行しません。手順は [tests/eval/README.md](eval/README.md) にあります。
 
-`structure`・`contracts`・`independence`・`integration`・`ui`・`docs` は、部品の名前を書いていません。部品は、フォルダ・`mcp.json`・`defaults.json`・「使う部品」の表・[コンポーネント一覧](../docs/parts.md) の「今の部品」の表から読みます。書き戻しのツールは、MCP サーバーのソースの `destructiveHint=True` から見つけます（名前付きの引数、`annotations={"destructiveHint": True}` の辞書、変数に作ってから渡すもの）。
-まだない部品は、理由を書いて飛ばします。
+## CI
 
-### モデルを使わずに流す一括のトリアージ（`tests/integration/flowlib.py`）
+`.github/workflows/coverity-triage-kit.yml` が、Windows と Linux のそれぞれで、Python 3.10 と最新版を使用して `python tests/run.py` を実行します。svn と Playwright をインストールするので、Linux ではスキップはありません。Windows では、次の3件をスキップします。
 
-`integration` の `test_flow.py`、`independence` の指示ファイルの試験、`ui` は、同じ道具を使います。
+- `skills/coverity-gui`：ブラウザーがコマンドの出力を引き継がないことの確認（Windows では、出力を引き継がない方法でブラウザーを開くため）
+- `skills/coverity-apply`：svn が表示できないファイル名の確認（svn の出力を、シェルスクリプトで置き換えるため）
+- `skills/coverity-apply`：git が 2.32 より古いときのメッセージの確認（git の出力を、シェルスクリプトで置き換えるため）
 
-- 小さな C のリポジトリ（git、`main`）と、5件の警告：同じ関数の2件（グループになる）、意図的な1件（逸脱）、
-  チェッカーは違うが同じ修正で直る2件（統合役がまとめる）。何が正しいかも道具が持っています。
-- 偽のエージェント：指示ファイルの表から、直すフォルダ・結果・確かめの結果・計画のファイルを読み、書かれたとおりに書きます。
-  作業役は、作業用のコピーで本当にコードを直します。検証役は、評価基準をすべて1回ずつ書きます（1件は一度差し戻します）。
-- 統括エージェントの代わり：`tick` の `actions` のとおりに、警告の取得を MCP サーバー（`mcp.json` の起動のコマンド）か、
-  用意したファイル（`new-run --issues-file`）で行い、`launch` を偽のエージェントに渡し、`--finished` で知らせます。
-- 部品は、`defaults.json`（`runCommand`、`guiCommand`、`applySkill`）と `mcp.json` と、スキルの SKILL.md が動かすよう書いた
-  スクリプトから見つけます。uv・git・模擬の Coverity・部品がないときは、理由を書いて飛ばします。
-
-### 部品の試験の動かし方の決まり
-
-`tests/run.py` と独立性の試験は、部品の試験を、部品のフォルダで次のように動かします。部品の README にも同じ動かし方を書きます。
-
-- フォルダに `pyproject.toml` があるとき（MCP サーバー）：uv のプロジェクトとして動かす。
-
-  ```text
-  uv run --native-tls --frozen --quiet --directory "<部品のフォルダ>" python -m unittest discover -s tests -v
-  ```
-
-- ないとき（スキル）：
-
-  ```text
-  # Windows（PowerShell）
-  py -3 -m unittest discover -s tests -v
-  # Linux（bash）
-  python3 -m unittest discover -s tests -v
-  ```
-
-部品の試験が守ること：
-
-- そのフォルダだけを別の場所にコピーしても通る（プラグインの `tests/` やほかの部品を読まない）。スキルは、フォルダの名前を変えて（SKILL.md の `name` も変えて）コピーしても通る。
-- リポジトリの中にファイルを残さない（一時フォルダを使う）。`tests/run.py` は `PYTHONDONTWRITEBYTECODE=1` を付け、uv の環境（`UV_PROJECT_ENVIRONMENT`）を一時フォルダにする。試験の後にリポジトリに残ったもの（`__pycache__`、`.venv` など）があれば、「後片付け」として不合格にする。
-- 速く終わる（1つの部品で 90 秒ほどまで）。時間のかかる試験は、環境変数 `SKIP_SLOW_TESTS=1` のときに飛ばす。
-
-試験に渡る環境変数：
-
-| 変数 | 意味 |
-| --- | --- |
-| `SKIP_SLOW_TESTS` | `1` なら時間のかかる試験を飛ばす（`--skip-slow`） |
-| `TESTS_JOBS` | 同時に動かす数（`--jobs`） |
-| `TESTS_PART_TIMEOUT` | 独立性の試験で、コピーした部品の試験の時間の上限（秒。既定 900） |
-
-### CI
-
-リポジトリの `.github/workflows/coverity-triage-kit.yml` が、`plugins/coverity-triage-kit/` が変わったときに、同じ試験を Windows と Linux で動かします。
-部品の名前は書いていないので、部品の構成が変わっても、直さずに済みます。
-
-| ジョブ | 動かすもの |
-| --- | --- |
-| 部品ごとの試験 | `tests/run.py --only parts`（Python 3.12 と最新） |
-| プラグイン全体の試験 | `structure`、`contracts`、`independence`、`integration`、`docs`、`eval`。最初に、`tests/run.py --list` のどの組も、どれかのジョブで動くことを確かめる（Linux だけ） |
-| 結果と設定の画面 | `ui`（Node 22。Playwright と Chromium を入れ、あることを確かめてから動かす） |
-| Web管理画面 | `extension`（Node 22 と 24） |
-
-`tests/` に試験の組を足したら、どれかのジョブの `--only` に足します。足し忘れると、プラグイン全体の試験のジョブが不合格になります。
-
-## EVAL（実際のモデル）
-
-実際のモデルで課題を解かせて採点します（仕様 REQ-602）。AI クレジットを使うので、CI では動かしません。結果は `tests/eval/REPORT.md` にまとめます。
-
-| 段階 | 課題の置き場所 | 動かし方 |
-| --- | --- | --- |
-| 1（スキル） | `skills/<名前>/evals/<課題>/`（`prompt.md`、`case.yaml`、`graders/`、`files/`、`place-files.sh`） | skill-creator の手順で、スキルありとなしを比べて採点する。Claude Code では、スキルのフォルダで `claude plugin eval . --allow-tools Write,Edit,Bash --scaffold` でも動く |
-| 1（MCP サーバー） | `mcp-servers/<名前>/evals/`（mcp-builder の形の `evaluation.xml` と偽の Coverity のデータ） | その `evals/README.md` のとおり |
-| 2〜4 | `tests/eval/` | [EVAL の道具](eval/README.md) のとおり。`claude_adapter.py` が、Copilot CLI の部品を Claude Code の形に置き換えて動かす（設計書 9.3） |
-
-- 作業の場所は、リポジトリの外にします。
-- Claude Code では確かめられないこと（Copilot CLI の許可の確認、エクステンション、サブエージェントの ask_user など）は、設計書 9.4 の表で、Copilot CLI で手で確かめ、版と日付を書きます。
-- 部品を変えたら、その部品の EVAL を動かし直します。
+CI の Windows は日本語の設定ではないため、svn に日本語の名前を渡せません。svn のテストは、その場合だけ、フォルダーとファイルの名前を英数字にして実行します。日本語の設定の Windows での svn と日本語の名前の組み合わせは、CI では確認していません。

@@ -1,0 +1,8 @@
+# サンプル（sample-target）の警告に対して想定する結論。tests/eval が使用します。
+items:
+  "20001": {recommendation: fix, reason: "本物のバグ（fgets 失敗時に fp を閉じていない）"}
+  "20002": {recommendation: deviation, reason: "誤検知の可能性（呼び出し元の read_config で path を検証済み）"}
+  "20003": {recommendation: fix, reason: "本物のバグ（malloc の戻り値を確認していない）"}
+# 同じ原因の CID（3段階目で1つに統合される）
+group:
+  cids: [20004, 20005, 20006]

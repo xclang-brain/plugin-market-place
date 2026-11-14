@@ -1,7 +1,0 @@
-schema_version: "1.1"
-name: sample-repository-only
-expected_outcome: |
-  自己診断の結果のフォルダを作り（範囲 ②）、見本のリポジトリを作る。返事でその絶対パスを伝える。
-  見本は git のリポジトリで、偽の Coverity の設定（api: fake）と src/reader.c がコミットされている。一括のトリアージは始めない。
-  結果のフォルダの selftest.json は、範囲が ② だけ（sections ["2"]）、2-1 が成功、sample_repo が見本のリポジトリで、
-  2-2〜2-8 は成功・失敗・要確認として記録されていない。
