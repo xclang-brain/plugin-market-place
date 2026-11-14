@@ -15,11 +15,13 @@ apply line, to run once the person has answered OK, ``to_change`` with the plan 
 changes a choice (a template: one --set per changed CID), ``call`` with the tool call that registers the
 entries in Coverity, and ``if_not_called`` with the sentence for the person when that call was not made.
 The result folder is the state. This script writes apply-plan.json, applied.json and coverity-entries.json
-(+ .sha256) into it. git: one branch per result folder, one commit per fix, pushed. svn: svn patch.
+(+ .sha256) into it. git: one commit per fix on a branch of the result folder, pushed; a branch that was
+pushed is not added to (a later OK makes the next one). svn: svn patch.
 """
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -139,12 +141,37 @@ def stamp(at: str) -> float:
     return datetime.fromisoformat(at).timestamp()
 
 
-def fits(decision, patch: bool, state_file: Path) -> bool:
-    """A choice made on the screen counts while it still fits the item: a fix needs fix.patch, and
-    state.json must not have been written after the choice (a new save, review or merge)."""
+def version(folder: Path) -> str:
+    """The version of an item: SHA-256 over the files a choice is made on (cid/<CID>/). A new result, a
+    review or a merge changes it. The screen computes it the same way and saves it with a choice."""
+    digest = hashlib.sha256()
+    for name in ("state.json", "result.json", "fix.patch"):
+        for attempt in range(200):
+            try:
+                data = (folder / name).read_bytes()
+                break
+            except FileNotFoundError:
+                data = None
+                break
+            except PermissionError:  # Windows: the file is being replaced at this moment
+                if attempt == 199:
+                    raise
+                time.sleep(0.05)
+        digest.update(f"{name} {-1 if data is None else len(data)}\n".encode())
+        digest.update(data or b"")
+    return digest.hexdigest()
+
+
+def fits(decision, patch: bool, state_file: Path, made_on: str | None = None) -> bool:
+    """A choice counts while it still fits the item: a fix needs fix.patch. A choice of the screen counts
+    while the item has the version it was made on (``made_on``: the version now); one of the chat while
+    state.json was not written after it (a new save, review or merge)."""
     try:
-        return (decision["decision"] in CHOICE and (patch or decision["decision"] != "fix")
-                and int(state_file.stat().st_mtime) <= stamp(decision["at"]))
+        if decision["decision"] not in CHOICE or not (patch or decision["decision"] != "fix"):
+            return False
+        if made_on is not None:
+            return decision.get("version") == made_on
+        return int(state_file.stat().st_mtime) <= stamp(decision["at"])
     except (KeyError, TypeError, ValueError, OSError):
         return False
 
@@ -188,7 +215,7 @@ class Run:
         reason = next((sentence for sentence, applies in reasons.items() if applies), "")
         advice = result.get("recommendation")
         default = advice if not reason and (advice == "deviation" or advice == "fix" and patch) else "none"
-        decision = decision if fits(decision, patch, self.file(cid, "state.json")) else {}
+        decision = decision if fits(decision, patch, self.file(cid, "state.json"), version(self.dir / "cid" / str(cid))) else {}
         deviation = result.get("deviation") or {}
         handled = "applied" if str(cid) in self.fixed else "written" if self.registered(cids) else ""
         return {"cid": cid, "kind": "item", "cids": cids, "state": state, "patch": patch, "default": default,
@@ -215,6 +242,19 @@ class Run:
             digest.update(f"{path.relative_to(self.dir).as_posix()} {-1 if data is None else len(data)}\n".encode())
             digest.update(data or b"")
         return digest.hexdigest()
+
+    def branch(self) -> str:
+        """git: the branch the fixes of the next OK go to. A branch that was pushed is not added to: its pull
+        request may have been merged (also squashed or rebased) or have commits of others. The fixes of a
+        later OK get a branch of their own, from the newest base branch: <name>-2, <name>-3, ..."""
+        first = f"coverity-fix/{self.dir.name}"
+        branch = str(self.applied.get("branch") or first)
+        if not self.applied.get("pushed"):
+            return branch
+        used = {branch, *(str(fix.get("branch")) for fix in self.fixed.values() if isinstance(fix, dict))}
+        names = (f"{first}-{n}" for n in itertools.count(2))
+        return next(name for name in names if name not in used and
+                    git(self.repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}").returncode != 0)
 
     def command(self, name: str, *extra: str) -> str:
         """The full command line of a step. Paths are written with forward slashes (Windows accepts them)."""
@@ -298,8 +338,9 @@ def cmd_plan(args) -> dict:
                          "--set <CID>=<fix|deviation|none>")
     earlier = agreed(run)
     chosen = {**earlier, **chosen}  # what the person says now replaces it
-    branch, kind = f"coverity-fix/{run.dir.name}", run.meta.get("vcs")
+    kind = run.meta.get("vcs")
     origin = kind == "git" and git(run.repo, "config", "--get", "remote.origin.url").stdout.strip()
+    branch, current = (run.branch(), str(run.applied.get("branch") or "")) if kind == "git" else ("", "")
     # What an earlier OK did not complete: a push (the branch has fixes and there is an origin), entries.
     unpushed = bool(origin and run.fixed and not run.applied.get("pushed"))
     waiting = len(run.waiting())
@@ -352,7 +393,7 @@ def cmd_plan(args) -> dict:
     parts = [f"修正の取り込み（{n['fix']} 件。{how}）" if n["fix"] else "",
              f"逸脱コメントの登録（{n['deviation']} 件）" if n["deviation"] else "",
              f"保留の登録（{n['none']} 件）" if n["none"] else "",
-             f"ブランチ {branch} の push" if unpushed and not n["fix"] else "",
+             f"ブランチ {current or branch} の push" if unpushed and not n["fix"] else "",
              f"取り込み済みの修正の Coverity への登録（{waiting} 件）" if waiting else ""]
     if not any(parts):
         return {**out, "message": "取り込む修正と、Coverity に登録する内容はありません", "to_change": change, "next": []}
@@ -372,11 +413,12 @@ def record(run: Run, cid: int, **fields) -> None:
 
 
 def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
-    """One commit per fix on the one branch of this result folder, made in the index of a temporary
+    """One commit per fix on the branch of this OK (Run.branch), made in the index of a temporary
     worktree outside the repository, without a checkout (the person's working tree, index and current
     branch are not touched); then the push, without force, and the text of the pull request (the person
     creates it)."""
-    repo, branch, base = run.repo, f"coverity-fix/{run.dir.name}", str(run.meta.get("base_branch") or "")
+    repo, base = run.repo, str(run.meta.get("base_branch") or "")
+    branch = run.branch() if todo else str(run.applied.get("branch") or f"coverity-fix/{run.dir.name}")
     remote = text(git(repo, "config", "--get", "remote.origin.url").stdout)
     if todo:
         version = re.search(r"(\d+)\.(\d+)(\.\d+)*", text(git(repo, "version").stdout))  # "git version 2.43.0.windows.1"
@@ -420,11 +462,12 @@ def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
                 commit = text(git(repo, "rev-parse", "HEAD", cwd=tree, check=True).stdout)
                 git(repo, "update-ref", f"refs/heads/{branch}", commit, check=True)
                 run.applied = {"vcs": "git", "branch": branch, "base_branch": base, "pushed": False}
-                record(run, cid, commit=commit)
+                record(run, cid, commit=commit, branch=branch)
                 fixes["applied"].append(cid)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
             git(repo, "worktree", "prune")
+        branch = str(run.applied.get("branch") or branch)  # no fix was committed: the branch of the earlier OK
     if not run.fixed:
         return None
     pushed, error, pull = bool(run.applied.get("pushed")), None, None
@@ -435,8 +478,9 @@ def take_git(run: Run, todo: list[int], fixes: dict) -> dict | None:
         else:
             error = text(push.stderr)[-500:] or "git push が失敗しました"
     if pushed:
-        title = f"Coverity の警告の修正（{run.meta.get('stream', '')}、{len(run.fixed)} 件）"
-        cids = [member for cid, row in run.items.items() if str(cid) in run.fixed for member in row["cids"]]
+        mine = [cid for cid, fix in run.fixed.items() if fix.get("branch", branch) == branch]  # the fixes of this branch
+        title = f"Coverity の警告の修正（{run.meta.get('stream', '')}、{len(mine)} 件）"
+        cids = [member for cid, row in run.items.items() if str(cid) in mine for member in row["cids"]]
         body = ("Coverity の警告の修正です。修正の内容は、各コミットのメッセージにあります。\n\n"
                 f"CID: {', '.join(map(str, cids))}")  # no table: the URL stays short
         web = (re.match(r"https?://(?:[^@/]+@)?([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$", remote)
@@ -483,12 +527,15 @@ def cmd_apply(args) -> dict:
     place = (take_git if kind == "git" else take_svn)(run, todo, fixes)
     # The entries for Coverity, after the fixes: the chosen deviations, every fix that is taken in and the
     # items of 保留, each while it is not registered yet (written.json). The comment of a fix is one line.
-    where = f"修正をブランチ {place['branch']} にコミットしました。" if kind == "git" and place \
-        else "修正を作業コピーに適用しました。"
+    def where(cid: int) -> str:
+        if kind == "git" and place:
+            return f"修正をブランチ {run.fixed[str(cid)].get('branch') or place['branch']} にコミットしました。"
+        return "修正を作業コピーに適用しました。"
+
     deviations = [entry for entry in plan["deviations"] if not run.registered(entry["cids"])]
     taken = [{"cids": run.items[cid]["cids"], "classification": "Bug", "action": "Fix Required",
               "severity": run.items[cid]["deviation"]["severity"],
-              "comment": " ".join((where + run.items[cid]["summary"]).split())[:200]}
+              "comment": " ".join((where(cid) + run.items[cid]["summary"]).split())[:200]}
              for cid in run.waiting()]
     pending = [entry for entry in plan["none"] if isinstance(entry, dict) and not run.registered(entry["cids"])]
     target, entries = run.dir / "coverity-entries.json", [*deviations, *taken, *pending]

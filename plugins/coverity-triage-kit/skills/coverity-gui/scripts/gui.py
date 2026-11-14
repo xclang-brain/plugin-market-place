@@ -74,6 +74,50 @@ def load(path: Path) -> dict:
     return {}
 
 
+def load_strict(path: Path) -> dict:
+    """Like load, for a file that is read to be written again: a file that stays locked or is not a JSON
+    object is an error, never {}. Written again from {}, it would lose what it holds."""
+    for _ in range(20):
+        try:
+            data = json.loads(path.read_bytes().decode("utf-8-sig"))
+            break
+        except FileNotFoundError:
+            return {}
+        except PermissionError:  # Windows: the file is being replaced at this moment
+            time.sleep(0.05)
+        except (OSError, ValueError):
+            data = None
+            break
+    else:
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("decisions", {}), dict):
+        raise Problem(f"選択を記録したファイルを読み取れないため、保存しませんでした（ほかの CID の選択を消さないためです）。"
+                      f"しばらくしてから、もう一度選択してください。続くときは、{path.as_posix()} を確認してください", 503)
+    return data
+
+
+def version(folder: Path) -> str:
+    """The version of an item: SHA-256 over the files a choice is made on (cid/<CID>/). A choice names the
+    version it was made on, and counts only while the item has it: a new result, a review or a merge
+    changes it. The skill that takes the fixes in computes it the same way."""
+    digest = hashlib.sha256()
+    for name in ("state.json", "result.json", "fix.patch"):
+        for attempt in range(20):
+            try:
+                data = (folder / name).read_bytes()
+                break
+            except FileNotFoundError:
+                data = None
+                break
+            except PermissionError:  # Windows: the file is being replaced at this moment
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
+        digest.update(f"{name} {-1 if data is None else len(data)}\n".encode())
+        digest.update(data or b"")
+    return digest.hexdigest()
+
+
 def write_json(path: Path, data: dict, mode: int = 0o666) -> None:
     """Write through a temporary file and a rename (Windows refuses the rename while the file is read)."""
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
@@ -153,15 +197,14 @@ class Run:
             found[status(state)] += 1
         return {**found, "remaining": found["pending"] + found["working"]}
 
-    def chosen(self, cid: int, can_fix: bool) -> dict:
-        """The choice made on the screen, while it still fits the item: a fix needs fix.patch, and
-        state.json must not have been written after the choice (a new save, review or merge)."""
+    def chosen(self, cid: int, can_fix: bool, made_on: str) -> dict:
+        """The choice made on the screen, while it still fits the item: a fix needs fix.patch, and the
+        item must still have the version the choice was made on (no new save, review or merge since)."""
         found = self.decisions.get(str(cid))
         try:
-            at = datetime.fromisoformat(found["at"]).timestamp()
             fits = (found["decision"] in CHOICES and (can_fix or found["decision"] != "fix")
-                    and int(self.file(cid, "state.json").stat().st_mtime) <= at)
-        except (KeyError, TypeError, ValueError, OSError):
+                    and found.get("version") == made_on)
+        except (KeyError, TypeError):
             fits = False
         return found if fits else {}
 
@@ -173,7 +216,7 @@ class Run:
                "place": f"{issue.get('file', '')}:{issue.get('line', '')}", "status": status(state),
                "verdict": None, "recommendation": None, "confidence": None, "review": None, "build": None,
                "files": [], "comment": None, "choice": None, "choice_from": None, "reason": "", "can_fix": False,
-               "comment_edited": False, "done": None,
+               "comment_edited": False, "done": None, "version": None,
                "error": str(state.get("error") or "") if status(state) == "failed" else ""}
         if row["status"] != "done":
             return row
@@ -182,10 +225,12 @@ class Run:
         if not isinstance(deviation, dict) or not isinstance(deviation.get("comment"), str):
             return {**row, "status": "unreadable"}
         members, can_fix = state.get("members") or [], self.file(cid, "fix.patch").is_file()
+        made_on = version(self.dir / "cid" / str(cid))
         review, build, advice = state.get("review"), (self.built or {}).get(str(cid)), result.get("recommendation")
         row.update(members=members, verdict=result.get("verdict"), recommendation=advice,
                    confidence=state.get("confidence"), review=review, build=build,
-                   files=(state.get("files") or []) if can_fix else [], comment=deviation["comment"], can_fix=can_fix)
+                   files=(state.get("files") or []) if can_fix else [], comment=deviation["comment"], can_fix=can_fix,
+                   version=made_on)
         if str(cid) in self.applied:
             return {**row, "done": "applied"}
         if all(str(c) in self.written for c in [cid, *members]):  # shown: the comment that was registered
@@ -193,7 +238,7 @@ class Run:
             said = entry.get("comment") or row["comment"]  # 保留 has a comment of its own, which nobody edited
             edited = said != row["comment"] and entry.get("classification") != "Pending"
             return {**row, "done": "written", "comment": said, "comment_edited": edited}
-        chosen = self.chosen(cid, can_fix)
+        chosen = self.chosen(cid, can_fix, made_on)
         if chosen:
             return {**row, "choice": chosen["decision"], "choice_from": "screen",
                     "comment": chosen.get("comment") or row["comment"], "comment_edited": bool(chosen.get("comment"))}
@@ -247,7 +292,7 @@ def detail(repo: Path, cid: int) -> dict:
     out = {"ok": True, "cid": cid, "members": row["members"], "status": row["status"],
            "issue": {key: run.issues[cid].get(key) for key in ("checker", "file", "line", "function", "impact")},
            "result": None, "patch": None, "review": None, "build": row["build"], "deviation": None,
-           **{key: row[key] for key in ("choice", "choice_from", "can_fix", "done")}}
+           **{key: row[key] for key in ("choice", "choice_from", "can_fix", "done", "version")}}
     if row["status"] != "done":
         return out
     result = load(run.file(cid, "result.json"))
@@ -281,7 +326,10 @@ def decide(repo: Path, body: dict) -> dict:
         raise Problem("選択が正しくありません。fix、deviation、none のいずれかを指定してください")
     if choice == "fix" and not row["can_fix"]:
         raise Problem("この CID には修正コードがないため、「修正を取り込む」は選択できません")
-    entry = {"decision": choice}
+    if body.get("version") != row["version"]:  # the page showed an earlier result (or an earlier review)
+        raise Problem(f"CID {cid} の結果が、表示した後に更新されています。新しい内容を表示しましたので、"
+                      "確認してから、もう一度選択してください", 409)
+    entry = {"decision": choice, "version": row["version"]}
     original = load(run.file(cid, "result.json"))["deviation"]["comment"]
     comment = comment.strip() if isinstance(comment, str) else comment
     if comment is not None and comment != original:
@@ -296,7 +344,8 @@ def decide(repo: Path, body: dict) -> dict:
             raise Problem(f"逸脱コメントは、元のコメントと同じ「{start}」で始めてください")
         entry["comment"] = comment
     entry["at"] = datetime.now().astimezone().isoformat()
-    write_json(run.dir / "decisions.json", {"decisions": {**run.decisions, str(cid): entry}})
+    saved = load_strict(run.dir / "decisions.json").get("decisions") or {}  # the choices of the other CIDs
+    write_json(run.dir / "decisions.json", {"decisions": {**saved, str(cid): entry}})
     return {"ok": True, "row": Run(repo).row(cid)}
 
 
