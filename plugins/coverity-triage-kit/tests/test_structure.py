@@ -125,6 +125,28 @@ class Structure(unittest.TestCase):
     def test_the_mcp_server_offers_the_four_tools(self):
         self.assertEqual(mcp_tools(), TOOLS)
 
+    def test_the_screen_and_the_step_after_the_ok_compute_the_same_version_of_an_item(self):
+        """A choice on the screen is saved with the version of its item, and counts after the OK only while
+        the item has it: the two skills must compute it alike."""
+        import importlib.util
+
+        def function(path: str):
+            spec = importlib.util.spec_from_file_location(Path(path).stem, PLUGIN / path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.version
+
+        screen, after_ok = function("skills/coverity-gui/scripts/gui.py"), function("skills/coverity-apply/scripts/apply.py")
+        with tempfile.TemporaryDirectory() as top:
+            folder = Path(top)
+            seen = set()
+            for name, data in (("state.json", b'{"status": "done"}'), ("result.json", "{\"結果\": 1}".encode()),
+                               ("fix.patch", b"--- a\n+++ b\n")):
+                (folder / name).write_bytes(data)
+                self.assertEqual(screen(folder), after_ok(folder), name)
+                seen.add(screen(folder))
+            self.assertEqual(len(seen), 3, "every file changes the version")
+
 
 if __name__ == "__main__":
     unittest.main()
