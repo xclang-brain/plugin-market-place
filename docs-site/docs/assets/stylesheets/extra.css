@@ -74,7 +74,7 @@
   position: relative;
   overflow: hidden;
   margin: .4rem 0 1.6rem;
-  padding: 2.2rem 2rem 1.8rem;
+  padding: 2.2rem 2rem;
   border-radius: 14px;
   background: var(--ctk-hero);
   color: #fff;
@@ -90,6 +90,7 @@
   pointer-events: none;
 }
 .ctk-hero > * { position: relative; z-index: 1; }
+.md-typeset .ctk-hero > :last-child { margin-bottom: 0; }
 .md-typeset .ctk-hero h1 {
   margin: 0 0 .5rem;
   color: #fff;
@@ -99,14 +100,6 @@
 }
 .md-typeset .ctk-hero p { max-width: 38em; font-size: .86rem; color: rgba(255, 255, 255, .92); }
 .md-typeset .ctk-hero strong { color: #fff; }
-.md-typeset .ctk-hero .md-button {
-  margin: .4rem .5rem 0 0;
-  color: #fff;
-  border-color: rgba(255, 255, 255, .55);
-}
-.md-typeset .ctk-hero .md-button:hover { background: rgba(255, 255, 255, .12); border-color: #fff; }
-.md-typeset .ctk-hero .md-button--primary { background: #fff; border-color: #fff; color: #17324d; }
-.md-typeset .ctk-hero .md-button--primary:hover { background: #e8f6f4; color: #0f2236; }
 
 /* ---------- カード ---------- */
 .md-typeset .grid.cards > ul > li {
@@ -229,16 +222,11 @@
 .ctk-filter output { flex: none; font-size: .72rem; color: var(--md-default-fg-color--light); }
 .ctk-filter-empty { color: var(--md-default-fg-color--light); }
 
-/* ---------- 次へのボタン ---------- */
-.md-typeset .md-button { border-radius: 8px; }
-.md-typeset p > .md-button:only-child { margin-top: 1.4em; }
-
 /* ---------- 狭い画面 ---------- */
 @media screen and (max-width: 44.9375em) {
   .ctk-hero { padding: 1.4rem 1.1rem 1.2rem; border-radius: 10px; }
   .md-typeset .ctk-hero h1 { font-size: 1.45rem; overflow-wrap: anywhere; }
   .md-typeset .ctk-hero p { font-size: .8rem; }
-  .md-typeset .ctk-hero .md-button { display: block; text-align: center; margin-right: 0; }
   .ctk-filter { top: 2.4rem; }
   .md-typeset .ctk-diagram > .mermaid { min-width: 32rem; }
 }

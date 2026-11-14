@@ -100,16 +100,16 @@ markdown_extensions:
 nav:
   - ホーム: index.md
   - 使う:
-      - 準備: use/setup.md
+      - 準備する: use/setup.md
       - 1件ずつ処置する: use/first.md
       - 一覧で決める: use/decide.md
       - まとめて任せる: use/delegate.md
       - 画面で選ぶ: use/screen.md
-      - 設定: use/settings.md
+      - 設定を変える: use/settings.md
       - 困ったとき: use/trouble.md
   - 開発する:
       - 始める前に: dev/index.md
       - 仕組み: dev/architecture.md
       - 変更するとき: dev/change.md
-      - テスト: dev/test.md
-      - このサイトの更新: dev/site.md
+      - テストする: dev/test.md
+      - サイトを更新する: dev/site.md

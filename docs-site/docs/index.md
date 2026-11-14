@@ -9,10 +9,7 @@ hide:
 
 # coverity-triage-kit
 
-Coverity Connect の警告を CID ごとに調べ、**修正コード**と**逸脱コメント**の両方を用意する GitHub Copilot CLI のプラグインです。対象は C / C++ です。どちらを採用するかは、一覧を見て決めます。
-
-[準備を始める](use/setup.md){ .md-button .md-button--primary }
-[仕組みを読む](dev/architecture.md){ .md-button }
+Coverity Connect の警告を CID ごとに調べ、**修正コード**と**逸脱コメント**を両方用意する、GitHub Copilot CLI のプラグインです。対象は C / C++ です。どちらを採用するかは、最後に一覧で決めます。
 
 </div>
 
@@ -31,7 +28,7 @@ flowchart LR
   end
 ```
 
-調査と修正は、リポジトリの外の作業用コピーで行います。Coverity に書き込む直前には、Copilot CLI が許可を確認します。
+調査と修正は、リポジトリの外の作業用コピーで行います。Coverity に書き込む前には、Copilot CLI が許可を求めます。
 
 <div class="grid cards" markdown>
 
@@ -39,24 +36,32 @@ flowchart LR
 
     ---
 
-    [準備](use/setup.md)をして、[1件ずつ処置](use/first.md)し、[一覧で決める](use/decide.md)まで進めます。
+    準備をして、1件の警告で、調査から OK までを試します。
+
+    [:octicons-arrow-right-24: 準備する](use/setup.md)
 
 -   :material-robot-outline:{ .lg } **まとめて処置する**
 
     ---
 
-    エージェントに[まとめて任せ](use/delegate.md)、結果を一覧か[画面](use/screen.md)で選びます。
+    条件に合う警告を、エージェントに最後まで任せます。
+
+    [:octicons-arrow-right-24: まとめて任せる](use/delegate.md)
 
 -   :material-lifebuoy:{ .lg } **うまく動かない**
 
     ---
 
-    表示されたメッセージの一部で、[困ったとき](use/trouble.md)を絞り込みます。
+    表示されたメッセージを貼り付けて、対処を探します。
 
--   :material-source-branch:{ .lg } **プラグインを変更する**
+    [:octicons-arrow-right-24: 困ったとき](use/trouble.md)
+
+-   :material-source-branch:{ .lg } **プラグインを開発する**
 
     ---
 
-    [始める前に](dev/index.md)で、守る決まりと、それを確認するテストを読みます。
+    守る決まりと、それを確認するテストから読みます。
+
+    [:octicons-arrow-right-24: 始める前に](dev/index.md)
 
 </div>
