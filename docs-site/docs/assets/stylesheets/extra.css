@@ -1,29 +1,41 @@
-/* ---------- 色 ---------- */
+/*
+ * 説明サイトの見た目の調整。Material for MkDocs の標準の見た目を上書きする。
+ * 色はすべて先頭の変数で定義し、ライトモード（:root）とダークモード（slate）で値だけを切り替える。
+ */
+
+/* ---------- 色：ライトモード ---------- */
 :root {
+  /* ヘッダーとタブの背景（濃い紺）と、強調に使うアクセント色（青緑） */
   --md-primary-fg-color: #17324d;
   --md-primary-fg-color--light: #2a4a6b;
   --md-primary-fg-color--dark: #0f2236;
   --md-accent-fg-color: #0e8a7d;
-  --md-accent-fg-color--transparent: rgba(14, 138, 125, .1);
-  --md-typeset-a-color: #0b6b8a;
+  --md-accent-fg-color--transparent: rgba(14, 138, 125, .1);  /* 表の行や入力欄の、薄い強調 */
+  --md-typeset-a-color: #0b6b8a;                               /* 本文中のリンク */
 
-  --ctk-hero: linear-gradient(135deg, #17324d 0%, #1d5470 55%, #0e8a7d 100%);
-  --ctk-table-head: #eef3f7;
-  --ctk-chat: #0e8a7d;
-  --ctk-term: #3d4b5c;
-  --ctk-output: #8592a3;
-  --ctk-fix-bg: #dcf5e6;      --ctk-fix-fg: #11643a;
-  --ctk-deviation-bg: #e2ecfb; --ctk-deviation-fg: #1d4f91;
-  --ctk-hold-bg: #fdf0d5;     --ctk-hold-fg: #7a4d00;
+  --ctk-hero: linear-gradient(135deg, #17324d 0%, #1d5470 55%, #0e8a7d 100%);  /* ホーム上部の帯 */
+  --ctk-table-head: #eef3f7;                                                   /* 表の見出し行 */
 
-  --ctk-icon-chat: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2zM4 4v13.17L5.17 16H20V4zm2 3h12v2H6zm0 4h9v2H6z"/></svg>');
-  --ctk-icon-term: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 19V7H4v12zm0-16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm-7 14v-2h5v2zm-3.42-4L5.57 9H8.4l3.3 3.3c.39.39.39 1.03 0 1.42L8.42 17H5.59z"/></svg>');
-  --ctk-icon-output: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 4v12h18V4zm0-2h18a2 2 0 0 1 2 2v12c0 .53-.21 1.04-.59 1.41-.37.38-.88.59-1.41.59h-7v2h2v2H8v-2h2v-2H3c-.53 0-1.04-.21-1.41-.59C1.21 17.04 1 16.53 1 16V4c0-1.11.89-2 2-2"/></svg>');
-  --ctk-icon-search: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>');
+  /* コードブロックの種類ごとの色（左の線、題、アイコン） */
+  --ctk-chat: #0e8a7d;    /* チャットに入力 */
+  --ctk-term: #3d4b5c;    /* ターミナル */
+  --ctk-output: #8592a3;  /* 表示の例 */
+
+  /* 表の「選択」列の、3つの選択肢のラベルの色（背景と文字） */
+  --ctk-fix-bg: #dcf5e6;      --ctk-fix-fg: #11643a;        /* 修正を取り込む：緑 */
+  --ctk-deviation-bg: #e2ecfb; --ctk-deviation-fg: #1d4f91;  /* 逸脱コメントを登録する：青 */
+  --ctk-hold-bg: #fdf0d5;     --ctk-hold-fg: #7a4d00;       /* 保留にする：黄 */
+
+  /* アイコンの形（Material Design Icons の SVG）。mask として使い、周囲の文字色で描く */
+  --ctk-icon-chat: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2zM4 4v13.17L5.17 16H20V4zm2 3h12v2H6zm0 4h9v2H6z"/></svg>');  /* 吹き出し */
+  --ctk-icon-term: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 19V7H4v12zm0-16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm-7 14v-2h5v2zm-3.42-4L5.57 9H8.4l3.3 3.3c.39.39.39 1.03 0 1.42L8.42 17H5.59z"/></svg>');  /* ターミナル */
+  --ctk-icon-output: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 4v12h18V4zm0-2h18a2 2 0 0 1 2 2v12c0 .53-.21 1.04-.59 1.41-.37.38-.88.59-1.41.59h-7v2h2v2H8v-2h2v-2H3c-.53 0-1.04-.21-1.41-.59C1.21 17.04 1 16.53 1 16V4c0-1.11.89-2 2-2"/></svg>');  /* モニター */
+  --ctk-icon-search: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>');  /* 虫めがね */
 }
 
+/* ---------- 色：ダークモード（上と同じ変数の、暗い背景向けの値） ---------- */
 [data-md-color-scheme="slate"] {
-  --md-hue: 212;
+  --md-hue: 212;  /* 背景の灰色を、青みのある灰色にする */
   --md-primary-fg-color: #1b3550;
   --md-primary-fg-color--light: #2a4a6b;
   --md-primary-fg-color--dark: #10243a;
@@ -41,23 +53,27 @@
   --ctk-hold-bg: rgba(240, 173, 40, .16);      --ctk-hold-fg: #f5c868;
 }
 
-/* ---------- 文字 ---------- */
+/* ---------- 本文の文字 ---------- */
+/* 日本語を読みやすくするため、標準より文字を少し大きくし、行間と字間を広げる */
 .md-typeset {
   font-size: .78rem;
   line-height: 1.85;
   letter-spacing: .02em;
 }
+/* 見出しは、括弧や句読点の余白を詰めて（palt）、字間を少し広げる */
 .md-typeset h1, .md-typeset h2, .md-typeset h3 {
   font-feature-settings: "palt";
   letter-spacing: .04em;
 }
 .md-typeset h1 { font-weight: 700; color: var(--md-default-fg-color); }
+/* 大見出し（h2）：上に余白を取り、下に線を引く */
 .md-typeset h2 {
   font-weight: 700;
   margin-top: 2.2em;
   padding-bottom: .3em;
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
 }
+/* 大見出しの左に、アクセント色の縦棒を付ける */
 .md-typeset h2::before {
   content: "";
   display: inline-block;
@@ -67,9 +83,11 @@
   border-radius: 2px;
   background: var(--md-accent-fg-color);
 }
+/* 太字は、本文より濃い色にする */
 .md-typeset strong { color: var(--md-default-fg-color); }
 
-/* ---------- ホームの見出し ---------- */
+/* ---------- ホーム上部の帯（index.md の <div class="ctk-hero">） ---------- */
+/* グラデーションの背景に白い文字。角を丸め、下に影を付ける */
 .ctk-hero {
   position: relative;
   overflow: hidden;
@@ -80,6 +98,7 @@
   color: #fff;
   box-shadow: 0 10px 30px rgba(15, 34, 54, .18);
 }
+/* 帯の右側にだけ、薄い点の模様を重ねる（左に向かって消える） */
 .ctk-hero::after {
   content: "";
   position: absolute; inset: 0;
@@ -89,8 +108,10 @@
           mask-image: linear-gradient(110deg, transparent 35%, #000 100%);
   pointer-events: none;
 }
+/* 文字を点の模様より前に出し、帯の下端の余白を揃える */
 .ctk-hero > * { position: relative; z-index: 1; }
 .md-typeset .ctk-hero > :last-child { margin-bottom: 0; }
+/* 帯の中の題（プラグイン名）と説明文 */
 .md-typeset .ctk-hero h1 {
   margin: 0 0 .5rem;
   color: #fff;
@@ -101,7 +122,8 @@
 .md-typeset .ctk-hero p { max-width: 38em; font-size: .86rem; color: rgba(255, 255, 255, .92); }
 .md-typeset .ctk-hero strong { color: #fff; }
 
-/* ---------- カード ---------- */
+/* ---------- ホームのカード ---------- */
+/* マウスを重ねると、少し浮き上がり、枠がアクセント色になる */
 .md-typeset .grid.cards > ul > li {
   border-radius: 10px;
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
@@ -111,35 +133,45 @@
   border-color: var(--md-accent-fg-color);
   box-shadow: 0 6px 18px rgba(15, 34, 54, .12);
 }
+/* 1行に2枚並べる（幅が狭い画面では1枚） */
 .md-typeset .grid.cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
+/* 題の左のアイコンを大きくし、アクセント色にする */
 .md-typeset .grid.cards .lg { font-size: 1.5em; vertical-align: -.25em; color: var(--md-accent-fg-color); }
+/* 題と説明文の間の線の余白 */
 .md-typeset .grid.cards hr { margin: .5em 0; }
 
-/* ---------- 図 ---------- */
+/* ---------- 図（Mermaid） ---------- */
+/* 図は中央に置き、本文の幅に収まらないときは横にスクロールする（枠の div は hooks.py が付ける） */
 .ctk-diagram { margin: 1.2em 0 1.6em; overflow-x: auto; }
 .md-typeset .ctk-diagram > .mermaid { margin: 0; text-align: center; }
 
 /* ---------- 表 ---------- */
+/* 表を本文の幅いっぱいに広げる（Material の標準では、内容の幅に縮む） */
 .md-typeset__table { width: 100%; }
 .md-typeset__table table:not([class]) { display: table; width: 100%; }
+/* 文字の大きさ、行間、角の丸み */
 .md-typeset table:not([class]) {
   font-size: .74rem;
   line-height: 1.7;
   border-radius: 8px;
   overflow: hidden;
 }
+/* 見出し行：背景を付け、列名を折り返さない */
 .md-typeset table:not([class]) th {
   background: var(--ctk-table-head);
   font-weight: 700;
   white-space: nowrap;
 }
+/* セルの余白と、上揃え */
 .md-typeset table:not([class]) th,
 .md-typeset table:not([class]) td { padding: .75em 1em; }
 .md-typeset table:not([class]) td { vertical-align: top; }
+/* 1列目（項目名）を少し太くする */
 .md-typeset table:not([class]) td:first-child { font-weight: 500; }
+/* マウスを重ねた行を、薄いアクセント色にする */
 .md-typeset table:not([class]) tr:hover > td { background: var(--md-accent-fg-color--transparent); }
 
-/* 「選択」の列（JavaScript が付ける） */
+/* 表の「選択」列の選択肢を、色付きのラベルにする（クラスは extra.js が付ける） */
 .ctk-choice {
   display: inline-block;
   padding: .05em .6em;
@@ -153,7 +185,8 @@
 .ctk-choice--deviation { background: var(--ctk-deviation-bg); color: var(--ctk-deviation-fg); }
 .ctk-choice--hold { background: var(--ctk-hold-bg); color: var(--ctk-hold-fg); }
 
-/* ---------- コードの見出し（JavaScript が種類を付ける） ---------- */
+/* ---------- コードブロックの題（title="…"） ---------- */
+/* 題の文字と、その左のアイコンを横に並べる */
 .md-typeset .highlight span.filename {
   display: flex;
   align-items: center;
@@ -161,6 +194,7 @@
   font-weight: 700;
   letter-spacing: .03em;
 }
+/* 種類（data-ctk-kind。extra.js が題の文から付ける）があるときは、題の左にアイコンを描く */
 .md-typeset .highlight[data-ctk-kind] span.filename::before {
   content: "";
   flex: none;
@@ -169,16 +203,20 @@
   -webkit-mask: var(--ctk-icon) center / contain no-repeat;
           mask: var(--ctk-icon) center / contain no-repeat;
 }
+/* 種類があるときは、ブロックの左に色の線を引き、題をその色にする */
 .md-typeset .highlight[data-ctk-kind] { border-left: 3px solid var(--ctk-kind-color); border-radius: 4px; }
 .md-typeset .highlight[data-ctk-kind] span.filename { color: var(--ctk-kind-color); }
+/* 種類ごとの色とアイコン：チャットに入力（吹き出し）、ターミナル、表示の例（モニター） */
 .md-typeset .highlight[data-ctk-kind="chat"] { --ctk-kind-color: var(--ctk-chat); --ctk-icon: var(--ctk-icon-chat); }
 .md-typeset .highlight[data-ctk-kind="term"] { --ctk-kind-color: var(--ctk-term); --ctk-icon: var(--ctk-icon-term); }
 .md-typeset .highlight[data-ctk-kind="output"] { --ctk-kind-color: var(--ctk-output); --ctk-icon: var(--ctk-icon-output); }
+/* チャットに入力する文は、太字にする */
 .md-typeset .highlight[data-ctk-kind="chat"] code { font-weight: 600; }
-/* 表示の例は読むためのものなので、横にスクロールさせずに折り返します */
+/* 表示の例は読むためのものなので、横にスクロールさせずに折り返す */
 .md-typeset .highlight[data-ctk-kind="output"] code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* ---------- 絞り込み（困ったとき） ---------- */
+/* ---------- トラブルシューティングの絞り込み欄（入力欄は extra.js が作る） ---------- */
+/* スクロールしても、ヘッダーのすぐ下に留まる */
 .ctk-filter {
   position: sticky;
   top: 2.6rem;
@@ -190,6 +228,7 @@
   padding: .5em 0;
   background: var(--md-default-bg-color);
 }
+/* 入力欄：左に虫めがねのアイコンの余白を取り、角を丸める */
 .ctk-filter input {
   flex: 1;
   min-width: 0;
@@ -203,10 +242,12 @@
   outline: none;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
+/* 入力中は、枠をアクセント色にし、外側を薄く光らせる */
 .ctk-filter input:focus {
   border-color: var(--md-accent-fg-color);
   box-shadow: 0 0 0 3px var(--md-accent-fg-color--transparent);
 }
+/* 入力欄の左端の虫めがねのアイコン */
 .ctk-filter::before {
   content: "";
   position: absolute;
@@ -219,14 +260,18 @@
           mask: var(--ctk-icon-search) center / contain no-repeat;
   pointer-events: none;
 }
+/* 入力欄の右の件数と、当てはまる行がないときの文 */
 .ctk-filter output { flex: none; font-size: .72rem; color: var(--md-default-fg-color--light); }
 .ctk-filter-empty { color: var(--md-default-fg-color--light); }
 
-/* ---------- 狭い画面 ---------- */
+/* ---------- 狭い画面（スマートフォン） ---------- */
 @media screen and (max-width: 44.9375em) {
+  /* ホーム上部の帯を小さくし、長いプラグイン名は途中で折り返す */
   .ctk-hero { padding: 1.4rem 1.1rem 1.2rem; border-radius: 10px; }
   .md-typeset .ctk-hero h1 { font-size: 1.45rem; overflow-wrap: anywhere; }
   .md-typeset .ctk-hero p { font-size: .8rem; }
+  /* ヘッダーが低くなる分、絞り込み欄の留まる位置を上げる */
   .ctk-filter { top: 2.4rem; }
+  /* 図は縮めずに読める大きさで描き、横にスクロールして見る */
   .md-typeset .ctk-diagram > .mermaid { min-width: 32rem; }
 }
