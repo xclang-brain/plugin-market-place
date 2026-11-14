@@ -13,7 +13,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -68,19 +67,20 @@ class Case(unittest.TestCase):
         """Before the OK the person's repository and Coverity are as they were."""
         self.assertEqual((flowlib.user_tree(self.kind, self.repo), self.coverity.writes), (self.before, []))
 
-    def taken_in(self, run: Path, *items: list[int]) -> bytes:
+    def taken_in(self, run: Path, *items: list[int], branch: str = "") -> bytes:
         """The fixes of these items have arrived and nothing else has changed. git: one commit per fix on
-        the branch of the folder on origin; the person's working tree, index and branch are untouched.
-        svn: the working copy has the patch, nothing is committed. Returns the code with the fixes."""
+        the branch of the OK on origin (``branch`` after the name of the folder: -2 for the OK after a push);
+        the person's working tree, index and branch are untouched. svn: the working copy has the patch,
+        nothing is committed. Returns the code with the fixes."""
         tree = flowlib.user_tree(self.kind, self.repo)
         if self.kind == "svn":
             self.assertEqual(tree, self.before + b"M       src/reader.c\n")
             return (self.repo / "src" / "reader.c").read_bytes()
         git = ("git", "--git-dir", self.top / "origin.git")
-        log = flowlib.call(*git, "log", "--reverse", "--format=%s", f"main..coverity-fix/{run.name}", cwd=self.top)
+        log = flowlib.call(*git, "log", "--reverse", "--format=%s", f"main..coverity-fix/{run.name}{branch}", cwd=self.top)
         subjects = [f"Coverity CID {', '.join(map(str, item))} の修正（{flowlib.WARNINGS[item[0]]['checker']}）" for item in items]
         self.assertEqual((log.decode("utf-8").splitlines(), tree), (subjects, self.before))
-        return flowlib.call(*git, "show", f"coverity-fix/{run.name}:src/reader.c", cwd=self.top)
+        return flowlib.call(*git, "show", f"coverity-fix/{run.name}{branch}:src/reader.c", cwd=self.top)
 
     def screen(self, url: str, path: str, body: dict | None = None) -> dict:
         """One request of the page to its server."""
@@ -287,7 +287,8 @@ class Flow:
                                            "取り込み済みの修正の Coverity への登録（1 件）を行います。" + ASK)
         # 「20001 は修正、ほかは OK」: the fix that was made again is taken in, and Coverity gets every entry once
         again.ok(again.change(plan, "20001=fix"))
-        self.assertIn(b"(void)fclose(fp);", self.taken_in(run, GROUP, [20001]))
+        # git: the branch of the first OK was pushed (its pull request may be merged): this fix gets its own branch
+        self.assertIn(b"(void)fclose(fp);", self.taken_in(run, [20001], branch="-2"))
         self.assertEqual(self.written(), [([20002], "False Positive", "Ignore"), ([20001], "Bug", "Fix Required"),
                                           (GROUP, "Bug", "Fix Required"), ([20003], "Pending", "Undecided")])
         self.assertEqual(self.coverity.writes[-1]["comment"], self.held(run, 20003, "検証で要確認のため"))
@@ -315,9 +316,9 @@ class Flow:
                 rows = self.parity(me, url)[1]
         self.assertEqual((step["counts"]["failed"], rows[20003]["choice"], rows[20004]["choice"]), (1, "fix", "fix"))
         # the screen: 修正を取り込む for 20003; then, in the chat, 「CID 20003 を処置して。…」 (made again)
-        chosen = self.screen(url, "/api/decision", {"run": run.name, "cid": 20003, "decision": "fix", "comment": None})["row"]
+        chosen = self.screen(url, "/api/decision", {"run": run.name, "cid": 20003, "decision": "fix", "comment": None,
+                                                    "version": rows[20003]["version"]})["row"]
         self.assertEqual((chosen["choice"], chosen["choice_from"], chosen["build"]), ("fix", "screen", "failed"))
-        time.sleep(1.01 - time.time() % 1)  # a choice counts until state.json is written in a later second
         redo = me.line("triage", "next", "--run", run, "--slot 1 --cid 20003")
         wait = me.run(redo)  # finish has removed the work copies: 20003 is unfinished until start has made them again
         rows = self.parity(me, url)[1]
@@ -332,8 +333,10 @@ class Flow:
                          "a choice made before the result was made again no longer counts")
         # the screen: an edited comment for 20002, and the fix of the merged CIDs in spite of the build check
         edited = "誤検知。唯一の呼び出し元 read_config()（src/reader.c:32〜36）が path の NULL を除外してから渡している。"
+        shown = self.parity(me, url)[1]  # the page sends the version of the result it shows
         for cid, choice, comment in ((20002, "deviation", edited), (20004, "fix", None)):
-            self.assertTrue(self.screen(url, "/api/decision", {"run": run.name, "cid": cid, "decision": choice, "comment": comment})["ok"])
+            self.assertTrue(self.screen(url, "/api/decision", {"run": run.name, "cid": cid, "decision": choice, "comment": comment,
+                                                               "version": shown[cid]["version"]})["ok"])
         # 「画面で選んだ内容で進めて」, then 「OK」
         plan = self.parity(me, url)[0]
         table = flowlib.rows(plan["table"])

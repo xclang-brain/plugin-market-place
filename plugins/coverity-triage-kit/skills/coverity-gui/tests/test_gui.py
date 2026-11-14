@@ -8,6 +8,7 @@ space and Japanese characters. Run with ``python -B`` (tests/run.py does): nothi
 import http.client
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -106,10 +107,13 @@ def item(run: Path, cid: int, fix: bool = True, recommendation: str = "", **stat
 
 
 def decisions(run: Path) -> dict:
-    """decisions.json without the times (ISO 8601, read by the skill that takes the fixes in)."""
+    """decisions.json without the times (ISO 8601) and the versions of the items (SHA-256), which the skill
+    that takes the fixes in reads."""
     saved = json.loads((run / "decisions.json").read_bytes().decode("utf-8"))["decisions"]
     assert all(datetime.fromisoformat(entry["at"]).tzinfo for entry in saved.values()), saved
-    return {cid: {key: value for key, value in entry.items() if key != "at"} for cid, entry in saved.items()}
+    assert all(re.fullmatch(r"[0-9a-f]{64}", entry["version"]) for entry in saved.values()), saved
+    return {cid: {key: value for key, value in entry.items() if key not in ("at", "version")}
+            for cid, entry in saved.items()}
 
 
 class ScreenCase(unittest.TestCase):
@@ -164,8 +168,10 @@ class ScreenCase(unittest.TestCase):
     def rows(self) -> dict:
         return {row["cid"]: row for row in self.http("GET", "/api/state")[1]["rows"]}
 
-    def decide(self, run: Path, cid, decision, comment=None, name: str = ""):
-        body = {"run": name or run.name, "cid": cid, "decision": decision, "comment": comment}
+    def decide(self, run: Path, cid, decision, comment=None, name: str = "", version=None):
+        """Choose as the page does: with the version of the item that the page shows (the newest one)."""
+        shown = version or ((self.rows().get(cid) or {}).get("version") if type(cid) is int else None)
+        body = {"run": name or run.name, "cid": cid, "decision": decision, "comment": comment, "version": shown}
         return self.http("POST", "/api/decision", body)
 
 
@@ -198,7 +204,8 @@ class ApiTest(ScreenCase):
             "cid": 20001, "members": [], "checker": "NULL_RETURNS", "place": "src/a.c:3", "status": "done",
             "verdict": "true_bug", "recommendation": "fix", "confidence": "high", "review": "pass", "build": "ok",
             "files": [FILE], "comment": FIX, "choice": "fix", "choice_from": "default", "reason": "",
-            "can_fix": True, "comment_edited": False, "done": None, "error": ""})
+            "can_fix": True, "comment_edited": False, "done": None, "error": "", "version": rows[20001]["version"]})
+        self.assertRegex(rows[20001]["version"], r"^[0-9a-f]{64}$")
         for cid, want in {20002: {"files": [], "comment": KEEP, "choice": "deviation", "can_fix": False, "build": None},
                           20003: {"members": [20004], "review": "flag", "choice": "none", "reason": "検証で要確認のため"},
                           20005: {"status": "failed", "choice": None, "error": "処置を2回開始しましたが、どちらも結果が保存されませんでした"},
@@ -217,7 +224,7 @@ class ApiTest(ScreenCase):
             "patch": PATHS + HUNK, "review": {"outcome": "flag", "points": ["src/a.c:3 呼び出し元を確認できません"]},
             "build": "unknown", "deviation": {"comment": FIX, "original_comment": FIX, "classification": "Bug",
                                               "action": "Ignore", "severity": "Major"},
-            "choice": "none", "choice_from": "default", "can_fix": True, "done": None}))
+            "choice": "none", "choice_from": "default", "can_fix": True, "done": None, "version": rows[20003]["version"]}))
         no_fix = self.http("GET", "/api/cid/20002")[1]
         self.assertEqual((no_fix["patch"], no_fix["result"]["no_fix_reason"]), (None, "コードに問題がないため"))
         self.assertEqual(self.http("GET", "/api/cid/20007")[1]["result"], None)  # not finished: the warning only
@@ -300,17 +307,49 @@ class ApiTest(ScreenCase):
         self.decide(run, 20001, "none")
         self.decide(run, 20002, "fix")
         self.assertEqual([self.rows()[cid]["choice_from"] for cid in (20001, 20002)], ["screen", "screen"])
-        later = time.time() + 5  # the result was saved, reviewed or merged again after the choice
-        os.utime(run / "cid/20001/state.json", (later, later))
+        # the result was reviewed again after the choice, within the same second: its version is another one
+        state = json.loads((run / "cid/20001/state.json").read_bytes())
+        put(run / "cid/20001/state.json", {**state, "review": "flag"})
         (run / "cid/20002/fix.patch").unlink()
         rows = self.rows()
         self.assertEqual([(rows[cid]["choice"], rows[cid]["choice_from"]) for cid in (20001, 20002)],
-                         [("fix", "default"), ("none", "default")])
+                         [("none", "default"), ("none", "default")])
+
+    def test_a_page_that_shows_an_earlier_result_cannot_choose(self):
+        run = self.run_folder([20001])
+        item(run, 20001, fix=False)
+        shown = self.rows()[20001]["version"]
+        self.assertEqual(self.http("GET", "/api/cid/20001")[1]["version"], shown)
+        # the CID is made again: a new comment; the page still has the earlier one in its text box
+        result = json.loads((run / "cid/20001/result.json").read_bytes())
+        put(run / "cid/20001/result.json", {**result, "deviation": {**result["deviation"], "comment": "誤検知。新しい理由。"}})
+        refused = (409, {"ok": False, "error": "CID 20001 の結果が、表示した後に更新されています。新しい内容を表示しましたので、"
+                                               "確認してから、もう一度選択してください"})
+        self.assertEqual(self.decide(run, 20001, "deviation", KEEP, version=shown), refused)
+        self.assertEqual(self.decide(run, 20001, "deviation", KEEP, version="0" * 64), refused)
+        self.assertFalse((run / "decisions.json").exists())
+        self.assertEqual(self.decide(run, 20001, "deviation")[0], 200)  # with the version the page shows now
+        self.assertEqual(self.rows()[20001]["comment"], "誤検知。新しい理由。")
+
+    def test_choices_of_other_cids_are_kept_when_decisions_json_cannot_be_read(self):
+        run = self.run_folder([20001, 20002])
+        item(run, 20001)
+        item(run, 20002)
+        self.assertEqual(self.decide(run, 20001, "none")[0], 200)
+        good = (run / "decisions.json").read_bytes()
+        (run / "decisions.json").write_bytes(good[:-10])  # being written by hand, or cut off
+        status, reply = self.decide(run, 20002, "none")
+        self.assertEqual((status, reply["error"].split("（")[0]), (503, "選択を記録したファイルを読み取れないため、保存しませんでした"))
+        self.assertEqual((run / "decisions.json").read_bytes(), good[:-10], "nothing is written over it")
+        (run / "decisions.json").write_bytes(good)
+        self.assertEqual(self.decide(run, 20002, "none")[0], 200)
+        self.assertEqual(decisions(run), {"20001": {"decision": "none"}, "20002": {"decision": "none"}})
 
     def test_access_is_checked(self):
         run = self.run_folder([20001])
         item(run, 20001)
-        body, here = {"run": run.name, "cid": 20001, "decision": "none", "comment": None}, f"localhost:{self.port}"
+        body = {"run": run.name, "cid": 20001, "decision": "none", "comment": None, "version": self.rows()[20001]["version"]}
+        here = f"localhost:{self.port}"
         page = self.http("GET", f"/?t={self.token}", Host=here)
         self.assertEqual((page[0], "<title>Coverity の警告の処置</title>" in page[1]), (200, True))
         for path in ("/app.js", "/style.css"):  # no data in them: no token

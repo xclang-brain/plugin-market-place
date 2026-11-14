@@ -12,7 +12,7 @@ const WORDS = {
 const COMMENT_MAX = 200;
 let state = null; // the last reply of /api/state
 let layout = ''; // what the table is built for: the result folder, its columns and its CIDs
-let open = null; // the opened row: {cid, tr, text, sync}
+let open = null; // the opened row: {cid, version, tr, text, sync}
 let saves = 0; // a reply of /api/state that was asked for before a save is not shown
 const shown = new Map(); // CID -> the row as it is in the table (JSON)
 
@@ -156,7 +156,7 @@ async function openDetail(row) {
   closeDetail();
   body.append(tr);
   body.querySelector('.open').setAttribute('aria-expanded', 'true');
-  open = { cid: row.cid, tr, text, sync };
+  open = { cid: row.cid, version: d.version, tr, text, sync };
   sync();
 }
 
@@ -175,10 +175,12 @@ function put(row, own) {
 }
 
 async function save(row, decision) {
-  const comment = open && open.cid === row.cid ? open.text.value.trim() : row.comment;
+  // The version of the result the person looks at: the server refuses the choice when the result has changed since.
+  const opened = open && open.cid === row.cid;
+  const comment = opened ? open.text.value.trim() : row.comment, version = opened ? open.version : row.version;
   saves += 1;
   try {
-    put((await api('/api/decision', { run: state.run, cid: row.cid, decision, comment })).row, true);
+    put((await api('/api/decision', { run: state.run, cid: row.cid, decision, comment, version })).row, true);
     settle('save');
   } catch (error) {
     report(error, 'save');
