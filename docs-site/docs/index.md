@@ -28,8 +28,6 @@ flowchart LR
   end
 ```
 
-調査と修正は、リポジトリの外の作業用コピーで行います。Coverity に書き込む前には、Copilot CLI が許可を求めます。
-
 <div class="grid cards" markdown>
 
 -   :material-rocket-launch-outline:{ .lg } **初めての利用**

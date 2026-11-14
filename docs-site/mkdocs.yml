@@ -1,3 +1,6 @@
+# coverity-triage-kit 説明サイトの設定（MkDocs と Material for MkDocs）
+
+# サイトの基本情報。site_url は GitHub Pages の公開先、edit_uri は各ページ右上の編集ボタンのリンク先
 site_name: coverity-triage-kit
 site_description: Coverity Connect の警告を CID ごとに調べ、修正コードと逸脱コメントを用意する GitHub Copilot CLI のプラグイン
 site_url: https://xclang-brain.github.io/plugin-market-place/
@@ -5,20 +8,24 @@ repo_url: https://github.com/xclang-brain/plugin-market-place
 repo_name: plugin-market-place
 edit_uri: edit/main/docs-site/docs/
 
-# 版と、認証情報・設定ファイルのひな形は、プラグインのファイルから hooks.py が差し込みます
+# ビルド時の追加処理（hooks.py）。プラグインのファイルから、認証情報の設定手順、設定ファイルの初期内容、
+# バージョン、プラグイン内のファイルへのリンクを差し込み、Mermaid の図を横スクロールの枠で囲む
 hooks:
   - hooks.py
 
 theme:
   name: material
-  language: ja
+  language: ja                            # 検索欄やボタンなど、テーマの文言を日本語にする
   font:
-    text: Noto Sans JP
-    code: JetBrains Mono
+    text: Noto Sans JP                    # 本文の書体（Google Fonts から読み込む）
+    code: JetBrains Mono                  # コードの書体
   icon:
-    logo: material/shield-check-outline
-    repo: fontawesome/brands/github
-  favicon: assets/favicon.svg
+    logo: material/shield-check-outline   # ヘッダー左上のアイコン
+    repo: fontawesome/brands/github       # ヘッダー右上の、リポジトリへのリンクのアイコン
+  favicon: assets/favicon.svg             # ブラウザーのタブのアイコン
+  # 配色。初期状態は OS の設定（ライト／ダーク）に合わせ、ヘッダーのボタンで
+  # 「OS に合わせる → ライト → ダーク」の順に切り替える。
+  # 色そのものは extra.css で定義するため、primary と accent は custom にする
   palette:
     - media: "(prefers-color-scheme)"
       toggle:
@@ -39,25 +46,27 @@ theme:
         icon: material/brightness-auto
         name: OS の設定に合わせる
   features:
-    - navigation.tabs
-    - navigation.top
-    - navigation.footer
-    - navigation.instant
-    - navigation.tracking
-    - toc.follow
-    - search.highlight
-    - content.code.copy
-    - content.tabs.link
-    - content.action.edit
+    - navigation.tabs        # 「ホーム」「使い方」「開発」を、ヘッダーの下のタブにする
+    - navigation.top         # 上に向かってスクロールしたときに、「トップへ戻る」ボタンを出す
+    - navigation.footer      # ページ下部に、前後のページへのリンクを出す
+    - navigation.instant     # ページを再読み込みせずに切り替える（extra.js は document$ で切り替えを受け取る）
+    - navigation.tracking    # スクロールに合わせて、URL の見出しアンカーを更新する
+    - toc.follow             # 右側の目次を、表示中の見出しに追従させる
+    - search.highlight       # 検索結果から開いたページで、検索語を強調する
+    - content.code.copy      # コードブロックに、コピーボタンを付ける
+    - content.tabs.link      # 「PowerShell（Windows）」「bash（Linux）」のタブの選択を、全ページで連動させる
+    - content.action.edit    # 各ページに、GitHub で編集するボタンを付ける
 
+# 見た目の調整（色、文字、表、コードブロックなど）と、表示の補助（選択肢の色付け、絞り込み欄）
 extra_css:
   - assets/stylesheets/extra.css
 extra_javascript:
   - assets/javascripts/extra.js
 
 extra:
-  generator: false
+  generator: false           # フッターの「Made with Material for MkDocs」を表示しない
 
+# リンク切れと、存在しない見出しへのリンクを警告にする。--strict でビルドすると、警告でビルドが失敗する
 validation:
   omitted_files: warn
   absolute_links: warn
@@ -66,37 +75,39 @@ validation:
 
 plugins:
   - search:
-      lang: ja
+      lang: ja               # 日本語の単語分割で、サイト内を検索する
 
+# Markdown の書き方の拡張
 markdown_extensions:
-  - abbr
-  - admonition
-  - attr_list
-  - md_in_html
-  - tables
+  - admonition               # 注意書きの囲み（!!! warning "…"）
+  - attr_list                # 要素へのクラスの指定（ホームのカードのアイコンの { .lg }）
+  - md_in_html               # HTML の中での Markdown（ホームの帯とカード、絞り込み欄の位置）
+  - tables                   # 表
   - toc:
-      permalink: true
+      permalink: true        # 見出しにマウスを重ねると、リンク用の記号を出す
+      # 日本語の見出しから、日本語のまま見出しアンカーを作る（標準の設定では日本語が消える）
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
           case: lower
-  - pymdownx.details
-  - pymdownx.emoji:
+  - pymdownx.details         # 折りたたみの囲み（??? info "…"）
+  - pymdownx.emoji:          # :material-…: の書き方で、アイコンを使う（ホームのカード）
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
-  - pymdownx.highlight:
+  - pymdownx.highlight:      # コードブロックの色分け
       anchor_linenums: true
-  - pymdownx.inlinehilite
-  - pymdownx.superfences:
+  - pymdownx.superfences:    # リスト内のコードブロックと、mermaid のコードブロックの図としての描画
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.tabbed:
-      alternate_style: true
+  - pymdownx.tabbed:         # タブ（=== "PowerShell（Windows）"）
+      alternate_style: true  # Material の現行の表示形式
+      # タブのアンカーも、日本語のまま作る
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
           case: lower
 
+# ナビゲーション。最上位の項目が、ヘッダーの下のタブになる
 nav:
   - ホーム: index.md
   - 使い方:
