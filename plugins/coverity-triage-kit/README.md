@@ -79,6 +79,7 @@ bash で設定した値は、そのターミナルの中だけで有効です。
 | 目的 | 文書 |
 | --- | --- |
 | 使い方を順に試す | 上の表の 1 → 2 → 3 → 4 |
+| ブラウザーで読む | [説明サイト](https://xclang-brain.github.io/plugin-market-place/)（使い方、困ったとき、仕組み） |
 | 取得する条件やオプションを変える | [設定](docs/guide/settings.md) |
 | 変更点を確認する | [変更履歴](CHANGELOG.md) |
 | 開発に参加する | [仕様書](docs/specs/requirements.md)・[設計書](docs/design/design.md)・[テスト](tests/README.md) |

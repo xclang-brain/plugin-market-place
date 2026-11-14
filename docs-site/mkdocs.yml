@@ -1,0 +1,115 @@
+site_name: coverity-triage-kit
+site_description: Coverity Connect の警告を CID ごとに調べ、修正コードと逸脱コメントを用意する GitHub Copilot CLI のプラグイン
+site_url: https://xclang-brain.github.io/plugin-market-place/
+repo_url: https://github.com/xclang-brain/plugin-market-place
+repo_name: plugin-market-place
+edit_uri: edit/main/docs-site/docs/
+
+# 版と、認証情報・設定ファイルのひな形は、プラグインのファイルから hooks.py が差し込みます
+hooks:
+  - hooks.py
+
+theme:
+  name: material
+  language: ja
+  font:
+    text: Noto Sans JP
+    code: JetBrains Mono
+  icon:
+    logo: material/shield-check-outline
+    repo: fontawesome/brands/github
+  favicon: assets/favicon.svg
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: ライトモードに切り替える
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: ダークモードに切り替える
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-auto
+        name: OS の設定に合わせる
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.footer
+    - navigation.instant
+    - navigation.tracking
+    - toc.follow
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+
+extra_css:
+  - assets/stylesheets/extra.css
+extra_javascript:
+  - assets/javascripts/extra.js
+
+extra:
+  generator: false
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+plugins:
+  - search:
+      lang: ja
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+
+nav:
+  - ホーム: index.md
+  - 使う:
+      - 準備する: use/setup.md
+      - 1件ずつ処置する: use/first.md
+      - 一覧で決める: use/decide.md
+      - まとめて任せる: use/delegate.md
+      - 画面で選ぶ: use/screen.md
+      - 設定を変える: use/settings.md
+      - 困ったとき: use/trouble.md
+  - 開発する:
+      - 始める前に: dev/index.md
+      - 仕組み: dev/architecture.md
+      - 変更するとき: dev/change.md
+      - テストする: dev/test.md
+      - サイトを更新する: dev/site.md
