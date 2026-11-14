@@ -27,6 +27,8 @@ copilot plugin install <プラグインの名前>@plugin-market-place
 | [handoff-compare-report](plugins/handoff-compare-report/) | 病棟の申し送りの3つの形（AI なし／AI が全体を下書き／事実の欄だけ AI）の机上の比較で、形ごとに漏れや時間を数え、結論つきの比較報告 compare_report.md を作る | 0.1.0 |
 | [embedded-debug-kit](plugins/embedded-debug-kit/) | 組み込み機器の C/C++ の不具合を、AI が実機で試しながら直す。スキル、作業エージェント、統括・検証エージェント、Web管理画面の4つの段階で使える。Claude Code でも使える | 0.1.0 |
 
+coverity-triage-kit の使い方と仕組みは、[説明サイト](https://xclang-brain.github.io/plugin-market-place/) でも読めます（ソースは `docs-site/`）。
+
 weekly-sales-report は、plugin-creator の試験で作った見本です。AI が演じたユーザー（営業チームのリーダー）と plugin-creator が会話して作りました。中に出てくる人の名前や売上の数字は、架空のものです。
 
 coverity-warning-triage は、plugin-creator の作り直しの試験で作りました。元のプラグイン coverity-triage（[coverity-triage-agent](https://github.com/xclang-brain/coverity-triage-agent)、MIT License）の部品を流用しています。plugin-creator の問いには、利用者の代わりに AI（Claude）が、元のプラグインの資料をもとに答えました。
