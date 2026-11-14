@@ -60,8 +60,8 @@ flowchart LR
 
     ---
 
-    守る決まりと、それを確認するテストから読みます。
+    設計原則と、それを検査するテストから確認します。
 
-    [:octicons-arrow-right-24: 始める前に](dev/index.md)
+    [:octicons-arrow-right-24: 概要と原則](dev/index.md)
 
 </div>

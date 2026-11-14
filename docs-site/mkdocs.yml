@@ -99,7 +99,7 @@ markdown_extensions:
 
 nav:
   - ホーム: index.md
-  - 使う:
+  - 使い方:
       - 準備する: use/setup.md
       - 1件ずつ処置する: use/first.md
       - 一覧で決める: use/decide.md
@@ -107,9 +107,9 @@ nav:
       - 画面で選ぶ: use/screen.md
       - 設定を変える: use/settings.md
       - 困ったとき: use/trouble.md
-  - 開発する:
-      - 始める前に: dev/index.md
-      - 仕組み: dev/architecture.md
-      - 変更するとき: dev/change.md
-      - テストする: dev/test.md
-      - サイトを更新する: dev/site.md
+  - 開発:
+      - 概要と原則: dev/index.md
+      - アーキテクチャ: dev/architecture.md
+      - 変更時の手順: dev/change.md
+      - テスト: dev/test.md
+      - サイトの更新: dev/site.md
