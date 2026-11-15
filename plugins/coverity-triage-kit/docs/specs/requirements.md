@@ -59,7 +59,7 @@ CID ごとに、「修正を取り込む」「逸脱コメントを登録する�
 | 逸脱コメントを登録する | Coverity に、Classification・Action・Severity とコメントを登録します |
 | 保留にする | Coverity に「Pending／Undecided／Unspecified」と、保留の理由のコメントを登録します |
 
-Coverity に書き込む直前には、Copilot CLI の許可の確認が表示されます。
+Coverity に書き込む直前には、Copilot CLI の許可の確認が表示されます。Copilot CLI が MCP サーバーからの質問を表示できるときは、登録する件数と CID を示す確認も表示され、承認したときだけ登録します。
 
 どの選択でも、OK の後に CID は Coverity で分類済みになり、次の取得からは除かれます。未分類のまま残すと、次の取得で同じ警告をもう一度処置することになるためです。保留にした CID は、Coverity で確認するか、設定の `conditions.classification` に `Pending` を加えて取得し直します。
 

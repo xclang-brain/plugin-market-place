@@ -56,7 +56,7 @@ CID ごとの修正コードと根拠は C:/work/coverity-triage-out/20261110-15
 copilot --agent coverity-triage-kit:triage-worker --add-dir "<結果フォルダーの場所>" --allow-tool 'shell(uv:*)' --allow-tool write --allow-tool 'coverity-connect(coverity_search_issues)' --allow-tool 'coverity-connect(coverity_get_issue_details)'
 ```
 
-Coverity に書き込むツールは、この指定に含めていません。書き込みの前には、必ず許可の確認が表示されます。
+Coverity に書き込むツールは、この指定に含めていません。書き込みの前には、必ず許可の確認が表示されます。Copilot CLI が MCP サーバーからの質問を表示できるときは、登録する件数と CID を示す確認も表示されます。
 
 ## 次へ
 

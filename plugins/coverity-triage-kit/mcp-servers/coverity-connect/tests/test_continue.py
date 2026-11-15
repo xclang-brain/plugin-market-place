@@ -31,12 +31,14 @@ class ContinueTest(ServerCase):
             "write": ("coverity_update_triage", {"entries_file": self.entries(
                 [{"cids": [2001], **ENTRY}, {"cids": [2002, 2003], **ENTRY}], stream="other-main")})}
         self.emu.delay = {"/issues/search": SLOW, "/ws/v9/defectservice": SLOW, "/issues/triage": SLOW}
-        started = {name: self.server.start(tool, repo_root=repo, **arguments) for name, (tool, arguments) in calls.items()}
+        # the write goes to the stream of the settings file of its repository
+        roots = {"search": repo, "details": repo, "write": self.repo(stream="other-main")}
+        started = {name: self.server.start(tool, repo_root=roots[name], **arguments) for name, (tool, arguments) in calls.items()}
         first = {name: self.server.wait(ident)["structuredContent"] for name, ident in started.items()}
         self.emu.delay = {}
 
         def again(name: str) -> dict:
-            return self.ok(calls[name][0], repo_root=repo, **calls[name][1])
+            return self.ok(calls[name][0], repo_root=roots[name], **calls[name][1])
 
         with self.subTest("search: the next page"):
             self.assertEqual(first["search"], {"done": False, "count": 200, "total_matched": None, "limited": False,

@@ -47,7 +47,9 @@ class Server:
     """The server process, started with the command of mcp.json and driven as an MCP client drives it:
     newline-delimited JSON-RPC over its pipes."""
 
-    def __init__(self, **env: str):
+    def __init__(self, answer=None, **env: str):
+        """``answer``: a client that can ask the person (MCP elicitation). It gets the question of the server
+        and returns the result: {"action": "accept", "content": {...}}, decline or cancel."""
         clean = {name: value for name, value in os.environ.items() if not name.upper().endswith("_PROXY")}
         # The env block of mcp.json arrives as a client passes it that does not expand it: "${COV_USER}", ...
         clean.update(REGISTERED["env"], PYTHONDONTWRITEBYTECODE="1", **env)
@@ -62,7 +64,9 @@ class Server:
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=lambda: self.received.extend(
             raw.decode("utf-8", "replace") for raw in self.proc.stderr), daemon=True).start()
-        self.wait(self.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+        self.answer, self.asked = answer, []  # the questions of the server (params of elicitation/create)
+        self.wait(self.send("initialize", {"protocolVersion": "2025-06-18",
+                                           "capabilities": {"elicitation": {}} if answer else {},
                                            "clientInfo": {"name": "test", "version": "0"}}))
         self._write({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
@@ -71,6 +75,10 @@ class Server:
             line = raw.decode("utf-8")
             self.received.append(line)
             message = json.loads(line)
+            if "method" in message and "id" in message:  # a request of the server: the question of the write tool
+                self.asked.append(message["params"])
+                self._write({"jsonrpc": "2.0", "id": message["id"], "result": self.answer(message["params"])})
+                continue
             with self.ready:
                 if "id" in message:
                     self.answers[message["id"]] = message
@@ -132,8 +140,8 @@ class ServerCase(unittest.TestCase):
         cls.server = cls.start_server(COV_USER=USER, COV_AUTH_KEY=KEY)
 
     @classmethod
-    def start_server(cls, **env: str) -> Server:
-        server = Server(**env)
+    def start_server(cls, answer=None, **env: str) -> Server:
+        server = Server(answer, **env)
         cls.addClassCleanup(server.close)
         return server
 
