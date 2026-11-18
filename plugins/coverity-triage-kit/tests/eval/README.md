@@ -44,3 +44,23 @@ python3 tests/eval/run_eval.py --stage 3 --vcs svn --answer-ok --work <フォル
 | `transcript.jsonl`、`transcript-ok.jsonl`（1段階目は `transcript-1.jsonl`〜`transcript-5.jsonl`） | 実行の記録（stream-json）。標準エラーは `.err` |
 | `coverity-triage-out/<年月日-時分秒>/` | 結果フォルダー |
 | `repo/`、`origin.git/`（svn は `svnrepo/`）、`plugin/`、`fresh/`、`warnings.json` | 見本のリポジトリ、修正の取り込み先、実行に使用したプラグインのコピー（`tests/` と `docs/` を除く）、`fix.patch` の適用を確認したコピー、エミュレーターが返す警告 |
+
+## 実機の Copilot CLI での確認（`try_copilot.py`）
+
+実機の GitHub Copilot CLI でしか確かめられないことを、1回の実行で確かめます。Windows では `tests/eval/try-copilot.cmd` をダブルクリックします。ほかの OS では、プラグインのフォルダーで次を実行します。
+
+```text
+uv run --native-tls --quiet tests/eval/try_copilot.py
+```
+
+このフォルダーのプラグインを `--plugin-dir` で読み込みます（インストール済みのプラグインは変更しません。同じ名前のプラグインがインストールされているときは、確認の間だけ無効にし、終わったら有効に戻します）。Coverity は `tests/coverity_emulator` で、本物の Coverity には接続しません。モデルへの依頼を3回行うため、Copilot の利用量を消費します。
+
+| 確認 | 方法 | 合格の条件 |
+| --- | --- | --- |
+| 1. MCP サーバーの起動と Coverity への接続 | `copilot -p` で `coverity_check_connection` を呼び出させる（自動） | エミュレーターに接続がある |
+| 2. 書き込みの前の確認（MCP の elicitation）への対応 | 書き込みのツールを許可した状態で、`copilot -p` から書き込みを依頼する（自動） | 何も書き込まれず、サーバーの「承認しなかった」の応答がある（対話のない実行では、Copilot CLI が確認を断るため） |
+| 3. 確認の画面の表示と、承認したときの登録 | `copilot -i` で書き込みを依頼し、表示された確認で承認する（人が操作する） | 確認に件数と CID が表示され、承認すると 2 件が登録される |
+
+`--skip-screen` を付けると、3 を行いません。`--model <名前>` で、Copilot CLI のモデルを指定できます。結果は、端末と、作業フォルダー（システムの一時フォルダーの下）の `report.md` に書きます。終了コードは、すべて合格のときに 0 です。
+
+必要なもの: GitHub Copilot CLI（ログイン済み）、uv。

@@ -270,20 +270,59 @@ def _entries(path: Path) -> tuple[str, list[dict]]:
     return stream, entries
 
 
+def _stream_of(settings: Settings, stream: str) -> None:
+    if stream != settings.stream:
+        raise Failure(f"登録する内容のストリーム（{stream}）が、設定ファイルのストリーム（{settings.stream}）と違います。"
+                      "もう一度、一覧の確認からやり直してください")
+
+
+def _registered(written_file: Path) -> dict:
+    record = read_json(written_file) or {"written": {}}
+    if not isinstance(record, dict) or not isinstance(record.get("written"), dict):
+        raise Failure(f"ファイルを読み取れません: {written_file.as_posix()}（written がありません）。"
+                      "ファイルの内容を確認してください")
+    return record
+
+
+SHOWN_CIDS = 30  # CIDs named in the question to the person
+
+
+def confirmation(repo_root: str, entries_file: str) -> tuple[str, str] | None:
+    """(key, question) of what the person approves before anything is written: the SHA-256 of the entries
+    file and a sentence of what goes to Coverity. None: every CID of the file is registered already."""
+    settings = load(repo_root)
+    path = absolute(entries_file, "entries_file")
+    stream, entries = _entries(path)
+    _stream_of(settings, stream)
+    done = _registered(path.with_name("written.json"))["written"]
+    counts = {"逸脱コメント": 0, "取り込んだ修正（Bug／Fix Required）": 0, "保留（Pending）": 0}
+    cids: list[int] = []
+    for entry in entries:
+        todo = [cid for cid in entry["cids"] if str(cid) not in done]
+        kind = ("保留（Pending）" if entry["classification"] == "Pending" else "取り込んだ修正（Bug／Fix Required）"
+                if entry["action"] == "Fix Required" else "逸脱コメント")
+        counts[kind] += len(todo)
+        cids += todo
+    if not cids:
+        return None
+    named = ", ".join(map(str, sorted(cids)[:SHOWN_CIDS])) + (f" ほか {len(cids) - SHOWN_CIDS} 件" if len(cids) > SHOWN_CIDS else "")
+    question = (f"Coverity（ストリーム {stream}）に、{'、'.join(f'{kind} {n} 件' for kind, n in counts.items() if n)}を登録します。"
+                f"\nCID: {named}\n登録してよいときは、「登録する」を選んでから承認してください。")
+    return hashlib.sha256(path.read_bytes()).hexdigest(), question
+
+
 def update_triage(repo_root: str, entries_file: str) -> dict:
     deadline = Deadline()
     settings = load(repo_root)
     stream, entries = _entries(absolute(entries_file, "entries_file"))
+    _stream_of(settings, stream)
     written_file = Path(entries_file).with_name("written.json")
     written: list[int] = []
     skipped: list[int] = []
     failed: dict[str, str] = {}
     remaining: list[int] = []
     with _write_lock, Client(settings.url) as client:
-        record = read_json(written_file) or {"written": {}}
-        if not isinstance(record, dict) or not isinstance(record.get("written"), dict):
-            raise Failure(f"ファイルを読み取れません: {written_file.as_posix()}（written がありません）。"
-                          "ファイルの内容を確認してください")
+        record = _registered(written_file)
         store = ""
         for entry in entries:
             todo = [cid for cid in entry["cids"] if str(cid) not in record["written"]]

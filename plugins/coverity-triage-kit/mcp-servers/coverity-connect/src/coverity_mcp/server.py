@@ -13,9 +13,9 @@ import re
 from collections.abc import Callable
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import CallToolResult, ClientCapabilities, ElicitationCapability, TextContent, ToolAnnotations
+from pydantic import BaseModel, Field
 
 from . import tools
 from .settings import Failure
@@ -29,18 +29,32 @@ INSTRUCTIONS = (
 
 mcp = FastMCP("coverity-connect", instructions=INSTRUCTIONS, log_level="WARNING")
 
+DECLINED = "利用者が Coverity への登録を承認しなかったため、登録は行っていません"
+APPROVED: set[str] = set()  # the entries files (SHA-256) the person has approved since the server started
+
+
+class Approval(BaseModel):
+    """The question of the write tool: the person ticks it to approve."""
+
+    register: bool = Field(title="登録する", description="Coverity に登録するときは選択してください")
+
+
 RepoRoot = Annotated[str, Field(description="リポジトリの最上位フォルダーの絶対パス（例: C:/work/app、/home/me/app）")]
 
 
+def _error(exc: Exception | str) -> CallToolResult:
+    """A tool error whose text is the Japanese sentence alone."""
+    text = exc if isinstance(exc, str) else str(exc) if isinstance(exc, Failure) else (
+        f"ファイルまたはフォルダーを使用できませんでした（{exc}）。引数のパスを確認してください")
+    return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
+
+
 async def _run(func: Callable[..., dict], *args) -> CallToolResult:
-    """Run a tool in a worker thread (its requests block). A failure becomes a tool error whose text is the
-    Japanese sentence alone."""
+    """Run a tool in a worker thread (its requests block). A failure becomes a tool error."""
     try:
         data = await asyncio.to_thread(func, *args)
     except (Failure, OSError) as exc:
-        text = str(exc) if isinstance(exc, Failure) else (
-            f"ファイルまたはフォルダーを使用できませんでした（{exc}）。引数のパスを確認してください")
-        return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
+        return _error(exc)
     return CallToolResult(content=[TextContent(type="text", text=json.dumps(data, ensure_ascii=False))],
                           structuredContent=data)
 
@@ -106,7 +120,24 @@ async def coverity_update_triage(
     repo_root: RepoRoot,
     entries_file: Annotated[str, Field(
         description="登録する内容のファイルの絶対パス（例: <結果フォルダー>/coverity-entries.json）")],
+    ctx: Context,
 ) -> CallToolResult:
+    # The OK in the chat goes through the model, and the permission prompt of the client can be switched off
+    # for the session. Where the client can show a question of the server (MCP elicitation), the person
+    # approves the write here, once per entries file: the client asks the person, not the model.
+    try:
+        asked = await asyncio.to_thread(tools.confirmation, repo_root, entries_file)
+    except (Failure, OSError) as exc:
+        return _error(exc)
+    can_ask = ctx.session.check_client_capability(ClientCapabilities(elicitation=ElicitationCapability()))
+    if asked and asked[0] not in APPROVED and can_ask:
+        try:
+            answer = await ctx.elicit(asked[1], Approval)
+        except Exception as exc:  # noqa: BLE001 - nothing is written without the answer
+            return _error(f"登録の確認を表示できなかったため、Coverity への登録は行っていません（{type(exc).__name__}: {exc}）")
+        if answer.action != "accept" or not answer.data.register:
+            return _error(DECLINED)
+        APPROVED.add(asked[0])
     return await _run(tools.update_triage, repo_root, entries_file)
 
 

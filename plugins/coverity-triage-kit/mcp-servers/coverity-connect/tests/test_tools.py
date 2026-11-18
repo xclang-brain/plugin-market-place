@@ -186,6 +186,54 @@ class ToolsTest(ServerCase):
         # What was registered is no longer Unclassified: the next search leaves it out.
         self.assertEqual([issue["cid"] for issue in self.ok("coverity_search_issues", repo_root=repo)["issues"]], [102])
 
+    def test_update_triage_asks_the_person_where_the_client_can_ask(self) -> None:
+        """A client with MCP elicitation shows the question of the server to the person: nothing is written
+        without their approval, even when the permission prompt of the client is off for the session."""
+        from coverity_emulator import KEY, USER
+
+        answers: list[dict] = []
+        server = self.start_server(lambda question: answers.pop(0), COV_USER=USER, COV_AUTH_KEY=KEY)
+        repo = self.repo()
+        deviation = {"cids": [103, 104], "classification": "Intentional", "action": "Ignore",
+                     "severity": "Unspecified", "comment": "意図的。m103.c の変換は仕様で定めた範囲に収まる。"}
+        fix = {"cids": [101], "classification": "Bug", "action": "Fix Required", "severity": "Major",
+               "comment": "修正をブランチ coverity-fix/20261110-153000 にコミットしました。NULL の確認を追加"}
+        held = {"cids": [102], "classification": "Pending", "action": "Undecided", "severity": "Unspecified",
+                "comment": "保留。確信度が低いため。"}
+        file = self.entries([deviation, fix, held])
+        declined = "利用者が Coverity への登録を承認しなかったため、登録は行っていません"
+        for answer in ({"action": "decline"}, {"action": "cancel"}, {"action": "accept", "content": {"register": False}}):
+            answers.append(answer)
+            self.assertEqual(self.refused("coverity_update_triage", repo_root=repo, entries_file=file, server=server), declined)
+        self.assertEqual((self.emu.writes, (self.run_dir / "written.json").exists()), ([], False))
+        question = server.asked[0]
+        self.assertEqual(question["message"], "Coverity（ストリーム app-main）に、逸脱コメント 2 件、"
+                                              "取り込んだ修正（Bug／Fix Required） 1 件、保留（Pending） 1 件を登録します。\n"
+                                              "CID: 101, 102, 103, 104\n登録してよいときは、「登録する」を選んでから承認してください。")
+        self.assertEqual(list(question["requestedSchema"]["properties"]), ["register"])
+        answers.append({"action": "accept", "content": {"register": True}})
+        self.assertEqual(self.ok("coverity_update_triage", repo_root=repo, entries_file=file, server=server)["written"],
+                         [103, 104, 101, 102])
+        # The same file again (a call that continues): approved once, not asked again
+        self.ok("coverity_update_triage", repo_root=repo, entries_file=file, server=server)
+        self.assertEqual(len(server.asked), 4)
+        # Other entries are asked again, with the CIDs that are not registered yet
+        file = self.entries([deviation, {**fix, "cids": [101, 105]}])
+        answers.append({"action": "decline"})
+        self.refused("coverity_update_triage", repo_root=repo, entries_file=file, server=server)
+        self.assertEqual(server.asked[-1]["message"].split("\n")[:2], [
+            "Coverity（ストリーム app-main）に、取り込んだ修正（Bug／Fix Required） 1 件を登録します。", "CID: 105"])
+
+    def test_update_triage_refuses_entries_of_another_stream(self) -> None:
+        repo = self.repo(stream="app-main")
+        entry = {"cids": [102], "classification": "False Positive", "action": "Ignore", "severity": "Unspecified",
+                 "comment": "誤検知。呼び出し元が引数を検証してから呼び出す。"}
+        file = self.entries([entry], stream="app-release")
+        self.assertEqual(self.refused("coverity_update_triage", repo_root=repo, entries_file=file),
+                         "登録する内容のストリーム（app-release）が、設定ファイルのストリーム（app-main）と違います。"
+                         "もう一度、一覧の確認からやり直してください")
+        self.assertEqual(self.emu.writes, [])
+
     def test_update_triage_refuses_a_file_changed_after_the_ok(self) -> None:
         repo = self.repo()
         entry = {"cids": [102], "classification": "False Positive", "action": "Ignore", "severity": "Unspecified",
